@@ -12,6 +12,10 @@ Planning. No application code or deployment exists yet. React, TypeScript, Vite,
 Fastify, and SQLite are proposed choices, pending the architecture review and a
 Hermes integration spike.
 
+See the [implementation plan](docs/Plan.md) for the planning interview's decisions,
+acceptance requirements, unresolved risks, and implementation order. Use the
+[kickoff prompt](docs/ImplementationPrompt.md) to start a fresh implementation session.
+
 Hermes owns agent execution, tools, memory, and canonical session history. The
 interface will own presentation, human preferences, and notification delivery.
 
