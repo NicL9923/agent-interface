@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+.env
+.env.*
+!.env.example
+.private/
+secrets/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+.DS_Store
