@@ -52,9 +52,9 @@ The app uses the Google Identity Services callback, so it
 does not need a new Google redirect URI. Keep the existing Hermes redirect URI.
 The server verifies Google's identity token and enforces the household allowlist.
 Local development identities are refused by production configuration.
-The production Google button loads. Household sign-in through that new button
-still needs confirmation; the shared browser tools cannot operate its account
-chooser. This is separate from the verified existing Hermes Google session.
+Nicolas confirmed successful Google sign-in and a quick chat through the
+production app on September 30. The second household identity and rejection of
+an unlisted identity still need production acceptance in issue #1.
 
 ## Application backups
 

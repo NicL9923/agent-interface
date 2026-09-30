@@ -28,5 +28,5 @@
     "firstBackupSucceeded": true,
     "activationRollbackExercised": true
   },
-  "newAppGoogleSignIn": "Awaiting household confirmation; Google account chooser is not available through shared browser automation."
+  "newAppGoogleSignIn": "Nicolas confirmed successful Google sign-in and a quick chat through the production app on 2026-09-30. User-reported acceptance; the second household identity and rejection of an unlisted identity remain unverified in production."
 }

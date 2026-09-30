@@ -9,8 +9,12 @@ for their recorded code states.
 
 ### Code and integration
 
-- Final source fingerprint, 138 files: `sha256:052decf29d2d3430a241e24ababb8459763704d211bf454fdeeb440237edea1f`.
+- Tested source fingerprint, 138 files: `sha256:052decf29d2d3430a241e24ababb8459763704d211bf454fdeeb440237edea1f`.
   The source-state tool excludes this ledger, private data and ignored build files.
+- Final fingerprint after recording Nicolas's production sign-in/chat confirmation:
+  `sha256:206566ba16d76abe7126e32589cb001785e0cfebff7d8c3b52ffdcb70b0c4ff3`.
+  Only hosting documentation and the acceptance receipt changed; application code
+  and the deployed runtime remain identical. The successful checks are reused.
 - All 137 Node tests and the production build passed at 10:03 local time.
   The final web build is `09520ac38712c923`, with seven static cache entries.
   Linux Node 24.21.0 produced the same web artifact as the Mac build.
@@ -84,9 +88,11 @@ for their recorded code states.
   enabled; its first checked backup succeeded. Copies remain on the same host.
 - Google authorized origins were saved and verified in the shared browser after
   Nicolas completed phone/email challenges. Existing origin/callbacks and account
-  settings were preserved. The new app's Google button loads, but its account
-  chooser is inaccessible to the shared browser tools; household confirmation
-  remains pending. The old Hermes Google session is independently verified.
+  settings were preserved. Nicolas subsequently confirmed successful Google
+  sign-in and a quick chat through the production app on September 30. This is
+  user-reported production acceptance; the original Hermes Google session was
+  independently verified by the agent. The second household identity and an
+  unlisted identity still need production acceptance in issue #1.
 
 Physical APNs/PWA delivery, Apple signing, physical accessibility/motion, live
 image/MCP providers, unattended timed routines, goal continuation and compressed
@@ -287,7 +293,9 @@ Unchanged avatar and external-service acceptance records above remain applicable
 
 ## Remaining external acceptance
 
-- Configure Google and complete real allowlisted sign-in on the intended origin.
+- Google configuration and the first household sign-in/chat were confirmed on
+  September 30. Verify the second household identity and rejection of an unlisted
+  identity in production.
 - Configure a live image backend, generate a portrait and a chat image, and verify
   delivery through authenticated app routes. No generated-image success is claimed
   from the deterministic provider.
