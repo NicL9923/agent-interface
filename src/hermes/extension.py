@@ -5,6 +5,7 @@ python src/hermes/extension.py --port 19119
 See docs/HermesCapabilityMatrix.md. Journal contains private runtime data, never commit it.
 """
 import argparse
+import contextvars
 import hashlib
 import json
 import os
@@ -16,11 +17,20 @@ import contextlib
 import re
 import mimetypes
 import subprocess
+import importlib.util
+import hmac
 from pathlib import Path
 
 REVISION = "b9cb268deffc97946ec11645aa622a7353dd0591"
 QUALIFIED_REVISIONS = {REVISION, "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6"}
 QUALIFIED_OAUTH_PATCH = "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c"
+
+
+def qualification_module():
+    spec = importlib.util.spec_from_file_location("agent_interface_qualification", Path(__file__).with_name("qualification.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def source_state():
@@ -30,7 +40,18 @@ def source_state():
     actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])
     patch_hash = hashlib.sha256(patch).hexdigest() if patch else None
-    if actual not in QUALIFIED_REVISIONS or patch_hash not in (None, QUALIFIED_OAUTH_PATCH):
+    known = actual in QUALIFIED_REVISIONS and patch_hash in (None, QUALIFIED_OAUTH_PATCH)
+    if not known:
+        try:
+            qualification = qualification_module()
+            provisional = qualification.provisional_revision()
+            if provisional == actual and patch_hash == (os.environ.get("HERMES_SPIKE_PATCH_SHA256") or None):
+                return actual, patch_hash
+            receipt = qualification.read_receipt(os.environ.get("HERMES_AGENT_INTERFACE_QUALIFICATION_FILE", ""), Path(__file__).resolve().parents[2])
+            known = receipt["revision"] == actual and receipt["trackedPatchSha256"] == patch_hash
+        except (OSError, ValueError, KeyError, TypeError):
+            known = False
+    if not known:
         raise SystemExit("Hermes source or tracked repair differs from the qualified add-on. Run compatibility probes before deployment.")
     return actual, patch_hash
 
@@ -63,6 +84,8 @@ class Journal:
                 self.db.execute(f"ALTER TABLE receipts ADD COLUMN {column} TEXT")
         if "artifacts" not in {row[1] for row in self.db.execute("PRAGMA table_info(tools)")}:
             self.db.execute("ALTER TABLE tools ADD COLUMN artifacts TEXT")
+        if "detail" not in {row[1] for row in self.db.execute("PRAGMA table_info(tools)")}:
+            self.db.execute("ALTER TABLE tools ADD COLUMN detail TEXT")
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(events)")}
         for column in ("event_key", "routine_id"):
             if column not in columns:
@@ -95,6 +118,139 @@ def install(path=None):
     keepers = {}
     canonical = {}
     settlement = {}
+    maintenance_lock = threading.RLock()
+    maintenance_file = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE")
+    from hermes_cli.backend_retirement import retirement
+    maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
+
+    def maintenance_state():
+        if not maintenance_file:
+            return None
+        path = Path(maintenance_file)
+        if not path.is_absolute():
+            raise RuntimeError("Maintenance lease requires an absolute private path.")
+        if not path.exists():
+            return None
+        info = path.lstat()
+        if path.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise RuntimeError("Maintenance lease is not private.")
+        return json.loads(path.read_text())
+
+    def busy_sessions():
+        # Native workers can reserve admission while holding _sessions_lock.
+        # Snapshot the dictionary without taking that lock in the reverse order;
+        # native reservations cover work queued after this snapshot.
+        sessions = server._sessions.copy()
+        return [{"sessionId": sid, "profile": profile_for(sid), "state": "running"}
+                for sid, session in sessions.items()
+                if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
+                or session.get("pending_steer") or session.get("_auto_continue_scheduled")]
+
+    def maintenance(rid, params):
+        secret = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", "")
+        supplied = params.get("service_key", "")
+        if not secret or not isinstance(supplied, str) or not hmac.compare_digest(supplied, secret):
+            return server._err(rid, 403, "Private maintenance authentication required")
+        if not maintenance_file:
+            return server._err(rid, 409, "Host maintenance lease is not configured")
+        with maintenance_lock:
+            lease = maintenance_state()
+            action = params.get("action", "status")
+            operation = params.get("operation_id")
+            if action not in ("status", "acquire", "release"):
+                return server._err(rid, 400, "Unknown maintenance action")
+            if action != "status" and (not isinstance(operation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", operation)):
+                return server._err(rid, 400, "Invalid maintenance operation")
+            if lease and lease.get("operationId") != operation and action != "status":
+                return server._err(rid, 409, "Another maintenance operation owns this lease")
+            busy = busy_sessions()
+            if action == "acquire":
+                # This request holds one native reservation. Queued RPCs and
+                # deferred work reserve before execution and must also be idle.
+                if busy or retirement.active_count() > 1:
+                    return server._err(rid, 409, "Hermes still has active work; no maintenance lease acquired")
+                path = Path(maintenance_file)
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                temporary = path.with_name(path.name + "." + uuid.uuid4().hex)
+                fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                with os.fdopen(fd, "w") as handle:
+                    json.dump({"operationId": operation}, handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                temporary.replace(path)
+                lease = {"operationId": operation}
+            elif action == "release" and lease:
+                Path(maintenance_file).unlink()
+                lease = None
+            return server._ok(rid, {"active": lease is not None, "operationId": (lease or {}).get("operationId"), "busy": busy})
+
+    original_handle = server.handle_request
+    original_dispatch = server.dispatch
+    original_acquire = retirement.acquire
+    maintenance_reads = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
+                         "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since"}
+    def guarded_acquire():
+        with maintenance_lock:
+            if maintenance_state() and not maintenance_read.get():
+                return False
+            return original_acquire()
+    retirement.acquire = guarded_acquire
+
+    def guarded_call(call, request, *args, **kwargs):
+        method = request.get("method", "")
+        read = method in maintenance_reads
+        token = maintenance_read.set(read)
+        try:
+            with maintenance_lock:
+                if not read and maintenance_state():
+                    return server._err(request.get("id"), 409, "Hermes is being upgraded. Your current work and drafts are preserved.")
+            # Native admission takes the same gate atomically. Never hold our
+            # lock across a native handler's own session/profile locks.
+            return call(request, *args, **kwargs)
+        finally:
+            maintenance_read.reset(token)
+
+    # Native dispatch reserves pool work before queueing. Fencing only the
+    # synchronous handler misses native shell/configuration/image RPCs.
+    server.handle_request = lambda request: guarded_call(original_handle, request)
+    server.dispatch = lambda request, *args, **kwargs: guarded_call(original_dispatch, request, *args, **kwargs)
+    server.register_method("agent-interface.maintenance", maintenance)
+
+    # Keep the canonical native projection, adding only details present in its
+    # original tool rows. The compact native view otherwise omits most outputs.
+    original_history = server._history_to_messages
+    def detailed_history(history, **kwargs):
+        messages = original_history(history, **kwargs)
+        tool_rows = {}
+        for row in history:
+            if not isinstance(row, dict) or row.get("role") != "tool":
+                continue
+            # Native compaction and hidden scaffolding must stay hidden. A model
+            # can reuse a call ID later, so identity also includes native time.
+            visible = original_history([row], **kwargs)
+            projected = server.project_compaction_message_for_display(row)
+            if not visible or not isinstance(projected, dict):
+                continue
+            key = (visible[0].get("tool_call_id"), visible[0].get("timestamp"))
+            tool_rows.setdefault(key, []).append(projected)
+        for message in messages:
+            if message.get("role") != "tool":
+                continue
+            matches = tool_rows.get((message.get("tool_call_id"), message.get("timestamp"))) or []
+            if not matches:
+                continue
+            raw = matches.pop(0)
+            if raw.get("_row_id") is not None:
+                message["row_id"] = raw["_row_id"]
+            result = raw.get("content")
+            if result is not None:
+                try:
+                    result = json.loads(result) if isinstance(result, str) else result
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                message["app_tool_result"] = result
+        return messages
+    server._history_to_messages = detailed_history
 
     class Keeper:
         closed = False
@@ -143,11 +299,62 @@ def install(path=None):
         return registered
 
     original_write = server.write_json
+    def history_row_floor(session):
+        # Native flushes stamp raw rows with their durable IDs. Snapshot those
+        # already-visible rows without taking another database or session lock.
+        history = list(session.get("display_history_prefix") or []) + list(session.get("history") or [])
+        ids = [row["_row_id"] for row in history if isinstance(row, dict) and type(row.get("_row_id")) is int]
+        return max(ids) if ids else None if history else 0
+
+    def parsed_result(result):
+        if isinstance(result, str):
+            try:
+                return json.loads(result)
+            except (ValueError, TypeError):
+                pass
+        return result
+
     def write(frame):
         params = frame.get("params") or {}
         sid = params.get("session_id")
         kind = params.get("type")
         payload = params.get("payload") or {}
+        session = server._sessions.get(sid, {}) if sid else {}
+        if sid and kind == "message.start":
+            session["app_live_tools"] = {}
+            session["app_live_tool_row_floors"] = {}
+            session["app_exposed_reasoning"] = ""
+            session["app_turn_id"] = uuid.uuid4().hex
+        if sid and kind in ("reasoning.delta", "reasoning.available") and isinstance(payload.get("text"), str):
+            text = payload["text"]
+            prior = session.get("app_exposed_reasoning", "")
+            session["app_exposed_reasoning"] = prior + text if kind != "reasoning.available" or not prior.endswith(text) else prior
+        if sid and kind in ("tool.start", "tool.complete") and isinstance(payload.get("tool_id"), str):
+            with journal.lock:
+                run = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
+            calls = session.setdefault("app_live_tools", {})
+            tool_id = payload["tool_id"]
+            prior = calls.get(tool_id, {})
+            detail = {**prior, "id": prior.get("id") or f"{run[0] if run else session.get('app_turn_id', sid)}:{tool_id}",
+                      "name": payload.get("name") or prior.get("name") or "Tool",
+                      "status": "running" if kind == "tool.start" else "completed"}
+            if payload.get("args") is not None:
+                detail["arguments"] = json.dumps(payload["args"], ensure_ascii=False, indent=2)
+            elif isinstance(payload.get("args_text"), str):
+                detail["arguments"] = payload["args_text"]
+            if kind == "tool.start":
+                detail["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                session.setdefault("app_live_tool_row_floors", {})[tool_id] = history_row_floor(session)
+            else:
+                result = payload.get("result")
+                detail["result"] = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
+                if isinstance(result, dict) and (result.get("success") is False or result.get("ok") is False or result.get("error") or
+                                               isinstance(result.get("exit_code"), int) and not isinstance(result.get("exit_code"), bool) and result["exit_code"] != 0):
+                    detail["status"] = "failed"
+                    if isinstance(result.get("error"), str):
+                        detail["error"] = result["error"]
+                detail["completedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            calls[tool_id] = detail
         event_kind = {"complete": "completed", "error": "failed", "interrupted": "interrupted"}.get(payload.get("status")) if kind == "message.complete" else None
         if frame.get("method") == "approval":
             event_kind = "approval"
@@ -162,7 +369,7 @@ def install(path=None):
             with journal.lock, journal.db:
                 session = server._sessions.get(sid, {})
                 run = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-                journal.db.execute("INSERT INTO tools(profile,stored_session,run_id,tool_id,result,artifacts) VALUES(?,?,?,?,?,?)", (profile_for(sid), session.get("session_key", sid), run[0] if run else None, payload.get("tool_id"), json.dumps(payload.get("result")), json.dumps(artifacts(payload.get("result"), session))))
+                journal.db.execute("INSERT INTO tools(profile,stored_session,run_id,tool_id,result,artifacts,detail) VALUES(?,?,?,?,?,?,?)", (profile_for(sid), session.get("session_key", sid), run[0] if run else None, payload.get("tool_id"), json.dumps(payload.get("result")), json.dumps(artifacts(payload.get("result"), session)), json.dumps(session.get("app_live_tools", {}).get(payload.get("tool_id")))))
         if sid and event_kind == "approval":
             with journal.lock:
                 row = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
@@ -202,6 +409,9 @@ def install(path=None):
     server._record_turn_marker = record_marker
     original_auto_continue = server._maybe_schedule_auto_continue
     def maybe_continue(sid, session, stored_key):
+        with maintenance_lock:
+            if maintenance_state():
+                return None
         profile = profile_name_for_home(session.get("profile_home") or get_hermes_home())
         with journal.lock:
             owned = journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND stored_session=? LIMIT 1", (profile, stored_key)).fetchone()
@@ -238,6 +448,12 @@ def install(path=None):
                 canonical[profile] = value["session_id"]
             value.setdefault("open_requests", [])
             sid = value["session_id"]
+            session = server._sessions[sid]
+            if session.get("running") and session.get("app_exposed_reasoning"):
+                value.setdefault("inflight", {})
+                if value["inflight"] is None:
+                    value["inflight"] = {}
+                value["inflight"]["reasoning"] = session["app_exposed_reasoning"]
             server._sessions[sid]["app_manual_recovery"] = True
             keeper = keepers.setdefault(sid, Keeper())
             server._attach_session_transport(server._sessions[sid], keeper)
@@ -256,6 +472,8 @@ def install(path=None):
             # App attribution follows Hermes's durable row identity, never a rewritten body.
             current_run = None
             for message in value.get("messages", []):
+                if message.get("role") == "user":
+                    current_run = None
                 if message.get("role") == "user" and message.get("row_id") is not None:
                     # Native steering persists a correction later, without an admission row ID.
                     # Pair equal corrections in admission order within this canonical owner.
@@ -285,10 +503,50 @@ def install(path=None):
                         display_text = display_text[:-len(suffix)-1]
                     message["app_display_text"] = display_text
                 if message.get("role") == "tool":
-                    tool = journal.db.execute("SELECT result,artifacts FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND (run_id=? OR ? IS NULL) ORDER BY id DESC LIMIT 1", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run, current_run)).fetchone()
+                    recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall() if current_run else []
+                    tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
                     if tool:
-                        message["app_tool_result"] = json.loads(tool[0])
+                        # The persisted native output remains authoritative.
                         message["app_artifacts"] = json.loads(tool[1] or "[]")
+                        # Reused IDs within a run cannot identify one call's
+                        # timestamps or arguments. Fall back to its native row.
+                        if len(recorded) == 1 and tool[2]:
+                            detail = json.loads(tool[2])
+                            if isinstance(detail, dict) and detail.get("name") == message.get("name"):
+                                try:
+                                    arguments = json.loads(detail.get("arguments", "{}"))
+                                except (ValueError, TypeError):
+                                    arguments = None
+                                if arguments == (message.get("args") or {}):
+                                    message["app_tool_call"] = detail
+            # Standard native tools flush before completion; Codex can expose
+            # completion before its turn flush. Keep those results until their
+            # exact call appears in visible canonical history. Reused old IDs
+            # cannot suppress a new call, and uncertain boundaries keep detail.
+            value["app_tool_calls"] = []
+            if session.get("running"):
+                for tool_id, call in session.get("app_live_tools", {}).items():
+                    represented = False
+                    if call.get("status") != "running":
+                        floor = session.get("app_live_tool_row_floors", {}).get(tool_id)
+                        try:
+                            arguments = json.loads(call.get("arguments", "{}"))
+                        except (ValueError, TypeError):
+                            arguments = None
+                        for message in value.get("messages", []):
+                            if message.get("role") != "tool":
+                                continue
+                            if (message.get("app_tool_call") or {}).get("id") == call.get("id"):
+                                represented = True
+                                break
+                            if (type(floor) is int and type(message.get("row_id")) is int and message["row_id"] > floor
+                                    and message.get("tool_call_id") == tool_id and message.get("name") == call.get("name")
+                                    and arguments == (message.get("args") or {})
+                                    and parsed_result(message.get("app_tool_result")) == parsed_result(call.get("result"))):
+                                represented = True
+                                break
+                    if not represented:
+                        value["app_tool_calls"].append(call)
             return server._ok(rid, value)
 
     def submit(rid, params):

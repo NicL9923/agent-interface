@@ -1,5 +1,116 @@
 # Validation ledger
 
+## September 30 Hermes upgrades and live activity
+
+PR #2 was merged at `1ec8ff5f3ff58afcc9c03b60c5161fc400bceccd` before this
+follow-up. The new implementation qualifies an exact official Hermes revision,
+offers an explicit administrator upgrade in web and iOS, and shows working
+avatars with actual exposed reasoning and tool details. Production services and
+the installed Hermes version were not changed by this follow-up.
+
+### Code state and checks
+
+- Final source fingerprint, 179 files:
+  `sha256:9326a919fb45447b5b374ff97c38448656d9ac2384ab641cf7cc1d9ed3c3fe5b`.
+  The source-state tool includes new files and evidence, and excludes this ledger,
+  private data and ignored build products.
+- Native implementation fingerprint, 24 files:
+  `sha256:d2ecb032929967e44450107ebf23b210e2b6eea7ac9f8685cd724bf05e0987db`.
+  This hashes sorted native source/asset paths and their SHA256 content hashes.
+- All 159 Node tests passed against the final product changes. Type checking and
+  the production build passed. Web build `404c0d099b21f1bb` caches seven static
+  files. No transcript or API data is added to the service-worker cache.
+- The 49 Python checks cover dashboard startup, receipt authority, the upgrade
+  worker, Linux cutover hooks, the persistent gateway guard and managed-runtime
+  fingerprints. They exercise staged additions, rollback, ownership loss,
+  interrupted release, source/configuration changes, plugin dependency inputs,
+  console script changes and an external virtual-environment interpreter alias.
+  CI runs these alongside the existing Node version matrix.
+- The worker's 18 tests use real temporary Git checkouts and fixture host hooks.
+  The 10 Linux and six gateway guard tests use isolated host fixtures. These are
+  control-plane checks, not a production systemd or Google acceptance receipt.
+
+### Real Hermes qualification
+
+- A final unknown-revision qualification run passed the complete native,
+  add-on, executor-kill/recovery, routine, 13-group app and 13-check maintenance
+  suites. Revision `c3a0ee37c8a60624433e19fe295bdaf910532731` is an empty local
+  commit over `b9cb268deffc97946ec11645aa622a7353dd0591`, with identical upstream
+  code. This proves the isolated unknown-revision path, not compatibility with
+  a new official release. Its [receipt](evidence/hermes-upgrade-unknown/qualification-probe.json)
+  and content manifest preserve the final run separately from historical evidence.
+- The final real managed-runtime run passed the same full suites on
+  `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`, with exact OAuth repair
+  `2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c`.
+  It used native PM Python 3.14.7 and Node 24.21.0 in disposable VPS homes.
+  [Managed runtime receipt](evidence/hermes-upgrade-managed/hermes-managed-python-probe.json)
+  and [app receipt](evidence/hermes-upgrade-managed/app-probe.json) record the result.
+- Both runs bind integration digest
+  `c9bb7d65223d0b4fec2e6dbb1323eb0a2c734ff7f2a8735ff267424f6c577e48`.
+  The application source digest was unchanged before and after each full run:
+  `fa906aef5fb6cb9ddd0b7499adf5deb4c87ba623a9cdca93d5528c0227a97047`.
+- The qualified managed generation matched an independently built native
+  generation before and after the suite. Actual installed library and executable
+  console script mutations changed its fingerprint; restoring the bytes restored
+  the original fingerprint. A completed staging marker still allowed launch.
+  The interpreter digest is
+  `8dfa9757a52b9c3edf1dedaaa2a7a8c40ea4beb058f20e90bdd47b48f3b1b176`;
+  dependency digest is
+  `d3cfa55424cc1990eaf1523872225e397759dfd8ed9a68daed3e6a31a27f828e`.
+- The repository evidence archiver now rejects failed/mismatched app receipts
+  and refuses to replace older evidence with different bytes. Historical default
+  receipt paths remain intact. New run directories include SHA256 manifests.
+
+The provider in these probes is deterministic. Native Hermes execution, tools,
+session persistence, admission, scheduler and restart recovery are real. Model
+quality, live image providers and paid-provider behavior are not established.
+The staged managed selection contained zero plugin dependency members. Plugin
+dependency copying has focused unit coverage; the real runtime check does not
+claim that branch was exercised.
+
+### Native and browser checks
+
+- Xcode 27 and iOS 27 passed 22 native contract/presentation unit tests. Focused
+  iPhone UI checks exercised upgrade qualification, an uncertain install request,
+  progress, verification and live activity with exposed reasoning/tool inputs.
+  The final human-error presentation change passed an incremental build and its
+  affected upgrade UI check in `ios-upgrade-human-error-20260930-r8.xcresult`.
+  Unchanged tests from the recorded r4, r6 and r7 results were reused.
+- The T3 collaborative browser exercised the actual web components with explicitly
+  labeled fixture upgrade states and tool data at 1280 × 800 and 390 × 844, in
+  light and dark themes. The agent inspected the screenshots. The inline avatar
+  had an active animation and visibly changed. Phone layouts had no horizontal
+  overflow; Escape restored focus and the closed drawer remained inert.
+- Human status text remains primary. The diagnostic update reference stays inside
+  collapsed checks. Advanced view exposes actual supplied reasoning and tool
+  arguments/results; Simple view hides their payloads. Native spinner text is
+  activity guidance and is not presented as model reasoning.
+- [Web review](evidence/hermes-upgrade-web-review.png),
+  [native upgrade review](../ios/evidence/hermes-upgrade-fixture-review.png) and
+  [native activity review](../ios/evidence/native-live-activity-fixture.png)
+  contain fixture content. They do not establish a completed live Hermes upgrade.
+  Existing unchanged avatar artwork and reduced-motion checks remain applicable.
+
+### Independent review and production limits
+
+Independent GPT-6.1 Sol high reviewers inspected each other's implementation and
+the root integration changes. Verified fixes addressed queued native RPC admission,
+session/admission lock ordering, scheduled/deferred work, persistent gateway
+ingress, staged repair files, exact runtime fingerprints, strict receipt booleans,
+hidden/reused tool rows and status copy. Further native checks covered Codex's
+completion-before-persistence ordering and repeated tool IDs. Adapter recovery
+now discards old streamed details across an offline task switch. All reported
+findings were verified resolved; no concrete code finding remains open.
+
+Host upgrade activation is still opt-in. It requires the private installer
+configuration, original Google HTTP/fresh-WebSocket verifier, shared OAuth and
+Google-plugin regressions, and supervised gateway guard in
+[HermesUpgradeLinux.md](HermesUpgradeLinux.md). Those host regressions are required
+before the worker can issue a production qualification receipt. This follow-up
+has not independently completed them on a new official candidate, exercised a
+production systemd cutover, or upgraded the household Hermes installation.
+Existing production sign-in/chat acceptance and issue #1 remain recorded below.
+
 ## September 30 native app and deployment
 
 This follow-up adds the native iPhone/iPad app, native authentication and APNs,

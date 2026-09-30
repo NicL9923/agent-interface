@@ -1,0 +1,46 @@
+.hermes-upgrade-panel {
+  width: min(470px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 26px 30px 22px;
+  box-shadow: 0 24px 90px #14201926;
+}
+.hermes-upgrade-panel::backdrop { background: #14201955; }
+.upgrade-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
+.upgrade-header .eyebrow { margin: 0; }
+.upgrade-mark {
+  display: grid; place-items: center; width: 54px; height: 54px; margin-bottom: 22px;
+  border-radius: 18px; background: var(--accent-soft); color: var(--accent); font-size: 28px;
+}
+.upgrade-mark.is-working { animation: upgrade-breathe 2s ease-in-out infinite; }
+.upgrade-mark.needs-attention { color: var(--danger); background: var(--rail); }
+.hermes-upgrade-panel h2 { font-size: 25px; line-height: 1.2; margin-bottom: 12px; }
+.upgrade-description { color: var(--muted); font-size: 14px; min-height: 44px; margin-bottom: 24px; }
+.upgrade-versions { display: flex; gap: 26px; padding: 18px 0; margin: 0 0 22px; border-block: 1px solid var(--line); }
+.upgrade-versions > div { flex: 1; min-width: 0; }
+.upgrade-versions dt { color: var(--muted); font-size: 11px; margin-bottom: 7px; }
+.upgrade-versions dd { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.upgrade-work-block { font-size: 13px; color: var(--muted); }
+.upgrade-error { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.upgrade-action > .primary { width: 100%; min-height: 46px; }
+.upgrade-action > p { font-size: 11px; line-height: 1.6; text-align: center; color: var(--muted); margin: 12px 4px 22px; }
+.upgrade-checks { border-top: 1px solid var(--line); font-size: 12px; }
+.upgrade-checks summary { cursor: pointer; padding: 16px 0 8px; }
+.upgrade-checks summary > span { color: var(--muted); margin-left: 10px; font-size: 11px; }
+.upgrade-checks ol { list-style: none; padding: 0; margin: 12px 0 0; }
+.upgrade-checks li { display: flex; gap: 11px; padding: 9px 0; align-items: flex-start; }
+.upgrade-check-icon { width: 18px; flex-shrink: 0; color: var(--accent); text-align: center; }
+.upgrade-checks [data-check-status="failed"] .upgrade-check-icon { color: var(--danger); }
+.upgrade-checks strong { display: block; font-weight: 500; }
+.upgrade-checks small { display: block; color: var(--muted); line-height: 1.6; margin-top: 3px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.upgrade-checked-at { font-size: 10px; color: var(--muted); margin: 18px 0 0; }
+@keyframes upgrade-breathe { 50% { opacity: .55; transform: translateY(-2px); } }
+@media (max-width: 620px) {
+  .hermes-upgrade-panel { padding: 22px; border-radius: 20px; }
+  .hermes-upgrade-panel h2 { font-size: 23px; }
+}
+@media (prefers-reduced-motion: reduce) { .upgrade-mark.is-working { animation: none; } }

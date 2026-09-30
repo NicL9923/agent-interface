@@ -68,6 +68,77 @@ afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('exposes real streamed reasoning and keeps working while a tool is running', async () => {
+    snapshot.info.running = true;
+    await runtime.conversation('shared');
+    const event = (type:string,payload:Record<string,unknown>) => sockets[0].receive({method:'event',params:{session_id:'live-one',type,payload}});
+    event('message.start', {});
+    event('reasoning.delta', {text:'Exposed provider explanation.'});
+    event('thinking.delta', {text:'Still waiting for the provider…'});
+    const waiting = await runtime.conversation('shared');
+    expect(waiting.activity.detail).toBe('Still waiting for the provider…');
+    expect(waiting.messages.at(-1)?.reasoning).toBe('Exposed provider explanation.');
+    event('tool.start', {tool_id:'call-one',name:'terminal',args:{command:'printf synthetic'}});
+    event('message.delta', {text:'A streamed answer'});
+    const working = await runtime.conversation('shared');
+    expect(working.activity).toMatchObject({state:'working',detail:'Using terminal'});
+    expect(working.messages.at(-1)).toMatchObject({text:'A streamed answer',reasoning:'Exposed provider explanation.'});
+    expect(working.toolCalls).toMatchObject([{id:'call-one',name:'terminal',arguments:'{\n  "command": "printf synthetic"\n}',status:'running'}]);
+    event('tool.complete', {tool_id:'call-one',name:'terminal',result:{output:'synthetic',exit_code:1,error:'Command failed'}});
+    const finishedTool = await runtime.conversation('shared');
+    expect(finishedTool.activity.state).toBe('thinking');
+    expect(finishedTool.toolCalls).toMatchObject([{id:'call-one',status:'failed',error:'Command failed'}]);
+    expect(finishedTool.toolCalls![0].startedAt).toBeDefined();
+    expect(finishedTool.toolCalls![0].completedAt).toBeDefined();
+  });
+  it('recovers running tool details and reasoning from an authoritative cold snapshot', async () => {
+    snapshot.info.running = true;
+    snapshot.app_tool_calls = [{id:'run:call',name:'web_search',arguments:'{"query":"synthetic"}',status:'running'}];
+    snapshot.inflight = {reasoning:'Exposed native reasoning without answer text'};
+    const cold = await runtime.conversation('shared');
+    expect(cold.activity).toMatchObject({state:'working',detail:'Using web_search'});
+    expect(cold.toolCalls).toEqual(snapshot.app_tool_calls);
+    expect(cold.messages.at(-1)).toMatchObject({text:'',reasoning:snapshot.inflight.reasoning});
+  });
+  it('settles missed streamed completion without adding stale reasoning to canonical history', async () => {
+    snapshot.info.running = true;
+    await runtime.conversation('shared');
+    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'reasoning.delta',payload:{text:'Partial live explanation'}}});
+    snapshot.info.running = false;
+    snapshot.inflight = null;
+    snapshot.messages = [{role:'assistant',row_id:8,text:'The durable answer',reasoning:'The complete exposed explanation'}];
+    const settled = await runtime.conversation('shared');
+    expect(settled.messages).toHaveLength(1);
+    expect(settled.messages[0]).toMatchObject({text:'The durable answer',reasoning:'The complete exposed explanation'});
+  });
+  it('drops old streamed detail when another turn begins during a disconnected gap', async () => {
+    snapshot.info.running = true;
+    snapshot.app_run_id = 'old-run';
+    await runtime.conversation('shared');
+    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'reasoning.delta',payload:{text:'Old run partial reasoning'}}});
+    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'old-tool',name:'terminal'}}});
+    sockets[0].close();
+    snapshot.app_run_id = 'different-run';
+    snapshot.inflight = {assistant:'',streaming:true};
+    snapshot.messages = [{role:'assistant',row_id:8,text:'Completed prior answer',reasoning:'Completed prior reasoning'}];
+    await runtime.reconnect!();
+    const current = await runtime.conversation('shared');
+    expect(current.messages).toHaveLength(1);
+    expect(current.messages[0].reasoning).toBe('Completed prior reasoning');
+    expect(current.toolCalls).toEqual([]);
+    expect(current.activity.state).toBe('thinking');
+  });
+  it('preserves durable actual tool input/output and does not keep an idle bot working', async () => {
+    snapshot.messages = [{role:'tool',row_id:7,name:'terminal',tool_call_id:'call-one',args:{command:'synthetic'},
+      app_tool_result:{output:'completed',exit_code:0},app_tool_call:{id:'run-one:call-one',name:'terminal',arguments:'{"command":"synthetic"}',status:'completed',result:'actual result',startedAt:'2026-09-30T00:00:00Z',completedAt:'2026-09-30T00:00:01Z'}}];
+    await runtime.conversation('shared');
+    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'later-call',name:'terminal'}}});
+    const idle = await runtime.conversation('shared');
+    expect(idle.activity.state).toBe('idle');
+    expect(idle.toolCalls).toEqual([]);
+    expect(idle.messages[0].toolCall).toEqual(snapshot.messages[0].app_tool_call);
+    expect(idle.messages[0].text).toContain('completed');
+  });
   it('reports both qualified actual revisions and rejects unknown revisions', async () => {
     for (const actual of [revision, 'd23cc6b06455b8551fb6f61d3cad040a0e82f5b6']) {
       await runtime.close(); reportedRevision = actual;

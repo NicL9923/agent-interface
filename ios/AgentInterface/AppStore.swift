@@ -24,6 +24,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var sessionExpired = false
   @Published var notificationStatus = "Notifications are off"
   @Published var openedFile: PreviewFile?
+  @Published var upgradeStatus: UpgradeStatus?
+  @Published var upgradeBusy = false
+  @Published var upgradeError: String?
+  @Published var upgradeInstallUncertain = false
+  private var upgradeRequest: UpgradeInstallRequest?
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
   private var draftTask: Task<Void, Never>?
@@ -226,6 +231,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         sending = false
         uploading = false
         interruptionReviewed = false
+        resetUpgrade()
       }
       bootstrap = value
       api.csrf = value.csrfToken
@@ -556,7 +562,64 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     uploading = false
     appUnavailable = false
     sessionExpired = false
+    resetUpgrade()
     return true
+  }
+  private func resetUpgrade() {
+    upgradeStatus = nil
+    upgradeBusy = false
+    upgradeError = nil
+    upgradeInstallUncertain = false
+    upgradeRequest = nil
+  }
+  func refreshUpgrade() async {
+    await upgradeOperation(nil)
+  }
+  func checkUpgrade() async {
+    guard upgradeStatus?.canCheck == true else { return }
+    await upgradeOperation("check")
+  }
+  func installUpgrade(candidateRevision: String) async {
+    guard upgradeStatus?.canInstall == true, !upgradeInstallUncertain,
+      upgradeStatus?.candidate?.revision == candidateRevision else { return }
+    if upgradeRequest?.candidateRevision != candidateRevision {
+      upgradeRequest = UpgradeInstallRequest(candidateRevision: candidateRevision, requestId: UUID().uuidString)
+    }
+    await upgradeOperation("install")
+  }
+  private func upgradeOperation(_ action: String?) async {
+    guard let api, api.token != nil, !sessionExpired, !upgradeBusy else { return }
+    let currentGeneration = generation
+    upgradeBusy = true
+    defer { if currentGeneration == generation { upgradeBusy = false } }
+    do {
+      let value: UpgradeStatus
+      if action == "install", let upgradeRequest {
+        value = try await api.write("/hermes/upgrade/install", upgradeRequest)
+      } else if action == "check" {
+        value = try await api.write("/hermes/upgrade/check", [String: String]())
+      } else {
+        value = try await api.get("/hermes/upgrade")
+      }
+      guard currentGeneration == generation else { return }
+      upgradeStatus = value
+      upgradeError = nil
+      upgradeInstallUncertain = false
+      if ["succeeded", "failed", "rolled_back"].contains(value.phase) { upgradeRequest = nil }
+    } catch {
+      guard currentGeneration == generation, !(error is CancellationError) else { return }
+      let status = (error as? APIError)?.status
+      if status == 401 { report(error) }
+      if status == 404 {
+        upgradeError = "This app server doesn't support Hermes updates yet. Ask the self-hoster to update the app server."
+      } else {
+        upgradeError = error.localizedDescription
+      }
+      if action == "install", status == nil || status == 0 || (status ?? 0) >= 500 {
+        upgradeInstallUncertain = true
+        upgradeError = "The update request may have reached the server. Refresh its status before trying again. \(error.localizedDescription)"
+      }
+    }
   }
   func changeConnection() async {
     if await signOut() {

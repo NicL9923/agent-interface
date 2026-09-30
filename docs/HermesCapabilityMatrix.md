@@ -1,6 +1,6 @@
 # Hermes integration evidence
 
-Validated September 30, 2026 against [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), revisions `b9cb268deffc97946ec11645aa622a7353dd0591` and `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`, using Python 3.14.7 on macOS. The production revision also passed with the existing tracked OAuth repair, SHA256 `2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c`. The add-on reports the imported revision and repair hash; it rejects other revisions or tracked edits. The exact Python dependencies are recorded in [hermes-environment.json](evidence/hermes-environment.json) and constrained by [requirements.lock.txt](../scripts/spike/requirements.lock.txt).
+Validated September 30, 2026 against [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), revisions `b9cb268deffc97946ec11645aa622a7353dd0591` and `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`, using Python 3.14.7. The production revision also passed with the existing tracked OAuth repair, SHA256 `2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c`. The add-on reports the imported revision and repair hash. Other source revisions require a private receipt for that exact source, repair and application integration. The original constrained Python dependencies are recorded in [requirements.lock.txt](../scripts/spike/requirements.lock.txt). The validation ledger distinguishes ordinary virtual environments from Hermes's managed dependency generations.
 
 The tests ran real Hermes, its AIAgent, native tools, native profile/session stores, and the official scheduler provider. The local OpenAI HTTP provider is a deterministic fixture. It proves integration behavior, not answer quality or compatibility with a live commercial provider. No production service or household profile was used. Application tests with a Runtime double remain separate from this evidence.
 
@@ -55,6 +55,27 @@ The native baseline is in [hermes-native-probe.json](evidence/hermes-native-prob
 The PR follow-up uses native dashboard job reads for routine listing and event discovery. The tool-facing list also probes machine-wide gateway liveness, which can delay other requests. An app probe timed out there under heavy host load. The fresh application probe passed after removing those repeated process checks from polling. Native execution and store ownership are unchanged.
 
 ## Reproduce safely
+
+For a candidate outside the original revision allowlist, use a separate exact
+checkout and explicitly request qualification:
+
+```sh
+python3.14 scripts/spike/run.py --qualification --revision EXACT_40_CHARACTER_SHA \
+  --source /private/qualification/source --python /private/qualification/qualified-python
+```
+
+The managed qualification launcher activates a native PM generation built for
+that source. It preserves the fixture's disposable Hermes home and propagates
+activation to child tools. The supervisor never uses the probe-only revision
+permit. The upgrade worker writes a production qualification receipt only after
+the full real integration suite and configured host regressions succeed. See
+[Linux upgrade hooks](HermesUpgradeLinux.md) for the private installer contract.
+
+The dashboard's persistent maintenance lease fences synchronous RPCs, queued
+native pool work and deferred session work at native admission. The separately
+supervised gateway needs the persistent guard launcher so an expired native
+drain marker cannot reopen Discord or cron during verification. Temporary-host
+tests do not prove a production systemd cutover or live Google/Discord recovery.
 
 Install Node dependencies with `npm ci`, then run this from the repository with Python 3.14:
 

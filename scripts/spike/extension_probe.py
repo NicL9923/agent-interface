@@ -112,6 +112,40 @@ async def main(args):
     snapshot = await c.call("agent-interface.open", profile="spike")
     sid = snapshot["session_id"]
     saved = snapshot["canonical_stored_session_id"]
+    private_key = os.environ["HERMES_AGENT_INTERFACE_TOKEN"]
+    try:
+        await c.call("agent-interface.maintenance", action="acquire", operation_id="spike-maintenance", service_key="invalid")
+        raise AssertionError("A browser identity must not acquire host maintenance")
+    except RuntimeError:
+        pass
+    acquired = await c.call("agent-interface.maintenance", action="acquire", operation_id="spike-maintenance", service_key=private_key)
+    assert acquired["active"] and acquired["busy"] == []
+    other = await Client().connect()
+    before_maintenance = provider_count()
+    for client in (c, other):
+        try:
+            await client.call("prompt.submit", session_id=sid, profile="spike", text="No model execution during maintenance")
+            raise AssertionError("Native work started behind the maintenance fence")
+        except RuntimeError:
+            pass
+    # These native RPCs use the asynchronous pool and bypass handle_request.
+    # Check both work and configuration admission, then prove no profile exists.
+    for method, params in (
+        ("shell.exec", {"session_id": sid, "profile": "spike", "command": "printf maintenance-bypass"}),
+        ("profiles.create", {"name": "maintenance-must-not-create"}),
+    ):
+        try:
+            await other.call(method, **params)
+            raise AssertionError("Native pool work crossed the maintenance fence")
+        except RuntimeError as error:
+            assert "being upgraded" in str(error), str(error)
+    roster = await c.call("profiles.list")
+    assert not any(profile.get("name") == "maintenance-must-not-create" for profile in roster["profiles"])
+    assert provider_count() == before_maintenance
+    released = await c.call("agent-interface.maintenance", action="release", operation_id="spike-maintenance", service_key=private_key)
+    assert not released["active"]
+    await other.close()
+    evidence["checks"]["private_maintenance_fence"] = {"browser_identity_refused": True, "two_native_clients_fenced": True, "native_pool_work_fenced": True, "no_model_execution": True, "same_owner_release": True}
     await c.call("config.set", key="approvals.mode", value="manual", profile="spike")
     async def send(request_id, text, actor="synthetic-person-a", steer=False):
         return await c.call("agent-interface.submit", profile="spike", session_id=sid, request_id=request_id, sender_id=actor, text=text, steer=steer, attachments=[])
@@ -122,6 +156,11 @@ async def main(args):
     snapshot = await settled(c)
     assert sum(x.get("app_request_id") == first_id for x in snapshot["messages"]) == 1
     assert snapshot["canonical_stored_session_id"] == saved
+    detailed_tool = next(x for x in snapshot["messages"] if x.get("role") == "tool" and x.get("app_tool_call"))
+    assert detailed_tool["app_tool_call"]["status"] == "completed"
+    assert "printf" in detailed_tool["app_tool_call"]["arguments"]
+    assert "hermes-real-tool-proof" in detailed_tool["app_tool_call"]["result"]
+    evidence["checks"]["canonical_tool_details"] = {"actual_arguments": True, "actual_result": True, "stable_call_identity": True, "completion_state": True}
     evidence["checks"]["duplicate_admission"] = {"same_receipt": True, "canonical_user_rows": 1, "real_tool_output": any((x.get("app_tool_result") or {}).get("output") == "hermes-real-tool-proof" for x in snapshot["messages"])}
     second_id = "spike-second-" + str(time.time_ns())
     second = await send(second_id, "second task")
@@ -193,6 +232,12 @@ async def main(args):
     evidence["checks"]["durable_discovery"] = {"completion_events": sum(x["kind"] == "completed" for x in before["events"]), "approval_events": sum(x["kind"] == "approval" for x in before["events"]), "cursor_replay_duplicates": 0}
     interrupted_id = "spike-interrupted-" + str(time.time_ns())
     await send(interrupted_id, "PROBE_SLOW executor kill")
+    try:
+        await c.call("agent-interface.maintenance", action="acquire", operation_id="spike-active-maintenance", service_key=private_key)
+        raise AssertionError("Maintenance must refuse active native execution")
+    except RuntimeError:
+        pass
+    evidence["checks"]["active_work_upgrade_refused"] = True
     (home / "extension-probe-checkpoint.json").write_text(json.dumps({"request_id": interrupted_id, "epoch": caps["executor_epoch"], "cursor": before["cursor"], "provider_count": provider_count()}))
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(evidence, indent=2) + "\n")

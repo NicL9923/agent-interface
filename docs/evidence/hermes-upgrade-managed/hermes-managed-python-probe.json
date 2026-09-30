@@ -1,0 +1,42 @@
+{
+  "kind": "Real native PM dependency generation and managed qualification in marked disposable VPS homes",
+  "productionMutations": false,
+  "provider": "deterministic fixture",
+  "sourceRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "trackedPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "integrationDigest": "c9bb7d65223d0b4fec2e6dbb1323eb0a2c734ff7f2a8735ff267424f6c577e48",
+  "helperSha256": "ec21684feac2999f0addf6396a70c88cd9c05f19d4bb61df32aef15a955b34fb",
+  "extras": [
+    "all",
+    "discord",
+    "exa"
+  ],
+  "dependencyPluginMembers": 0,
+  "comparedNativeGenerations": 2,
+  "python": "3.14.7",
+  "node": "v24.21.0",
+  "fingerprint": {
+    "interpreterSha256": "8dfa9757a52b9c3edf1dedaaa2a7a8c40ea4beb058f20e90bdd47b48f3b1b176",
+    "dependenciesSha256": "d3cfa55424cc1990eaf1523872225e397759dfd8ed9a68daed3e6a31a27f828e"
+  },
+  "checks": {
+    "nativePreparation": true,
+    "independentNativeEquivalentMatch": true,
+    "postFullQualificationFingerprintStable": true,
+    "completedStageLaunchAllowed": true,
+    "actualLibraryMutationDetected": true,
+    "actualConsoleMutationDetected": true,
+    "fullNativeAndAppQualification": true,
+    "helperUnitTests": 7,
+    "maintenanceGuardChecks": 13,
+    "appChecks": 13,
+    "externalVenvAliasRejected": true
+  },
+  "appSourceDigestStart": "fa906aef5fb6cb9ddd0b7499adf5deb4c87ba623a9cdca93d5528c0227a97047",
+  "appSourceDigestEnd": "fa906aef5fb6cb9ddd0b7499adf5deb4c87ba623a9cdca93d5528c0227a97047",
+  "codeStateStable": true,
+  "limitations": [
+    "Dependency-member plugin copying has focused unit coverage; this live selection had no plugin dependency members.",
+    "Household Google/private host regressions and systemd production cutover are separate installer checks."
+  ]
+}

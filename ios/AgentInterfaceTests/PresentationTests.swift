@@ -17,6 +17,24 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(conversation.restorableReadAnchor("last-tool"))
     XCTAssertNil(conversation.restorableReadAnchor("missing"))
   }
+  func testCurrentToolCallsMergeWithCanonicalResultsByTheirActualID() throws {
+    let json = """
+      {"botId":"bot","messages":[{"id":"assistant","role":"assistant","text":"","toolCall":{"id":"call-one","name":"read_file","arguments":"{\\"path\\":\\"note.txt\\"}","status":"completed","result":"Saved note"}}],"activity":{"state":"working"},"approvals":[],"files":[],"toolCalls":[{"id":"call-one","name":"read_file","status":"running"},{"id":"call-two","name":"web_search","status":"running"}]}
+      """
+    let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
+    XCTAssertEqual(conversation.activityMessages.compactMap { $0.toolCall?.id }, ["call-one", "call-two"])
+    XCTAssertEqual(conversation.activityMessages.first?.toolCall?.result, "Saved note")
+    XCTAssertEqual(conversation.activityMessages.first?.toolCall?.arguments, "{\"path\":\"note.txt\"}")
+    XCTAssertTrue(conversation.visibleMessages.isEmpty)
+    XCTAssertNil(conversation.restorableReadAnchor("assistant"))
+    var mixed = conversation
+    mixed.messages[0].text = "Here is the answer."
+    XCTAssertEqual(mixed.visibleMessages.map(\.id), ["assistant"])
+    var tool = Message(id: "canonical-tool", role: "tool", text: "Actual canonical result", toolCall: ToolCall(id: "call", name: "read_file", status: "completed"))
+    XCTAssertEqual(tool.toolResult, "Actual canonical result")
+    tool.role = "assistant"
+    XCTAssertEqual(tool.toolResult, "", "Assistant answer text is not a tool result")
+  }
   func testTaskListsAreReadOnlyCompletionIndicatorsAndOrdinaryListsKeepMarkers() throws {
     let done = try XCTUnwrap(MarkdownView.listRow("- [x] Finished **work**"))
     XCTAssertEqual(done.completed, true)

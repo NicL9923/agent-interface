@@ -54,6 +54,8 @@
       ],
     ]
     static var routines: [[String: Any]] = []
+    static var upgradePhase = "idle"
+    static var upgradeReadsRemaining = 0
     static var avatar: [String: Any] = [
       "mode": "geometric", "shape": "blob", "color": "#1084FE", "eyes": "oval", "accessory": "none",
     ]
@@ -111,6 +113,9 @@
         body = [:]
       }
       if path == "/api/bootstrap" {
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
+          Self.preferences["presentation"] = "advanced"
+        }
         object = [
           "user": Self.user,
           "household": [
@@ -135,6 +140,58 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
+          object = [
+            "botId": path.components(separatedBy: "/")[3],
+            "messages": [["id": "fixture-answer", "role": "assistant", "text": "I'll check the current weather for the ranch.", "reasoning": "Fixture exposed reasoning: current weather needs a fresh forecast."]],
+            "activity": ["state": "working", "detail": "Checking the latest forecast"],
+            "toolCalls": [["id": "fixture-search", "name": "web_search", "arguments": "{\"query\":\"Texas ranch weather forecast\"}", "status": "running"]],
+            "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition,
+          ]
+        }
+      } else if path.hasPrefix("/api/hermes/upgrade") {
+        if path.hasSuffix("/check") {
+          Self.upgradePhase = "qualifying"
+          Self.upgradeReadsRemaining = 1
+        } else if path.hasSuffix("/install") {
+          Self.upgradePhase = "installing"
+          Self.upgradeReadsRemaining = 3
+          if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_UNCERTAIN"] == "1" {
+            status = 503
+          }
+        } else if Self.upgradeReadsRemaining > 0 {
+          Self.upgradeReadsRemaining -= 1
+        } else {
+          switch Self.upgradePhase {
+          case "qualifying": Self.upgradePhase = "ready"
+          case "installing": Self.upgradePhase = "verifying"; Self.upgradeReadsRemaining = 1
+          case "verifying": Self.upgradePhase = "succeeded"
+          default: break
+          }
+        }
+        let phase = Self.upgradePhase
+        let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": "compatibility", "label": "App compatibility", "status": phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
+        let fixtureMessage: String
+        switch phase {
+        case "idle": fixtureMessage = "Check the shared installation for a compatible update."
+        case "succeeded": fixtureMessage = "Fixture update verified. Conversations are preserved."
+        case "ready": fixtureMessage = "The candidate passed compatibility checks."
+        default: fixtureMessage = "The server is \(phase) the fixture installation."
+        }
+        let upgrade: [String: Any] = [
+          "available": true, "phase": phase,
+          "current": ["revision": phase == "succeeded" ? "fixture-new-revision" : "fixture-old-revision", "version": phase == "succeeded" ? "Fixture 2.0" : "Fixture 1.0"],
+          "candidate": ["revision": "fixture-new-revision", "version": "Fixture 2.0"],
+          "message": fixtureMessage,
+          "checks": fixtureChecks,
+          "canCheck": ["idle", "ready", "succeeded"].contains(phase),
+          "canInstall": phase == "ready", "busyBots": [],
+        ]
+        if status == 503 {
+          object = ["error": "Fixture connection lost during update admission"]
+        } else {
+          object = upgrade
+        }
       } else if path.hasSuffix("/draft") {
         if method == "PUT" { Self.draft = body }
         object = Self.draft

@@ -125,6 +125,23 @@ struct Message: Codable, Identifiable {
   var files: [FileRef]?
   var reasoning: String?
   var toolName: String?
+  var toolCall: ToolCall?
+  var isToolActivity: Bool { role == "tool" || (toolCall != nil && text.isEmpty) }
+  var displayToolName: String { toolCall?.name ?? toolName ?? "Tool" }
+  var toolResult: String {
+    let canonical = role == "tool" || toolCall == nil ? text : ""
+    return toolCall?.result ?? canonical
+  }
+}
+struct ToolCall: Codable, Identifiable {
+  var id: String
+  var name: String
+  var arguments: String?
+  var status: String
+  var result: String?
+  var error: String?
+  var startedAt: String?
+  var completedAt: String?
 }
 struct Approval: Codable, Identifiable {
   var id: String
@@ -170,17 +187,72 @@ struct Conversation: Codable {
   var files: [FileRef]
   var draft: Draft?
   var readPosition: ReadPosition?
+  var toolCalls: [ToolCall]?
+  var activityMessages: [Message] {
+    let canonical = messages.filter { $0.isToolActivity || $0.toolCall != nil }
+    let known = Set(canonical.compactMap { $0.toolCall?.id })
+    return canonical + (toolCalls ?? []).filter { !known.contains($0.id) }.map {
+      Message(id: "tool-call-" + $0.id, role: "tool", text: $0.result ?? "", toolCall: $0)
+    }
+  }
   var visibleMessages: [Message] {
-    messages.filter { $0.role != "tool" || !($0.files?.isEmpty ?? true) }
+    messages.filter { !$0.isToolActivity || !($0.files?.isEmpty ?? true) }
   }
   func restorableReadAnchor(_ saved: String?) -> String? {
     guard let saved else { return nil }
     if visibleMessages.contains(where: { $0.id == saved }) { return saved }
     guard let index = messages.firstIndex(where: { $0.id == saved }) else { return nil }
     return messages.dropFirst(index + 1).first {
-      $0.role != "tool" || !($0.files?.isEmpty ?? true)
+      !$0.isToolActivity || !($0.files?.isEmpty ?? true)
     }?.id
   }
+}
+struct UpgradeRevision: Codable {
+  var revision: String
+  var version: String?
+  var notesUrl: String?
+  var displayVersion: String { version ?? String(revision.prefix(12)) }
+}
+struct UpgradeCheck: Codable, Identifiable {
+  var id: String
+  var label: String
+  var status: String
+  var detail: String?
+}
+struct UpgradeStatus: Codable {
+  var available: Bool
+  var phase: String
+  var current: UpgradeRevision?
+  var candidate: UpgradeRevision?
+  var message: String
+  var checks: [UpgradeCheck]
+  var canCheck: Bool
+  var canInstall: Bool
+  var operationId: String?
+  var error: String?
+  var checkedAt: String?
+  var updatedAt: String?
+  var busyBots: [String]
+  var inProgress: Bool { ["checking", "qualifying", "installing", "verifying"].contains(phase) }
+  var installing: Bool { ["installing", "verifying"].contains(phase) }
+  var title: String {
+    switch phase {
+    case "checking": "Checking for an update"
+    case "qualifying": "Checking compatibility"
+    case "ready": "Update ready"
+    case "installing": "Updating Hermes"
+    case "verifying": "Verifying Hermes"
+    case "succeeded": "Hermes is up to date"
+    case "rolled_back": "Previous version restored"
+    case "blocked": "Update needs attention"
+    case "failed": "Update could not finish"
+    default: available ? "Keep Hermes up to date" : "Updates aren't available"
+    }
+  }
+}
+struct UpgradeInstallRequest: Encodable {
+  var candidateRevision: String
+  var requestId: String
 }
 struct Bootstrap: Codable {
   var user: Member

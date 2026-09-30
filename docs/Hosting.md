@@ -68,6 +68,20 @@ These copies protect against an application mistake. They are on the same host,
 so they do not establish disaster recovery from loss of that host. Existing Hermes
 backups remain separate.
 
+## Hermes upgrade follow-up
+
+PR #2 has been merged. The upgrade implementation adds private host configuration,
+an explicit administrator allowlist, a staged qualification receipt and persistent
+maintenance guards. These controls are opt-in. This follow-up has not been deployed
+to the household installation, and it has not run a production Hermes upgrade.
+
+Enabling host upgrades requires the [Linux installer contract](HermesUpgradeLinux.md),
+including its original Google authentication verifier and private OAuth/plugin
+regressions. Verify the guarded native gateway under its existing supervisor
+before enabling the update action. Keep the production source repair and both
+Discord connections intact. The local validation ledger records isolated
+execution separately from production acceptance.
+
 ## Native distribution
 
 iOS users connect to this same HTTPS origin. Apple signing, APNs credentials and

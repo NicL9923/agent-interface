@@ -117,6 +117,7 @@ struct ConversationView: View {
             )
             .id(message.id)
           }
+          if store.active { liveActivity }
           ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
             approval in approvalCard(approval)
           }
@@ -125,15 +126,12 @@ struct ConversationView: View {
           }
           if let conversation = store.conversation,
             store.bootstrap?.preferences.presentation == "advanced"
-              || conversation.messages.contains(where: { $0.role == "tool" })
+              || !conversation.activityMessages.isEmpty
           {
             DisclosureGroup("Activity details") {
               Text(conversation.activity.detail ?? store.activity.label).font(.footnote)
-              ForEach(conversation.messages.filter { $0.role == "tool" }.suffix(8)) { message in
-                VStack(alignment: .leading, spacing: 4) {
-                  Text(message.toolName ?? "Tool").font(.caption.bold())
-                  MarkdownView(text: message.text).font(.footnote)
-                }.padding(.vertical, 4)
+              ForEach(conversation.activityMessages.suffix(8)) { message in
+                ToolActivityView(message: message)
               }
               if store.bootstrap?.preferences.presentation == "advanced" {
                 LabeledContent("Model", value: bot.model).font(.caption)
@@ -221,6 +219,23 @@ struct ConversationView: View {
         }
       }
     }
+  }
+  private var liveActivity: some View {
+    HStack(alignment: .center, spacing: 12) {
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 44, name: bot.name)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(store.activity == .blocked ? "\(bot.name) needs your help" : "\(bot.name) is \(store.activity.label.lowercased())").font(.subheadline.bold())
+        if let detail = store.conversation?.activity.detail, !detail.isEmpty {
+          Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+        }
+        if store.bootstrap?.preferences.presentation == "advanced",
+          let call = store.conversation?.activityMessages.last(where: { $0.toolCall?.status == "running" })?.toolCall
+        {
+          Label(call.name, systemImage: "wrench.and.screwdriver").font(.caption)
+        }
+      }
+      Spacer(minLength: 0)
+    }.padding(.vertical, 8).accessibilityIdentifier("liveActivity")
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -383,12 +398,13 @@ struct MessageView: View {
           Text(value, style: .time).font(.caption2).foregroundStyle(.secondary)
         }
       }
-      if message.role == "tool" {
-        DisclosureGroup(message.toolName ?? "Tool activity") { MarkdownView(text: message.text) }
+      if message.isToolActivity {
+        ToolActivityView(message: message)
       } else {
         MarkdownView(text: message.text)
+        if advanced && message.toolCall != nil { ToolActivityView(message: message) }
       }
-      if let reasoning = message.reasoning, !reasoning.isEmpty {
+      if advanced, let reasoning = message.reasoning, !reasoning.isEmpty {
         DisclosureGroup("Reasoning") {
           MarkdownView(text: reasoning).font(.footnote).foregroundStyle(.secondary)
         }
@@ -398,6 +414,32 @@ struct MessageView: View {
       message.role == "user" ? Palette.user(scheme) : Color.clear,
       in: RoundedRectangle(cornerRadius: 14)
     ).accessibilityElement(children: .contain)
+  }
+}
+struct ToolActivityView: View {
+  var message: Message
+  var body: some View {
+    DisclosureGroup {
+      VStack(alignment: .leading, spacing: 8) {
+        if let arguments = message.toolCall?.arguments, !arguments.isEmpty {
+          Text("Arguments").font(.caption.bold())
+          Text(arguments).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+        }
+        if let error = message.toolCall?.error, !error.isEmpty {
+          Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
+        }
+        let result = message.toolResult
+        if !result.isEmpty { MarkdownView(text: result).font(.footnote) }
+      }.padding(.vertical, 4)
+    } label: {
+      HStack {
+        Label(message.displayToolName, systemImage: "wrench.and.screwdriver").font(.caption.bold())
+        Spacer()
+        if let status = message.toolCall?.status {
+          Text(status.capitalized).font(.caption).foregroundStyle(.secondary)
+        }
+      }
+    }
   }
 }
 struct AttentionView: View {

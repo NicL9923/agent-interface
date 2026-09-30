@@ -12,6 +12,14 @@ managed through Cloudflare. This includes the app service, domain and HTTPS.
 Preserve the existing Hermes dashboard, shared authentication repair, profiles,
 reverse proxy routes and VPN. Unrelated infrastructure changes remain outside scope.
 
+The September 30 follow-up also requires Hermes update qualification, a simple
+administrator update flow in both clients, a prominent animated conversation
+avatar, and actual reasoning/tool details in Advanced view. Check an exact
+official source revision in isolation before offering installation. Preserve the
+OAuth repair and existing connections, stop new native work during cutover, and
+verify recovery before reopening admission. An update request does not authorize
+an unattended production Hermes upgrade.
+
 ## Purpose
 
 Build an installable PWA and a native SwiftUI iOS app for two household members

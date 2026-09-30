@@ -19,6 +19,7 @@ import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
+import { HermesUpgrades } from "./upgrades.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -104,6 +105,7 @@ export async function createApp(
     background?: boolean;
     verifyGoogle?: Parameters<typeof installAuth>[3];
     sendApns?: ApnsSender;
+    upgrades?: HermesUpgrades;
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -124,6 +126,13 @@ export async function createApp(
     limits: { fileSize: 20 * 1024 * 1024, files: 1 },
   });
   await installAuth(app, store, config, options.verifyGoogle);
+  const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
+  app.addHook("onRequest", async (req, reply) => {
+    if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
+    const path = req.url.split("?")[0];
+    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines"))
+      return reply.code(409).send({ error: "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
+  });
   app.setErrorHandler((error, req, reply) => {
     if (error instanceof z.ZodError)
       return reply.code(400).send({
@@ -162,6 +171,15 @@ export async function createApp(
     ...(nativeAvatar ? { avatar: bot.avatar } : {}),
   });
   app.get("/api/health", async () => ({ ok: true }));
+  app.get("/api/hermes/upgrade", async req => upgrades.status(signedIn(req)));
+  app.post("/api/hermes/upgrade/check", async req => {
+    z.object({}).strict().parse(req.body);
+    return upgrades.check(signedIn(req));
+  });
+  app.post("/api/hermes/upgrade/install", async req => {
+    const input = z.object({ candidateRevision: z.string().regex(/^[a-f0-9]{40}$/), requestId: z.string().uuid() }).strict().parse(req.body);
+    return upgrades.install(signedIn(req), input);
+  });
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {
     if (snapshot) return snapshot;

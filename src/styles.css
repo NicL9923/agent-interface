@@ -324,6 +324,10 @@ a {
   border: 0;
   padding: 8px 0;
 }
+.rail-footer .connection-button { display: flex; align-items: center; gap: 7px; font-size: 10px; padding: 9px 0; min-height: 32px; }
+.connection-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--accent); }
+.connection-button.attention .connection-dot { background: currentColor; }
+.connection-chevron { margin-left: auto; font-size: 17px; }
 .connection {
   color: var(--muted);
   font-size: 10px;
@@ -516,6 +520,31 @@ a {
   font-size: 11px;
   padding: 3px 8px;
 }
+.conversation-activity { gap: 15px; margin: 0 0 12px; min-height: 68px; }
+.activity-copy { flex: 1; min-width: 0; }
+.activity-copy strong { display: flex; align-items: center; gap: 7px; color: var(--ink); font-size: 13px; font-weight: 500; }
+.activity-copy p { font-size: 12px; margin: 5px 0 0; line-height: 1.4; overflow-wrap: anywhere; max-height: 50px; overflow: auto; }
+.activity-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.state-thinking .activity-dot, .state-working .activity-dot { animation: activity-breathe 1.8s ease-in-out infinite; }
+.state-disconnected .activity-dot, .state-interrupted .activity-dot { background: var(--muted); }
+.state-failed .activity-dot { background: var(--danger); }
+.conversation-activity > button { font-size: 12px; padding: 9px 12px; border: 1px solid var(--line); }
+.tool-call-detail { border: 1px solid var(--line); background: var(--raised); border-radius: 12px; padding: 3px 14px; color: var(--ink); }
+.tool-call-detail summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; font-size: 12px; }
+.tool-call-detail summary::before { content: "›"; color: var(--muted); font-size: 18px; }
+.tool-call-detail[open] summary::before { transform: rotate(90deg); }
+.tool-call-detail summary > span:first-child { flex: 1; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.tool-call-status { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+.tool-call-running { color: var(--accent); }
+.tool-call-failed { color: var(--danger); }
+.tool-call-detail dl { margin: 8px 0 16px; font-size: 11px; }
+.tool-call-detail dl > div { display: flex; gap: 12px; margin: 6px 0; }
+.tool-call-detail dt { color: var(--muted); width: 50px; flex-shrink: 0; }
+.tool-call-detail dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+.tool-call-detail h3 { font-size: 11px; letter-spacing: 0; margin: 16px 0 8px; }
+.tool-call-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; max-height: 360px; overflow: auto; padding: 12px; background: var(--rail); border-radius: 8px; }
+@keyframes activity-breathe { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .state-thinking .activity-dot, .state-working .activity-dot { animation: none; } }
 .composer {
   background: var(--raised);
   border: 1px solid var(--line);

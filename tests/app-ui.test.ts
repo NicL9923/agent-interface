@@ -16,7 +16,9 @@ vi.mock("../src/client-api", async (original) => ({
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
+  Avatar: (props: { state?: string; size?: number }) => createElement("span", {
+    "data-avatar-state": props.state, "data-avatar-size": props.size,
+  }),
 }));
 
 const bootstrap: Bootstrap = {
@@ -84,6 +86,62 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("shows the current work beside a prominent avatar and stops claiming work during a disconnect", async () => {
+    conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" } };
+    await render();
+    expect(container.querySelector('.conversation-activity [data-avatar-size="60"]')?.getAttribute("data-avatar-state")).toBe("working");
+    expect(container.querySelector(".activity-copy")?.textContent).toContain("Running terminal");
+    vi.mocked(api).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/conversation") throw new Error("Disconnected");
+      return (path === "/bootstrap" ? bootstrap : savedDraft) as T;
+    });
+    await advance(1500);
+    expect(container.querySelector('.conversation-activity [data-avatar-size="60"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
+    expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Running terminal");
+  });
+
+  it("keeps Simple readable and exposes real reasoning and deduplicated tool details in Advanced", async () => {
+    const call = { id: "call-1", name: "terminal", arguments: '{"command":"pwd"}', status: "completed" as const,
+      result: "/home/hermes", startedAt: "2026-09-30T12:00:00Z", completedAt: "2026-09-30T12:00:01Z" };
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "reply", role: "assistant", text: "Found it.", reasoning: "Checking the working directory." },
+      { id: "tool-result", role: "tool", text: "/home/hermes", toolName: "terminal", toolCall: call },
+    ], toolCalls: [call, { id: "call-2", name: "read_file", status: "failed", error: "File is missing." }] };
+    await render();
+    expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(0);
+    expect(container.querySelector(".transcript")!.textContent).not.toContain("Checking the working directory.");
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+      ? { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } }
+      : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
+    await advance(8000);
+    expect(container.querySelectorAll('[data-tool-call-id="call-1"]')).toHaveLength(1);
+    expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(2);
+    const completed = container.querySelector<HTMLDetailsElement>('[data-tool-call-id="call-1"]')!;
+    expect(completed.open).toBe(false);
+    expect(completed.textContent).toContain("Completed");
+    expect(completed.textContent).toContain('{"command":"pwd"}');
+    expect(completed.textContent).toContain("/home/hermes");
+    expect(completed.querySelectorAll("time")).toHaveLength(2);
+    expect(container.querySelector('[data-tool-call-id="call-2"]')?.textContent).toContain("File is missing.");
+    expect(container.querySelector(".transcript")!.textContent).toContain("Checking the working directory.");
+  });
+
+  it("labels a running tool as last observed while disconnected", async () => {
+    conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" },
+      toolCalls: [{ id: "live-call", name: "terminal", status: "running", arguments: "pwd" }] };
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+      ? { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } }
+      : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
+    await render();
+    expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Running");
+    vi.mocked(api).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/conversation") throw new Error("Disconnected");
+      return (path === "/bootstrap" ? { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } } : savedDraft) as T;
+    });
+    await advance(1500);
+    expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Last seen running");
+  });
+
   it("loads a saved server draft while Hermes is down and never overwrites it with an empty draft", async () => {
     let resolveDraft!: (value: typeof savedDraft) => void;
     const draftResponse = new Promise<typeof savedDraft>((resolve) => { resolveDraft = resolve; });
