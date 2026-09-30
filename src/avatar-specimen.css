@@ -1,0 +1,157 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: ui-rounded, "Avenir Next", system-ui, sans-serif;
+  background: #f8f5ee;
+}
+main {
+  --surface: #f8f5ee;
+  --ink: #282820;
+  background: var(--surface);
+  color: var(--ink);
+  min-height: 100vh;
+  padding: 48px max(24px, calc((100vw - 1000px) / 2));
+}
+main[data-theme="dark"] {
+  --surface: #1b201e;
+  --ink: #f4efdf;
+}
+h1 {
+  font-size: clamp(40px, 6vw, 65px);
+  line-height: 1.06;
+  letter-spacing: -2px;
+  font-weight: 600;
+  margin: 24px 0;
+}
+h2 {
+  font-size: 21px;
+  font-weight: 600;
+}
+p {
+  max-width: 650px;
+  line-height: 1.6;
+  opacity: 0.75;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+select {
+  color: inherit;
+  background: transparent;
+  border: 1px solid #92978f66;
+  border-radius: 12px;
+  padding: 12px;
+  cursor: pointer;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #1084fe;
+  outline-offset: 3px;
+}
+button[aria-pressed="true"] {
+  background: #207763;
+  color: white;
+  border-color: #207763;
+}
+.spec-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 28px 0;
+}
+label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.spec-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-top: 1px solid #92978f55;
+  border-bottom: 1px solid #92978f55;
+  padding: 48px 0 28px;
+  text-align: center;
+}
+.spec-preview h2 {
+  margin-top: 26px;
+}
+.spec-states {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.spec-shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 24px 0;
+}
+.spec-shapes button {
+  width: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.spec-shapes span {
+  font-size: 12px;
+}
+.spec-swatch {
+  height: 34px;
+  width: 34px;
+  border-radius: 50%;
+  padding: 0;
+}
+.spec-states-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+.spec-states-grid > div {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  padding: 12px 0;
+  font-size: 14px;
+}
+section {
+  padding: 24px 0;
+}
+input[type="file"] {
+  max-width: 100%;
+  font-size: 14px;
+}
+@media (max-width: 550px) {
+  main {
+    padding: 26px 20px;
+  }
+  .spec-states-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .spec-shapes {
+    gap: 10px;
+  }
+  .spec-shapes button {
+    width: 85px;
+  }
+  .spec-controls {
+    gap: 16px;
+  }
+  h1 {
+    letter-spacing: -1px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto;
+  }
+}

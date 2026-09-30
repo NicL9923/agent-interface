@@ -3,9 +3,11 @@ dist/
 build/
 coverage/
 .vite/
+data/
 .env
 .env.*
 !.env.example
+.playwright-cli/
 .private/
 secrets/
 *.sqlite
@@ -14,3 +16,5 @@ secrets/
 *.db-*
 *.log
 .DS_Store
+__pycache__/
+*.pyc

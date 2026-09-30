@@ -1,0 +1,1613 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  AttentionRequest,
+  Bootstrap,
+  Bot,
+  Conversation,
+  FileRef,
+  Preferences,
+  SubmissionReceipt,
+} from "./shared/types";
+import { api, ApiError, setCsrf, write } from "./client-api";
+import { Avatar, stateLabels } from "./components/Avatar";
+import { BotSettings } from "./BotSettings";
+import { MessageMarkdown } from "./components/MessageMarkdown";
+type SavedConversation = Conversation & {
+  draft?: { text: string; attachments: FileRef[] };
+  readPosition?: { scrollTop: number };
+};
+type Draft = {
+  text: string;
+  attachments: FileRef[];
+  botId?: string;
+  userId?: string;
+};
+type Pending = {
+  requestId: string;
+  botId: string;
+  text: string;
+  attachments: FileRef[];
+  reviewedInterruption: boolean;
+};
+const draftKey = (user: string, bot: string) =>
+  `agent-interface:draft:${user}:${bot}`;
+function localRead<T>(key: string): T | null {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null");
+  } catch {
+    return null;
+  }
+}
+function localRemove(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {}
+}
+function localSave(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Server persistence still applies when browser storage is full. */
+  }
+}
+function clearSavedDraft(user: string, submission: Pending) {
+  const key = draftKey(user, submission.botId);
+  const saved = localRead<Draft>(key);
+  if (
+    saved &&
+    saved.text === submission.text &&
+    JSON.stringify(saved.attachments) === JSON.stringify(submission.attachments)
+  ) {
+    const cleared = {
+      text: "",
+      attachments: [],
+      botId: submission.botId,
+      userId: user,
+    };
+    localSave(key, cleared);
+    return cleared;
+  }
+  return null;
+}
+export function App() {
+  const [boot, setBoot] = useState<Bootstrap | null>(null);
+  const [auth, setAuth] = useState(false);
+  const [error, setError] = useState("");
+  const [botId, setBotId] = useState(
+    () => new URLSearchParams(location.search).get("bot") || "",
+  );
+  const [conversation, setConversation] = useState<SavedConversation | null>(
+    null,
+  );
+  const [draft, setDraft] = useState<Draft>({ text: "", attachments: [] });
+  const [draftReady, setDraftReady] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
+  const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [disconnected, setDisconnected] = useState(false);
+  const [settings, setSettings] = useState<Bot | "new" | null>(null);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(false);
+  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 620px)").matches);
+  const rail = useRef<HTMLElement>(null);
+  const preferencesDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const query = matchMedia("(max-width: 620px)");
+    const update = () => setMobile(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (!preferencesOpen) return;
+    const dialog = preferencesDialog.current;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      if (mobile) document.querySelector<HTMLButtonElement>("[aria-label='Open assistants']")?.focus();
+    };
+  }, [preferencesOpen, mobile]);
+  useEffect(() => {
+    if (!mobile || !railOpen || !rail.current) return;
+    const drawer = rail.current;
+    const previous = document.activeElement as HTMLElement | null;
+    const controls = () => Array.from(drawer.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), [tabindex='0']",
+    )).filter((element) => element.getClientRects().length > 0);
+    controls()[0]?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setRailOpen(false);
+      } else if (event.key === "Tab") {
+        const items = controls();
+        const first = items[0];
+        const last = items.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    drawer.addEventListener("keydown", keydown);
+    return () => {
+      drawer.removeEventListener("keydown", keydown);
+      previous?.focus();
+    };
+  }, [mobile, railOpen]);
+  const [reviewed, setReviewed] = useState(false);
+  useEffect(() => setReviewed(false), [conversation?.activity.state, conversation?.activity.runId]);
+  const [workerUpdate, setWorkerUpdate] = useState<ServiceWorker | null>(null);
+  const [installEvent, setInstallEvent] = useState<
+    (Event & { prompt: () => Promise<void> }) | null
+  >(null);
+  const [notice, setNotice] = useState("");
+  const positionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (positionTimer.current) clearTimeout(positionTimer.current);
+  }, [boot?.user.id]);
+  const scroll = useRef<HTMLDivElement>(null);
+  const bottom = useRef(true);
+  const activeBotRef = useRef(botId);
+  activeBotRef.current = botId;
+  const refresh = useCallback(async () => {
+    try {
+      const next = await api<Bootstrap>("/bootstrap");
+      setCsrf(next.csrfToken);
+      setBoot(next);
+      setAuth(false);
+      setDisconnected(!next.connection.connected);
+      setBotId(
+        (previous) =>
+          previous || next.preferences.defaultBotId || next.bots[0]?.id || "",
+      );
+      return next;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setAuth(true);
+        setBoot(null);
+      } else {
+        setDisconnected(true);
+        setError(String((e as Error).message));
+      }
+      return null;
+    }
+  }, []);
+  useEffect(() => {
+    void refresh();
+    const id = setInterval(() => void refresh(), 8000);
+    return () => clearInterval(id);
+  }, [refresh]);
+  useEffect(() => {
+    const theme = boot?.preferences.theme || "system";
+    document.documentElement.dataset.theme = theme;
+  }, [boot?.preferences.theme]);
+  useEffect(() => {
+    if (!botId || !boot) return;
+    let live = true;
+    const userId = boot.user.id;
+    setConversation(null);
+    setDraftReady(false);
+    setReviewed(false);
+    setReceipt(null);
+    setPending(
+      localRead<Pending>(`agent-interface:submission:${userId}:${botId}`),
+    );
+    const cached = localRead<Draft>(draftKey(userId, botId));
+    let draftLoaded = !!cached;
+    let loadingDraft = false;
+    let loadingConversation = false;
+    let firstConversation = true;
+    setDraft({ ...(cached || { text: "", attachments: [] }), botId, userId });
+    if (cached) setDraftReady(true);
+    // Personal drafts remain available even when the separate executor is down.
+    const loadDraft = async () => {
+      if (draftLoaded || loadingDraft) return;
+      loadingDraft = true;
+      try {
+        const saved = await api<Draft | null>(`/bots/${encodeURIComponent(botId)}/draft`);
+        if (!live) return;
+        draftLoaded = true;
+        setDraft({ ...(saved || { text: "", attachments: [] }), botId, userId });
+        setDraftReady(true);
+      } catch (e) {
+        if (live) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
+      } finally {
+        loadingDraft = false;
+      }
+    };
+    const load = async () => {
+      if (loadingConversation) return;
+      loadingConversation = true;
+      try {
+        const result = await api<SavedConversation>(
+          `/bots/${encodeURIComponent(botId)}/conversation`,
+        );
+        if (!live) return;
+        setConversation(result);
+        if (firstConversation) {
+          firstConversation = false;
+          requestAnimationFrame(() => {
+            if (!live || !scroll.current) return;
+            const saved = localRead<number>(`agent-interface:scroll:${userId}:${botId}`)
+              ?? result.readPosition?.scrollTop;
+            scroll.current.scrollTop = saved ?? scroll.current.scrollHeight;
+            bottom.current = scroll.current.scrollHeight - scroll.current.scrollTop
+              - scroll.current.clientHeight < 100;
+          });
+        } else if (bottom.current) {
+          requestAnimationFrame(() => {
+            if (live && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
+          });
+        }
+      } catch (e) {
+        if (live) {
+          setDisconnected(true);
+          if (firstConversation) setError((e as Error).message);
+        }
+      } finally {
+        loadingConversation = false;
+      }
+    };
+    void loadDraft();
+    void load();
+    const timer = setInterval(() => { void loadDraft(); void load(); }, 1500);
+    const url = new URL(location.href);
+    url.searchParams.set("bot", botId);
+    history.replaceState(null, "", url);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [botId, boot?.user.id]);
+  useEffect(() => {
+    if (
+      !boot ||
+      !botId ||
+      !draftReady ||
+      draft.botId !== botId ||
+      draft.userId !== boot.user.id
+    )
+      return;
+    const user = boot.user.id;
+    localSave(draftKey(user, botId), draft);
+    const timer = setTimeout(
+      () =>
+        void write(
+          `/bots/${encodeURIComponent(botId)}/draft`,
+          draft,
+          "PUT",
+        ).catch(() => {}),
+      350,
+    );
+    return () => clearTimeout(timer);
+  }, [draft, botId, draftReady, boot?.user.id]);
+  useEffect(() => {
+    if (!pending || !boot || sending) return;
+    let live = true;
+    const key = `agent-interface:submission:${boot.user.id}:${pending.botId}`;
+    const reconcile = async () => {
+      try {
+        const result = await api<SubmissionReceipt>(
+          `/submissions/${pending.requestId}`,
+        );
+        if (!live) return;
+        setReceipt(result);
+        if (result.status === "accepted") {
+          const cleared = clearSavedDraft(boot.user.id, pending);
+          if (cleared)
+            void write(
+              `/bots/${encodeURIComponent(pending.botId)}/draft`,
+              cleared,
+              "PUT",
+            ).catch(() => {});
+          setPending(null);
+          localRemove(key);
+          setDraft((current) =>
+            current.botId === pending.botId &&
+            current.userId === boot.user.id &&
+            current.text === pending.text &&
+            JSON.stringify(current.attachments) ===
+              JSON.stringify(pending.attachments)
+              ? {
+                  text: "",
+                  attachments: [],
+                  botId: current.botId,
+                  userId: current.userId,
+                }
+              : current,
+          );
+        } else if (
+          result.status === "rejected" ||
+          result.status === "interrupted"
+        ) {
+          setPending(null);
+          localRemove(key);
+        }
+      } catch {
+        /* Unknown submission stays pending until a reliable reconciliation. */
+      }
+    };
+    void reconcile();
+    const timer = setInterval(() => void reconcile(), 2000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [pending, boot?.user.id, sending]);
+  useEffect(() => {
+    if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
+    let cancelled = false;
+    void navigator.serviceWorker
+      .register("/sw.js")
+      .then((registration) => {
+        if (cancelled) return;
+        if (registration.waiting) setWorkerUpdate(registration.waiting);
+        registration.addEventListener("updatefound", () => {
+          const worker = registration.installing;
+          worker?.addEventListener("statechange", () => {
+            if (
+              worker.state === "installed" &&
+              navigator.serviceWorker.controller
+            )
+              setWorkerUpdate(registration.waiting);
+          });
+        });
+      })
+      .catch(() =>
+        setNotice("Offline installation is unavailable in this browser."),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    const handler = (event: Event) => {
+      event.preventDefault();
+      setInstallEvent(event as Event & { prompt: () => Promise<void> });
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+  const savePreferences = async (value: Preferences) => {
+    try {
+      const saved = await write<Preferences>("/preferences", value, "PATCH");
+      setBoot((previous) =>
+        previous ? { ...previous, preferences: saved } : previous,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const persistPosition = () => {
+    if (!boot || !botId || !scroll.current) return;
+    const top = scroll.current.scrollTop;
+    bottom.current =
+      scroll.current.scrollHeight - top - scroll.current.clientHeight < 100;
+    localSave(`agent-interface:scroll:${boot.user.id}:${botId}`, top);
+    if (positionTimer.current) clearTimeout(positionTimer.current);
+    const positionBot = botId;
+    positionTimer.current = setTimeout(
+      () =>
+        void write(
+          `/bots/${encodeURIComponent(positionBot)}/read-position`,
+          { scrollTop: top, messageId: conversation?.messages.at(-1)?.id },
+          "PUT",
+        ).catch(() => {}),
+      300,
+    );
+  };
+  const selectBot = (id: string) => {
+    persistPosition();
+    setBotId(id);
+    setRailOpen(false);
+    setError("");
+  };
+  const send = async () => {
+    if (
+      !boot ||
+      pending ||
+      sending ||
+      !draftReady ||
+      !botId ||
+      draft.botId !== botId ||
+      draft.userId !== boot.user.id
+    )
+      return;
+    setError("");
+    const request: Pending = {
+      requestId: crypto.randomUUID(),
+      botId,
+      text: draft.text,
+      attachments: draft.attachments,
+      reviewedInterruption: reviewed,
+    };
+    localSave(`agent-interface:submission:${boot.user.id}:${botId}`, request);
+    setPending(request);
+    setSending(true);
+    try {
+      const result = await write<SubmissionReceipt>(
+        `/bots/${encodeURIComponent(botId)}/messages`,
+        request,
+      );
+      if (activeBotRef.current === request.botId) setReceipt(result);
+      if (result.status === "accepted") {
+        const cleared = clearSavedDraft(boot.user.id, request);
+        if (cleared)
+          void write(
+            `/bots/${encodeURIComponent(request.botId)}/draft`,
+            cleared,
+            "PUT",
+          ).catch(() => {});
+        setDraft((current) =>
+          current.botId === request.botId &&
+          current.userId === boot.user.id &&
+          current.text === request.text &&
+          JSON.stringify(current.attachments) ===
+            JSON.stringify(request.attachments)
+            ? {
+                text: "",
+                attachments: [],
+                botId: current.botId,
+                userId: current.userId,
+              }
+            : current,
+        );
+        if (activeBotRef.current === request.botId) setPending(null);
+        localRemove(
+          `agent-interface:submission:${boot.user.id}:${request.botId}`,
+        );
+      } else if (
+        result.status === "rejected" ||
+        result.status === "interrupted"
+      ) {
+        if (activeBotRef.current === request.botId) setPending(null);
+        localRemove(
+          `agent-interface:submission:${boot.user.id}:${request.botId}`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.status < 500) {
+        if (activeBotRef.current === request.botId) setPending(null);
+        localRemove(
+          `agent-interface:submission:${boot.user.id}:${request.botId}`,
+        );
+      }
+      setError((e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  };
+  const upload = async (files: FileList | null) => {
+    if (!files || !boot) return;
+    const uploadBot = botId;
+    const uploadUser = boot.user.id;
+    let targetDraft = { ...draft };
+    setUploading(true);
+    setError("");
+    try {
+      for (const file of Array.from(files)) {
+        const form = new FormData();
+        form.append("file", file);
+        const result = await api<FileRef>(
+          `/bots/${encodeURIComponent(uploadBot)}/uploads`,
+          { method: "POST", body: form },
+        );
+        targetDraft =
+          localRead<Draft>(draftKey(uploadUser, uploadBot)) || targetDraft;
+        targetDraft = {
+          ...targetDraft,
+          attachments: [...targetDraft.attachments, result],
+        };
+        localSave(draftKey(uploadUser, uploadBot), targetDraft);
+        void write(
+          `/bots/${encodeURIComponent(uploadBot)}/draft`,
+          targetDraft,
+          "PUT",
+        ).catch(() => {});
+        setDraft((current) =>
+          current.botId === uploadBot && current.userId === uploadUser
+            ? { ...current, attachments: [...current.attachments, result] }
+            : current,
+        );
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const enablePush = async () => {
+    if (!boot?.vapidPublicKey) {
+      setNotice("Notifications are not configured on this installation.");
+      return;
+    }
+    try {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window))
+        throw new Error(
+          "This browser does not support Web Push. On iPhone, install the app first.",
+        );
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted")
+        throw new Error(
+          "Notification permission was not granted. You can enable it in browser settings.",
+        );
+      const existingRegistration =
+        await navigator.serviceWorker.getRegistration();
+      if (!existingRegistration)
+        throw new Error(
+          "Open the installed app to enable notifications. The development preview does not register its worker.",
+        );
+      const registration = await navigator.serviceWorker.ready;
+      const bytes = Uint8Array.from(
+        atob(boot.vapidPublicKey.replace(/-/g, "+").replace(/_/g, "/")),
+        (c) => c.charCodeAt(0),
+      );
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: bytes,
+      });
+      await write("/push/subscriptions", subscription.toJSON());
+      setNotice(
+        "Notifications enabled. Verify delivery with the installed phone app closed.",
+      );
+    } catch (e) {
+      setNotice((e as Error).message);
+    }
+  };
+  if (auth) return <SignIn onSuccess={() => void refresh()} />;
+  if (!boot)
+    return (
+      <main className="welcome">
+        <p className="eyebrow">Agent Interface</p>
+        <h1>
+          Your assistants,
+          <br />
+          in one familiar place.
+        </h1>
+        <p>{error || "Connecting to your household…"}</p>
+        {error && <button onClick={() => void refresh()}>Try again</button>}
+      </main>
+    );
+  const selected = boot.bots.find((bot) => bot.id === botId);
+  const state = disconnected
+    ? "disconnected"
+    : conversation?.activity.state || selected?.activity || "idle";
+  const active = ["thinking", "working", "waiting", "blocked"].includes(state);
+  const allBots = boot.bots;
+  const prefs = boot.preferences;
+  const ordered = [...allBots].sort(
+    (a, b) =>
+      Number(prefs.favorites.includes(b.id)) -
+      Number(prefs.favorites.includes(a.id)),
+  );
+  const renderBot = (bot: Bot) => (
+    <button
+      className={`bot-item ${bot.id === botId ? "selected" : ""}`}
+      key={bot.id}
+      onClick={() => selectBot(bot.id)}
+    >
+      <Avatar
+        avatar={bot.avatar}
+        state={
+          disconnected
+            ? "disconnected"
+            : bot.id === botId
+              ? state
+              : bot.activity
+        }
+        size={40}
+        name={bot.name}
+      />
+      <span>
+        <strong>{bot.name}</strong>
+        <small>{bot.shared ? "Shared assistant" : "Personal assistant"}</small>
+      </span>
+      {prefs.favorites.includes(bot.id) && (
+        <span className="favorite-star" aria-label="Favorite">
+          ☆
+        </span>
+      )}
+    </button>
+  );
+  return (
+    <div className="app-shell">
+      <aside
+        ref={rail}
+        id="assistant-navigation"
+        className={`bot-rail ${railOpen ? "open" : ""}`}
+        aria-label="Assistants"
+        role={mobile ? "dialog" : undefined}
+        aria-modal={mobile && railOpen ? true : undefined}
+        inert={mobile && !railOpen}
+      >
+        <div className="rail-brand">
+          <span className="brand-mark">a.</span>
+          <strong>Agent Interface</strong>
+          <button
+            className="mobile-only icon-button"
+            aria-label="Close assistants"
+            onClick={() => setRailOpen(false)}
+          >
+            ×
+          </button>
+        </div>
+        <div className="household-label">
+          <span className="online-dot" />
+          {boot.user.name}'s home
+        </div>
+        <div className="rail-scroll">
+          {prefs.sections.map((section) => (
+            <section className="bot-section" key={section.id}>
+              <h2>{section.name}</h2>
+              {ordered
+                .filter((bot) => section.botIds.includes(bot.id))
+                .map(renderBot)}
+            </section>
+          ))}
+          <section className="bot-section">
+            <h2>
+              {prefs.sections.length ? "More assistants" : "Your assistants"}
+            </h2>
+            {ordered
+              .filter(
+                (bot) =>
+                  !prefs.sections.some((section) =>
+                    section.botIds.includes(bot.id),
+                  ),
+              )
+              .map(renderBot)}
+            {!allBots.length && (
+              <p className="muted rail-empty">
+                No assistants are available from Hermes yet.
+              </p>
+            )}
+          </section>
+          <button className="new-bot" onClick={() => {
+            setRailOpen(false);
+            setSettings("new");
+          }}>
+            ＋ New assistant
+          </button>
+        </div>
+        <div className="rail-footer">
+          <button
+            onClick={() => {
+              setRailOpen(false);
+              setPreferencesOpen(!preferencesOpen);
+            }}
+          >
+            ☷ Preferences
+          </button>
+          <span className={`connection ${disconnected ? "attention" : ""}`}>
+            {disconnected ? "Connection lost" : "Connected to Hermes"}
+          </span>
+        </div>
+      </aside>
+      {railOpen && (
+        <button
+          className="rail-scrim"
+          aria-label="Close assistants"
+          onClick={() => setRailOpen(false)}
+        />
+      )}
+      <main className="conversation-panel" inert={mobile && railOpen}>
+        <header className="chat-header">
+          <button
+            className="mobile-only icon-button"
+            aria-label="Open assistants"
+            aria-expanded={railOpen}
+            aria-controls="assistant-navigation"
+            onClick={() => {
+              setPreferencesOpen(false);
+              setRailOpen(true);
+            }}
+          >
+            ☰
+          </button>
+          {selected ? (
+            <>
+              <Avatar
+                avatar={selected.avatar}
+                state={state}
+                size={42}
+                name={selected.name}
+              />
+              <div className="chat-title">
+                <h1>{selected.name}</h1>
+                <p>{`${selected.shared ? "Shared with your household" : "Your personal assistant"} · ${selected.provider ? selected.provider + " / " : ""}${selected.model}`}</p>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Edit assistant"
+                onClick={() => setSettings(selected)}
+              >
+                ⚙
+              </button>
+              <button
+                className="icon-button"
+                aria-label={
+                  prefs.favorites.includes(selected.id)
+                    ? "Remove favorite"
+                    : "Favorite assistant"
+                }
+                onClick={() =>
+                  void savePreferences({
+                    ...prefs,
+                    favorites: prefs.favorites.includes(selected.id)
+                      ? prefs.favorites.filter((id) => id !== selected.id)
+                      : [...prefs.favorites, selected.id],
+                  })
+                }
+              >
+                ☆
+              </button>
+            </>
+          ) : (
+            <div className="chat-title">
+              <h1>Welcome home</h1>
+              <p>Your assistants will appear here when Hermes is connected.</p>
+            </div>
+          )}
+        </header>
+        {workerUpdate && (
+          <div className="notice">
+            An app update is ready.
+            <button
+              onClick={() => {
+                navigator.serviceWorker.addEventListener(
+                  "controllerchange",
+                  () => location.reload(),
+                  { once: true },
+                );
+                workerUpdate.postMessage({ type: "SKIP_WAITING" });
+              }}
+            >
+              Reload when ready
+            </button>
+          </div>
+        )}
+        {disconnected && (
+          <div className="notice attention" role="status">
+            Connection lost. Your draft is saved. Activity is unknown.
+            <button onClick={() => void refresh()}>Reconnect</button>
+          </div>
+        )}
+        {error && (
+          <div className="notice error" role="alert">
+            {error}
+            <button aria-label="Dismiss error" onClick={() => setError("")}>
+              ×
+            </button>
+          </div>
+        )}
+        <div
+          className="transcript"
+          ref={scroll}
+          onScroll={persistPosition}
+          aria-label="Conversation"
+          tabIndex={0}
+        >
+          {!selected ? (
+            <div className="empty-state">
+              <Avatar size={100} />
+              <h2>A little less to carry.</h2>
+              <p>
+                Return to the same assistants, with the context and
+                conversations you share.
+              </p>
+              <button
+                className="primary"
+                disabled={!boot.capabilities.botConfiguration.supported}
+                title={boot.capabilities.botConfiguration.reason}
+                onClick={() => setSettings("new")}
+              >
+                Create an assistant
+              </button>
+              {!boot.capabilities.botConfiguration.supported && (
+                <p className="muted">
+                  Assistant setup is unavailable while Hermes is disconnected.
+                </p>
+              )}
+              {prefs.presentation === "advanced" && (
+                <details className="activity-details">
+                  <summary>Connection details</summary>
+                  <p>{boot.connection.detail}</p>
+                </details>
+              )}
+            </div>
+          ) : conversation?.messages.length ? (
+            <>
+              {conversation.messages
+                .filter((message) => message.role !== "tool" || message.files?.length)
+                .map((message) => (
+                  <article
+                    className={`message message-${message.role}`}
+                    key={message.id}
+                  >
+                    <div className="message-attribution">
+                      {message.role === "user"
+                        ? message.sender?.name || "Household member"
+                        : message.role === "assistant" || message.role === "tool"
+                          ? selected.name
+                          : message.toolName || message.role}
+                      {message.createdAt && (
+                        <time dateTime={message.createdAt}>
+                          {new Date(message.createdAt).toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </time>
+                      )}
+                    </div>
+                    {message.role === "assistant" ? (
+                      <MessageMarkdown text={message.text} />
+                    ) : message.role !== "tool" && (
+                      <div className="message-text">{message.text}</div>
+                    )}
+                    {message.reasoning && (
+                      <details className="message-detail">
+                        <summary>Reasoning</summary>
+                        <p>{message.reasoning}</p>
+                      </details>
+                    )}
+                    {message.files?.map((file) => (
+                      <FileLink file={file} key={file.id} />
+                    ))}
+                  </article>
+                ))}
+            </>
+          ) : (
+            <div className="empty-state">
+              <Avatar
+                avatar={selected.avatar}
+                state={state}
+                size={112}
+                name={selected.name}
+              />
+              <h2>What’s on your mind?</h2>
+              <p>
+                Ask a question, share a file, or hand over something from your
+                to-do list.
+              </p>
+              {!boot.capabilities.chat.supported && (
+                <p className="muted">{boot.capabilities.chat.reason}</p>
+              )}
+            </div>
+          )}
+          {conversation?.attention?.map((request) => (
+            <AttentionCard
+              key={request.id}
+              request={request}
+              botId={botId}
+              report={setError}
+            />
+          ))}
+          {conversation?.approvals
+            .filter((approval) => approval.status === "pending")
+            .map((approval) => (
+              <article className="approval-card" key={approval.id}>
+                <p className="eyebrow">Your decision needed</p>
+                <h2>{approval.title}</h2>
+                <p>{approval.detail}</p>
+                {approval.expiresAt && (
+                  <small>
+                    Expires {new Date(approval.expiresAt).toLocaleString()}
+                  </small>
+                )}
+                <div className="actions">
+                  <button
+                    className="primary"
+                    disabled={!boot.capabilities.approvals.supported}
+                    onClick={() =>
+                      void write(
+                        `/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`,
+                        { decision: "approved" },
+                      ).catch((e) => setError(e.message))
+                    }
+                  >
+                    Approve
+                  </button>
+                  <button
+                    disabled={!boot.capabilities.approvals.supported}
+                    onClick={() =>
+                      void write(
+                        `/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`,
+                        { decision: "denied" },
+                      ).catch((e) => setError(e.message))
+                    }
+                  >
+                    Decline
+                  </button>
+                </div>
+                <small>
+                  Either household member can decide. Hermes checks whether this
+                  request is still pending.
+                </small>
+              </article>
+            ))}
+        </div>
+        {selected && (
+          <footer className="composer-area">
+            <div className={`activity-status state-${state}`} role="status">
+              <span className="state-symbol">
+                {state === "done"
+                  ? "✓"
+                  : state === "blocked"
+                    ? "!"
+                    : state === "disconnected"
+                      ? "?"
+                      : state === "interrupted"
+                        ? "Ⅱ"
+                        : "·"}
+              </span>
+              <span>
+                {stateLabels[state]}
+                {conversation?.activity.detail &&
+                  ` · ${conversation.activity.detail}`}
+              </span>
+              {active && (
+                <button
+                  disabled={!boot.capabilities.stop.supported}
+                  title={boot.capabilities.stop.reason}
+                  onClick={() =>
+                    void write(
+                      `/bots/${encodeURIComponent(botId)}/stop`,
+                      {},
+                    ).catch((e) => setError(e.message))
+                  }
+                >
+                  Stop
+                </button>
+              )}
+            </div>
+            {state === "interrupted" && (
+              <label className="interruption-review">
+                <input
+                  type="checkbox"
+                  checked={reviewed}
+                  onChange={(event) => setReviewed(event.target.checked)}
+                />{" "}
+                I reviewed the interrupted task and its last actions before
+                continuing.
+              </label>
+            )}
+            {conversation &&
+              (conversation.messages.some(
+                (message) => message.role === "tool",
+              ) ||
+                prefs.presentation === "advanced") && (
+                <details className="activity-details">
+                  <summary>Activity details</summary>
+                  <p>{conversation.activity.detail || stateLabels[state]}</p>
+                  {conversation.messages
+                    .filter((message) => message.role === "tool")
+                    .slice(-8)
+                    .map((message) => (
+                      <p key={message.id}>
+                        <strong>{message.toolName}</strong> {message.text}
+                      </p>
+                    ))}
+                </details>
+              )}
+            {pending && (
+              <div className="notice" role="status">
+                Checking whether Hermes accepted your message. Your draft is
+                preserved; sending stays paused to prevent duplicates.
+                <button
+                  disabled={sending || !boot.capabilities.idempotency.supported}
+                  title={boot.capabilities.idempotency.reason}
+                  onClick={() => {
+                    setSending(true);
+                    void write<SubmissionReceipt>(
+                      `/bots/${encodeURIComponent(pending.botId)}/messages`,
+                      { ...pending, reviewedUncertain: true },
+                    )
+                      .then((result) => setReceipt(result))
+                      .catch((e) => setError(e.message))
+                      .finally(() => setSending(false));
+                  }}
+                >
+                  Retry this saved message
+                </button>
+              </div>
+            )}
+            {receipt?.status === "rejected" && (
+              <div className="notice attention" role="alert">
+                {receipt.message || "Hermes did not accept this message. Your draft is saved."}
+              </div>
+            )}
+            {receipt?.status === "interrupted" && (
+              <div className="notice attention">
+                This submission was interrupted. Review its last actions before
+                trying again.
+              </div>
+            )}
+            <form
+              className="composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void send();
+              }}
+            >
+              <div className="attachment-list">
+                {draft.attachments.map((file) => (
+                  <span key={file.id}>
+                    {file.name}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${file.name}`}
+                      onClick={() =>
+                        setDraft((previous) => ({
+                          ...previous,
+                          attachments: previous.attachments.filter(
+                            (f) => f.id !== file.id,
+                          ),
+                        }))
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <label className="sr-only" htmlFor="message">
+                Message {selected.name}
+              </label>
+              <textarea
+                id="message"
+                value={draft.botId === botId ? draft.text : ""}
+                placeholder={
+                  active
+                    ? `Guide ${selected.name} while they work…`
+                    : `Message ${selected.name}…`
+                }
+                onChange={(event) =>
+                  setDraft((previous) => ({
+                    ...previous,
+                    text: event.target.value,
+                  }))
+                }
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    if (
+                      !(
+                        pending ||
+                        sending ||
+                        uploading ||
+                        disconnected ||
+                        !boot.capabilities.chat.supported ||
+                        (state === "interrupted" && !reviewed) ||
+                        (active && !boot.capabilities.steering.supported)
+                      ) &&
+                      (draft.text.trim() || draft.attachments.length)
+                    )
+                      void send();
+                  }
+                }}
+                rows={2}
+                disabled={!draftReady || draft.botId !== botId}
+              />
+              <div className="composer-tools">
+                <label
+                  className={`attach-control ${!boot.capabilities.uploads.supported ? "disabled" : ""}`}
+                  title={boot.capabilities.uploads.reason}
+                >
+                  <span>＋ Attach</span>
+                  <input
+                    aria-label="Attach images, PDFs, or text"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain"
+                    multiple
+                    disabled={
+                      !draftReady ||
+                      !boot.capabilities.uploads.supported ||
+                      uploading ||
+                      draft.attachments.length >= 10
+                    }
+                    onChange={(event) => {
+                      void upload(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                <span className="composer-hint">
+                  {uploading
+                    ? "Uploading…"
+                    : active
+                      ? "New messages guide the current work"
+                      : "Enter to send · Shift + Enter for a new line"}
+                </span>
+                <button
+                  className="send-button"
+                  aria-label={active ? "Send guidance" : "Send message"}
+                  disabled={
+                    !draftReady ||
+                    pending !== null ||
+                    sending ||
+                    uploading ||
+                    disconnected ||
+                    !boot.capabilities.chat.supported ||
+                    (active && !boot.capabilities.steering.supported) ||
+                    (state === "interrupted" && !reviewed) ||
+                    (!draft.text.trim() && !draft.attachments.length)
+                  }
+                >
+                  ↑
+                </button>
+              </div>
+            </form>
+            <p className="shared-note">
+              {selected.shared
+                ? "One shared conversation. Messages and decisions keep their sender."
+                : "Personal organization does not create a privacy boundary."}
+            </p>
+          </footer>
+        )}
+      </main>
+      {settings && (
+        <BotSettings
+          bot={settings}
+          bootstrap={boot}
+          onClose={() => setSettings(null)}
+          onSaved={() => void refresh()}
+        />
+      )}
+      {preferencesOpen && (
+        <dialog
+          ref={preferencesDialog}
+          className="preferences-panel"
+          aria-labelledby="preferences-title"
+          onCancel={() => setPreferencesOpen(false)}
+          onClose={() => setPreferencesOpen(false)}
+        >
+          <header>
+            <h2 id="preferences-title">Your preferences</h2>
+            <button
+              className="icon-button"
+              aria-label="Close preferences"
+              onClick={() => setPreferencesOpen(false)}
+            >
+              ×
+            </button>
+          </header>
+          <label>
+            Appearance
+            <select
+              value={prefs.theme}
+              onChange={(e) =>
+                void savePreferences({
+                  ...prefs,
+                  theme: e.target.value as Preferences["theme"],
+                })
+              }
+            >
+              <option value="system">Follow device</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label>
+            Presentation
+            <select
+              value={prefs.presentation}
+              onChange={(e) =>
+                void savePreferences({
+                  ...prefs,
+                  presentation: e.target.value as Preferences["presentation"],
+                })
+              }
+            >
+              <option value="simple">Simple</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </label>
+          <label>
+            Open by default
+            <select
+              value={prefs.defaultBotId || ""}
+              onChange={(e) =>
+                void savePreferences({
+                  ...prefs,
+                  defaultBotId: e.target.value || undefined,
+                })
+              }
+            >
+              <option value="">First assistant</option>
+              {allBots.map((bot) => (
+                <option value={bot.id} key={bot.id}>
+                  {bot.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <fieldset>
+            <legend>Follow all activity</legend>
+            <p className="muted">
+              Shared-task notifications already go to participants. Follow an
+              assistant to receive all their activity.
+            </p>
+            {allBots.map((bot) => (
+              <label className="checkbox-label" key={bot.id}>
+                <input
+                  type="checkbox"
+                  checked={prefs.followBots.includes(bot.id)}
+                  onChange={(e) =>
+                    void savePreferences({
+                      ...prefs,
+                      followBots: e.target.checked
+                        ? [...prefs.followBots, bot.id]
+                        : prefs.followBots.filter((id) => id !== bot.id),
+                    })
+                  }
+                />
+                {bot.name}
+              </label>
+            ))}
+          </fieldset>
+          <SectionEditor
+            preferences={prefs}
+            bots={allBots}
+            save={savePreferences}
+          />
+          <div className="actions">
+            <button onClick={() => void enablePush()}>
+              Enable notifications
+            </button>
+            <button
+              onClick={() =>
+                void (async () => {
+                  try {
+                    if ("serviceWorker" in navigator) {
+                      const registration =
+                        await navigator.serviceWorker.getRegistration();
+                      const subscription =
+                        await registration?.pushManager.getSubscription();
+                      if (subscription) {
+                        await write(
+                          "/push/subscriptions",
+                          { endpoint: subscription.endpoint },
+                          "DELETE",
+                        );
+                        await subscription.unsubscribe();
+                      }
+                    }
+                    await write("/auth/logout", {});
+                    setBoot(null);
+                    setConversation(null);
+                    setDraft({ text: "", attachments: [] });
+                    setPending(null);
+                    setSettings(null);
+                    setRailOpen(false);
+                    setReceipt(null);
+                    setPreferencesOpen(false);
+                    setAuth(true);
+                  } catch (e) {
+                    setNotice((e as Error).message);
+                  }
+                })()
+              }
+            >
+              Sign out
+            </button>
+            {selected && (
+              <button
+                disabled={!boot.vapidPublicKey}
+                onClick={() =>
+                  void write("/push/test", { botId })
+                    .then(() =>
+                      setNotice(
+                        "Test notification queued. Verify it arrives with your installed phone app closed.",
+                      ),
+                    )
+                    .catch((e) => setNotice(e.message))
+                }
+              >
+                Send test notification
+              </button>
+            )}
+            {installEvent && (
+              <button onClick={() => void installEvent.prompt()}>
+                Install app
+              </button>
+            )}
+          </div>
+          <p className="muted">
+            On iPhone, choose Share, then Add to Home Screen. Install before
+            enabling notifications.
+          </p>
+          {notice && <p role="status">{notice}</p>}
+        </dialog>
+      )}
+    </div>
+  );
+}
+function FileLink({ file }: { file: FileRef }) {
+  return (
+    <a
+      className="file-link"
+      href={file.url || `/api/files/${encodeURIComponent(file.id)}`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {file.mime.startsWith("image/") && (
+        <img
+          src={file.url || `/api/files/${encodeURIComponent(file.id)}`}
+          alt={file.name}
+          loading="lazy"
+        />
+      )}
+      <span>↓ {file.name}</span>
+    </a>
+  );
+}
+function SectionEditor({
+  preferences,
+  bots,
+  save,
+}: {
+  preferences: Preferences;
+  bots: Bot[];
+  save: (v: Preferences) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <fieldset>
+      <legend>Assistant sections</legend>
+      {preferences.sections.map((section) => (
+        <div className="section-editor" key={section.id}>
+          <div className="actions">
+            <strong>{section.name}</strong>
+            <button
+              aria-label={`Remove section ${section.name}`}
+              onClick={() =>
+                void save({
+                  ...preferences,
+                  sections: preferences.sections.filter(
+                    (s) => s.id !== section.id,
+                  ),
+                })
+              }
+            >
+              ×
+            </button>
+          </div>
+          {bots.map((bot) => (
+            <label className="checkbox-label" key={bot.id}>
+              <input
+                type="checkbox"
+                checked={section.botIds.includes(bot.id)}
+                onChange={(e) =>
+                  void save({
+                    ...preferences,
+                    sections: preferences.sections.map((s) =>
+                      s.id === section.id
+                        ? {
+                            ...s,
+                            botIds: e.target.checked
+                              ? [...s.botIds, bot.id]
+                              : s.botIds.filter((id) => id !== bot.id),
+                          }
+                        : s,
+                    ),
+                  })
+                }
+              />
+              {bot.name}
+            </label>
+          ))}
+        </div>
+      ))}
+      <div className="actions">
+        <input
+          aria-label="New section name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Section name"
+        />
+        <button
+          disabled={!name.trim()}
+          onClick={() => {
+            void save({
+              ...preferences,
+              sections: [
+                ...preferences.sections,
+                { id: crypto.randomUUID(), name: name.trim(), botIds: [] },
+              ],
+            });
+            setName("");
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </fieldset>
+  );
+}
+function SignIn({ onSuccess }: { onSuccess: () => void }) {
+  const [config, setConfig] = useState<{
+    localDevAuth: boolean;
+    googleClientId?: string;
+  } | null>(null);
+  const [error, setError] = useState("");
+  const [member, setMember] = useState<"one" | "two">("one");
+  const google = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    void api<typeof config>("/auth/config")
+      .then(setConfig)
+      .catch((e) => setError(e.message));
+  }, []);
+  useEffect(() => {
+    if (!config?.googleClientId) return;
+    let cancelled = false;
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = () => {
+      const g = (
+        window as unknown as {
+          google: {
+            accounts: {
+              id: {
+                initialize: (v: unknown) => void;
+                renderButton: (e: HTMLElement, v: unknown) => void;
+              };
+            };
+          };
+        }
+      ).google;
+      if (cancelled || !google.current) return;
+      g.accounts.id.initialize({
+        client_id: config.googleClientId,
+        callback: async ({ credential }: { credential: string }) => {
+          try {
+            await write("/auth/google", { credential });
+            onSuccess();
+          } catch (e) {
+            setError((e as Error).message);
+          }
+        },
+      });
+      g.accounts.id.renderButton(google.current, {
+        theme: "outline",
+        size: "large",
+      });
+    };
+    document.head.appendChild(script);
+    return () => {
+      cancelled = true;
+      script.remove();
+    };
+  }, [config?.googleClientId]);
+  return (
+    <main className="welcome">
+      <p className="eyebrow">Agent Interface</p>
+      <Avatar size={100} />
+      <h1>
+        A familiar place
+        <br />
+        for your assistants.
+      </h1>
+      <p>Sign in to return to your household conversations.</p>
+      <div ref={google} />
+      {config?.localDevAuth && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void write("/auth/local", { member })
+              .then(onSuccess)
+              .catch((e) => setError(e.message));
+          }}
+        >
+          <label>
+            Local household member
+            <select
+              value={member}
+              onChange={(e) => setMember(e.target.value as "one" | "two")}
+            >
+              <option value="one">Household member one</option>
+              <option value="two">Household member two</option>
+            </select>
+          </label>
+          <button className="primary">Enter local workspace</button>
+          <p className="muted">
+            Local development sign-in is enabled on this machine.
+          </p>
+        </form>
+      )}
+      {config && !config.googleClientId && !config.localDevAuth && (
+        <p>Google sign-in is not configured on this installation.</p>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </main>
+  );
+}
+
+function AttentionCard({
+  request,
+  botId,
+  report,
+}: {
+  request: AttentionRequest;
+  botId: string;
+  report: (s: string) => void;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  return (
+    <article className="approval-card">
+      <p className="eyebrow">
+        {request.kind === "clarify"
+          ? "A question for you"
+          : "Continue in Hermes"}
+      </p>
+      <h2>{request.title}</h2>
+      <p>{request.detail}</p>
+      {request.kind === "clarify" && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            setBusy(true);
+            void write(
+              `/bots/${encodeURIComponent(botId)}/requests/${encodeURIComponent(request.id)}`,
+              { answers },
+            )
+              .catch((error) => report(error.message))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {request.questions?.map((question) => (
+            <label key={question.id}>
+              {question.prompt}
+              {question.options?.length ? (
+                <select
+                  required
+                  value={answers[question.id] || ""}
+                  onChange={(event) =>
+                    setAnswers({
+                      ...answers,
+                      [question.id]: event.target.value,
+                    })
+                  }
+                >
+                  <option value="">Choose an answer</option>
+                  {question.options.map((option) => (
+                    <option key={option}>{option}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  required
+                  value={answers[question.id] || ""}
+                  onChange={(event) =>
+                    setAnswers({
+                      ...answers,
+                      [question.id]: event.target.value,
+                    })
+                  }
+                />
+              )}
+            </label>
+          ))}
+          <button className="primary" disabled={busy}>
+            Send answers
+          </button>
+        </form>
+      )}
+      {request.kind === "official" && (
+        <p className="muted">
+          Open the official Hermes interface to handle this request. Return here
+          when it is complete.
+        </p>
+      )}
+    </article>
+  );
+}

@@ -1,0 +1,264 @@
+export type ActivityState =
+  | "idle"
+  | "thinking"
+  | "working"
+  | "waiting"
+  | "blocked"
+  | "done"
+  | "disconnected"
+  | "failed"
+  | "interrupted";
+export type Eyes = "round" | "oval" | "visor" | "spark";
+export type Accessory = "none" | "hat" | "glasses";
+export type Avatar =
+  | {
+      mode: "geometric";
+      shape:
+        | "drop"
+        | "triangle"
+        | "cloud"
+        | "circle"
+        | "capsule"
+        | "blob"
+        | "pebble"
+        | "squircle"
+        | "hex";
+      color: string;
+      eyes: Eyes;
+      accessory: Accessory;
+      eyeWidth?: number;
+      eyeHeight?: number;
+      eyeSpacing?: number;
+    }
+  | {
+      mode: "mascot";
+      family: "sprout" | "fox" | "bear";
+      color: string;
+      eyes: Eyes;
+      accessory: Accessory;
+      eyeWidth?: number;
+      eyeHeight?: number;
+      eyeSpacing?: number;
+    }
+  | { mode: "portrait"; src: string; origin: "uploaded" | "generated" };
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  picture?: string;
+}
+export interface Preferences {
+  presentation: "simple" | "advanced";
+  theme: "system" | "light" | "dark";
+  favorites: string[];
+  defaultBotId?: string;
+  sections: { id: string; name: string; botIds: string[] }[];
+  followBots: string[];
+}
+export interface Capability {
+  supported: boolean;
+  reason?: string;
+}
+export type CapabilityKey =
+  | "chat"
+  | "steering"
+  | "approvals"
+  | "uploads"
+  | "generatedFiles"
+  | "botConfiguration"
+  | "tools"
+  | "skills"
+  | "routines"
+  | "durableEvents"
+  | "idempotency"
+  | "imageGeneration"
+  | "stop"
+  | "portraitGeneration"
+  | "avatarMetadata";
+export type Capabilities = Record<CapabilityKey, Capability>;
+export interface Bot {
+  id: string;
+  name: string;
+  description?: string;
+  instructions?: string;
+  model: string;
+  provider?: string;
+  enabledMcpServers?: string[];
+  shared: boolean;
+  ownerId?: string;
+  avatar?: Avatar;
+  enabledTools?: string[];
+  enabledSkills?: string[];
+  sessionId?: string;
+  activity: ActivityState;
+}
+export interface BotInput {
+  confirmModel?: boolean;
+  name: string;
+  description?: string;
+  instructions: string;
+  model: string;
+  provider?: string;
+  enabledMcpServers?: string[];
+  shared: boolean;
+  enabledTools?: string[];
+  enabledSkills?: string[];
+}
+export interface FileRef {
+  id: string;
+  name: string;
+  mime: string;
+  size?: number;
+  url?: string;
+}
+export interface Message {
+  id: string;
+  role: "user" | "assistant" | "tool" | "system";
+  text: string;
+  createdAt?: string;
+  sender?: Pick<User, "id" | "name">;
+  files?: FileRef[];
+  reasoning?: string;
+  toolName?: string;
+}
+export interface Approval {
+  id: string;
+  title: string;
+  detail: string;
+  status: "pending" | "approved" | "denied" | "expired";
+  expiresAt?: string;
+}
+export interface Activity {
+  state: ActivityState;
+  detail?: string;
+  runId?: string;
+  updatedAt?: string;
+}
+export interface AttentionRequest {
+  id: string;
+  kind: "clarify" | "official";
+  title: string;
+  detail: string;
+  questions?: { id: string; prompt: string; options?: string[] }[];
+}
+export interface Conversation {
+  attention?: AttentionRequest[];
+  botId: string;
+  sessionId?: string;
+  messages: Message[];
+  activity: Activity;
+  approvals: Approval[];
+  files: FileRef[];
+}
+export interface Tool {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+export interface Skill {
+  required?: boolean;
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+export interface Routine {
+  id: string;
+  botId: string;
+  name: string;
+  prompt: string;
+  schedule: string;
+  enabled: boolean;
+  recipientIds?: string[];
+}
+export interface Bootstrap {
+  user: User;
+  household: User[];
+  preferences: Preferences;
+  bots: Bot[];
+  capabilities: Capabilities;
+  connection: { connected: boolean; version?: string; detail?: string };
+  csrfToken: string;
+  vapidPublicKey?: string;
+}
+export interface Submission {
+  reviewedInterruption?: boolean;
+  requestId: string;
+  botId: string;
+  text: string;
+  attachments: FileRef[];
+  senderId: string;
+}
+export interface SubmissionReceipt {
+  requestId: string;
+  status: "accepted" | "uncertain" | "rejected" | "interrupted";
+  runId?: string;
+  messageId?: string;
+  message?: string;
+}
+export interface RuntimeEvent {
+  id: string;
+  botId: string;
+  runId?: string;
+  routineId?: string;
+  kind: "completed" | "approval" | "failed" | "interrupted" | "activity";
+  title: string;
+  body?: string;
+  occurredAt: string;
+}
+export interface RuntimeDiscovery {
+  cursor: string;
+  events: RuntimeEvent[];
+}
+export interface RuntimeStatus {
+  connected: boolean;
+  version?: string;
+  detail?: string;
+}
+export interface Runtime {
+  status(): Promise<RuntimeStatus>;
+  capabilities(): Promise<Capabilities>;
+  listBots(): Promise<Bot[]>;
+  saveBot(input: BotInput, id?: string): Promise<Bot>;
+  deleteBot(id: string): Promise<void>;
+  stop(botId: string): Promise<void>;
+  generatePortrait(botId: string, prompt: string): Promise<FileRef>;
+  setAvatar?(botId: string, avatar: Avatar): Promise<void>;
+  conversation(botId: string): Promise<Conversation>;
+  submit(input: Submission): Promise<SubmissionReceipt>;
+  lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
+  steer(input: Submission): Promise<SubmissionReceipt>;
+  answerRequest(
+    botId: string,
+    id: string,
+    answers: Record<string, string>,
+  ): Promise<void>;
+  approve(
+    botId: string,
+    approvalId: string,
+    decision: "approved" | "denied",
+    senderId: string,
+  ): Promise<void>;
+  upload(
+    botId: string,
+    input: { name: string; mime: string; data: Buffer },
+  ): Promise<FileRef>;
+  download(id: string): Promise<{ data: Buffer; name: string; mime: string }>;
+  tools(botId: string): Promise<Tool[]>;
+  setTools(botId: string, ids: string[]): Promise<void>;
+  skills(botId: string): Promise<Skill[]>;
+  setSkills(botId: string, ids: string[]): Promise<void>;
+  routines(): Promise<Routine[]>;
+  saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
+  deleteRoutine(id: string): Promise<void>;
+  discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
+  close(): Promise<void>;
+}
+export const defaultPreferences: Preferences = {
+  presentation: "simple",
+  theme: "system",
+  favorites: [],
+  sections: [],
+  followBots: [],
+};
