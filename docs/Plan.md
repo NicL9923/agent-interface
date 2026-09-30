@@ -2,12 +2,20 @@
 
 Implementation brief from the September 29, 2026 planning interview. Nicolas
 requested that implementation begin in a fresh session using the
-[kickoff prompt](ImplementationPrompt.md). Production deployment remains separate.
+[kickoff prompt](ImplementationPrompt.md).
+
+On September 30, Nicolas added a native iOS app with full feature parity and
+confirmed the setup split below. These additions extend the settled scope;
+the planning interview remains complete. He subsequently authorized production
+hosting on the existing Hermes VPS at `agentui.wildflowersranch.com`, with DNS
+managed through Cloudflare. This includes the app service, domain and HTTPS.
+Preserve the existing Hermes dashboard, shared authentication repair, profiles,
+reverse proxy routes and VPN. Unrelated infrastructure changes remain outside scope.
 
 ## Purpose
 
-Build an installable PWA for two household members using one shared Hermes
-installation. Everyday questions are the primary use case. Image generation is
+Build an installable PWA and a native SwiftUI iOS app for two household members
+using one shared Hermes installation. Everyday questions are the primary use case. Image generation is
 a secondary use case. The interface should feel like returning to a persistent
 assistant rather than starting a disposable chat.
 
@@ -35,6 +43,13 @@ release includes full everyday bot configuration, not only a chat wrapper.
   skills, and routine management in the first release.
 - New provider and service sign-ins remain in the official Hermes interface
   initially. The custom app configures connections already established there.
+- The self-hoster configures the permanent Hermes connection during server setup.
+  Web users only sign in. Native iOS users enter the app server's address and sign
+  in to that household. Neither client collects the Hermes gateway token.
+- The native iOS app shares the server API and canonical conversations. It must
+  include bot, tool, skill, routine and avatar configuration, attachments,
+  approvals, steering, personal organization, recovery and notifications.
+  Native controls and navigation may differ from the web layout.
 
 ## Avatar acceptance requirements
 
@@ -69,6 +84,10 @@ assume that published examples grant asset reuse rights.
   integration spike.
 - The browser communicates only with the app's authenticated same-origin
   endpoints. Hermes and provider credentials remain server-side.
+- The iOS app authenticates through a system browser session and exchanges a
+  short-lived, one-time code bound to its PKCE verifier for an app session.
+  Tokens belong in Keychain and must be scoped to the selected server. Browser
+  cookie and CSRF protections remain intact.
 - Google sign-in with an explicit household allowlist. Keep private account and
   deployment details outside this public repository.
 - Hermes owns profiles, tools, skills, memory, routines, execution, approval
@@ -90,6 +109,9 @@ assume that published examples grant asset reuse rights.
 - Web Push must work with the installed phone app closed and open the correct
   saved conversation. Cache versioned static assets conservatively; do not cache
   authenticated API responses or arbitrary transcripts in the service worker.
+- Native notifications use APNs with the same persisted recipient rules as Web
+  Push. Signing, Apple configuration and physical-device delivery require
+  separate external acceptance. A simulated notification is not delivery proof.
 - Handle routine results as well as human-started tasks. Routine notification
   recipients must be explicitly persisted because those runs have no current
   human task participant.
@@ -97,6 +119,10 @@ assume that published examples grant asset reuse rights.
   compatibility suite and rollback path. Do not alter shared infrastructure
   through ordinary bot configuration.
 - Human group chats and additional agent runtimes remain out of scope.
+
+Nicolas also requested an assessment of replacing Hermes. The
+[runtime assessment](HarnessAssessment.md) records that research. It does not
+authorize a runtime replacement in this implementation.
 
 ## Unresolved integration risks
 
@@ -138,8 +164,8 @@ Produce a capability matrix for:
 
 Report missing capabilities and the smallest proposed extension before committing
 to the final transport. Then build and review the avatar specimen and the complete
-phone path. Production promotion remains a separate action; this planning
-brief does not authorize a deployment or infrastructure change.
+phone path. The original planning brief excluded production changes. Nicolas's
+September 30 follow-up authorizes the specific deployment described above.
 
 ## References
 

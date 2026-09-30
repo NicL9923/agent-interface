@@ -1,0 +1,144 @@
+{
+  "kind": "T3 collaborative browser checks against real isolated Hermes; deterministic model provider",
+  "date": "2026-09-29",
+  "frontendSourceSha256": {
+    "src/App.tsx": "edb9a6cb79392a70271bbf38fad9ee560d0a6296bc56d5cbf5c32f5d7530ff53",
+    "src/BotSettings.tsx": "233f5cbbaee7b00dd77c4c1261f9be0cc78ea79b78754364a070810b7bc5bff0",
+    "src/styles.css": "794918f98cb6523b776f12bf2cbd624cd3d403302cd2d49de3196b25ce84d62e",
+    "src/components/Avatar.tsx": "d1448afd12cc99eabcabb99956bf2554955050fc822010cd1983adc1baf96d2d",
+    "src/components/avatar.css": "ac43aaf463bea75a6aecac79983bc2de837c9fcb02718714ede8b0e5df6a7b13",
+    "src/avatar-specimen.tsx": "9d9c74e1793095473d72497229aa74bfb7d21c00b06978f1695a6670e9877750",
+    "src/avatar-specimen.css": "9cc6f231db3e21f9a63d779e93e697d622d0264d42710335c8f63a3dd910ad47",
+    "scripts/service-worker.js": "14105ff06edb9474af02f1cc93d6ca9ce27861ad3cffecc5b838c39b2e2798eb",
+    "scripts/build-worker.mjs": "e6744beee3890e0cb862cc4175d40ff1bef61ae08c5a6a698f9e17e7bd7aeadb"
+  },
+  "build": "1087024edf975c44",
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 800,
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "themes": [
+        "light",
+        "dark"
+      ]
+    }
+  ],
+  "checks": {
+    "twoLocalIdentitiesAndLogout": true,
+    "sharedConversationAndSenderAttribution": true,
+    "createBotWithInstructionsAndSharedModel": true,
+    "geometricShapeColorSaved": true,
+    "mascotSaved": true,
+    "uploadedPortraitSavedAndAuthenticatedImageLoaded": true,
+    "draftPreservedAcrossBotSwitches": true,
+    "perUserThemeAndSections": true,
+    "noHorizontalOverflow": true,
+    "workerUpdateExplicitReload": true,
+    "staticCacheOnly": true,
+    "reducedMotionSpecimenStable": true,
+    "workingSpecimenMoves": true,
+    "disconnectedSpecimenSettlesStill": true,
+    "crossUserNativeApprovalAndRecordedApprover": true
+  },
+  "cachePaths": [
+    "/assets/index-BDEqPlh5.css",
+    "/assets/index-CySxsrM2.js",
+    "/icon-192.png",
+    "/icon-512.png",
+    "/icon.svg",
+    "/index.html",
+    "/manifest.webmanifest"
+  ],
+  "limits": [
+    "Local development identities, not live Google OAuth.",
+    "Viewport checks, not physical phone installation or push delivery.",
+    "Reduced motion exercised by specimen control; native OS preference is not emulated by the T3 browser tool.",
+    "Portrait generation is disabled because the isolated runtime has no image backend.",
+    "Avatar trajectories are an original approximation reviewed against the primary reference, not pixel-identical copies."
+  ],
+  "visualEvidence": "browser-review.png",
+  "followupFindings": [
+    "Resolved: native approval snapshots clear the card after completion.",
+    "Resolved: generated files render in chat while raw tool details stay collapsed.",
+    "Resolved: rejected image guidance explains the limitation and retains the draft.",
+    "Resolved: image-only messages retain sender attribution and render authenticated image previews.",
+    "Sign-out clears bot settings and pending scroll writes when identities change."
+  ],
+  "finalSmoke": {
+    "build": "20a3cf1591b45d97",
+    "frontendSourceSha256": {
+      "src/App.tsx": "a185598989c1abcc190d46716d7e5ceda347ffb587912b84d3321257d76f2e75",
+      "src/BotSettings.tsx": "2481a2d824a00c744ad8628534b2317c2cd7440e08441c70386d2178e3d48020",
+      "src/styles.css": "794918f98cb6523b776f12bf2cbd624cd3d403302cd2d49de3196b25ce84d62e",
+      "src/components/Avatar.tsx": "d1448afd12cc99eabcabb99956bf2554955050fc822010cd1983adc1baf96d2d",
+      "src/components/avatar.css": "ac43aaf463bea75a6aecac79983bc2de837c9fcb02718714ede8b0e5df6a7b13",
+      "src/avatar-specimen.tsx": "9d9c74e1793095473d72497229aa74bfb7d21c00b06978f1695a6670e9877750",
+      "src/avatar-specimen.css": "9cc6f231db3e21f9a63d779e93e697d622d0264d42710335c8f63a3dd910ad47",
+      "scripts/service-worker.js": "14105ff06edb9474af02f1cc93d6ca9ce27861ad3cffecc5b838c39b2e2798eb",
+      "scripts/build-worker.mjs": "e6744beee3890e0cb862cc4175d40ff1bef61ae08c5a6a698f9e17e7bd7aeadb"
+    },
+    "adapterSha256": "50496d67e513a72ba157fb42584dcb03ca79e1e22220ac75d3a34d4dd67d90fb",
+    "extensionSha256": "ccecfc0279319986059b005c285ef6c7c7e39eeeacd59ca2a15e9c540ca7b8a8",
+    "checks": {
+      "approvalCardClearedAfterNativeCompletion": true,
+      "freshRegisteredPortraitSavedToNativeAsset": true,
+      "activeImageRejectionExplainedAndDraftRetained": true,
+      "generatedFileVisibleWithToolDetailsCollapsed": true,
+      "generatedFileAuthenticatedBytes": "synthetic-file-proof",
+      "imageOnlyCanonicalSender": "Local member one",
+      "imageOnlyPreviewLoaded": true,
+      "imageOnlyServerPathHidden": true,
+      "phoneNoHorizontalOverflow": true
+    }
+  },
+  "prFollowup": {
+    "build": "c474588de95617ad",
+    "sourceSha256": {
+      "src/App.tsx": "fa7f0a6c29758c50d9ea1a000c64c2ac2661c0077eae61930b0202d23d1c995a",
+      "src/BotSettings.tsx": "9c76aeec19a42c4d19327feec675a14acabc1a28fe893a0a8e1b3e3b00944825",
+      "src/avatar-specimen.css": "9cc6f231db3e21f9a63d779e93e697d622d0264d42710335c8f63a3dd910ad47",
+      "src/avatar-specimen.tsx": "9d9c74e1793095473d72497229aa74bfb7d21c00b06978f1695a6670e9877750",
+      "src/client-api.ts": "489111da1a4dc5e7c76118b5ee6fbb2d2aa801fff528757490356790056a7883",
+      "src/components/Avatar.tsx": "d1448afd12cc99eabcabb99956bf2554955050fc822010cd1983adc1baf96d2d",
+      "src/components/MessageMarkdown.tsx": "f1e7a609c02d961a13c6bdfc3600fbb9a7e86ff9bdb9aa33c667992bedb40641",
+      "src/components/avatar.css": "ac43aaf463bea75a6aecac79983bc2de837c9fcb02718714ede8b0e5df6a7b13",
+      "src/components/message-markdown.css": "b84ba93d823f7c91a4928f7a71bc9bf95caf6c895a4ebad2bc40a182f3183cfe",
+      "src/hermes/extension.py": "3a4af8f9513f97300fe5f27c2aa9028510eb52000d27e78d49939601d3a444ab",
+      "src/main.tsx": "9199bfba8182fe6921f500d9a9eb35618abb637bd2b6fa2829539a0dc5af554c",
+      "src/server/app.ts": "45c585543adab3568dc3d85facf465c0d4eb10cd6d6036efa2c25f90f9bec08a",
+      "src/server/auth.ts": "c866b3e2afaf29f8e38ff1fd05f49de4356823c20ec77aab0773d312acbfe125",
+      "src/server/config.ts": "959444c07613033aa258746cda435a32b8fca6d0e57aa0ce23aa359c2f9d9ad1",
+      "src/server/hermes.ts": "80b8e0f8ccf0a045c0217efb7bb375288240cdf2998c50ddcf4a852eb9b5cfaa",
+      "src/server/index.ts": "fb6340c400a071c131eda873db5610c411085dad768c2820b4e2dff7b091c3c7",
+      "src/server/notifications.ts": "fc0fbaeacc739bc9cdd4597895aec10c5c26c0b19afa931d6a221d6d0d78752b",
+      "src/server/store.ts": "569a8bf5bbb29433ef5c5b3c586036c3834789063cb884c62748670cb0722caa",
+      "src/shared/types.ts": "c47573e957a551442e69f0b810dd5d7afc53762ed03469e24adb72fb2e56bfdc",
+      "src/styles.css": "14c3baf838035767616a0422040144cf36b63341bea05f59ad13d3d427dcfb23"
+    },
+    "checks": {
+      "safeMarkdownRenderedFromRealHermesFixture": true,
+      "actualClipboardWriteSucceeded": true,
+      "phoneCodeScrollsInsideItsBlock": true,
+      "phoneAndDesktopNoHorizontalOverflow": true,
+      "phoneDrawerFocusWraps": true,
+      "closedPhoneDrawerInert": true,
+      "preferencesUsesNativeModal": true,
+      "namedAssistantSettingsDialog": true,
+      "preferencesEscapeRestoresPhoneNavigationFocus": true
+    },
+    "screenshots": [
+      "desktop-chat.png",
+      "phone-chat.png",
+      "phone-avatar.png"
+    ],
+    "provider": "deterministic local fixture"
+  }
+}
