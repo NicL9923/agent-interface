@@ -1,6 +1,6 @@
 {
-  "revision": "b9cb268deffc97946ec11645aa622a7353dd0591",
-  "tracked_patch_sha256": null,
+  "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "tracked_patch_sha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
   "python": "3.14.7",
   "dependencies": [
     "annotated-doc==0.0.5",

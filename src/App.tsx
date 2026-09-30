@@ -16,7 +16,7 @@ import { ConnectionPanel } from "./components/ConnectionPanel";
 import { SignIn } from "./components/SignIn";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
-  readPosition?: { scrollTop: number };
+  readPosition?: { scrollTop?: number; messageId?: string };
 };
 type Draft = {
   text: string;
@@ -179,7 +179,7 @@ export function App() {
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
           setSettings(null); setPreferencesOpen(false); setError("");
         }
-        setCsrf(next.csrfToken);
+        setCsrf(next.csrfToken ?? "");
         setBoot((previous) => ({ ...next,
           bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
             ? previous.bots : next.bots,
@@ -301,9 +301,14 @@ export function App() {
           firstConversation = false;
           requestAnimationFrame(() => {
             if (!live || !scroll.current) return;
-            const saved = localRead<number>(`agent-interface:scroll:${userId}:${botId}`)
-              ?? result.readPosition?.scrollTop;
-            scroll.current.scrollTop = saved ?? scroll.current.scrollHeight;
+            const saved = localRead<number>(`agent-interface:scroll:${userId}:${botId}`);
+            const messages = [...scroll.current.querySelectorAll<HTMLElement>('[data-message-id]')];
+            const anchorIndex = result.messages.findIndex(message => message.id === result.readPosition?.messageId);
+            const anchor = messages.find(element => element.dataset.messageId === result.readPosition?.messageId)
+              ?? (anchorIndex >= 0 ? messages.find(element => result.messages.findIndex(message => message.id === element.dataset.messageId) >= anchorIndex) : undefined);
+            scroll.current.scrollTop = saved ?? (anchor
+              ? scroll.current.scrollTop + anchor.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top
+              : result.readPosition?.scrollTop ?? scroll.current.scrollHeight);
             bottom.current = scroll.current.scrollHeight - scroll.current.scrollTop
               - scroll.current.clientHeight < 100;
           });
@@ -479,11 +484,15 @@ export function App() {
     localSave(`agent-interface:scroll:${boot.user.id}:${botId}`, top);
     if (positionTimer.current) clearTimeout(positionTimer.current);
     const positionBot = botId;
+    const viewportTop = scroll.current.getBoundingClientRect().top;
+    const visibleMessage = [...scroll.current.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find(element => element.getBoundingClientRect().bottom > viewportTop + 8);
+    const messageId = bottom.current ? conversation?.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
     positionTimer.current = setTimeout(
       () =>
         void write(
           `/bots/${encodeURIComponent(positionBot)}/read-position`,
-          { scrollTop: top, messageId: conversation?.messages.at(-1)?.id },
+          { scrollTop: top, messageId },
           "PUT",
         ).catch(() => {}),
       300,
@@ -924,6 +933,7 @@ export function App() {
                   <article
                     className={`message message-${message.role}`}
                     key={message.id}
+                    data-message-id={message.id}
                   >
                     <div className="message-attribution">
                       {message.role === "user"
@@ -1098,14 +1108,20 @@ export function App() {
                   disabled={sending || !boot.capabilities.idempotency.supported}
                   title={boot.capabilities.idempotency.reason}
                   onClick={() => {
+                    const epoch = identityEpoch.current;
+                    const requestBot = pending.botId;
+                    const current = () => epoch === identityEpoch.current &&
+                      activeBotRef.current === requestBot;
                     setSending(true);
                     void write<SubmissionReceipt>(
                       `/bots/${encodeURIComponent(pending.botId)}/messages`,
                       { ...pending, reviewedUncertain: true },
                     )
-                      .then((result) => setReceipt(result))
-                      .catch((e) => setError(e.message))
-                      .finally(() => setSending(false));
+                      .then((result) => { if (current()) setReceipt(result); })
+                      .catch((e) => { if (current()) setError(e.message); })
+                      .finally(() => {
+                        if (epoch === identityEpoch.current) setSending(false);
+                      });
                   }}
                 >
                   Retry this saved message

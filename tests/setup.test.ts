@@ -16,6 +16,13 @@ const configured = { LOCAL_DEV_AUTH: 'true', HERMES_URL: 'http://127.0.0.1:19121
 const original = '# Existing private settings\nLOCAL_DEV_AUTH=true\nHERMES_URL=http://127.0.0.1:19121\nHERMES_TOKEN="old#token"\nOTHER=keep\n';
 
 describe('host-local connection setup', () => {
+  it('forwards explicit service authentication to connection verification', async () => {
+    const factory = vi.fn(() => ({status: async () => ({connected: true, code: 'ready' as const}), close: async () => {}}));
+    const values = {...configured, HERMES_AUTH_MODE: 'service', HERMES_TOKEN: 's'.repeat(43)};
+    await checkSetup(values, factory);
+    expect(factory).toHaveBeenCalledWith({url: values.HERMES_URL, token: values.HERMES_TOKEN, authMode: 'service'});
+    await expect(checkSetup({...configured, HERMES_AUTH_MODE: 'other'}, factory)).rejects.toThrow('HERMES_AUTH_MODE');
+  });
   it('preserves comments, unrelated multiline assignments and quoted values, replacing duplicate settings', () => {
     const text = '# Keep this\r\nexport OTHER="first\r\nsecond"\r\nHERMES_TOKEN="old\r\ntoken"\r\nHERMES_TOKEN=duplicate\r\nEXTRA=\'hash#value\'\r\n';
     const result = updateEnv(text, {HERMES_TOKEN: 'new#token"quoted', LOCAL_DEV_AUTH: 'false'});
@@ -91,7 +98,7 @@ describe('host-local connection setup', () => {
     const close = vi.fn(async () => {});
     const factory = vi.fn(() => ({status, close}));
     expect(await checkSetup(configured, factory)).toEqual({connected: true, code: 'ready'});
-    expect(factory).toHaveBeenCalledWith({url: configured.HERMES_URL, token: configured.HERMES_TOKEN});
+    expect(factory).toHaveBeenCalledWith({url: configured.HERMES_URL, token: configured.HERMES_TOKEN, authMode: 'static'});
     expect(status).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
   });

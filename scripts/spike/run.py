@@ -12,11 +12,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import hashlib
 import urllib.request
 from pathlib import Path
 from guard import verify_target
 
 REVISION = "b9cb268deffc97946ec11645aa622a7353dd0591"
+QUALIFIED_REVISIONS = [REVISION, "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6"]
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -41,9 +43,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", type=Path, help="Reuse only an existing marked disposable spike dependency environment")
     parser.add_argument("--app-only", action="store_true", help="Rerun only authenticated app acceptance against a fresh isolated gateway")
+    parser.add_argument("--revision", choices=QUALIFIED_REVISIONS, default=REVISION)
+    parser.add_argument("--source", type=Path, help="Use a separate detached local qualification checkout without changing it")
+    parser.add_argument("--python", type=Path, help="Reuse an existing constrained dependency interpreter with --source; source imports are explicitly isolated")
+    parser.add_argument("--source-patch-sha256", help="Required exact git diff HEAD hash for a locally repaired qualification checkout")
     args = parser.parse_args()
     root = args.reuse.resolve() if args.reuse else Path(tempfile.mkdtemp(prefix="agent-interface-spike-"))
     source, home, venv, workspace = (root / name for name in ("source", "home", "venv", "workspace"))
+    if args.source:
+        if args.reuse: raise SystemExit("Use either --source or --reuse, never both")
+        source = args.source.resolve()
+    if args.python and not args.source: raise SystemExit("--python requires a separate --source checkout")
     if args.reuse and (not (home / ".agent-interface-isolated").is_file() or (home / ".agent-interface-isolated").read_text() != "agent-interface-disposable-spike"):
         raise SystemExit("Reuse requires an already marked disposable home")
     if args.reuse:
@@ -51,14 +61,21 @@ def main():
         workspace = root / ("workspace-run-" + secrets.token_hex(4))
     home.mkdir(mode=0o700, exist_ok=True); workspace.mkdir(exist_ok=True)
     (home / ".agent-interface-isolated").write_text("agent-interface-disposable-spike")
-    python = venv / "bin" / "python"
+    # Preserve the venv launcher symlink; resolving it selects the base interpreter and loses dependencies.
+    python = args.python.absolute() if args.python else venv / "bin" / "python"
     if not args.reuse:
-        subprocess.run(["git", "clone", "--filter=blob:none", "https://github.com/NousResearch/hermes-agent.git", str(source)], check=True)
-        subprocess.run(["git", "-C", str(source), "checkout", "--detach", REVISION], check=True)
-        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-        subprocess.run([str(python), "-m", "pip", "install", "--constraint", str(REPO / "scripts/spike/requirements.lock.txt"), "-e", str(source)], check=True)
-    if subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() != REVISION:
+        if not args.source:
+            subprocess.run(["git", "clone", "--filter=blob:none", "https://github.com/NousResearch/hermes-agent.git", str(source)], check=True)
+            subprocess.run(["git", "-C", str(source), "checkout", "--detach", args.revision], check=True)
+        if not args.python:
+            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+            subprocess.run([str(python), "-m", "pip", "install", "--constraint", str(REPO / "scripts/spike/requirements.lock.txt"), "-e", str(source)], check=True)
+    if subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() != args.revision:
         raise SystemExit("Unexpected source revision")
+    patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])
+    patch_hash = hashlib.sha256(patch).hexdigest() if patch else None
+    if patch_hash != args.source_patch_sha256:
+        raise SystemExit("Qualification checkout repair hash differs from --source-patch-sha256")
     if (home / ".agent-interface-isolated").read_text() != "agent-interface-disposable-spike":
         raise SystemExit("Not an isolated spike root")
     provider_port, gateway_port = port(), port()
@@ -84,6 +101,9 @@ approvals:
     (home / ".env").write_text("OPENAI_API_KEY=isolated-fixture\n")
     (home / ".env").chmod(0o600)
     env = {**os.environ, "HERMES_HOME": str(home), "HERMES_SPIKE_PROVIDER_PORT": str(provider_port), "HERMES_SPIKE_PROVIDER_LOG": str(root / "provider-executions.jsonl"), "HERMES_SPIKE_URL": f"http://127.0.0.1:{gateway_port}", "HERMES_SPIKE_TOKEN": token, "HERMES_DASHBOARD_SESSION_TOKEN": token, "HERMES_SERVE_HEADLESS": "1", "HERMES_SKIP_UPDATE_CHECK": "1"}
+    env["PYTHONPATH"] = str(source)
+    env["HERMES_SPIKE_REVISION"] = args.revision
+    env["HERMES_SPIKE_PATCH_SHA256"] = patch_hash or ""
     # Keep production API secrets out of this process and every tool it can spawn.
     for key in list(env):
         if any(word in key for word in ("API_KEY", "ACCESS_TOKEN", "SECRET")) and key != "HERMES_SPIKE_TOKEN":
@@ -145,7 +165,7 @@ approvals:
             raise RuntimeError("Real application probe failed")
         evidence = REPO / "docs/evidence/hermes-environment.json"
         freeze = subprocess.check_output([str(python), "-m", "pip", "freeze"], text=True)
-        evidence.write_text(json.dumps({"revision": REVISION, "python": sys.version.split()[0], "dependencies": [line for line in freeze.splitlines() if not line.startswith(("#", "-e"))], "provider": "deterministic fixture", "production_access": False}, indent=2) + "\n")
+        evidence.write_text(json.dumps({"revision": args.revision, "tracked_patch_sha256": patch_hash, "python": sys.version.split()[0], "dependencies": [line for line in freeze.splitlines() if not line.startswith(("#", "-e"))], "provider": "deterministic fixture", "production_access": False}, indent=2) + "\n")
         print("Native and add-on spike passed. Evidence saved under docs/evidence. Disposable private logs: " + str(root))
     finally:
         if gateway: stop(gateway)

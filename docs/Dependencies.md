@@ -34,7 +34,7 @@ as a command and does not depend on the removed programmatic API.
 # App state and authentication
 
 Hermes owns conversations and execution. The app SQLite database stores identities,
-sessions, preferences, drafts, read positions, bot presentation, submission intents,
+browser and native sessions, preferences, drafts, read positions, bot presentation, submission intents,
 actor attribution, task participants, explicit routine recipients, subscriptions,
 notification discovery records, delivery attempts, and the discovery cursor.
 It has no canonical message or conversation-history table. An uncertain submission
@@ -53,11 +53,19 @@ lets the service worker replace the same event's notification.
 
 Google ID tokens must have a verified email matching `HOUSEHOLD_EMAILS`. Every
 session request checks the current allowlist. Cookies are HTTP-only, same-site
-strict, and secure in production. API writes require the configured origin and the
+strict, and secure in production. Browser API writes require the configured origin and the
 session's CSRF token. Production startup fails without HTTPS, Google configuration,
 and an explicit household allowlist. A public listener or public origin enforces
 the same rules even if `NODE_ENV=development`; forgetting that environment flag
 cannot expose a development sign-in route. HTTPS origins always set secure cookies.
+
+The native iOS app uses the same allowlist through a PKCE-bound browser handoff.
+Opaque bearer sessions are hashed in SQLite and expire after seven days. Native
+requests omit Origin and cookies; any bearer request with Origin is rejected.
+Session revocation also removes its APNs device registrations. The native
+[authentication contract](native-api.md) records the endpoints and expiry rules.
+APNs uses Node's built-in cryptography and HTTP/2; no additional npm dependency
+is required.
 
 For local browser validation, `LOCAL_DEV_AUTH=true` permits two local identities
 only in development, with both the listener and configured origin on loopback.

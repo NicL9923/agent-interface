@@ -1,0 +1,25 @@
+{
+  "kind": "Native authentication against real isolated Hermes with deterministic provider; local test account, not live Google or physical iOS",
+  "at": "2026-09-30T15:07:51.362146+00:00",
+  "sourceFiles": {
+    "src/hermes/extension.py": "ce07c6c1b6c0a0c4cea9c7f776493f0299c3f711426810bf2539794afaacad22",
+    "src/server/apns.ts": "6471f693427d3f04a85a2cd265e8b8b558542302496ba54275404d2ce96b0f61",
+    "src/server/app.ts": "dc3584a015c022226046b34b852bd7bb283de58dc7e8c2799d0912ea335d27bf",
+    "src/server/auth.ts": "35ed9dd7cf1ca6316c10d6c3da27135c4c11b3f880af2c1930d7b26ac45d81c1",
+    "src/server/config.ts": "a3fd6f3d96801c86720c93d833cb09a3d0643f3f8a891a6c445547db050c6a49",
+    "src/server/hermes.ts": "3a2859964eabdbe229b4361220d6c0422e50d0a4ad7c8cd8b5019717442b8170",
+    "src/server/index.ts": "1ac11996eca25ef5e74ac2117773b5bd0e49dfe321f537e43ff3dc4f0bd6e83d",
+    "src/server/native-auth.ts": "c7ec9498e6a9a48a8f3dedaab14d1aeeb981ab1540cb629cf11967ece13d89d7",
+    "src/server/notifications.ts": "ff0e5bea762bf450426580839955b3729635ed90bee5dc8a39718cc5d42d1f2c",
+    "src/server/store.ts": "6b123659dbceebef51591df515b0eef59b804c26af511edcfe712c802b2b9b04",
+    "src/shared/types.ts": "2a4ad165522eed9ec34cdea80c652f307e53c51570e04b28e9b18db439417c93"
+  },
+  "result": {
+    "nativeAuthVersion": 1,
+    "oneTimeHandoff": true,
+    "canonicalConversation": true,
+    "browserOriginRejected": true,
+    "logoutRevoked": true,
+    "hermesVersion": "b9cb268deffc97946ec11645aa622a7353dd0591"
+  }
+}

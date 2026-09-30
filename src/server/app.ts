@@ -18,6 +18,7 @@ import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
 import { BackgroundWorker } from "./notifications.js";
+import type { ApnsSender } from "./apns.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -102,6 +103,7 @@ export async function createApp(
     store?: Store;
     background?: boolean;
     verifyGoogle?: Parameters<typeof installAuth>[3];
+    sendApns?: ApnsSender;
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -115,7 +117,7 @@ export async function createApp(
     reply
       .header("X-Content-Type-Options", "nosniff")
       .header("X-Frame-Options", "DENY")
-      .header("Referrer-Policy", "same-origin");
+      .header("Referrer-Policy", "strict-origin-when-cross-origin");
   });
   await app.register(cookie);
   await app.register(multipart, {
@@ -419,7 +421,7 @@ export async function createApp(
           : z
               .object({
                 messageId: z.string().max(200).optional(),
-                scrollTop: z.number().min(0),
+                scrollTop: z.number().min(0).optional(),
               })
               .parse(req.body);
       store.savePersonal(table, signedIn(req).id, params(req).id, value);
@@ -581,6 +583,33 @@ export async function createApp(
     store.unsubscribe(signedIn(req).id, endpoint);
     return { ok: true };
   });
+  const requireNativePush = (req: FastifyRequest) => {
+    if (!req.nativeSessionHash) throw failure(403, "Native device registration requires native sign-in");
+    if (!config.apns) throw failure(409, "Apple push notifications are not configured on this host");
+    return config.apns;
+  };
+  app.get("/api/native/push/config", async () => ({ available: !!config.apns, environment: config.apns?.environment }));
+  app.put("/api/native/push/device", async req => {
+    const apns = requireNativePush(req);
+    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
+    store.registerNativeDevice(signedIn(req).id, req.nativeSessionHash!, body.deviceId, body.token.toLowerCase(), apns.environment);
+    return { ok: true };
+  });
+  app.delete("/api/native/push/device", async req => {
+    if (!req.nativeSessionHash) throw failure(403, "Native device registration requires native sign-in");
+    const body = z.object({ deviceId: z.string().uuid() }).strict().parse(req.body);
+    store.removeNativeDevice(signedIn(req).id, body.deviceId);
+    return { ok: true };
+  });
+  app.post("/api/native/push/test", async req => {
+    requireNativePush(req);
+    const { botId } = z.object({ botId: id }).strict().parse(req.body);
+    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw failure(404, "Bot not found");
+    const eventId = crypto.randomUUID();
+    store.db.prepare("INSERT INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)")
+      .run(eventId, eventId, signedIn(req).id, JSON.stringify({ title: "Agent Interface test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId }));
+    return { ok: true, detail: "Queued for this person. Confirm delivery on the signed-in physical device." };
+  });
   const clientRoot = resolve("dist/client");
   if (existsSync(clientRoot)) {
     await app.register(staticFiles, {
@@ -598,7 +627,7 @@ export async function createApp(
         : reply.type("text/html").sendFile("index.html"),
     );
   }
-  const worker = new BackgroundWorker(store, runtime, config);
+  const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns);
   if (options.background !== false) worker.start();
   app.addHook("onClose", async () => {
     const stopped = worker.stop();

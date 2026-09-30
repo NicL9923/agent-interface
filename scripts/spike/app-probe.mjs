@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import {
   readFileSync,
+  readdirSync,
   existsSync,
   mkdtempSync,
   rmSync,
@@ -52,16 +53,16 @@ const start = async () => {
 };
 await start();
 const scopeFiles = [
-  "src/server/app.ts",
-  "src/server/auth.ts",
-  "src/server/config.ts",
-  "src/server/store.ts",
-  "src/server/notifications.ts",
-  "src/server/hermes.ts",
+  ...readdirSync("src/server").filter(name => name.endsWith(".ts"))
+    .map(name => `src/server/${name}`),
   "src/hermes/extension.py",
+  "src/hermes/dashboard.py",
+  "src/hermes/service_auth.py",
   "src/shared/types.ts",
+  "scripts/spike/app-probe.mjs",
+  "package.json",
   "package-lock.json",
-];
+].sort();
 function sourceDigest() {
   const hash = createHash("sha256");
   for (const file of scopeFiles) {
@@ -74,7 +75,8 @@ const initialDigest = sourceDigest();
 const report = {
   kind: "Real Fastify app and Hermes gateway, deterministic model wire fixture; no real model or image backend",
   node: process.version,
-  hermesRevision: "b9cb268deffc97946ec11645aa622a7353dd0591",
+  hermesRevision: process.env.HERMES_SPIKE_REVISION ?? "b9cb268deffc97946ec11645aa622a7353dd0591",
+  trackedPatchSha256: process.env.HERMES_SPIKE_PATCH_SHA256 || null,
   startedAt: new Date().toISOString(),
   checks: {},
   sourceDigestStart: initialDigest,

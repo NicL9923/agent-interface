@@ -236,6 +236,13 @@ describe("authentication and household state", () => {
       (await app.inject({ url: "/api/bots/shared/draft", headers: one })).json()
         .text,
     ).toBe("Unsent");
+    const position = await app.inject({ method: "PUT", url: "/api/bots/shared/read-position",
+      headers: one, payload: { messageId: "earlier-answer" } });
+    expect(position.statusCode).toBe(200);
+    expect(position.json()).toEqual({ messageId: "earlier-answer" });
+    expect((await app.inject({ url: "/api/bots/shared/conversation", headers: one })).json().readPosition)
+      .toEqual({ messageId: "earlier-answer" });
+    expect((await app.inject({ url: "/api/bots/shared/read-position", headers: two })).json()).toBe(null);
     expect(
       (await app.inject({ url: "/api/bootstrap", headers: two })).json().bots[0]
         .shared,

@@ -1,9 +1,9 @@
 {
   "kind": "Real Fastify app and Hermes gateway, deterministic model wire fixture; no real model or image backend",
   "node": "v26.10.0",
-  "hermesRevision": "b9cb268deffc97946ec11645aa622a7353dd0591",
-  "trackedPatchSha256": null,
-  "startedAt": "2026-09-30T15:18:08.777Z",
+  "hermesRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "trackedPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "startedAt": "2026-09-30T15:16:24.589Z",
   "checks": {
     "authAndCapabilities": {
       "passed": true,
@@ -85,7 +85,7 @@
     "executorRestartNeedsExplicitReview": {
       "passed": true,
       "receiptInterrupted": true,
-      "automaticReconnectMs": 719,
+      "automaticReconnectMs": 760,
       "canonicalStateInterrupted": true,
       "automaticResume": false,
       "unreviewedAdmissionRejected": true,

@@ -12,6 +12,14 @@ export interface Config {
   vapidSubject: string;
   hermesUrl?: string;
   hermesToken?: string;
+  hermesAuthMode: "static" | "service";
+  apns?: {
+    teamId: string;
+    keyId: string;
+    topic: string;
+    privateKeyFile: string;
+    environment: "sandbox" | "production";
+  };
 }
 export const loopback = (host: string) =>
   ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
@@ -41,8 +49,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vapidSubject: env.VAPID_SUBJECT ?? "",
     hermesUrl: env.HERMES_URL,
     hermesToken: env.HERMES_TOKEN,
+    hermesAuthMode: (env.HERMES_AUTH_MODE || "static") as "static" | "service",
   };
   const origin = parseAppOrigin(config.origin);
+  if (!["static", "service"].includes(config.hermesAuthMode)) throw new Error("HERMES_AUTH_MODE must be static or service");
+  if (config.hermesAuthMode === "service" && config.hermesToken && !/^[A-Za-z0-9_-]{43}$/.test(config.hermesToken))
+    throw new Error("HERMES_TOKEN must be the private 32-byte base64url service key in service mode");
   config.production =
     config.production || !loopback(config.host) || !loopback(origin.hostname);
   if (
@@ -72,6 +84,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     )
   )
     throw new Error("All VAPID settings must be supplied together");
+  const apns = [env.APNS_TEAM_ID, env.APNS_KEY_ID, env.APNS_TOPIC, env.APNS_PRIVATE_KEY_FILE];
+  if (apns.some(Boolean)) {
+    if (!apns.every(Boolean)) throw new Error("All APNs signing settings must be supplied together");
+    if (!/^[A-Z0-9]{10}$/.test(env.APNS_TEAM_ID!) || !/^[A-Z0-9]{10}$/.test(env.APNS_KEY_ID!))
+      throw new Error("APNs team and key IDs must contain 10 uppercase letters or digits");
+    if (!/^[A-Za-z0-9.-]{1,255}$/.test(env.APNS_TOPIC!)) throw new Error("Invalid APNs bundle ID");
+    if (!["sandbox", "production"].includes(env.APNS_ENVIRONMENT ?? ""))
+      throw new Error("APNS_ENVIRONMENT must be sandbox or production when APNs is configured");
+    config.apns = { teamId: env.APNS_TEAM_ID!, keyId: env.APNS_KEY_ID!, topic: env.APNS_TOPIC!,
+      privateKeyFile: env.APNS_PRIVATE_KEY_FILE!, environment: env.APNS_ENVIRONMENT as "sandbox" | "production" };
+  } else if (env.APNS_ENVIRONMENT) throw new Error("APNs signing settings are required with APNS_ENVIRONMENT");
   return config;
 }
 

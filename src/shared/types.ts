@@ -179,7 +179,7 @@ export interface Bootstrap {
   bots: Bot[];
   capabilities: Capabilities;
   connection: RuntimeStatus;
-  csrfToken: string;
+  csrfToken: string | null;
   vapidPublicKey?: string;
 }
 export interface Submission {

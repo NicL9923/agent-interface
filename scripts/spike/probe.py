@@ -28,7 +28,7 @@ async def main():
         token = re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html).group(1)
     verify_target(home, url, token)
     frames = []
-    result = {"provider": "deterministic local wire fixture; no real model or image backend", "source_revision": "b9cb268deffc97946ec11645aa622a7353dd0591", "checks": {}}
+    result = {"provider": "deterministic local wire fixture; no real model or image backend", "source_revision": os.environ.get("HERMES_SPIKE_REVISION", "b9cb268deffc97946ec11645aa622a7353dd0591"), "checks": {}}
     async with websockets.connect(url.replace("http", "ws", 1) + "/api/ws?token=" + token) as ws:
         counter = 0
         async def call(method, **params):

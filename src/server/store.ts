@@ -22,6 +22,10 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,picture TEXT);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_flows(hash TEXT PRIMARY KEY,state TEXT NOT NULL,challenge TEXT NOT NULL,nonce TEXT NOT NULL,expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_codes(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),state TEXT NOT NULL,challenge TEXT NOT NULL,expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_devices(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL REFERENCES native_sessions(hash) ON DELETE CASCADE,token TEXT NOT NULL,environment TEXT NOT NULL,UNIQUE(token,environment));
       CREATE TABLE IF NOT EXISTS preferences(user_id TEXT PRIMARY KEY REFERENCES users(id),value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS drafts(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
       CREATE TABLE IF NOT EXISTS read_positions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
@@ -84,6 +88,71 @@ export class Store {
   }
   deleteSession(hash: string) {
     this.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash);
+  }
+  nativeSession(hash: string, userId: string, expires: number) {
+    this.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(hash, userId, expires);
+  }
+  getNativeSession(hash: string) {
+    const session = this.db.prepare("SELECT user_id AS userId,expires FROM native_sessions WHERE hash=?").get(hash) as
+      { userId: string; expires: number } | undefined;
+    if (session && session.expires <= Date.now()) { this.deleteNativeSession(hash); return undefined; }
+    return session;
+  }
+  deleteNativeSession(hash: string) {
+    this.db.prepare("DELETE FROM native_sessions WHERE hash=?").run(hash);
+  }
+  pruneNativeAuth() {
+    for (const table of ["native_flows", "native_codes", "native_sessions"])
+      this.db.prepare(`DELETE FROM ${table} WHERE expires<=?`).run(Date.now());
+  }
+  nativeFlow(hash: string, state: string, challenge: string, nonce: string, expires: number) {
+    this.pruneNativeAuth();
+    const count = this.db.prepare("SELECT count(*) AS count FROM native_flows").get() as { count: number };
+    if (count.count >= 1000) throw Object.assign(new Error("Too many sign-in attempts. Try again shortly."), { statusCode: 429 });
+    this.db.prepare("INSERT INTO native_flows VALUES(?,?,?,?,?)").run(hash, state, challenge, nonce, expires);
+  }
+  getNativeFlow(hash: string) {
+    return this.db.prepare("SELECT state,challenge,nonce FROM native_flows WHERE hash=? AND expires>?")
+      .get(hash, Date.now()) as { state: string; challenge: string; nonce: string } | undefined;
+  }
+  finishNativeFlow(flowHash: string, codeHash: string, userId: string) {
+    return this.transaction(() => {
+      const flow = this.getNativeFlow(flowHash);
+      if (!flow) return false;
+      this.db.prepare("DELETE FROM native_flows WHERE hash=?").run(flowHash);
+      this.db.prepare("INSERT INTO native_codes VALUES(?,?,?,?,?)")
+        .run(codeHash, userId, flow.state, flow.challenge, Date.now() + 60000);
+      return true;
+    });
+  }
+  consumeNativeCode(codeHash: string, state: string, challenge: string) {
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT user_id AS userId FROM native_codes WHERE hash=? AND state=? AND challenge=? AND expires>?")
+        .get(codeHash, state, challenge, Date.now()) as { userId: string } | undefined;
+      if (row) this.db.prepare("DELETE FROM native_codes WHERE hash=?").run(codeHash);
+      return row?.userId;
+    });
+  }
+  registerNativeDevice(userId: string, sessionHash: string, deviceId: string, token: string, environment: "sandbox" | "production") {
+    this.pruneNativeAuth();
+    const conflicts = this.db.prepare("SELECT user_id FROM native_devices WHERE device_id=? OR (token=? AND environment=?)")
+      .all(deviceId, token, environment) as { user_id: string }[];
+    if (conflicts.some(row => row.user_id !== userId))
+      throw Object.assign(new Error("This notification device belongs to another household member. Sign out there first."), { statusCode: 409 });
+    // Token rotation can retain an older installation ID. Keep exactly one current registration.
+    this.transaction(() => {
+      this.db.prepare("DELETE FROM native_devices WHERE user_id=? AND token=? AND environment=? AND device_id<>?").run(userId, token, environment, deviceId);
+      this.db.prepare("INSERT INTO native_devices VALUES(?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET session_hash=excluded.session_hash,token=excluded.token,environment=excluded.environment")
+        .run(deviceId, userId, sessionHash, token, environment);
+    });
+  }
+  removeNativeDevice(userId: string, deviceId: string) {
+    this.db.prepare("DELETE FROM native_devices WHERE user_id=? AND device_id=?").run(userId, deviceId);
+  }
+  nativeDevices(userId: string, environment: "sandbox" | "production") {
+    this.pruneNativeAuth();
+    return this.db.prepare("SELECT device_id AS deviceId,token,environment FROM native_devices WHERE user_id=? AND environment=?")
+      .all(userId, environment) as { deviceId: string; token: string; environment: "sandbox" | "production" }[];
   }
   preferences(id: string): Preferences {
     const row = this.db

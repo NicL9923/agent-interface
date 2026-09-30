@@ -15,6 +15,7 @@ let pendingBootstrap:Promise<Bootstrap>|undefined;
 let hermesDown:boolean;
 beforeEach(()=>{
   vi.useFakeTimers();vi.clearAllMocks();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+  vi.mocked(write).mockReset().mockResolvedValue({});
   vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
   localStorage.clear();history.replaceState(null,'','/');
   boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:structuredClone(defaultPreferences),bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}],capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
@@ -35,6 +36,32 @@ async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync
 const googleScript=()=>document.head.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]')!;
 
 describe('setup and recovery interface',()=>{
+  it('restores a native message anchor without a browser pixel offset',async()=>{
+    conversation.messages.push({id:'later-answer',role:'assistant',text:'Later answer'});
+    Object.assign(conversation,{readPosition:{messageId:'later-answer'}});
+    await renderApp();
+    const transcript=container.querySelector<HTMLElement>('.transcript')!;
+    const anchor=container.querySelector<HTMLElement>('[data-message-id="later-answer"]')!;
+    transcript.getBoundingClientRect=()=>({top:100,bottom:400} as DOMRect);
+    anchor.getBoundingClientRect=()=>({top:700,bottom:800} as DOMRect);
+    await advance(20);
+    expect(transcript.scrollTop).toBe(600);
+  });
+
+  it('saves the visible message anchor while reading older messages',async()=>{
+    conversation.messages.push({id:'latest-answer',role:'assistant',text:'Latest answer'});
+    await renderApp();await advance(20);
+    const transcript=container.querySelector<HTMLElement>('.transcript')!;
+    Object.defineProperties(transcript,{scrollHeight:{value:2000},clientHeight:{value:300}});
+    transcript.scrollTop=300;
+    transcript.getBoundingClientRect=()=>({top:100,bottom:400} as DOMRect);
+    container.querySelector<HTMLElement>('[data-message-id="answer-one"]')!.getBoundingClientRect=()=>({top:80,bottom:220} as DOMRect);
+    container.querySelector<HTMLElement>('[data-message-id="latest-answer"]')!.getBoundingClientRect=()=>({top:1800,bottom:1900} as DOMRect);
+    await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+    await advance(310);
+    expect(write).toHaveBeenCalledWith('/bots/shared/read-position',{scrollTop:300,messageId:'answer-one'},'PUT');
+  });
+
   it('gives an unconfigured household a concrete setup action and rechecks saved settings',async()=>{
     await act(async()=>root.render(createElement(SignIn,{onSuccess:vi.fn()})));
     expect(container.textContent).toContain('npm run setup');
@@ -109,6 +136,32 @@ describe('setup and recovery interface',()=>{
     expect(container.querySelector('textarea')?.value).toBe('Second member draft');
     expect(JSON.parse(localStorage.getItem('agent-interface:draft:one:shared')!).text).toBe('My unsent draft');
     expect(vi.mocked(write).mock.calls.filter(([path])=>path==='/bots/shared/messages')).toHaveLength(1);
+  });
+
+  it.each(['receipt','failure'])('ignores an old identity retry %s while the next identity is sending',async(outcome)=>{
+    const pending={requestId:'saved-request',botId:'shared',text:'My unsent draft',attachments:[],reviewedInterruption:false};
+    localStorage.setItem('agent-interface:submission:one:shared',JSON.stringify(pending));
+    const original=vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path==='/submissions/saved-request'
+      ? {requestId:'saved-request',status:'uncertain'} as T : await original(path,init) as T);
+    let finish!:()=>void;
+    const retry=new Promise((resolve,reject)=>{finish=()=>outcome==='receipt'
+      ? resolve({requestId:'saved-request',status:'rejected',message:'Old account rejection'})
+      : reject(new Error('Old account retry failure'));});
+    vi.mocked(write).mockReturnValueOnce(retry).mockReturnValueOnce(new Promise(()=>{}));
+    await renderApp();
+    const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Retry this saved message')!;
+    await act(async()=>button.click());
+    boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
+    await act(async()=>window.dispatchEvent(new Event('focus')));
+    await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+    expect(vi.mocked(write).mock.calls.filter(([path])=>path==='/bots/shared/messages')).toHaveLength(2);
+    await act(async()=>finish());
+    expect(container.textContent).not.toContain('Old account');
+    expect(container.querySelector('textarea')?.value).toBe('Second member draft');
+    const nextRetry=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Retry this saved message')!;
+    expect(nextRetry.disabled).toBe(true);
+    expect(JSON.parse(localStorage.getItem('agent-interface:submission:one:shared')!).requestId).toBe('saved-request');
   });
 
   it.each(['admission','reconciliation'])('clears local state after a deferred %s receipt without writing draft data over another device',async(mode)=>{

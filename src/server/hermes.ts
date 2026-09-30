@@ -4,9 +4,9 @@ import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
 type RegisteredFile = {path:string;name:string;mime:string;botId:string;kind:'upload'|'artifact';version:1};
-const revision = 'b9cb268deffc97946ec11645aa622a7353dd0591';
+const qualifiedRevisions = new Set(['b9cb268deffc97946ec11645aa622a7353dd0591', 'd23cc6b06455b8551fb6f61d3cad040a0e82f5b6']);
 const keys = ['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'] as const;
-export interface HermesOptions { url?: string; token?: string }
+export interface HermesOptions { url?: string; token?: string; authMode?: 'static' | 'service' }
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   type DiagnosticCode = NonNullable<RuntimeStatus['code']>;
@@ -52,6 +52,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let rosterRequest: Promise<Bot[]> | undefined;
   const supported = (value:boolean, reason?:string) => ({supported:value,...(!value ? {reason:reason ?? 'The connected Hermes backend does not expose this capability.'}: {})});
   const unavailable = () => new TransportError('unreachable', 'Hermes is disconnected. Check its supervised gateway and connection settings.');
+  const serviceAuth = options.authMode === 'service';
+  const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
+  const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
 
   let origin: URL | undefined;
   let configurationError: TransportError | undefined;
@@ -113,8 +116,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // distinguishes an expired token from an unavailable gateway without paid work.
     if (closed || !origin || !options.token || error instanceof TransportError && ['unauthorized', 'closed'].includes(error.code)) return error;
     try {
-      const response = await fetch(new URL('/api/profiles', origin), {
-        headers: {'X-Hermes-Session-Token': options.token},
+      const response = await fetch(new URL(servicePath('/api/profiles'), origin), {
+        headers: authHeaders(),
         signal: AbortSignal.timeout(5_000), redirect: 'error',
       });
       await response.body?.cancel();
@@ -124,9 +127,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     return error;
   }
   function verifyContract(capabilities: Wire): void {
-    if (capabilities.revision !== revision || capabilities.durable_admission !== true ||
+    if (!qualifiedRevisions.has(capabilities.revision) || capabilities.durable_admission !== true ||
         capabilities.durable_events !== true || capabilities.canonical_open !== true) {
-      throw new TransportError('incompatible', 'The verified durable Hermes add-on has an incompatible contract. Install the pinned add-on revision and reconnect.');
+      throw new TransportError('incompatible', 'The verified durable Hermes add-on has an incompatible contract. Install a qualified add-on revision and reconnect.');
     }
     extension = true;
     requiredSkills = new Set(Array.isArray(capabilities.essential_skills) ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string') : []);
@@ -148,7 +151,21 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           if (current) disconnect(current, unavailable(), false);
           const url = new URL('/api/ws', origin);
           url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-          url.searchParams.set('token', options.token!);
+          if (serviceAuth) {
+            let response: Response;
+            try {
+              response = await fetch(new URL('/api/agent-interface/service-ticket', origin), {
+                method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(5_000), redirect: 'error',
+              });
+            } catch { throw unavailable(); }
+            if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
+              response.status === 401 || response.status === 403 ? 'Hermes rejected the private service credential.' : 'Hermes service ticket could not be issued.');
+            const body = await response.json() as Wire;
+            if (typeof body.ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.ticket))
+              throw new TransportError('incompatible', 'Hermes returned an invalid service upgrade ticket.');
+            if (closed) throw new TransportError('closed', 'The Hermes connection is closed.');
+            url.searchParams.set('ticket', body.ticket);
+          } else url.searchParams.set('token', options.token!);
           let ws: WebSocket;
           try { ws = new WebSocket(url); } catch { throw unavailable(); }
           current = {ws, verified: false, lastReceivedAt: Date.now()};
@@ -206,7 +223,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         current.verified = true;
         failures = 0;
         retryAt = 0;
-        diagnostic = {connected: true, code: 'ready', version: revision, detail: 'The Hermes gateway and durable add-on contract are verified.'};
+        diagnostic = {connected: true, code: 'ready', version: capabilities.revision, detail: 'The Hermes gateway and durable add-on contract are verified.'};
       } catch (error) {
         const failure = error instanceof TransportError ? error : unavailable();
         if (current && connection === current) disconnect(current, failure);
@@ -300,8 +317,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     if (configurationError) throw configurationError;
     let response: Response;
     try {
-      response = await fetch(new URL(path, origin), {...init,
-        headers: {'X-Hermes-Session-Token': options.token!, ...init.headers},
+      const headers = new Headers(init.headers);
+      for (const [name, value] of Object.entries(authHeaders())) headers.set(name, value);
+      response = await fetch(new URL(servicePath(path), origin), {...init,
+        headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
     } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
     if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',

@@ -15,9 +15,24 @@ import uuid
 import contextlib
 import re
 import mimetypes
+import subprocess
 from pathlib import Path
 
 REVISION = "b9cb268deffc97946ec11645aa622a7353dd0591"
+QUALIFIED_REVISIONS = {REVISION, "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6"}
+QUALIFIED_OAUTH_PATCH = "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c"
+
+
+def source_state():
+    """Qualify imported Hermes, including tracked local repairs, without logging their contents."""
+    import hermes_cli
+    source = Path(hermes_cli.__file__).resolve().parents[1]
+    actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])
+    patch_hash = hashlib.sha256(patch).hexdigest() if patch else None
+    if actual not in QUALIFIED_REVISIONS or patch_hash not in (None, QUALIFIED_OAUTH_PATCH):
+        raise SystemExit("Hermes source or tracked repair differs from the qualified add-on. Run compatibility probes before deployment.")
+    return actual, patch_hash
 
 
 class Journal:
@@ -70,6 +85,7 @@ class Journal:
 
 
 def install(path=None):
+    actual_revision, patch_hash = source_state()
     from tui_gateway import server
     from tui_gateway.transport import Transport
     from hermes_constants import get_hermes_home, profile_name_for_home
@@ -395,19 +411,15 @@ def install(path=None):
         return server._ok(rid, {"cursor": str(ready[-1][0] if ready else cursor), "events": events})
 
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": REVISION, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in {"open": open_bot, "submit": submit, "receipt": receipt, "discover": discover}.items():
         server.register_method("agent-interface." + name, handler)
     return journal
 
 
 if __name__ == "__main__":
-    import subprocess
     import hermes_cli.web_server as web
-    source = Path(web.__file__).resolve().parents[1]
-    actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    if actual != REVISION:
-        raise SystemExit("Hermes source revision differs from the verified add-on. Run compatibility probes before changing REVISION.")
+    source_state()
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=19119)
     args = parser.parse_args()

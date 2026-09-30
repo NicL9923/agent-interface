@@ -1,6 +1,6 @@
 # Hermes integration evidence
 
-Validated September 29, 2026 against [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/tree/b9cb268deffc97946ec11645aa622a7353dd0591), revision `b9cb268deffc97946ec11645aa622a7353dd0591`, using Python 3.14.7 on macOS. The exact Python dependencies are recorded in [hermes-environment.json](evidence/hermes-environment.json) and constrained by [requirements.lock.txt](../scripts/spike/requirements.lock.txt).
+Validated September 30, 2026 against [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), revisions `b9cb268deffc97946ec11645aa622a7353dd0591` and `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`, using Python 3.14.7 on macOS. The production revision also passed with the existing tracked OAuth repair, SHA256 `2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c`. The add-on reports the imported revision and repair hash; it rejects other revisions or tracked edits. The exact Python dependencies are recorded in [hermes-environment.json](evidence/hermes-environment.json) and constrained by [requirements.lock.txt](../scripts/spike/requirements.lock.txt).
 
 The tests ran real Hermes, its AIAgent, native tools, native profile/session stores, and the official scheduler provider. The local OpenAI HTTP provider is a deterministic fixture. It proves integration behavior, not answer quality or compatibility with a live commercial provider. No production service or household profile was used. Application tests with a Runtime double remain separate from this evidence.
 
@@ -23,7 +23,7 @@ belong to their connection generation, so a late old-socket close cannot destroy
 replacement connection. Successful roster data remains visible during outages;
 the UI marks activity unknown and preserves the loaded conversation and draft.
 
-The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, attribution, and event discovery through `agent-interface.capabilities/open/submit/receipt/discover`. Its private SQLite journal lives at `HERMES_HOME/runtime/agent-interface.db`. It writes no Hermes database rows. The adapter enables mutations only after the add-on reports the exact verified revision. A native gateway without that contract stays unavailable with an explanation.
+The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, attribution, and event discovery through `agent-interface.capabilities/open/submit/receipt/discover`. Its private SQLite journal lives at `HERMES_HOME/runtime/agent-interface.db`. It writes no Hermes database rows. The adapter enables mutations only after the add-on reports a qualified revision. A native gateway without that contract stays unavailable with an explanation.
 
 Native `prompt.submit` supplies a durable `user_row_id` but no durable client request key. The add-on writes a FULL-synchronous receipt before calling native admission, compares retries against the original input and actor, and never automatically replays an uncertain submission. Each independent task has a distinct root request ID. Steering receipts join that root and bind to the actual canonical user row once native Hermes persists it. Sender attribution does not alter the message body or forge protected Hermes author metadata.
 
@@ -76,14 +76,36 @@ Use `--app-only` with that command when only application code changed. It still 
 
 ## Compatibility and rollback
 
-Do not load this add-on into an already running native owner. Stop that owner under its existing supervisor, then launch the add-on from the verified Hermes environment with the same `HERMES_HOME`, token and loopback port:
+The production wrapper installs the add-on before the original `hermes dashboard` CLI starts. It preserves the dashboard UI, Google plugins, native lifecycle and owner registration. Keep the existing home, host, port and supervisor. Do not use the isolated spike launcher for a production dashboard.
+
+Install an untracked module symlink beside the existing `hermes_cli` directory. Point it at the deployed release's wrapper so rollback follows the release link:
 
 ```sh
-/path/to/hermes-venv/bin/python /path/to/agent-interface/src/hermes/extension.py --port 19121
+ln -s /path/to/current/src/hermes/dashboard.py /path/to/hermes-agent/agent_interface_dashboard.py
 ```
 
-The environment must supply `HERMES_HOME`, `HERMES_SERVE_HEADLESS=1`, and the existing server token through `HERMES_DASHBOARD_SESSION_TOKEN`. Keep these in a private supervisor environment file. Set the application's `HERMES_URL` and `HERMES_TOKEN` to that owner. The launcher checks the upstream Git SHA before startup. A new revision needs compatibility probes before changing the constant.
+The PM-managed launcher supports `--run-module`. Preserve all existing dashboard options after the module name:
 
-To roll back, stop the add-on owner and start the original native owner with the same home and supervisor. Preserve the private journal if a task was interrupted or its admission uncertain. The app will disable unverified mutations when the add-on is absent. No database migration or Hermes-source patch needs reversal. The add-on uses upstream internal hooks and should become an upstream contract; it is not a portable plugin for arbitrary Hermes revisions.
+```sh
+/path/to/existing/hermes --run-module agent_interface_dashboard dashboard --host 127.0.0.1 --port 9119 --no-open
+```
+
+The supervisor supplies `HERMES_AGENT_INTERFACE_TOKEN` through a private environment file. Generate 32 random bytes and encode them as unpadded base64url. The app server uses that same key as `HERMES_TOKEN`, with `HERMES_AUTH_MODE=service` and `HERMES_URL=http://127.0.0.1:9119`. Setup and `npm run doctor` forward the selected authentication mode. Keep `HERMES_SERVE_HEADLESS` unset. The wrapper refuses headless and isolated dashboard startup. If its source qualification or service key fails before installation, it logs a fixed warning and starts the original dashboard without the add-on. The app then fails closed because its capabilities are absent. Failures after hook installation stop startup rather than continuing with partial changes.
+
+The service key grants gateway executor authority. It remains on the two servers and never enters a browser, mobile app, WebSocket URL or application notification. The add-on admits it only at `/api/agent-interface/service/` and `/api/agent-interface/service-ticket`, from a direct loopback peer without Origin, Cookie or forwarded headers. A finite method/path list dispatches the existing profile, file and cron handlers. Original dashboard routes keep their existing Google authentication. The ticket endpoint issues a fresh native single-use WebSocket ticket with a 30-second expiry. Public reverse proxies must return 404 for `/api/agent-interface/service*`, even though Hermes also checks the key and peer.
+
+The `static` authentication mode remains the default for isolated local fixtures with native session-token authentication. A Google-gated dashboard requires `service`; a copied expiring Google access token is not a service credential.
+
+[Baseline application evidence](evidence/app-probe-b9-qualified.json) and [production application evidence](evidence/app-probe-d23-qualified.json) each record 13 passing groups. [Baseline service evidence](evidence/hermes-service-probe-b9c.json) and [production service evidence](evidence/hermes-service-probe-d23.json) exercise actual native HTTP and WebSocket handlers behind a verified-Google-session fixture. They check preserved Google cookie/bearer access, service guards, one-use tickets, native profile deletion and file-policy parity. The fixture uses no household credentials.
+
+To qualify a separately prepared source checkout, the runner requires the exact tracked repair hash and creates a fresh marked home:
+
+```sh
+python3.14 scripts/spike/run.py --source /private/qualified-checkout --python /private/existing-spike/venv/bin/python --revision d23cc6b06455b8551fb6f61d3cad040a0e82f5b6 --source-patch-sha256 2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c
+```
+
+Preserve the interpreter symlink path so Python recognizes its virtual environment. The production managed-runtime startup check is `python3 scripts/spike/dashboard_probe.py --ssh-host SSH_ALIAS`; it reads the installed launcher's exported runtime command and activates the installed dependency selection with lazy installs disabled. It then switches to a disposable home before importing the wrapper and native dashboard. It copies only the wrapper files into a disposable remote directory, checks the dashboard and private ticket endpoint on a free loopback port, then stops only its child process. [The managed-runtime receipt](evidence/hermes-dashboard-managed-probe.json) records the upstream revision, tracked repair hash and checks without private paths.
+
+To roll back, restore the original supervisor command and previous app release. Preserve the private journal if a task was interrupted or its admission uncertain. The app disables unverified mutations when the add-on is absent. No database migration or Hermes-source patch needs reversal. The add-on uses upstream internal hooks and should become an upstream contract; it is not a portable plugin for arbitrary Hermes revisions.
 
 Official documentation checked September 29, 2026: [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode), [programmatic integration](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration), and [API server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server). Exact contracts came from the pinned source and runtime, because the documentation does not list every desktop method. Unverified environments include live provider/image backends, a live MCP service, timer-driven unattended scheduling, goal-mode continuation, compressed-history recovery, and physical-phone push delivery. These do not become passed checks merely because a deterministic fixture or browser test succeeded.

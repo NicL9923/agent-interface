@@ -5,12 +5,14 @@ import type { Config } from "./config.js";
 import { allowedIdentity, loopback } from "./config.js";
 import type { Store } from "./store.js";
 import type { User } from "../shared/types.js";
+import { installNativeAuth } from "./native-auth.js";
 export const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 declare module "fastify" {
   interface FastifyRequest {
     user: User | null;
     csrfToken: string | null;
+    nativeSessionHash: string | null;
   }
 }
 export async function installAuth(
@@ -23,16 +25,34 @@ export async function installAuth(
     email_verified?: boolean;
     name?: string;
     picture?: string;
+    nonce?: string;
   }>,
 ) {
   const google = new OAuth2Client(config.googleClientId);
   app.decorateRequest("user", null);
   app.decorateRequest("csrfToken", null);
+  app.decorateRequest("nativeSessionHash", null);
   app.addHook("onRequest", async (req, reply) => {
     if (!req.url.startsWith("/api/")) return;
     reply.header("Cache-Control", "no-store");
+    const authorization = req.headers.authorization;
+    if (authorization !== undefined) {
+      // Browser-origin requests always use the cookie/CSRF path; never let a bearer bypass it.
+      if (req.headers.origin !== undefined)
+        return reply.code(403).send({ error: "Native authentication does not accept browser-origin requests" });
+      const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization)?.[1];
+      const sessionHash = token ? hash(token) : "";
+      const session = token ? store.getNativeSession(sessionHash) : undefined;
+      const user = session ? store.getUser(session.userId) : undefined;
+      if (!user || !allowedIdentity(config, user)) {
+        if (session) store.deleteNativeSession(sessionHash);
+        return reply.code(401).send({ error: "Sign in required" });
+      }
+      req.user = user;
+      req.nativeSessionHash = sessionHash;
+    }
     const cookie = req.cookies.session;
-    if (cookie) {
+    if (!authorization && cookie) {
       const session = store.getSession(hash(cookie));
       if (session) {
         const user = store.getUser(session.userId);
@@ -48,10 +68,18 @@ export async function installAuth(
       "/api/auth/local",
       "/api/auth/config",
       "/api/health",
+      "/api/auth/native/complete",
+      "/api/auth/native/exchange",
     ].includes(req.url.split("?")[0]);
     if (!publicRoute && !req.user)
       return reply.code(401).send({ error: "Sign in required" });
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      if (req.url.split("?")[0] === "/api/auth/native/exchange") {
+        if (req.headers.origin !== undefined || req.headers.cookie !== undefined)
+          return reply.code(403).send({ error: "Native code exchange requires a native client" });
+        return;
+      }
+      if (req.nativeSessionHash && (!req.url.startsWith("/api/auth/") || req.url.split("?")[0] === "/api/auth/logout")) return;
       if (req.headers.origin !== config.origin)
         return reply
           .code(403)
@@ -74,7 +102,12 @@ export async function installAuth(
     });
     return { user, csrfToken: csrf };
   };
+  await installNativeAuth(app, store, config, async credential => {
+    const payload = verify ? await verify(credential) : (await google.verifyIdToken({ idToken: credential, audience: config.googleClientId })).getPayload();
+    return payload as { sub?: string; email?: string; email_verified?: boolean; name?: string; picture?: string; nonce?: string } | undefined;
+  });
   app.get("/api/auth/config", async () => ({
+    nativeAuthVersion: 1,
     googleClientId: config.googleClientId,
     localDevAuth: config.localDevAuth,
   }));
@@ -136,6 +169,10 @@ export async function installAuth(
     );
   });
   app.post("/api/auth/logout", async (req, reply) => {
+    if (req.nativeSessionHash) {
+      store.deleteNativeSession(req.nativeSessionHash);
+      return { ok: true };
+    }
     if (req.cookies.session) store.deleteSession(hash(req.cookies.session));
     reply.clearCookie("session", { path: "/" });
     return { ok: true };

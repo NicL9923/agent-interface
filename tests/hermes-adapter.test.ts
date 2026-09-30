@@ -6,6 +6,7 @@ import type { Runtime, Submission } from '../src/shared/types.js';
 // Isolated wire-contract regressions. Real Hermes execution evidence lives in the spike probes.
 const token='isolated-contract-token';
 const revision='b9cb268deffc97946ec11645aa622a7353dd0591';
+let reportedRevision:string;
 let snapshot:Record<string,any>;
 let calls:{method:string;params:Record<string,any>}[];
 let sockets:WireSocket[];
@@ -24,7 +25,8 @@ class WireSocket extends EventTarget {
   static CLOSING=2;
   static CLOSED=3;
   readyState=WireSocket.CONNECTING;
-  constructor(_url:string|URL){super();sockets.push(this);queueMicrotask(()=>{
+  readonly url: URL;
+  constructor(_url:string|URL){super();this.url=new URL(_url);sockets.push(this);queueMicrotask(()=>{
     if (opening === 'hang') return;
     if (opening === 'close') {this.close(); return;}
     if(connectionFails){this.dispatchEvent(new Event('error'));this.close();}
@@ -42,7 +44,7 @@ class WireSocket extends EventTarget {
       return;
     }
     let result:unknown={};
-    if(request.method==='agent-interface.capabilities')result={revision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one'};
+    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one'};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one'};
@@ -56,6 +58,7 @@ class WireSocket extends EventTarget {
   close(){this.readyState=3;this.dispatchEvent(new Event('close'));}
 }
 beforeEach(()=>{
+  reportedRevision=revision;
   snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;metadataConflict=false;connectionFails=false;imageReady=false;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
@@ -65,6 +68,45 @@ afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('reports both qualified actual revisions and rejects unknown revisions', async () => {
+    for (const actual of [revision, 'd23cc6b06455b8551fb6f61d3cad040a0e82f5b6']) {
+      await runtime.close(); reportedRevision = actual;
+      runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+      expect(await runtime.status()).toMatchObject({connected: true, version: actual});
+    }
+    await runtime.close(); reportedRevision = 'unknown-unqualified-revision';
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    expect(await runtime.status()).toMatchObject({connected: false, code: 'incompatible'});
+  });
+
+  it('uses a fresh single-use ticket and private prefixed bearer HTTP routes in service mode', async () => {
+    await runtime.close();
+    const fetch = vi.fn(async (url: URL | string) => String(url).endsWith('/service-ticket')
+      ? Response.json({ticket: 't'.repeat(43)}) : Response.json({profiles: []}));
+    vi.stubGlobal('fetch', fetch);
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    expect(await runtime.status()).toMatchObject({connected: true});
+    expect(sockets[0].url.searchParams.get('ticket')).toBe('t'.repeat(43));
+    expect(sockets[0].url.searchParams.has('token')).toBe(false);
+    expect(fetch.mock.calls[0][0].toString()).toBe('http://127.0.0.1:19119/api/agent-interface/service-ticket');
+    const request = (fetch.mock.calls as unknown as [URL, RequestInit][])[0][1];
+    expect(request).toMatchObject({method: 'POST', headers: {Authorization: `Bearer ${token}`}});
+    await runtime.deleteBot('shared');
+    const deletion = (fetch.mock.calls as unknown as [URL, RequestInit][]).find(([url]) => url.pathname.includes('/service/profiles/'))!;
+    expect(deletion[0].pathname).toBe('/api/agent-interface/service/profiles/shared');
+    expect(new Headers(deletion[1].headers).get('Authorization')).toBe(`Bearer ${token}`);
+    expect(new Headers(deletion[1].headers).has('X-Hermes-Session-Token')).toBe(false);
+    sockets[0].close();
+    await runtime.reconnect!();
+    expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/service-ticket'))).toHaveLength(2);
+  });
+
+  it('fails service authentication without opening a socket when ticket issuance rejects the credential', async () => {
+    await runtime.close(); vi.stubGlobal('fetch', vi.fn(async () => Response.json({error: 'Denied'}, {status: 401})));
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    expect(await runtime.status()).toMatchObject({connected: false, code: 'unauthorized'});
+    expect(sockets).toHaveLength(0);
+  });
   it('creates a bot without installing a machine-wide shell alias',async()=>{
     await runtime.saveBot({name:'Shared',instructions:'Local instructions',model:'Inherited',shared:true});
     expect(calls.find(call=>call.method==='profiles.create')?.params).toMatchObject({name:'shared',no_alias:true});

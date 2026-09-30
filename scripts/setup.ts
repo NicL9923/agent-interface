@@ -8,7 +8,7 @@ import { loadConfig, loopback, parseAppOrigin } from '../src/server/config.js';
 import { createHermesRuntime } from '../src/server/hermes.js';
 import type { Runtime, RuntimeStatus } from '../src/shared/types.js';
 
-const settingKeys = ['NODE_ENV', 'HOST', 'PORT', 'APP_ORIGIN', 'APP_DATABASE', 'LOCAL_DEV_AUTH', 'GOOGLE_CLIENT_ID', 'HOUSEHOLD_EMAILS', 'HERMES_URL', 'HERMES_TOKEN', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'];
+const settingKeys = ['NODE_ENV', 'HOST', 'PORT', 'APP_ORIGIN', 'APP_DATABASE', 'LOCAL_DEV_AUTH', 'GOOGLE_CLIENT_ID', 'HOUSEHOLD_EMAILS', 'HERMES_URL', 'HERMES_TOKEN', 'HERMES_AUTH_MODE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'];
 export type EnvValues = Record<string, string>;
 export function effectiveEnv(text: string, exported: NodeJS.ProcessEnv = process.env) {
   const values = parseEnv(text);
@@ -87,12 +87,12 @@ export async function savePrivateEnv(filename: string, original: string | undefi
 
 export async function checkSetup(
   values: NodeJS.ProcessEnv,
-  createRuntime: (options: {url?: string; token?: string}) => Pick<Runtime, 'status' | 'close'> = createHermesRuntime,
+  createRuntime: (options: {url?: string; token?: string; authMode?: 'static' | 'service'}) => Pick<Runtime, 'status' | 'close'> = createHermesRuntime,
 ): Promise<RuntimeStatus> {
   const config = loadConfig(values);
   if (!config.localDevAuth && (!config.googleClientId || !config.householdEmails.length))
     throw new Error('Configure Google sign-in and HOUSEHOLD_EMAILS, or explicitly select local test sign-in on a loopback development installation.');
-  const runtime = createRuntime({url: config.hermesUrl, token: config.hermesToken});
+  const runtime = createRuntime({url: config.hermesUrl, token: config.hermesToken, authMode: config.hermesAuthMode});
   try { return await runtime.status(); } finally { await runtime.close(); }
 }
 
@@ -161,6 +161,8 @@ async function main() {
   try { const url = new URL(values.HERMES_URL); if (!url.username && !url.password && !url.search && !url.hash) previousOrigin = url.origin; } catch { /* Ask for a usable origin. */ }
   changes.HERMES_URL = await ask('Existing Hermes gateway origin', previousOrigin);
   if (!changes.HERMES_URL) throw new Error('Enter the URL of your existing supervised Hermes gateway. No settings were saved.');
+  changes.HERMES_AUTH_MODE = await ask('Hermes authentication: service for a Google-protected dashboard, or static for an isolated loopback gateway', values.HERMES_AUTH_MODE || 'service');
+  if (!['static', 'service'].includes(changes.HERMES_AUTH_MODE)) throw new Error('Choose service or static. No settings were saved.');
   changes.HERMES_TOKEN = await askToken(Boolean(values.HERMES_TOKEN)) || values.HERMES_TOKEN || '';
   const {origin: publicOrigin, correction} = await resolveSetupOrigin(values);
   if (correction !== undefined) changes.APP_ORIGIN = correction;

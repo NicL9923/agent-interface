@@ -9,6 +9,7 @@ const config = loadConfig();
 const runtime = createHermesRuntime({
   url: config.hermesUrl,
   token: config.hermesToken,
+  authMode: config.hermesAuthMode,
 });
 const { app } = await createApp(config, runtime);
 await app.listen({ host: config.host, port: config.port });

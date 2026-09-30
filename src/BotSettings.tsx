@@ -46,6 +46,14 @@ export function BotSettings({
   );
   const [tools, setTools] = useState<Tool[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [catalog, setCatalog] = useState<{
+    tab: string;
+    botId: string;
+    status: "loading" | "ready" | "error";
+  }>();
+  const [catalogRetry, setCatalogRetry] = useState(0);
+  const catalogReady = catalog?.tab === tab &&
+    catalog.botId === existing?.id && catalog.status === "ready";
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [error, setError] = useState("");
   const [confirmModel, setConfirmModel] = useState(false);
@@ -58,22 +66,32 @@ export function BotSettings({
   }, []);
   useEffect(() => {
     if (!existing) return;
+    let current = true;
     const id = encodeURIComponent(existing.id);
-    if (tab === "tools" && bootstrap.capabilities.tools.supported)
-      void api<Tool[]>(`/bots/${id}/tools`)
-        .then(setTools)
-        .catch((e) => setError(e.message));
-    if (tab === "skills" && bootstrap.capabilities.skills.supported)
-      void api<Skill[]>(`/bots/${id}/skills`)
-        .then(setSkills)
-        .catch((e) => setError(e.message));
+    if ((tab === "tools" || tab === "skills") && bootstrap.capabilities[tab].supported) {
+      setCatalog({ tab, botId: existing.id, status: "loading" });
+      void api<Skill[]>(`/bots/${id}/${tab}`)
+        .then((items) => {
+          if (!current) return;
+          if (tab === "tools") setTools(items);
+          else setSkills(items);
+          setCatalog({ tab, botId: existing.id, status: "ready" });
+        })
+        .catch((e) => {
+          if (!current) return;
+          setError(e.message);
+          setCatalog({ tab, botId: existing.id, status: "error" });
+        });
+    }
     if (tab === "routines" && bootstrap.capabilities.routines.supported)
       void api<Routine[]>("/routines")
-        .then((result) =>
-          setRoutines(result.filter((r) => r.botId === existing.id)),
-        )
-        .catch((e) => setError(e.message));
-  }, [tab, existing?.id]);
+        .then((result) => {
+          if (current) setRoutines(result.filter((r) => r.botId === existing.id));
+        })
+        .catch((e) => { if (current) setError(e.message); });
+    return () => { current = false; };
+  }, [tab, existing?.id, catalogRetry, bootstrap.capabilities.tools.supported,
+    bootstrap.capabilities.skills.supported, bootstrap.capabilities.routines.supported]);
   const run = async (action: () => Promise<unknown>, success = "Saved") => {
     setBusy(true);
     setError("");
@@ -641,6 +659,13 @@ export function BotSettings({
               <p>Create the assistant before configuring its capabilities.</p>
             ) : (
               <>
+                {bootstrap.capabilities[tab].supported && !catalogReady && (
+                  catalog?.tab === tab && catalog.status === "error" ? (
+                    <button onClick={() => { setError(""); setCatalogRetry((value) => value + 1); }}>
+                      Retry loading {tab}
+                    </button>
+                  ) : <p role="status">Loading {tab}…</p>
+                )}
                 {(tab === "tools" ? tools : skills).map((item) => (
                   <label className="capability-item" key={item.id}>
                     <input
@@ -648,7 +673,7 @@ export function BotSettings({
                       checked={
                         item.enabled || ("required" in item && !!item.required)
                       }
-                      disabled={busy || ("required" in item && !!item.required)}
+                      disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported || ("required" in item && !!item.required)}
                       onChange={(e) => {
                         if (tab === "tools")
                           setTools((items) =>
@@ -677,13 +702,13 @@ export function BotSettings({
                     </span>
                   </label>
                 ))}
-                {bootstrap.capabilities[tab].supported &&
+                {catalogReady && bootstrap.capabilities[tab].supported &&
                   !(tab === "tools" ? tools : skills).length && (
                     <p className="muted">No {tab} were reported by Hermes.</p>
                   )}
                 <button
                   className="primary"
-                  disabled={busy || !bootstrap.capabilities[tab].supported}
+                  disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported}
                   onClick={() =>
                     void run(() =>
                       write(
