@@ -1,9 +1,15 @@
 # Agent Interface
 
-An installable web client for a shared Hermes installation. Each bot has a
+A web client and native iOS app for a shared Hermes installation. Each bot has a
 persistent conversation, configurable instructions and capabilities, and an avatar
 that reflects its current state. Each household member has separate preferences,
 drafts and notification subscriptions.
+
+Household installation: [agentui.wildflowersranch.com](https://agentui.wildflowersranch.com).
+
+The self-hoster connects this server to Hermes once. Web users sign in to that
+installation. iOS users enter its HTTPS address, then sign in to the same
+household. The mobile app connects to this server, not directly to Hermes.
 
 ## Run locally
 
@@ -55,6 +61,11 @@ Setup connects to an existing compatible owner; it does not install Hermes or
 change its supervisor. A missing add-on, incompatible revision, rejected token,
 or unreachable gateway gets a distinct diagnostic.
 
+For a Google-protected Hermes dashboard, run this app on the same host and use
+the private service connection described in the capability matrix. This keeps
+the permanent server credential separate from expiring household Google
+sessions. The original dashboard retains its Google sign-in and address.
+
 Google sign-in requires `GOOGLE_CLIENT_ID`, the app origin registered in the
 Google OAuth client's authorized JavaScript origins, and an explicit comma-separated
 `HOUSEHOLD_EMAILS` allowlist. Setup collects the client ID and household emails;
@@ -84,7 +95,8 @@ a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
 Pull requests run the application tests, production build and Python syntax checks
-on both supported Node versions. The isolated Hermes probes remain a separate
+on both supported Node versions. Native builds and simulator tests run on the
+Mac mini using Xcode 27.0. The isolated Hermes probes remain a separate
 explicit run using the capability matrix's reproduction instructions.
 
 The standalone [avatar specimen](avatar-specimen/index.html) is available at
@@ -93,4 +105,29 @@ The standalone [avatar specimen](avatar-specimen/index.html) is available at
 controls, motion and reuse restrictions. All shipped avatar artwork is original.
 
 The [settled plan](docs/Plan.md) remains the scope and acceptance brief.
-Implementation and validation are local; production deployment is separate.
+Nicolas authorized hosting this application at `agentui.wildflowersranch.com`
+on the existing Hermes VPS. The [deployment record](docs/Hosting.md) tracks
+that installation and any remaining acceptance steps.
+
+## Native iOS
+
+The SwiftUI app lives in [`ios/`](ios/). It uses the same authenticated application
+API, bot configuration and canonical conversations as the web client. Its
+[parity record](ios/Parity.md) distinguishes implemented features, simulator
+checks and external acceptance.
+
+Connect to the app server's HTTPS origin. HTTP is limited to loopback development,
+including an iOS simulator on the server's Mac. A physical phone needs an HTTPS
+address it can reach. Household sign-in opens the system authentication browser;
+the resulting app token stays in Keychain, scoped to that server.
+
+Native notifications require the `APNS_*` settings in `.env.example` and a signed
+app whose bundle ID and APNs environment match the server. The
+[native API contract](docs/native-api.md) documents sign-in, expiry and device
+registration. Apple signing and closed-app notification delivery on a physical
+phone remain external acceptance work. Adding the app does not deploy the server
+or configure an Apple account.
+
+The [runtime assessment](docs/HarnessAssessment.md) records the tradeoffs in
+keeping Hermes, replacing it, or wrapping existing executors such as Codex and
+Claude Code. Hermes remains the current execution owner.

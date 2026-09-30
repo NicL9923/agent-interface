@@ -1,0 +1,32 @@
+{
+  "at": "2026-09-30T15:25:20.506113+00:00",
+  "origin": "https://agentui.wildflowersranch.com",
+  "sourceManifestSha256": "ee6e4256ac2933853c6c5e50e740d1f769734ad238fab9be14a003c446125e24",
+  "deployedSourceFiles": 28,
+  "deployedSourceMatches": true,
+  "uiBuild": "09520ac38712c923",
+  "hermesRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "hermesTrackedPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "checks": {
+    "publicHTTPS": 200,
+    "appHealth": 200,
+    "anonymousBootstrap": 401,
+    "localIdentityRejected": 403,
+    "privateServicePublicRoute": 404,
+    "privateHermesDoctor": true,
+    "existingGoogleHTTP": 200,
+    "existingGoogleFreshWebSockets": [
+      true,
+      true
+    ],
+    "gatewayProcessPreserved": true,
+    "discordConnectionsPreserved": 2,
+    "profileConfigurationsPreserved": true,
+    "caddyActive": true,
+    "wireguardActive": true,
+    "dailyBackupTimerActive": true,
+    "firstBackupSucceeded": true,
+    "activationRollbackExercised": true
+  },
+  "newAppGoogleSignIn": "Awaiting household confirmation; Google account chooser is not available through shared browser automation."
+}

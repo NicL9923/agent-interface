@@ -1,5 +1,100 @@
 # Validation ledger
 
+## September 30 native app and deployment
+
+This follow-up adds the native iPhone/iPad app, native authentication and APNs,
+qualifies the deployed Hermes revision, and hosts the web app under Nicolas's
+explicit September 30 authorization. Earlier sections remain historical evidence
+for their recorded code states.
+
+### Code and integration
+
+- Final source fingerprint, 138 files: `sha256:052decf29d2d3430a241e24ababb8459763704d211bf454fdeeb440237edea1f`.
+  The source-state tool excludes this ledger, private data and ignored build files.
+- All 137 Node tests and the production build passed at 10:03 local time.
+  The final web build is `09520ac38712c923`, with seven static cache entries.
+  Linux Node 24.21.0 produced the same web artifact as the Mac build.
+- Both clean Hermes `b9cb268deffc97946ec11645aa622a7353dd0591` and production
+  `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6` passed the isolated native, admission,
+  restart, scheduler and application probes. The production checkout included
+  the exact preserved OAuth repair recorded in the capability matrix.
+- Final application probes passed 13/13 groups on each revision with unchanged
+  start/end digest `d680d2c0e5c874a99fb5ef9d3efcd1b62be9befb910f2bb1b886db571545c900`.
+  Separate `app-probe-b9-qualified.json` and `app-probe-d23-qualified.json` retain
+  those receipts. Real Hermes execution used a deterministic provider.
+- Six service-authentication groups passed on both revisions behind the actual
+  native Google gate with fixture identities. Original cookie/native HTTP and
+  WebSocket authentication remained separate from the private service key.
+- The actual VPS managed-runtime probe passed six checks in a disposable home:
+  original CLI startup, native profile home, private ticket, dashboard HTML and
+  child-only shutdown. Five dependency-free wrapper tests verify qualification,
+  safe fallback before hooks and failure after partial installation. CI runs them.
+- Native API smoke rechecked one-use PKCE exchange, canonical conversation reads,
+  browser-Origin rejection and logout revocation. Its current source hashes are
+  in `native-api-probe.json`.
+
+### Native and visual validation
+
+- Xcode 27.0 on the Mac mini built the SwiftUI app with local ad hoc signing.
+  Final native contract/presentation tests: 18 passed. Earlier phone fixture interactions, a dark iPad interaction test and a light
+  iPad interaction test passed. Their unchanged controls, themes and artwork
+  reuse those checks; the final navigation fix uses the real-server test below.
+- A real-server iPhone UI test completed system-browser sign-in, PKCE callback,
+  Keychain storage, fresh bot creation, a complete new canonical reply, the real
+  Hermes tool catalog, avatar settings and deletion of the owned test bot. It
+  used the isolated app server and deterministic provider. The empty-chat
+  welcome is checked after leaving a long conversation, preventing stale-scroll
+  and old-reply matches in the evidence. The final live suite passed one test
+  with zero failures in 43.115 seconds at 10:41 local time, with the welcome
+  required to be hittable without scrolling.
+- The agent inspected native portrait/landscape layouts, native configuration,
+  both themes, nine avatar state poses and reduced motion. Evidence lives in
+  `docs/evidence/ios-live-review.png` and `ios/evidence/tablet-avatar-review.png`.
+- Independent GPT-6.1 Sol high review covered the full branch, including new files.
+  Fixes addressed identity races and in-flight flags, optional read-position
+  pixels and hidden tool anchors, canonical-read failures, safe admission recovery,
+  catalog save gating, empty/cached conversation scrolling, Markdown task lists
+  and dark-mode contrast. No product or
+  integration code finding remains open.
+- Existing web visual checks remain valid for the unchanged layouts. The 32-test
+  targeted read-position follow-up covered anchor-only native writes, web anchor
+  restoration and visible-message recording; these are included in the final 137.
+
+### Production
+
+- `https://agentui.wildflowersranch.com` serves valid HTTPS through the existing
+  Caddy installation. Cloudflare has the new A record. The application service
+  starts automatically, passes doctor and uses the private loopback service key.
+- All 28 deployed runtime source/package files match the local frozen files;
+  `production-probe.json` records that manifest digest and sanitized checks.
+- Anonymous bootstrap returned 401; local test sign-in returned 403. Production
+  auth configuration reports Google configured, local identities disabled and
+  native authentication version 1. The private Hermes service prefix returned 404
+  through the public proxy.
+- Existing Hermes Google HTTP remained authenticated. Two fresh ticket WebSocket
+  connections succeeded after restart. The gateway process, both Discord
+  connections and both profile configuration hashes were preserved. Caddy and
+  WireGuard are active; unrelated proxy routes were retained.
+- A missing setup template in the first release archive triggered the guarded
+  rollback. It stopped the app, removed its new unit/drop-in files and verified
+  the original dashboard before the corrected activation. The archive tool now
+  includes the template and excludes ignored data and macOS metadata.
+- The online backup tool recovered a committed WAL row locally with the source
+  database open and produced owner-only files. The production daily timer is
+  enabled; its first checked backup succeeded. Copies remain on the same host.
+- Google authorized origins were saved and verified in the shared browser after
+  Nicolas completed phone/email challenges. Existing origin/callbacks and account
+  settings were preserved. The new app's Google button loads, but its account
+  chooser is inaccessible to the shared browser tools; household confirmation
+  remains pending. The old Hermes Google session is independently verified.
+
+Physical APNs/PWA delivery, Apple signing, physical accessibility/motion, live
+image/MCP providers, unattended timed routines, goal continuation and compressed
+history remain external acceptance in issue #1. Simulator and fixture checks do
+not establish those behaviors.
+
+The original local implementation record follows.
+
 Local validation on September 29, 2026. Application tests, real Hermes execution,
 visual checks, and physical-device acceptance are recorded separately. Production
 was not changed.
