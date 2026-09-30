@@ -101,9 +101,7 @@ describe("conversation state", () => {
     expect(textarea.disabled).toBe(false);
     expect(sendButton().disabled).toBe(true);
     await advance(400);
-    expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared/draft", {
-      ...savedDraft, botId: "shared", userId: "one",
-    }, "PUT");
+    expect(write).not.toHaveBeenCalled();
     expect(JSON.parse(localStorage.getItem("agent-interface:draft:one:shared")!).text).toBe(savedDraft.text);
   });
 

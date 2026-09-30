@@ -13,6 +13,9 @@ was not changed.
   Application code is unchanged from `1e3d417`; the successful checks above are reused.
 - Hermes: `b9cb268deffc97946ec11645aa622a7353dd0591`, isolated Python 3.14.7.
 - Application: Node 26.10.0; backend tests also exercised Node 24.21.0.
+- Final setup/recovery follow-up fingerprint, 77 files:
+  `sha256:2032b612d9437d6533a9445c686f4efd6d2dd37581dc89ddcd03aed6d06c2aed`.
+  Final product validation is recorded in "Connection and setup follow-up" below.
 - Provider: deterministic local OpenAI wire fixture. Hermes execution, native
   tools and canonical persistence are real. Model answers are synthetic.
 
@@ -44,13 +47,13 @@ was not changed.
 
 ## Application checks
 
-`npm test` passed all 58 tests against the PR code. Coverage includes identity and
+The initial PR implementation at `1e3d417` passed all 58 application tests. Coverage includes identity and
 allowlist enforcement, Origin and CSRF, separate personal state, uncertain admission,
 notification recovery, worker privacy, and the Hermes transport contract. Twelve
 DOM tests cover safe Markdown, clipboard success/failure, deletion confirmation,
 draft recovery during executor outage, and per-task interruption review.
 
-`npm run build` passed full type checking and the production build. The current UI
+`npm run build` passed full type checking and the production build. That UI
 build is `c474588de95617ad`, with seven static files in its worker cache.
 
 The full isolated native pipeline passed, including image-only canonical binding,
@@ -58,7 +61,7 @@ definite preparation failure and cleanup, cross-member approval, clarification,
 generated files, steering, durable discovery, actual executor death without
 automatic replay, and native routine execution with canonical delivery.
 
-The final authenticated [app probe](evidence/app-probe.json) passed all 13 groups.
+The initial authenticated app probe passed all 13 groups.
 It started at `2026-09-30T01:34:02.619Z` and recorded the same application source
 digest before and after:
 `5130e0477f038a2f8e898d29d8d1051eeaeaa3dc73e7e468e56ce39a7ad26fd1`.
@@ -129,6 +132,63 @@ GitHub Actions runs `npm ci`, the complete application suite, the production bui
 and Python syntax compilation on Node 24.21.0 and 26.10.0. Actions are pinned to
 verified upstream commit SHAs and use read-only repository permissions. Native
 Hermes execution probes remain explicit local checks; CI does not claim them.
+
+## Connection and setup follow-up
+
+The guided `npm run setup` flow now checks the actual native gateway and pinned
+add-on before atomically saving a private environment file. A successful CLI smoke
+check used a disposable directory and the isolated browser gateway. Token entry
+was masked, the saved file had mode `0600`, and `npm run doctor` succeeded without
+printing the token. An unreachable candidate left the environment file absent.
+Malformed app origins now prompt for an explicit correction; production bindings
+and authentication requirements remain enforced.
+
+The final application suite passed **117 tests** at 21:15 local time. The production
+build and full type checking passed against the same product state. UI build:
+`9c6158d21fec48b5`. Coverage includes socket ownership, handshake/read/mutation
+deadlines, silent-socket recovery, reconnect backoff, read coalescing, auth and
+compatibility diagnostics, preserved rosters, body-inclusive browser timeouts,
+identity changes during a send, offline drafts, configuration checks and Google
+script failure recovery. Snapshot coalescing preserves separate user identity,
+preferences and CSRF tokens.
+
+The final [authenticated app probe](evidence/app-probe.json) passed all 13 groups,
+including physical executor restart and explicit interruption review. It started
+at `2026-09-30T02:12:54.738Z`; the source digest was unchanged before and after:
+`4bfd22e910e9a9d5c011ac56b804ead561e451af122e0e9ff2325e69c2dcb0e0`.
+Automatic connection recovery after executor restart took 2,950 ms in this run.
+This is an observed local result, not a latency guarantee.
+
+An early isolated launch exceeded its startup deadline under concurrent host load.
+Another probe expected an immediate read after executor restart, before the new
+backoff expired. The probe now polls read-only bootstrap state with a bounded
+recovery deadline, then verifies interruption and no automatic replay. A run during
+review edits was correctly rejected by the source-stability check. The final run
+above uses the frozen product state.
+
+The [connection browser record](evidence/connection-browser-probe.json) covers the
+unconfigured landing page, signed-in missing-Hermes guidance, offline edits and
+server persistence after reconnect, and an actual stalled isolated gateway.
+Existing conversation content and drafts remained visible, sending was disabled
+during the outage, and automatic recovery restored sending. Phone width remained
+390 pixels; desktop width was 1280. The closed phone drawer was inert. T3's browser
+reported no available automation host, so these checks used Playwright CLI with
+installed Chromium. The PR includes a new labeled setup/offline/recovered collage.
+The browser recovered before the manual reconnect click; manual reconnect itself
+is covered by transport and authenticated API checks, not claimed as a browser pass.
+
+Independent GPT-6.1 Sol high reviews covered the full branch and separately reviewed
+the setup author's work. Three findings were addressed:
+
+- Native Hermes avatar metadata takes precedence over stale app presentation data.
+- Confirmed admission clears only the matching sender draft inside the first
+  accepted receipt transaction. Newer drafts survive, repeated receipts do not
+  clear retyped content, and clean cached drafts never trigger autosaves.
+- Invalid `APP_ORIGIN` values can be corrected by guided setup and produce named
+  diagnostics in doctor and server startup.
+
+The reviewers verified the final fixes and reported no outstanding findings.
+Unchanged avatar and external-service acceptance records above remain applicable.
 
 ## Remaining external acceptance
 

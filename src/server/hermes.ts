@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool } from '../shared/types.js';
+import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool } from '../shared/types.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
@@ -9,78 +9,325 @@ const keys = ['chat','steering','approvals','uploads','generatedFiles','botConfi
 export interface HermesOptions { url?: string; token?: string }
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
-  let socket: WebSocket | undefined;
+  type DiagnosticCode = NonNullable<RuntimeStatus['code']>;
+  class TransportError extends Error {
+    constructor(readonly code: DiagnosticCode, message: string, readonly rpcCode?: number) {
+      super(message);
+    }
+  }
+  type Connection = {
+    ws: WebSocket;
+    verified: boolean;
+    lastReceivedAt: number;
+    rejectOpening?: (error: Error) => void;
+  };
+  type Pending = {
+    connection: Connection;
+    resolve(value: Wire): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  };
+  const readMethods = new Set([
+    'agent-interface.capabilities', 'agent-interface.receipt', 'agent-interface.discover',
+    'profiles.list', 'profiles.describe', 'session.history',
+  ]);
+  let connection: Connection | undefined;
   let connecting: Promise<void> | undefined;
+  let reconnecting: Promise<RuntimeStatus> | undefined;
   let serial = 0;
   let closed = false;
   let extension = false;
-  let epoch: string | undefined;
-  let requiredSkills=new Set<string>();
-  const pending = new Map<number, { resolve(value: Wire): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  let requiredSkills = new Set<string>();
+  let failures = 0;
+  let retryAt = 0;
+  let lastConnectedAt: string | undefined;
+  let botCache: Bot[] = [];
+  const pending = new Map<number, Pending>();
+  const reads = new Map<string, Promise<Wire>>();
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
   const transient = new Map<string, {text:string;state:ActivityState;requests:Wire[];tools:Message[]}>();
   let capabilityCache: Capabilities | undefined;
-  const unavailable = () => new Error('Hermes is disconnected. Configure the existing supervised Hermes URL and server-side token.');
+  let capabilityRequest: Promise<Capabilities> | undefined;
+  let rosterRequest: Promise<Bot[]> | undefined;
   const supported = (value:boolean, reason?:string) => ({supported:value,...(!value ? {reason:reason ?? 'The connected Hermes backend does not expose this capability.'}: {})});
+  const unavailable = () => new TransportError('unreachable', 'Hermes is disconnected. Check its supervised gateway and connection settings.');
 
+  let origin: URL | undefined;
+  let configurationError: TransportError | undefined;
+  if (!options.url && !options.token) {
+    configurationError = new TransportError('not_configured', 'Connect an existing supervised Hermes gateway with its server-side session token.');
+  } else if (!options.url || !options.token || options.token.trim() !== options.token || /[\x00-\x1f\x7f]/.test(options.token)) {
+    configurationError = new TransportError('invalid_config', 'Hermes needs both a gateway origin and a nonempty server-side session token.');
+  } else {
+    try {
+      if (options.url.trim() !== options.url || !/^https?:\/\/[^/?#\\]+\/?$/i.test(options.url)) throw new Error('Invalid origin');
+      const candidate = new URL(options.url);
+      const hostname = candidate.hostname.toLowerCase();
+      const loopback = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '[::1]' || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(hostname);
+      if (!['http:', 'https:'].includes(candidate.protocol) || candidate.username || candidate.password ||
+          candidate.search || candidate.hash || candidate.pathname !== '/' ||
+          (candidate.protocol === 'http:' && !loopback)) throw new Error('Invalid origin');
+      origin = new URL(candidate.origin);
+    } catch {
+      configurationError = new TransportError('invalid_config', 'Use an HTTP loopback or HTTPS gateway origin, without a path, query, fragment, or embedded credentials.');
+    }
+  }
+  let diagnostic: RuntimeStatus = {connected: false, code: configurationError?.code ?? 'connecting', detail: configurationError?.message};
+
+  function statusSnapshot(): RuntimeStatus {
+    return {...diagnostic, ...(origin ? {address: origin.origin} : {}),
+      ...(lastConnectedAt ? {lastConnectedAt} : {}),
+      ...(retryAt ? {retryAt: new Date(retryAt).toISOString()} : {})};
+  }
+  function markFailure(error: Error): void {
+    if (closed) return;
+    const failure = error instanceof TransportError ? error : unavailable();
+    failures += 1;
+    retryAt = Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5));
+    diagnostic = {connected: false, code: failure.code, detail: failure.message};
+  }
+  function disconnect(current: Connection, error: Error, recordFailure = true): void {
+    if (connection !== current) return;
+    connection = undefined;
+    current.rejectOpening?.(error);
+    current.rejectOpening = undefined;
+    for (const [id, item] of pending) {
+      if (item.connection !== current) continue;
+      clearTimeout(item.timer);
+      pending.delete(id);
+      item.reject(error);
+    }
+    reads.clear();
+    live.clear();
+    capabilityCache = undefined;
+    extension = false;
+    for (const state of transient.values()) state.state = 'disconnected';
+    if (current.ws.readyState < WebSocket.CLOSING) {
+      try { current.ws.close(); } catch { /* Already disconnected. */ }
+    }
+    if (recordFailure && !connecting && !closed) markFailure(error);
+  }
+  async function diagnoseOpeningFailure(error: Error): Promise<Error> {
+    // WebSocket upgrade failures hide HTTP status. This authenticated native read
+    // distinguishes an expired token from an unavailable gateway without paid work.
+    if (closed || !origin || !options.token || error instanceof TransportError && ['unauthorized', 'closed'].includes(error.code)) return error;
+    try {
+      const response = await fetch(new URL('/api/profiles', origin), {
+        headers: {'X-Hermes-Session-Token': options.token},
+        signal: AbortSignal.timeout(5_000), redirect: 'error',
+      });
+      await response.body?.cancel();
+      if (response.status === 401 || response.status === 403)
+        return new TransportError('unauthorized', 'Hermes rejected the session token. Update the server-side token and reconnect.');
+    } catch { /* Keep the bounded, sanitized transport diagnosis. */ }
+    return error;
+  }
+  function verifyContract(capabilities: Wire): void {
+    if (capabilities.revision !== revision || capabilities.durable_admission !== true ||
+        capabilities.durable_events !== true || capabilities.canonical_open !== true) {
+      throw new TransportError('incompatible', 'The verified durable Hermes add-on has an incompatible contract. Install the pinned add-on revision and reconnect.');
+    }
+    extension = true;
+    requiredSkills = new Set(Array.isArray(capabilities.essential_skills) ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string') : []);
+  }
   async function connect(): Promise<void> {
-    if(closed) throw unavailable();
-    if(connecting) return connecting;
-    if(socket?.readyState===WebSocket.OPEN) return;
-    if(!options.url || !options.token) throw unavailable();
-    connecting = (async () => { await new Promise<void>((resolve,reject) => {
-      const url=new URL('/api/ws',options.url);url.protocol=url.protocol==='https:'?'wss:':'ws:';url.searchParams.set('token',options.token!);
-      const ws=new WebSocket(url);socket=ws;
-      const deadline=setTimeout(()=>{ws.close();reject(new Error('Hermes connection timed out.'));},10000);
-      ws.addEventListener('open',()=>{clearTimeout(deadline);resolve();});
-      ws.addEventListener('error',()=>{clearTimeout(deadline);reject(new Error('Hermes connection failed. Check its supervised process and credentials.'));});
-      ws.addEventListener('close',()=>{
-        clearTimeout(deadline);socket=undefined;live.clear();capabilityCache=undefined;extension=false;
-        for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('Hermes disconnected during the request. Its outcome may be uncertain.'));}pending.clear();
-        for(const state of transient.values())state.state='disconnected';
-      });
-      ws.addEventListener('message',({data})=>{
-        for(const line of String(data).split('\n').filter(Boolean)){
-          let frame:Wire;try{frame=JSON.parse(line);}catch{continue;}
-          if(typeof frame.id==='number' && !frame.method){const item=pending.get(frame.id);if(item){clearTimeout(item.timer);pending.delete(frame.id);frame.error?item.reject(new Error(`Hermes ${frame.error.code}: ${frame.error.message}`)):item.resolve(frame.result ?? {});}continue;}
-          const params=frame.params??{};const sid=params.session_id;
-          if(sid){const state=transient.get(sid)??{text:'',state:'idle',requests:[],tools:[]};transient.set(sid,state);
-            if(frame.method==='event'){
-              const payload=params.payload??{};
-              if(params.type==='message.start'){state.text='';state.tools=[];state.state='thinking';}
-              if(params.type==='message.delta'){state.text+=payload.delta??payload.text??'';state.state='thinking';}
-              if(params.type==='tool.start'){state.state='working';state.tools.push({id:`live-tool-${params.seq??serial}`,role:'tool',text:payload.description??payload.preview??payload.name??'Tool running',toolName:payload.name??payload.tool_name});}
-              if(params.type==='message.complete'){state.text='';state.state=payload.status==='error'?'failed':payload.status==='interrupted'?'interrupted':'done';state.tools=[];}
-              if(params.type==='error')state.state='failed';
-              if(params.type==='request.cancel')state.requests=state.requests.filter(x=>x.id!==payload.id);
-            }else if(frame.id && frame.method){
-              if(frame.method==='approval'){state.requests=state.requests.filter(x=>x.id!==frame.id);state.requests.push(frame);state.state='waiting';}
-              else if(['clarify','sudo','secret','vault.code','vault.unlock_prompt','connection'].includes(frame.method)){state.requests.push(frame);state.state='blocked';}
-              else ws.send(JSON.stringify({jsonrpc:'2.0',id:frame.id,error:{code:-32601,message:'This client does not implement this official-client bridge.'}}));
-            }
+    if (closed) throw new TransportError('closed', 'The Hermes connection is closed.');
+    if (configurationError) throw configurationError;
+    if (connecting) return connecting;
+    if (connection?.verified && connection.ws.readyState === WebSocket.OPEN && Date.now() - connection.lastReceivedAt < 15_000) return;
+    if (retryAt > Date.now()) throw new TransportError(diagnostic.code ?? 'unreachable', diagnostic.detail ?? unavailable().message);
+    const attempt = (async () => {
+      diagnostic = {connected: false, code: lastConnectedAt ? 'reconnecting' : 'connecting', detail: 'Checking the Hermes gateway and durable add-on contract.'};
+      let current = connection;
+      const handshakeDeadline = setTimeout(() => {
+        if (current && connection === current) disconnect(current, new TransportError('unreachable', 'Hermes handshake timed out. Check its supervised gateway and add-on.'));
+      }, 10_000);
+      try {
+        if (!current || current.ws.readyState !== WebSocket.OPEN) {
+          if (current) disconnect(current, unavailable(), false);
+          const url = new URL('/api/ws', origin);
+          url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+          url.searchParams.set('token', options.token!);
+          let ws: WebSocket;
+          try { ws = new WebSocket(url); } catch { throw unavailable(); }
+          current = {ws, verified: false, lastReceivedAt: Date.now()};
+          connection = current;
+          const owned = current;
+          try {
+            await new Promise<void>((resolve, reject) => {
+              let settled = false;
+              const settle = (error?: Error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(deadline);
+                owned.rejectOpening = undefined;
+                error ? reject(error) : resolve();
+              };
+              owned.rejectOpening = error => settle(error);
+              const deadline = setTimeout(() => {
+                const error = new TransportError('unreachable', 'Hermes connection timed out. Check its gateway address and supervised process.');
+                settle(error);
+                disconnect(owned, error);
+              }, 10_000);
+              ws.addEventListener('open', () => { if (connection === owned) settle(); });
+              ws.addEventListener('error', () => {
+                if (connection !== owned) return;
+                const error = unavailable();
+                settle(error);
+                disconnect(owned, error);
+              });
+              ws.addEventListener('close', event => {
+                if (connection !== owned) return;
+                const code = (event as CloseEvent).code;
+                const error = [4401, 4403].includes(code) || code === 1008 && /auth|token|unauthor/i.test((event as CloseEvent).reason ?? '')
+                  ? new TransportError('unauthorized', 'Hermes rejected the session token. Update the server-side token and reconnect.')
+                  : new TransportError('unreachable', 'Hermes disconnected during the request. Its outcome may be uncertain.');
+                settle(error);
+                disconnect(owned, error);
+              });
+              ws.addEventListener('message', event => receive(owned, String((event as MessageEvent).data)));
+            });
+          } catch (error) {
+            throw await diagnoseOpeningFailure(error instanceof Error ? error : unavailable());
           }
+          await rawRpc(current, 'client.capabilities', {server_requests: true});
         }
-      });
-    });
-    await rawRpc('client.capabilities',{server_requests:true});
-    try{const capabilities=await rawRpc('agent-interface.capabilities');extension=capabilities.revision===revision && capabilities.durable_admission===true && capabilities.durable_events===true && capabilities.canonical_open===true;epoch=capabilities.executor_epoch;requiredSkills=new Set(capabilities.essential_skills??[]);}catch{extension=false;}
-    capabilityCache=undefined;
+        let capabilities: Wire;
+        try { capabilities = await rawRpc(current, 'agent-interface.capabilities'); }
+        catch (error) {
+          if (error instanceof TransportError && error.rpcCode === -32601)
+            throw new TransportError('addon_missing', 'Install the verified durable Hermes add-on before using this app, then reconnect.');
+          throw error;
+        }
+        if (connection !== current || current.ws.readyState !== WebSocket.OPEN) throw unavailable();
+        verifyContract(capabilities);
+        if (!current.verified) lastConnectedAt = new Date().toISOString();
+        current.verified = true;
+        failures = 0;
+        retryAt = 0;
+        diagnostic = {connected: true, code: 'ready', version: revision, detail: 'The Hermes gateway and durable add-on contract are verified.'};
+      } catch (error) {
+        const failure = error instanceof TransportError ? error : unavailable();
+        if (current && connection === current) disconnect(current, failure);
+        markFailure(failure);
+        throw failure;
+      } finally { clearTimeout(handshakeDeadline); }
     })();
-    try{await connecting;}finally{connecting=undefined;}
+    connecting = attempt;
+    try { await attempt; } finally { if (connecting === attempt) connecting = undefined; }
   }
-
-  async function rpc(method:string,params:Wire={}):Promise<Wire>{
-    await connect();return rawRpc(method,params);
+  function receive(current: Connection, data: string): void {
+    if (connection !== current) return;
+    for (const line of data.split('\n').filter(Boolean)) {
+      let frame: Wire;
+      try { frame = JSON.parse(line); } catch { continue; }
+      if (!frame || typeof frame !== 'object') continue;
+      current.lastReceivedAt = Date.now();
+      if (typeof frame.id === 'number' && !frame.method) {
+        const item = pending.get(frame.id);
+        if (item?.connection === current) {
+          clearTimeout(item.timer);
+          pending.delete(frame.id);
+          if (frame.error) {
+            const code = frame.error.code;
+            const unauthorized = [401, 403].includes(code);
+            const error = new TransportError(unauthorized ? 'unauthorized' : 'incompatible',
+              unauthorized ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes refused the request (code ${typeof code === 'number' ? code : 'unknown'}). Review before retrying.`,
+              typeof code === 'number' ? code : undefined);
+            item.reject(error);
+            if (unauthorized) disconnect(current, error);
+          } else item.resolve(frame.result ?? {});
+        }
+        continue;
+      }
+      const params = frame.params ?? {};
+      const sid = params.session_id;
+      if (!sid) continue;
+      const state = transient.get(sid) ?? {text: '', state: 'idle' as ActivityState, requests: [], tools: []};
+      transient.set(sid, state);
+      if (frame.method === 'event') {
+        const payload = params.payload ?? {};
+        if (params.type === 'message.start') {state.text = ''; state.tools = []; state.state = 'thinking';}
+        if (params.type === 'message.delta') {state.text += payload.delta ?? payload.text ?? ''; state.state = 'thinking';}
+        if (params.type === 'tool.start') {state.state = 'working'; state.tools.push({id: `live-tool-${params.seq ?? serial}`, role: 'tool', text: payload.description ?? payload.preview ?? payload.name ?? 'Tool running', toolName: payload.name ?? payload.tool_name});}
+        if (params.type === 'message.complete') {state.text = ''; state.state = payload.status === 'error' ? 'failed' : payload.status === 'interrupted' ? 'interrupted' : 'done'; state.tools = [];}
+        if (params.type === 'error') state.state = 'failed';
+        if (params.type === 'request.cancel') state.requests = state.requests.filter(x => x.id !== payload.id);
+      } else if (frame.id && frame.method) {
+        if (frame.method === 'approval') {state.requests = state.requests.filter(x => x.id !== frame.id); state.requests.push(frame); state.state = 'waiting';}
+        else if (['clarify', 'sudo', 'secret', 'vault.code', 'vault.unlock_prompt', 'connection'].includes(frame.method)) {state.requests.push(frame); state.state = 'blocked';}
+        else if (current.ws.readyState === WebSocket.OPEN) {
+          try { current.ws.send(JSON.stringify({jsonrpc: '2.0', id: frame.id, error: {code: -32601, message: 'This client does not implement this official-client bridge.'}})); }
+          catch { disconnect(current, unavailable()); }
+        }
+      }
+    }
   }
-  async function rawRpc(method:string,params:Wire={}):Promise<Wire>{
-    const id=++serial;
-    return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Hermes ${method} timed out. Do not replay an uncertain submission.`));},45000);pending.set(id,{resolve,reject,timer});socket!.send(JSON.stringify({jsonrpc:'2.0',id,method,params}));});
+  async function rpc(method: string, params: Wire = {}): Promise<Wire> {
+    await connect();
+    const current = connection;
+    if (!current?.verified || current.ws.readyState !== WebSocket.OPEN) {
+      if (current) disconnect(current, unavailable());
+      throw unavailable();
+    }
+    const key = readMethods.has(method) || method === 'image.generate' && params.probe === true ? `${method}:${JSON.stringify(params)}` : undefined;
+    if (key && reads.has(key)) return reads.get(key)!;
+    const request = rawRpc(current, method, params);
+    if (key) reads.set(key, request);
+    try { return await request; }
+    finally { if (key && reads.get(key) === request) reads.delete(key); }
   }
-  async function http(path:string,init:RequestInit={}):Promise<Response>{
-    if(!options.url||!options.token)throw unavailable();
-    const response=await fetch(new URL(path,options.url),{...init,headers:{'X-Hermes-Session-Token':options.token,...init.headers},signal:AbortSignal.timeout(45000)});
-    if(!response.ok)throw new Error(`Hermes HTTP ${response.status}: request failed.`);return response;
+  function rawRpc(current: Connection, method: string, params: Wire = {}): Promise<Wire> {
+    if (connection !== current || current.ws.readyState !== WebSocket.OPEN) {
+      if (connection === current) disconnect(current, unavailable());
+      return Promise.reject(unavailable());
+    }
+    const id = ++serial;
+    const timeout = readMethods.has(method) || method === 'client.capabilities' || method === 'image.generate' && params.probe === true ? 10_000 : 45_000;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const error = new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`);
+        disconnect(current, error);
+      }, timeout);
+      pending.set(id, {connection: current, resolve, reject, timer});
+      try { current.ws.send(JSON.stringify({jsonrpc: '2.0', id, method, params})); }
+      catch { disconnect(current, new TransportError('unreachable', 'Hermes disconnected while sending. Its outcome may be uncertain.')); }
+    });
+  }
+  async function http(path: string, init: RequestInit = {}): Promise<Response> {
+    if (closed) throw new TransportError('closed', 'The Hermes connection is closed.');
+    if (configurationError) throw configurationError;
+    let response: Response;
+    try {
+      response = await fetch(new URL(path, origin), {...init,
+        headers: {'X-Hermes-Session-Token': options.token!, ...init.headers},
+        signal: AbortSignal.timeout(45_000), redirect: 'error'});
+    } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
+    if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
+      response.status === 401 || response.status === 403 ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes HTTP ${response.status}: request failed.`);
+    return response;
+  }
+  async function runtimeStatus(): Promise<RuntimeStatus> {
+    try { await connect(); } catch { /* Expose the sanitized connection diagnosis. */ }
+    return statusSnapshot();
+  }
+  async function reconnect(): Promise<RuntimeStatus> {
+    if (closed || configurationError) return statusSnapshot();
+    if (reconnecting) return reconnecting;
+    const attempt = (async () => {
+      if (connection?.verified && connection.ws.readyState === WebSocket.OPEN) {
+        // Force a read-only contract check while keeping admitted work on its socket.
+        connection.lastReceivedAt = 0;
+      } else if (connection) {
+        disconnect(connection, new TransportError('unreachable', 'Hermes connection replaced. Review any uncertain mutation before retrying.'), false);
+      }
+      if (connecting) await connecting.catch(() => {});
+      retryAt = 0;
+      return runtimeStatus();
+    })();
+    reconnecting = attempt;
+    try { return await attempt; } finally { if (reconnecting === attempt) reconnecting = undefined; }
   }
   async function open(botId:string):Promise<Wire>{
     await connect();
@@ -135,7 +382,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(id ? { updates: body } : { ...body, paused: !input.enabled }),
     })).json() as Wire;
-    if (job.error || job.success === false) throw new Error(job.error ?? 'Hermes refused the routine.');
+    if (job.error || job.success === false) throw new Error('Hermes refused the routine. Reload before retrying.');
     job = job.job ?? job;
     const jobId = job.id ?? job.job_id ?? id;
     if (!jobId) throw new Error('Hermes did not return a routine ID.');
@@ -148,24 +395,58 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
   return {
-    async status(){try{await connect();return {connected:true,version:extension?revision:'Native Hermes gateway; durable add-on absent',detail:extension?`Executor ${epoch}`:'Install the verified local add-on for durable admission and discovery.'};}catch{return {connected:false,detail:'Hermes is not configured or its supervised gateway is unavailable.'};}},
-    async capabilities(){if(capabilityCache)return capabilityCache;let connected=false;try{await connect();connected=true;}catch{}
-      const result=Object.fromEntries(keys.map(key=>[key,supported(connected&&extension,connected?'This Hermes revision has not passed the configured compatibility contract.':'Hermes is disconnected.')])) as Capabilities;
-      result.idempotency=supported(connected&&extension,'The verified durable admission add-on is required.');result.chat=result.idempotency;result.steering=result.idempotency;result.durableEvents=supported(connected&&extension,'The durable lifecycle journal add-on is required.');
-      let image=false;if(connected)try{image=(await rpc('image.generate',{probe:true})).available===true;}catch{}
-      result.imageGeneration=result.portraitGeneration=supported(connected&&extension&&image,'A verified Hermes add-on and a usable image-generation provider are required.');capabilityCache=connected?result:undefined;return result;},
-    async listBots(){try{await connect();const roster=await rpc('profiles.list',{include_sessions:true});return await Promise.all(roster.profiles.map(async(row:Wire)=>bot(row,await rpc('profiles.describe',{name:row.name}))));}catch{return []; }},
+    status: runtimeStatus,
+    reconnect,
+    async capabilities() {
+      if (capabilityRequest) return capabilityRequest;
+      const request = (async () => {
+        let connected = false;
+        try { await connect(); connected = true; } catch { /* Diagnostic supplies the reason. */ }
+        if (connected && capabilityCache) return capabilityCache;
+        const current = connection;
+        const result = Object.fromEntries(keys.map(key => [key, supported(connected && extension, diagnostic.detail ?? 'Hermes is disconnected.')])) as Capabilities;
+        result.idempotency = supported(connected && extension, 'The verified durable admission add-on is required.');
+        result.chat = result.idempotency;
+        result.steering = result.idempotency;
+        result.durableEvents = supported(connected && extension, 'The durable lifecycle journal add-on is required.');
+        let image = false;
+        if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; } catch { /* A failed probe never enables generation. */ }
+        const usable = connected && connection === current && current?.verified === true && current.ws.readyState === WebSocket.OPEN && extension;
+        if (!usable) {
+          for (const key of keys) result[key] = supported(false, diagnostic.detail ?? 'Hermes is disconnected.');
+        } else {
+          result.imageGeneration = result.portraitGeneration = supported(image, 'A verified Hermes add-on and a usable image-generation provider are required.');
+          capabilityCache = result;
+        }
+        return result;
+      })();
+      capabilityRequest = request;
+      try { return await request; } finally { if (capabilityRequest === request) capabilityRequest = undefined; }
+    },
+    async listBots() {
+      if (rosterRequest) return rosterRequest;
+      const request = (async () => {
+        try {
+          const roster = await rpc('profiles.list', {include_sessions: true});
+          const bots = await Promise.all(roster.profiles.map(async (row: Wire) => bot(row, await rpc('profiles.describe', {name: row.name}))));
+          botCache = bots;
+          return bots;
+        } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
+      })();
+      rosterRequest = request;
+      try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }
+    },
     async saveBot(input:BotInput,id?:string){await connect();const name=id??input.name.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-|-$/g,'');if(!name)throw new Error('Bot name needs letters or numbers.');
       let created=false;try{if(!id){await rpc('profiles.create',{name,description:input.description,soul:input.instructions,mirror_credentials:true,no_alias:true});created=true;}
       const rosterBefore=await rpc('profiles.list',{include_sessions:false});const previous=rosterBefore.profiles.find((x:Wire)=>x.name===name);
       const config:Wire={name,soul:input.instructions,description:input.description??'',ui_meta:{'hermes-bots':{...previous?.ui_meta?.['hermes-bots'],title:input.name},agent_interface:{...previous?.ui_meta?.agent_interface,name:input.name,shared:input.shared}},ui_meta_expected_revisions:{'hermes-bots':previous?.ui_meta_revisions?.['hermes-bots']??0,agent_interface:previous?.ui_meta_revisions?.agent_interface??0}};
       if(input.model && input.model!=='Inherited'){config.model=input.model;config.provider=input.provider??(await rpc('profiles.describe',{name})).model.provider;if(input.confirmModel)config.confirm_expensive_model=true;}if(input.enabledMcpServers)config.enabled_mcp_servers=input.enabledMcpServers;
       if(input.enabledSkills){const all=await rpc('profiles.describe',{name});config.disabled_skills=all.skills.filter((x:Wire)=>!input.enabledSkills!.includes(x.name)).map((x:Wire)=>x.name);}
-      const result=await rpc('profiles.configure',config);if(result.confirm_required)throw Object.assign(new Error(result.confirm_message??'Hermes requires confirmation for this model.'),{statusCode:409,code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
+      const result=await rpc('profiles.configure',config);if(result.confirm_required)throw Object.assign(new Error('Hermes requires confirmation for this model.'),{statusCode:409,code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
       const roster=await rpc('profiles.list',{include_sessions:true});return bot(roster.profiles.find((x:Wire)=>x.name===name),await rpc('profiles.describe',{name}));}catch(error){if(created){try{await http(`/api/profiles/${encodeURIComponent(name)}`,{method:'DELETE'});live.delete(name);}catch{throw Object.assign(new Error('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot '+name+'.'),{createdBotId:name,cause:error});}}throw error;}},
     async deleteBot(id){await http(`/api/profiles/${encodeURIComponent(id)}`,{method:'DELETE'});live.delete(id);},
     async stop(botId){const state=await open(botId);await rpc('session.interrupt',{session_id:state.session_id,profile:botId});},
-    async generatePortrait(botId,prompt){await open(botId);const result=await rpc('image.generate',{prompt,aspect_ratio:'square',max_bytes:2_000_000});if(!result.success||!result.image_data)throw new Error(result.error??'Hermes image generation did not deliver image bytes.');const [,mime,base64]=/^data:([^;]+);base64,(.*)$/.exec(result.image_data)??[];if(!mime||!base64)throw new Error('Hermes returned an invalid generated image.');return this.upload(botId,{name:'generated-portrait.png',mime,data:Buffer.from(base64,'base64')});},
+    async generatePortrait(botId,prompt){await open(botId);const result=await rpc('image.generate',{prompt,aspect_ratio:'square',max_bytes:2_000_000});if(!result.success||!result.image_data)throw new Error(typeof result.error==='string'&&/no image generation backend configured/i.test(result.error)?'No image generation backend configured.':'Hermes image generation did not deliver image bytes. Review the provider settings before retrying.');const [,mime,base64]=/^data:([^;]+);base64,(.*)$/.exec(result.image_data)??[];if(!mime||!base64)throw new Error('Hermes returned an invalid generated image.');return this.upload(botId,{name:'generated-portrait.png',mime,data:Buffer.from(base64,'base64')});},
     async setAvatar(botId,avatar:Avatar){
       const roster=await rpc('profiles.list',{include_sessions:false});const row=roster.profiles.find((x:Wire)=>x.name===botId);if(!row)throw new Error('Unknown Hermes bot.');
       let portraitData:string|undefined;
@@ -218,6 +499,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     saveRoutine: routineMutation,
     async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});},
     async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');return await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;},
-    async close(){closed=true;socket?.close();},
+    async close() {
+      closed = true;
+      retryAt = 0;
+      diagnostic = {connected: false, code: 'closed', detail: 'The Hermes connection is closed.'};
+      if (connection) disconnect(connection, new TransportError('closed', 'The Hermes connection is closed.'));
+    },
   };
 }

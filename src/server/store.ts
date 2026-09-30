@@ -116,6 +116,10 @@ export class Store {
       )
       .run(userId, botId, JSON.stringify(value));
   }
+  clearSubmittedDraft(userId: string, botId: string, expected: unknown) {
+    return this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=? AND value=?")
+      .run(JSON.stringify({text: "", attachments: []}), userId, botId, JSON.stringify(expected)).changes > 0;
+  }
   presentation(botId: string) {
     const row = this.db
       .prepare(
@@ -218,10 +222,15 @@ export class Store {
   }
   receipt(receipt: SubmissionReceipt) {
     this.transaction(() => {
+      const previous = this.submission(receipt.requestId);
       this.db
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
         .run(JSON.stringify(receipt), receipt.requestId);
       const row = this.submission(receipt.requestId);
+      if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
+        this.clearSubmittedDraft(row.input.senderId, row.input.botId, {
+          text: row.input.text, attachments: row.input.attachments ?? [],
+        });
       if (row && receipt.runId)
         this.participate(receipt.runId, row.input.senderId);
     });

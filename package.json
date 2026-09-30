@@ -12,7 +12,9 @@
     "build": "tsc --noEmit && vite build && node scripts/build-worker.mjs",
     "start": "tsx src/server/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "setup": "tsx scripts/setup.ts",
+    "doctor": "tsx scripts/setup.ts --check"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

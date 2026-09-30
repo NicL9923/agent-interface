@@ -1,0 +1,64 @@
+{
+  "checkedAt": "2026-09-30T02:17:13.283890+00:00",
+  "browser": "Playwright CLI Chromium fallback after T3 preview_open reported no automation host",
+  "runtime": "Real isolated pinned Hermes; deterministic provider content",
+  "productionChanged": false,
+  "uiBuild": "9c6158d21fec48b5",
+  "sources": {
+    "src/App.tsx": "ca6be312923e3c8537861ad64a23f8ae415d7cc549eb8b591cc714d60b5008b1",
+    "src/client-api.ts": "1e6b0f7a81fe23048b2143f20a3134d2227318affd0325b50914edaacfab5300",
+    "src/components/SignIn.tsx": "954423350f126001a10f75872d209cfdc8cb4dce5a5f0e2b47d99adbfa57f49e",
+    "src/components/ConnectionPanel.tsx": "ffbbe96af1786e59dae7e1a4ef3f7fa9a2f59490f4129769b53013e370952307",
+    "src/styles.css": "a7b43d7d3bf0bd44d21dad64922749d23efb168de0ffd4e193b76f30cc657dfb",
+    "src/server/hermes.ts": "8fd7d916dd08d025f96f187c639bb9cc5110d4629fe3f8426b28019f315e646f"
+  },
+  "checks": {
+    "unconfiguredSignIn": {
+      "passed": true,
+      "setupCommandAndHostInstructions": true,
+      "viewport": [
+        390,
+        844
+      ],
+      "documentWidth": 390
+    },
+    "signedInMissingHermes": {
+      "passed": true,
+      "guidedConnectionSteps": true,
+      "detailsCommandAndDoctor": true,
+      "documentWidth": 390
+    },
+    "browserOffline": {
+      "passed": true,
+      "existingArticlesRetained": 2,
+      "composerRemainsEditable": true,
+      "sendDisabled": true,
+      "draftSavedAfterOnline": true
+    },
+    "actualGatewayStall": {
+      "passed": true,
+      "method": "SIGSTOP isolated gateway, then SIGCONT with automatic resume guard",
+      "unavailableBanner": true,
+      "articlesRetained": 2,
+      "draftRetained": true,
+      "sendDisabledDuringOutage": true,
+      "automaticRecovery": true,
+      "sendEnabledAfterRecovery": true
+    },
+    "responsive": {
+      "passed": true,
+      "desktopWidth": 1280,
+      "phoneWidth": 390,
+      "closedPhoneDrawerInert": true,
+      "themes": [
+        "light",
+        "dark"
+      ]
+    }
+  },
+  "limitations": [
+    "Google sign-in was covered with application doubles, not live Google credentials.",
+    "Physical device and closed-app push acceptance remains external.",
+    "Manual reconnect transport and API were tested automatically; the browser recovered automatically before the manual button click."
+  ]
+}

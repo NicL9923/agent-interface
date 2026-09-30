@@ -12,6 +12,8 @@ import { api, ApiError, setCsrf, write } from "./client-api";
 import { Avatar, stateLabels } from "./components/Avatar";
 import { BotSettings } from "./BotSettings";
 import { MessageMarkdown } from "./components/MessageMarkdown";
+import { ConnectionPanel } from "./components/ConnectionPanel";
+import { SignIn } from "./components/SignIn";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop: number };
@@ -21,6 +23,7 @@ type Draft = {
   attachments: FileRef[];
   botId?: string;
   userId?: string;
+  dirty?: boolean;
 };
 type Pending = {
   requestId: string;
@@ -86,6 +89,17 @@ export function App() {
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
+  const [conversationDisconnected, setConversationDisconnected] = useState(false);
+  const [appUnavailable, setAppUnavailable] = useState(false);
+  const [offline, setOffline] = useState(() => navigator.onLine === false);
+  const [checkingConnection, setCheckingConnection] = useState(false);
+  const connectionLost = disconnected || conversationDisconnected || offline;
+  const bootstrapRequest = useRef<Promise<Bootstrap | null> | null>(null);
+  const identityEpoch = useRef(0);
+  const bootRef = useRef(boot);
+  bootRef.current = boot;
+  const authRef = useRef(auth);
+  authRef.current = auth;
   const [settings, setSettings] = useState<Bot | "new" | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
@@ -153,33 +167,85 @@ export function App() {
   const bottom = useRef(true);
   const activeBotRef = useRef(botId);
   activeBotRef.current = botId;
-  const refresh = useCallback(async () => {
-    try {
-      const next = await api<Bootstrap>("/bootstrap");
-      setCsrf(next.csrfToken);
-      setBoot(next);
-      setAuth(false);
-      setDisconnected(!next.connection.connected);
-      setBotId(
-        (previous) =>
-          previous || next.preferences.defaultBotId || next.bots[0]?.id || "",
-      );
-      return next;
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        setAuth(true);
-        setBoot(null);
-      } else {
-        setDisconnected(true);
-        setError(String((e as Error).message));
+  const refresh = useCallback((): Promise<Bootstrap | null> => {
+    if (bootstrapRequest.current) return bootstrapRequest.current;
+    const epoch = identityEpoch.current;
+    const request = (async () => {
+      try {
+        const next = await api<Bootstrap>("/bootstrap");
+        if (epoch !== identityEpoch.current) return null;
+        if (bootRef.current && bootRef.current.user.id !== next.user.id) {
+          identityEpoch.current++;
+          setSending(false); setUploading(false); setPending(null); setReceipt(null);
+          setSettings(null); setPreferencesOpen(false); setError("");
+        }
+        setCsrf(next.csrfToken);
+        setBoot((previous) => ({ ...next,
+          bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
+            ? previous.bots : next.bots,
+        }));
+        setAuth(false);
+        setAppUnavailable(false);
+        setDisconnected(!next.connection.connected);
+        setBotId((previous) => {
+          if (!next.connection.connected) return previous;
+          if (next.bots.some(bot => bot.id === previous)) return previous;
+          return next.bots.find(bot => bot.id === next.preferences.defaultBotId)?.id || next.bots[0]?.id || "";
+        });
+        return next;
+      } catch (e) {
+        if (epoch !== identityEpoch.current) return null;
+        if (e instanceof ApiError && e.status === 401) {
+          identityEpoch.current++;
+          setSending(false); setUploading(false); setPending(null); setReceipt(null);
+          setSettings(null); setPreferencesOpen(false); setError("");
+          setAuth(true); setBoot(null); setCsrf("");
+        } else {
+          setDisconnected(true); setAppUnavailable(true);
+        }
+        return null;
       }
-      return null;
-    }
+    })();
+    bootstrapRequest.current = request;
+    void request.finally(() => {
+      if (bootstrapRequest.current === request) bootstrapRequest.current = null;
+    });
+    return request;
   }, []);
+  const reconnect = useCallback(async () => {
+    if (checkingConnection) return;
+    setCheckingConnection(true);
+    try {
+      await write("/connection/retry", {});
+      await refresh();
+      window.dispatchEvent(new Event("agent-interface:reconnect"));
+    } catch {
+      setDisconnected(true); setAppUnavailable(true);
+    } finally {
+      setCheckingConnection(false);
+    }
+  }, [checkingConnection, refresh]);
   useEffect(() => {
     void refresh();
-    const id = setInterval(() => void refresh(), 8000);
-    return () => clearInterval(id);
+    const id = setInterval(() => {
+      if (!authRef.current && document.visibilityState !== "hidden" && navigator.onLine !== false) void refresh();
+    }, 8000);
+    const wake = () => {
+      setOffline(navigator.onLine === false);
+      if (navigator.onLine !== false && document.visibilityState !== "hidden") void refresh();
+    };
+    const lost = () => { setOffline(true); };
+    window.addEventListener("online", wake);
+    window.addEventListener("offline", lost);
+    window.addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("online", wake);
+      window.removeEventListener("offline", lost);
+      window.removeEventListener("focus", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
   }, [refresh]);
   useEffect(() => {
     const theme = boot?.preferences.theme || "system";
@@ -190,6 +256,7 @@ export function App() {
     let live = true;
     const userId = boot.user.id;
     setConversation(null);
+    setConversationDisconnected(false);
     setDraftReady(false);
     setReviewed(false);
     setReceipt(null);
@@ -197,7 +264,7 @@ export function App() {
       localRead<Pending>(`agent-interface:submission:${userId}:${botId}`),
     );
     const cached = localRead<Draft>(draftKey(userId, botId));
-    let draftLoaded = !!cached;
+    let draftLoaded = !!cached?.dirty;
     let loadingDraft = false;
     let loadingConversation = false;
     let firstConversation = true;
@@ -211,8 +278,9 @@ export function App() {
         const saved = await api<Draft | null>(`/bots/${encodeURIComponent(botId)}/draft`);
         if (!live) return;
         draftLoaded = true;
-        setDraft({ ...(saved || { text: "", attachments: [] }), botId, userId });
+        setDraft(current => current.dirty ? current : { ...(saved || { text: "", attachments: [] }), botId, userId });
         setDraftReady(true);
+        setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
       } catch (e) {
         if (live) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
@@ -228,6 +296,7 @@ export function App() {
         );
         if (!live) return;
         setConversation(result);
+        setConversationDisconnected(false);
         if (firstConversation) {
           firstConversation = false;
           requestAnimationFrame(() => {
@@ -243,10 +312,9 @@ export function App() {
             if (live && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
           });
         }
-      } catch (e) {
+      } catch {
         if (live) {
-          setDisconnected(true);
-          if (firstConversation) setError((e as Error).message);
+          setConversationDisconnected(true);
         }
       } finally {
         loadingConversation = false;
@@ -254,13 +322,24 @@ export function App() {
     };
     void loadDraft();
     void load();
-    const timer = setInterval(() => { void loadDraft(); void load(); }, 1500);
+    const wake = () => {
+      if (navigator.onLine !== false && document.visibilityState !== "hidden") {
+        void loadDraft(); void load();
+      }
+    };
+    const timer = setInterval(wake, 1500);
+    window.addEventListener("online", wake);
+    window.addEventListener("agent-interface:reconnect", wake);
+    document.addEventListener("visibilitychange", wake);
     const url = new URL(location.href);
     url.searchParams.set("bot", botId);
     history.replaceState(null, "", url);
     return () => {
       live = false;
       clearInterval(timer);
+      window.removeEventListener("online", wake);
+      window.removeEventListener("agent-interface:reconnect", wake);
+      document.removeEventListener("visibilitychange", wake);
     };
   }, [botId, boot?.user.id]);
   useEffect(() => {
@@ -274,36 +353,44 @@ export function App() {
       return;
     const user = boot.user.id;
     localSave(draftKey(user, botId), draft);
+    if (!draft.dirty || offline || appUnavailable || pending && pending.botId === botId &&
+      pending.text === draft.text && JSON.stringify(pending.attachments) === JSON.stringify(draft.attachments)) return;
+    const epoch = identityEpoch.current;
     const timer = setTimeout(
       () =>
         void write(
           `/bots/${encodeURIComponent(botId)}/draft`,
           draft,
           "PUT",
-        ).catch(() => {}),
+        ).then(() => {
+          if (epoch !== identityEpoch.current) return;
+          const key = draftKey(user, botId);
+          const cached = localRead<Draft>(key);
+          if (cached?.text === draft.text && JSON.stringify(cached.attachments) === JSON.stringify(draft.attachments))
+            localSave(key, {...cached, dirty: false});
+          setDraft(current => current === draft ? {...current, dirty: false} : current);
+        }).catch(() => {}),
       350,
     );
     return () => clearTimeout(timer);
-  }, [draft, botId, draftReady, boot?.user.id]);
+  }, [draft, botId, draftReady, boot?.user.id, offline, appUnavailable, pending]);
   useEffect(() => {
     if (!pending || !boot || sending) return;
     let live = true;
+    let loading = false;
+    const epoch = identityEpoch.current;
     const key = `agent-interface:submission:${boot.user.id}:${pending.botId}`;
     const reconcile = async () => {
+      if (loading || navigator.onLine === false || document.visibilityState === "hidden") return;
+      loading = true;
       try {
         const result = await api<SubmissionReceipt>(
           `/submissions/${pending.requestId}`,
         );
-        if (!live) return;
+        if (!live || epoch !== identityEpoch.current) return;
         setReceipt(result);
         if (result.status === "accepted") {
-          const cleared = clearSavedDraft(boot.user.id, pending);
-          if (cleared)
-            void write(
-              `/bots/${encodeURIComponent(pending.botId)}/draft`,
-              cleared,
-              "PUT",
-            ).catch(() => {});
+          clearSavedDraft(boot.user.id, pending);
           setPending(null);
           localRemove(key);
           setDraft((current) =>
@@ -329,7 +416,7 @@ export function App() {
         }
       } catch {
         /* Unknown submission stays pending until a reliable reconciliation. */
-      }
+      } finally { loading = false; }
     };
     void reconcile();
     const timer = setInterval(() => void reconcile(), 2000);
@@ -373,13 +460,15 @@ export function App() {
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
   const savePreferences = async (value: Preferences) => {
+    const epoch = identityEpoch.current;
     try {
       const saved = await write<Preferences>("/preferences", value, "PATCH");
+      if (epoch !== identityEpoch.current) return;
       setBoot((previous) =>
         previous ? { ...previous, preferences: saved } : previous,
       );
     } catch (e) {
-      setError((e as Error).message);
+      if (epoch === identityEpoch.current) setError((e as Error).message);
     }
   };
   const persistPosition = () => {
@@ -409,6 +498,7 @@ export function App() {
   const send = async () => {
     if (
       !boot ||
+      connectionLost ||
       pending ||
       sending ||
       !draftReady ||
@@ -418,6 +508,7 @@ export function App() {
     )
       return;
     setError("");
+    const epoch = identityEpoch.current;
     const request: Pending = {
       requestId: crypto.randomUUID(),
       botId,
@@ -433,15 +524,10 @@ export function App() {
         `/bots/${encodeURIComponent(botId)}/messages`,
         request,
       );
+      if (epoch !== identityEpoch.current) return;
       if (activeBotRef.current === request.botId) setReceipt(result);
       if (result.status === "accepted") {
-        const cleared = clearSavedDraft(boot.user.id, request);
-        if (cleared)
-          void write(
-            `/bots/${encodeURIComponent(request.botId)}/draft`,
-            cleared,
-            "PUT",
-          ).catch(() => {});
+        clearSavedDraft(boot.user.id, request);
         setDraft((current) =>
           current.botId === request.botId &&
           current.userId === boot.user.id &&
@@ -470,6 +556,7 @@ export function App() {
         );
       }
     } catch (e) {
+      if (epoch !== identityEpoch.current) return;
       if (e instanceof ApiError && e.status < 500) {
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(
@@ -478,13 +565,14 @@ export function App() {
       }
       setError((e as Error).message);
     } finally {
-      setSending(false);
+      if (epoch === identityEpoch.current) setSending(false);
     }
   };
   const upload = async (files: FileList | null) => {
     if (!files || !boot) return;
     const uploadBot = botId;
     const uploadUser = boot.user.id;
+    const epoch = identityEpoch.current;
     let targetDraft = { ...draft };
     setUploading(true);
     setError("");
@@ -496,11 +584,13 @@ export function App() {
           `/bots/${encodeURIComponent(uploadBot)}/uploads`,
           { method: "POST", body: form },
         );
+        if (epoch !== identityEpoch.current) return;
         targetDraft =
           localRead<Draft>(draftKey(uploadUser, uploadBot)) || targetDraft;
         targetDraft = {
           ...targetDraft,
           attachments: [...targetDraft.attachments, result],
+          dirty: true,
         };
         localSave(draftKey(uploadUser, uploadBot), targetDraft);
         void write(
@@ -510,14 +600,14 @@ export function App() {
         ).catch(() => {});
         setDraft((current) =>
           current.botId === uploadBot && current.userId === uploadUser
-            ? { ...current, attachments: [...current.attachments, result] }
+            ? { ...current, attachments: [...current.attachments, result], dirty: true }
             : current,
         );
       }
     } catch (e) {
-      setError((e as Error).message);
+      if (epoch === identityEpoch.current) setError((e as Error).message);
     } finally {
-      setUploading(false);
+      if (epoch === identityEpoch.current) setUploading(false);
     }
   };
   const enablePush = async () => {
@@ -558,7 +648,11 @@ export function App() {
       setNotice((e as Error).message);
     }
   };
-  if (auth) return <SignIn onSuccess={() => void refresh()} />;
+  if (auth) return <SignIn onSuccess={() => {
+    identityEpoch.current++;
+    bootstrapRequest.current = null;
+    void refresh();
+  }} />;
   if (!boot)
     return (
       <main className="welcome">
@@ -568,12 +662,12 @@ export function App() {
           <br />
           in one familiar place.
         </h1>
-        <p>{error || "Connecting to your household…"}</p>
-        {error && <button onClick={() => void refresh()}>Try again</button>}
+        <p role="status">{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+        {appUnavailable && <button onClick={() => void refresh()}>Try again</button>}
       </main>
     );
   const selected = boot.bots.find((bot) => bot.id === botId);
-  const state = disconnected
+  const state = connectionLost
     ? "disconnected"
     : conversation?.activity.state || selected?.activity || "idle";
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
@@ -593,7 +687,7 @@ export function App() {
       <Avatar
         avatar={bot.avatar}
         state={
-          disconnected
+          connectionLost
             ? "disconnected"
             : bot.id === botId
               ? state
@@ -682,8 +776,8 @@ export function App() {
           >
             ☷ Preferences
           </button>
-          <span className={`connection ${disconnected ? "attention" : ""}`}>
-            {disconnected ? "Connection lost" : "Connected to Hermes"}
+          <span className={`connection ${connectionLost ? "attention" : ""}`}>
+            {connectionLost ? offline ? "Offline" : "Reconnecting" : "Connected to Hermes"}
           </span>
         </div>
       </aside>
@@ -770,11 +864,9 @@ export function App() {
             </button>
           </div>
         )}
-        {disconnected && (
-          <div className="notice attention" role="status">
-            Connection lost. Your draft is saved. Activity is unknown.
-            <button onClick={() => void refresh()}>Reconnect</button>
-          </div>
+        {connectionLost && selected && (
+          <ConnectionPanel compact connection={boot.connection} offline={offline}
+            appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
         )}
         {error && (
           <div className="notice error" role="alert">
@@ -791,7 +883,10 @@ export function App() {
           aria-label="Conversation"
           tabIndex={0}
         >
-          {!selected ? (
+          {!selected && connectionLost ? (
+            <ConnectionPanel connection={boot.connection} offline={offline}
+              appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
+          ) : !selected ? (
             <div className="empty-state">
               <Avatar size={100} />
               <h2>A little less to carry.</h2>
@@ -819,6 +914,8 @@ export function App() {
                 </details>
               )}
             </div>
+          ) : !conversation && !connectionLost ? (
+            <div className="empty-state" role="status"><p>Opening your conversation…</p></div>
           ) : conversation?.messages.length ? (
             <>
               {conversation.messages
@@ -1043,6 +1140,7 @@ export function App() {
                       onClick={() =>
                         setDraft((previous) => ({
                           ...previous,
+                          dirty: true,
                           attachments: previous.attachments.filter(
                             (f) => f.id !== file.id,
                           ),
@@ -1068,6 +1166,7 @@ export function App() {
                 onChange={(event) =>
                   setDraft((previous) => ({
                     ...previous,
+                    dirty: true,
                     text: event.target.value,
                   }))
                 }
@@ -1083,7 +1182,7 @@ export function App() {
                         pending ||
                         sending ||
                         uploading ||
-                        disconnected ||
+                        connectionLost ||
                         !boot.capabilities.chat.supported ||
                         (state === "interrupted" && !reviewed) ||
                         (active && !boot.capabilities.steering.supported)
@@ -1134,7 +1233,7 @@ export function App() {
                     pending !== null ||
                     sending ||
                     uploading ||
-                    disconnected ||
+                    connectionLost ||
                     !boot.capabilities.chat.supported ||
                     (active && !boot.capabilities.steering.supported) ||
                     (state === "interrupted" && !reviewed) ||
@@ -1281,6 +1380,9 @@ export function App() {
                       }
                     }
                     await write("/auth/logout", {});
+                    identityEpoch.current++;
+                    bootstrapRequest.current = null;
+                    setCsrf("");
                     setBoot(null);
                     setConversation(null);
                     setDraft({ text: "", attachments: [] });
@@ -1430,104 +1532,6 @@ function SectionEditor({
         </button>
       </div>
     </fieldset>
-  );
-}
-function SignIn({ onSuccess }: { onSuccess: () => void }) {
-  const [config, setConfig] = useState<{
-    localDevAuth: boolean;
-    googleClientId?: string;
-  } | null>(null);
-  const [error, setError] = useState("");
-  const [member, setMember] = useState<"one" | "two">("one");
-  const google = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    void api<typeof config>("/auth/config")
-      .then(setConfig)
-      .catch((e) => setError(e.message));
-  }, []);
-  useEffect(() => {
-    if (!config?.googleClientId) return;
-    let cancelled = false;
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.onload = () => {
-      const g = (
-        window as unknown as {
-          google: {
-            accounts: {
-              id: {
-                initialize: (v: unknown) => void;
-                renderButton: (e: HTMLElement, v: unknown) => void;
-              };
-            };
-          };
-        }
-      ).google;
-      if (cancelled || !google.current) return;
-      g.accounts.id.initialize({
-        client_id: config.googleClientId,
-        callback: async ({ credential }: { credential: string }) => {
-          try {
-            await write("/auth/google", { credential });
-            onSuccess();
-          } catch (e) {
-            setError((e as Error).message);
-          }
-        },
-      });
-      g.accounts.id.renderButton(google.current, {
-        theme: "outline",
-        size: "large",
-      });
-    };
-    document.head.appendChild(script);
-    return () => {
-      cancelled = true;
-      script.remove();
-    };
-  }, [config?.googleClientId]);
-  return (
-    <main className="welcome">
-      <p className="eyebrow">Agent Interface</p>
-      <Avatar size={100} />
-      <h1>
-        A familiar place
-        <br />
-        for your assistants.
-      </h1>
-      <p>Sign in to return to your household conversations.</p>
-      <div ref={google} />
-      {config?.localDevAuth && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void write("/auth/local", { member })
-              .then(onSuccess)
-              .catch((e) => setError(e.message));
-          }}
-        >
-          <label>
-            Local household member
-            <select
-              value={member}
-              onChange={(e) => setMember(e.target.value as "one" | "two")}
-            >
-              <option value="one">Household member one</option>
-              <option value="two">Household member two</option>
-            </select>
-          </label>
-          <button className="primary">Enter local workspace</button>
-          <p className="muted">
-            Local development sign-in is enabled on this machine.
-          </p>
-        </form>
-      )}
-      {config && !config.googleClientId && !config.localDevAuth && (
-        <p>Google sign-in is not configured on this installation.</p>
-      )}
-      {error && <p role="alert">{error}</p>}
-    </main>
   );
 }
 

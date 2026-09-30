@@ -13,15 +13,26 @@ release. The lockfile pins application dependencies. See the
 
 ```sh
 npm ci
-cp .env.example .env
+npm run setup
 npm run build
 npm start
 ```
 
-Open `http://127.0.0.1:3000`. For local browser testing, set
-`LOCAL_DEV_AUTH=true` in `.env`. This exposes two explicitly named local test
-identities. The server refuses that setting in production or on a non-loopback
-host. With no Hermes connection, the app shows its disconnected state.
+Setup asks for the existing Hermes gateway address and token, then checks access
+and compatibility before saving a private `.env`. Token entry is masked. Choose
+Google sign-in for the household, or explicitly enable local test accounts for
+development. A failed check leaves the previous configuration intact.
+
+Open the app address printed by `npm start`, normally `http://127.0.0.1:3000`.
+Household members only need to sign in; they never enter the Hermes token.
+Local test accounts are refused in production or on a non-loopback host.
+An unconfigured installation explains how to start setup from its sign-in page.
+
+After changing configuration, restart the app. Use `npm run doctor` for a
+read-only check of the active configuration and Hermes connection. It exits with
+a failure status and an actionable explanation when something needs attention.
+Exported environment settings override `.env`; setup reports conflicting keys
+before writing so a saved change cannot silently be ignored.
 
 For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and
 `npm run dev:client` in separate terminals, and open port 5173. Vite proxies API
@@ -30,8 +41,9 @@ from one Fastify process.
 
 ## Connect Hermes
 
-Hermes runs separately from this application. Set `HERMES_URL` and
-`HERMES_TOKEN` on the server. Keep provider credentials in Hermes, and establish
+Hermes runs separately from this application. Guided setup saves `HERMES_URL` and
+`HERMES_TOKEN` on the app server. An existing HTTPS gateway is supported; cleartext
+HTTP is restricted to loopback. Keep provider credentials in Hermes, and establish
 new provider or service connections through the official Hermes interface.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
@@ -39,11 +51,23 @@ revision, native integration probes, and the small revision-bound extension for
 durable admission receipts and event discovery. Read its compatibility and
 rollback instructions before using that extension. The app does not directly
 edit Hermes databases or take over execution from an existing Hermes owner.
+Setup connects to an existing compatible owner; it does not install Hermes or
+change its supervisor. A missing add-on, incompatible revision, rejected token,
+or unreachable gateway gets a distinct diagnostic.
 
-Google sign-in requires `GOOGLE_CLIENT_ID` and an explicit comma-separated
-`HOUSEHOLD_EMAILS` allowlist. Production requires HTTPS. Web Push additionally
+Google sign-in requires `GOOGLE_CLIENT_ID`, the app origin registered in the
+Google OAuth client's authorized JavaScript origins, and an explicit comma-separated
+`HOUSEHOLD_EMAILS` allowlist. Setup collects the client ID and household emails;
+Google's external configuration remains a separate step. Production requires HTTPS. Web Push additionally
 requires the three `VAPID_*` settings in `.env.example`. Accounts, credentials,
 runtime databases and private operating notes stay outside this repository.
+
+During an outage, the app retains loaded conversations and personal drafts,
+rechecks the connection automatically, and refreshes when the browser comes back
+online or into view. Manual reconnect checks immediately. The transport bounds
+stalled requests and backs off repeated failures. It never automatically replays
+messages or configuration changes; uncertain admissions are reconciled through
+Hermes's durable receipts.
 
 ## Validate
 

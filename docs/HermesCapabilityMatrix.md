@@ -8,6 +8,21 @@ The tests ran real Hermes, its AIAgent, native tools, native profile/session sto
 
 The app connects to the official TUI gateway JSON-RPC WebSocket at `/api/ws` and uses authenticated native HTTP routes for files, profile deletion, and routine editing. Hermes runs under its own supervisor. Closing the browser or restarting the app does not create a second execution owner.
 
+Guided host setup verifies that connection before saving `.env`; `npm run doctor`
+performs the same read-only check. Diagnostics distinguish absent configuration,
+invalid origins, rejected credentials, unreachable gateways, missing add-ons, and
+incompatible contracts. Tokens remain server-side. Remote gateways require HTTPS;
+HTTP is allowed only on loopback. Redirects are refused for authenticated HTTP reads.
+
+The transport bounds opening/contract negotiation to ten seconds, reads to ten
+seconds, and mutations to 45 seconds. An opaque opening failure can add a bounded
+five-second native HTTP authentication check. Failed reconnects back off from one
+to 30 seconds; an explicit reconnect bypasses the delay. Identical overlapping
+reads share work. Mutations are never replayed. Socket events and pending requests
+belong to their connection generation, so a late old-socket close cannot destroy a
+replacement connection. Successful roster data remains visible during outages;
+the UI marks activity unknown and preserves the loaded conversation and draft.
+
 The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, attribution, and event discovery through `agent-interface.capabilities/open/submit/receipt/discover`. Its private SQLite journal lives at `HERMES_HOME/runtime/agent-interface.db`. It writes no Hermes database rows. The adapter enables mutations only after the add-on reports the exact verified revision. A native gateway without that contract stays unavailable with an explanation.
 
 Native `prompt.submit` supplies a durable `user_row_id` but no durable client request key. The add-on writes a FULL-synchronous receipt before calling native admission, compares retries against the original input and actor, and never automatically replays an uncertain submission. Each independent task has a distinct root request ID. Steering receipts join that root and bind to the actual canonical user row once native Hermes persists it. Sender attribution does not alter the message body or forge protected Hermes author metadata.

@@ -687,6 +687,17 @@ try {
         restarted,
         "Isolated controller did not acknowledge executor restart",
       );
+      // The app intentionally backs off failed connections. Exercise automatic
+      // read-only recovery instead of assuming the first post-restart read wins.
+      const recoveryStarted = Date.now();
+      let recovered = false;
+      while (Date.now() - recoveryStarted < 45_000) {
+        const { data: bootstrap } = await call("GET", "/api/bootstrap");
+        if (bootstrap.connection.connected) { recovered = true; break; }
+        await pause(500);
+      }
+      assert(recovered, "App did not automatically reconnect to the restarted executor");
+      const automaticReconnectMs = Date.now() - recoveryStarted;
       const { data: interrupted } = await call(
         "GET",
         `/api/bots/${botId}/conversation`,
@@ -726,6 +737,7 @@ try {
       await waitCompleted(botId);
       return {
         receiptInterrupted: true,
+        automaticReconnectMs,
         canonicalStateInterrupted: true,
         automaticResume: false,
         unreviewedAdmissionRejected: true,

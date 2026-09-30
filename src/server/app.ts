@@ -8,6 +8,7 @@ import { z } from "zod";
 import type {
   Avatar,
   BotInput,
+  Bootstrap,
   CapabilityKey,
   Preferences,
   Runtime,
@@ -90,6 +91,7 @@ const fileRef = z.object({
   size: z.number().optional(),
   url: z.string().optional(),
 });
+const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(10).default([]) });
 function failure(statusCode: number, message: string) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -153,24 +155,43 @@ export async function createApp(
     req.params as { id: string; approvalId?: string };
   const decorateBot = (
     bot: Awaited<ReturnType<Runtime["listBots"]>>[number],
-  ) => ({ ...bot, ...store.presentation(bot.id) });
+    nativeAvatar = false,
+  ) => ({ ...bot, ...store.presentation(bot.id),
+    ...(nativeAvatar ? { avatar: bot.avatar } : {}),
+  });
   app.get("/api/health", async () => ({ ok: true }));
+  let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
+  const runtimeSnapshot = () => {
+    if (snapshot) return snapshot;
+    snapshot = (async () => {
+      // Share only runtime reads. Identity, preferences and CSRF remain request-scoped.
+      const [bots, capabilities] = await Promise.all([
+        runtime.listBots(), runtime.capabilities(),
+      ]);
+      return { bots: bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)), capabilities, connection: await runtime.status() };
+    })().finally(() => { snapshot = undefined; });
+    return snapshot;
+  };
   app.get("/api/bootstrap", async (req) => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: store.preferences(signedIn(req).id),
-    bots: (await runtime.listBots()).map(decorateBot),
-    capabilities: await runtime.capabilities(),
-    connection: await runtime.status(),
+    ...await runtimeSnapshot(),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
   }));
+  app.post("/api/connection/retry", async () =>
+    runtime.reconnect ? runtime.reconnect() : runtime.status(),
+  );
   app.patch("/api/preferences", async (req) => {
     const value = preferenceInput.parse(req.body) as Preferences;
     store.savePreferences(signedIn(req).id, value);
     return value;
   });
-  app.get("/api/bots", async () => (await runtime.listBots()).map(decorateBot));
+  app.get("/api/bots", async () => {
+    const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
+    return bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported));
+  });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
     const input = botInput.parse(req.body);
@@ -179,7 +200,7 @@ export async function createApp(
       shared: input.shared,
       ownerId: input.shared ? undefined : signedIn(req).id,
     });
-    return decorateBot(bot);
+    return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
@@ -189,7 +210,7 @@ export async function createApp(
       shared: input.shared,
       ownerId: input.shared ? undefined : signedIn(req).id,
     });
-    return decorateBot(bot);
+    return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.delete("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
@@ -394,12 +415,7 @@ export async function createApp(
     app.put(`/api/bots/:id/${route}`, async (req) => {
       const value =
         route === "draft"
-          ? z
-              .object({
-                text: z.string().max(50000),
-                attachments: z.array(fileRef).max(10).default([]),
-              })
-              .parse(req.body)
+          ? draftInput.parse(req.body)
           : z
               .object({
                 messageId: z.string().max(200).optional(),

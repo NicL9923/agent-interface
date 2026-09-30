@@ -178,7 +178,7 @@ export interface Bootstrap {
   preferences: Preferences;
   bots: Bot[];
   capabilities: Capabilities;
-  connection: { connected: boolean; version?: string; detail?: string };
+  connection: RuntimeStatus;
   csrfToken: string;
   vapidPublicKey?: string;
 }
@@ -213,11 +213,16 @@ export interface RuntimeDiscovery {
 }
 export interface RuntimeStatus {
   connected: boolean;
+  code?: "not_configured" | "invalid_config" | "connecting" | "unreachable" | "unauthorized" | "addon_missing" | "incompatible" | "ready" | "reconnecting" | "closed";
   version?: string;
   detail?: string;
+  address?: string;
+  retryAt?: string;
+  lastConnectedAt?: string;
 }
 export interface Runtime {
   status(): Promise<RuntimeStatus>;
+  reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;
   listBots(): Promise<Bot[]>;
   saveBot(input: BotInput, id?: string): Promise<Bot>;

@@ -15,6 +15,14 @@ export interface Config {
 }
 export const loopback = (host: string) =>
   ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
+export function parseAppOrigin(value: string): URL {
+  let origin: URL;
+  try { origin = new URL(value); }
+  catch { throw new Error("APP_ORIGIN must be a valid HTTP or HTTPS origin, including its protocol"); }
+  if (!["http:", "https:"].includes(origin.protocol) || origin.origin !== value)
+    throw new Error("APP_ORIGIN must be an HTTP or HTTPS origin with no trailing slash or path");
+  return origin;
+}
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config: Config = {
     production: env.NODE_ENV === "production",
@@ -34,13 +42,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hermesUrl: env.HERMES_URL,
     hermesToken: env.HERMES_TOKEN,
   };
-  const origin = new URL(config.origin);
+  const origin = parseAppOrigin(config.origin);
   config.production =
     config.production || !loopback(config.host) || !loopback(origin.hostname);
-  if (origin.origin !== config.origin)
-    throw new Error(
-      "APP_ORIGIN must be an origin with no trailing slash or path",
-    );
   if (
     config.localDevAuth &&
     (config.production || !loopback(config.host) || !loopback(origin.hostname))
