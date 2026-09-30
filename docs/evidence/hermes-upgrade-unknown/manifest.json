@@ -1,0 +1,15 @@
+{
+  "revision": "c3a0ee37c8a60624433e19fe295bdaf910532731",
+  "trackedPatchSha256": null,
+  "appSourceDigest": "fa906aef5fb6cb9ddd0b7499adf5deb4c87ba623a9cdca93d5528c0227a97047",
+  "productionAccess": false,
+  "files": {
+    "app-probe.json": "b066d2d2cbaf2b06a264a4d852d2728b7d14a057bb32ec205a106d061891af96",
+    "hermes-environment.json": "ef97cf0d725af9589da8df5af305101ce76ab7da3c6a5a9b5662e1e1c7c4b900",
+    "hermes-extension-probe.json": "884b1511c383d4d43c3322a86a2a8eeaaaab61d391b13b7e1e30a69b447b24d9",
+    "hermes-maintenance-guard-probe.json": "1dcfbc89ddeb93b4b07df8c1e001ce80685cd3395eae300d755c74c8cd34a7bc",
+    "hermes-native-probe.json": "77ccb1f0cbabf59efdc7825630bb8b495630d020c33435f14546ace38c039bfc",
+    "hermes-routine-probe.json": "d28faeac63bd18fdce1b101b07a7c313d974e0d2947b2c4106ccec21fcdb37fc",
+    "qualification-probe.json": "707f95e683bd04aedce700adb4120a767f18064d9ea150c867ac0c9775beb101"
+  }
+}

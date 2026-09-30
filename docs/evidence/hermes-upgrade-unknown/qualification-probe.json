@@ -1,0 +1,19 @@
+{
+  "kind": "Synthetic unknown-revision qualification with real native Hermes and app execution",
+  "revision": "c3a0ee37c8a60624433e19fe295bdaf910532731",
+  "upstreamCodeRevision": "b9cb268deffc97946ec11645aa622a7353dd0591",
+  "revisionChange": "Empty disposable local commit; same upstream code, not a new official release",
+  "trackedPatchSha256": null,
+  "integrationDigest": "c9bb7d65223d0b4fec2e6dbb1323eb0a2c734ff7f2a8735ff267424f6c577e48",
+  "startedAt": "2026-09-30T21:53:01.208Z",
+  "appSourceDigestStart": "fa906aef5fb6cb9ddd0b7499adf5deb4c87ba623a9cdca93d5528c0227a97047",
+  "appSourceDigestEnd": "fa906aef5fb6cb9ddd0b7499adf5deb4c87ba623a9cdca93d5528c0227a97047",
+  "appGroupsPassed": 13,
+  "nativeMaintenanceAndProjectionChecksPassed": 13,
+  "productionAccess": false,
+  "provider": "Deterministic fixture",
+  "limitations": [
+    "No private household Google/host regressions or production cutover",
+    "Unknown-revision path only; does not qualify an untested future official release"
+  ]
+}

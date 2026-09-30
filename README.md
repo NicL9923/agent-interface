@@ -80,6 +80,26 @@ stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
 
+## Hermes updates and activity
+
+Open the connection status in the web sidebar, or Hermes updates in iOS
+Preferences. Administrators can check the next official Hermes revision before
+choosing to upgrade. Checking stages the exact source and tests it in a disposable
+home. It never installs an update. Progress survives closing the client and
+restarting the app server. An uncertain request is reconciled without replay.
+
+The installer must enable the [Linux upgrade hooks](docs/HermesUpgradeLinux.md)
+and administrator allowlist first. Installation waits for native work to finish,
+backs up the current source and runtime, and verifies the original sign-in and
+connections before releasing maintenance. Failed verification restores the
+previous version when rollback is safe. A failed or uncertain recovery keeps
+maintenance closed for installer review. The app does not silently update Hermes.
+
+Conversations show an animated avatar beside the composer while Hermes thinks
+or uses tools. Advanced view adds collapsed tool inputs, outputs, errors and
+timestamps, plus reasoning Hermes exposes. Disconnecting marks activity unknown;
+the last tool event is not evidence that execution is still running.
+
 ## Validate
 
 ```sh

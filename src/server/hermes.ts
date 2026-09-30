@@ -1,12 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool } from '../shared/types.js';
+import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
 type RegisteredFile = {path:string;name:string;mime:string;botId:string;kind:'upload'|'artifact';version:1};
 const qualifiedRevisions = new Set(['b9cb268deffc97946ec11645aa622a7353dd0591', 'd23cc6b06455b8551fb6f61d3cad040a0e82f5b6']);
 const keys = ['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'] as const;
-export interface HermesOptions { url?: string; token?: string; authMode?: 'static' | 'service' }
+export interface HermesOptions { url?: string; token?: string; authMode?: 'static' | 'service'; qualificationFile?: string; qualification?: {revision:string;home:string} }
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   type DiagnosticCode = NonNullable<RuntimeStatus['code']>;
@@ -46,7 +47,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const reads = new Map<string, Promise<Wire>>();
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
-  const transient = new Map<string, {text:string;state:ActivityState;requests:Wire[];tools:Message[]}>();
+  const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
   let capabilityCache: Capabilities | undefined;
   let capabilityRequest: Promise<Capabilities> | undefined;
   let rosterRequest: Promise<Bot[]> | undefined;
@@ -105,7 +106,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     live.clear();
     capabilityCache = undefined;
     extension = false;
-    for (const state of transient.values()) state.state = 'disconnected';
+    // A disconnected stream cannot identify which turn is now active. Fresh
+    // native snapshots restore current activity, reasoning and tools.
+    transient.clear();
     if (current.ws.readyState < WebSocket.CLOSING) {
       try { current.ws.close(); } catch { /* Already disconnected. */ }
     }
@@ -127,7 +130,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     return error;
   }
   function verifyContract(capabilities: Wire): void {
-    if (!qualifiedRevisions.has(capabilities.revision) || capabilities.durable_admission !== true ||
+    const qualified = qualifiedRevisions.has(capabilities.revision) ||
+      qualifiedReceipt(options.qualificationFile, capabilities.revision, capabilities.tracked_patch_sha256) ||
+      isolatedQualification(options.qualification, origin) === capabilities.revision;
+    if (!qualified || capabilities.durable_admission !== true ||
         capabilities.durable_events !== true || capabilities.canonical_open !== true) {
       throw new TransportError('incompatible', 'The verified durable Hermes add-on has an incompatible contract. Install a qualified add-on revision and reconnect.');
     }
@@ -261,14 +267,27 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       const params = frame.params ?? {};
       const sid = params.session_id;
       if (!sid) continue;
-      const state = transient.get(sid) ?? {text: '', state: 'idle' as ActivityState, requests: [], tools: []};
+      const state = transient.get(sid) ?? {text: '', reasoning: '', state: 'idle' as ActivityState, requests: [], tools: []};
       transient.set(sid, state);
       if (frame.method === 'event') {
         const payload = params.payload ?? {};
-        if (params.type === 'message.start') {state.text = ''; state.tools = []; state.state = 'thinking';}
-        if (params.type === 'message.delta') {state.text += payload.delta ?? payload.text ?? ''; state.state = 'thinking';}
-        if (params.type === 'tool.start') {state.state = 'working'; state.tools.push({id: `live-tool-${params.seq ?? serial}`, role: 'tool', text: payload.description ?? payload.preview ?? payload.name ?? 'Tool running', toolName: payload.name ?? payload.tool_name});}
-        if (params.type === 'message.complete') {state.text = ''; state.state = payload.status === 'error' ? 'failed' : payload.status === 'interrupted' ? 'interrupted' : 'done'; state.tools = [];}
+        if (params.type === 'message.start') {state.text = ''; state.reasoning = ''; state.detail = undefined; state.tools = []; state.state = 'thinking';}
+        if (params.type === 'message.delta') {state.text += payload.delta ?? payload.text ?? ''; if (!state.tools.some(tool => tool.status === 'running')) state.state = 'thinking';}
+        if (['reasoning.delta', 'reasoning.available'].includes(params.type) && typeof payload.text === 'string') {
+          if (params.type !== 'reasoning.available' || !state.reasoning.endsWith(payload.text)) state.reasoning += payload.text;
+        }
+        if (params.type === 'thinking.delta' && typeof payload.text === 'string') state.detail = payload.text;
+        if (params.type === 'tool.start' || params.type === 'tool.complete') {
+          const id = typeof payload.tool_id === 'string' ? payload.tool_id : `live-tool-${params.seq ?? serial}`;
+          const existing = state.tools.find(tool => tool.id === id);
+          const tool = toolDetails(payload, id, params.type === 'tool.start' ? 'running' : 'completed', existing);
+          if (existing) Object.assign(existing, tool); else state.tools.push(tool);
+          state.state = state.tools.some(tool => tool.status === 'running') ? 'working' : 'thinking';
+          state.detail = typeof payload.summary === 'string' ? payload.summary : params.type === 'tool.start' ? `Using ${tool.name}` : undefined;
+        }
+        if (params.type === 'tool.generating' && typeof payload.name === 'string') state.detail = `Preparing ${payload.name}`;
+        if (params.type === 'status.update' && typeof payload.text === 'string') state.detail = payload.text;
+        if (params.type === 'message.complete') {state.text = ''; state.reasoning = ''; state.detail = undefined; state.state = payload.status === 'error' ? 'failed' : payload.status === 'interrupted' ? 'interrupted' : 'done'; state.tools = [];}
         if (params.type === 'error') state.state = 'failed';
         if (params.type === 'request.cancel') state.requests = state.requests.filter(x => x.id !== payload.id);
       } else if (frame.id && frame.method) {
@@ -280,6 +299,23 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         }
       }
     }
+  }
+  function exposedText(value: unknown): string | undefined {
+    if (typeof value === 'string') return value;
+    if (value !== undefined && value !== null) return JSON.stringify(value, null, 2);
+    return undefined;
+  }
+  function toolDetails(payload: Wire, id: string, status: ToolCall['status'], previous?: ToolCall): ToolCall {
+    let result = payload.result;
+    if (typeof result === 'string') { try { result = JSON.parse(result); } catch { /* Original text remains inspectable. */ } }
+    const failed = result && typeof result === 'object' && (result.success === false || result.ok === false ||
+      typeof result.error === 'string' && result.error.length > 0 || typeof result.exit_code === 'number' && result.exit_code !== 0);
+    return {...previous, id, name: typeof payload.name === 'string' ? payload.name : previous?.name ?? 'Tool',
+      status: status === 'completed' && failed ? 'failed' : status,
+      arguments: exposedText(payload.args) ?? (typeof payload.args_text === 'string' ? payload.args_text : previous?.arguments),
+      ...(status !== 'running' ? {result: exposedText(payload.result) ?? payload.result_text,
+        error: failed && typeof result.error === 'string' ? result.error : undefined} : {}),
+      ...(status === 'running' ? {startedAt: previous?.startedAt ?? new Date().toISOString()} : {completedAt: new Date().toISOString()})};
   }
   async function rpc(method: string, params: Wire = {}): Promise<Wire> {
     await connect();
@@ -480,14 +516,34 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       if(portraitData){try{const stored=await rpc('profiles.set_asset',{name:botId,asset:'avatar',data:portraitData});if(!stored.ok)throw new Error('Asset save refused.');}catch{throw new Error('The app portrait metadata was saved, but Hermes could not save its native portrait asset. Retry to finish saving.');}}
     },
     async conversation(botId):Promise<Conversation>{await connect();const value=await open(botId);const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
-      const rows:Message[]=history.filter((x:Wire)=>x.display_kind!=='hidden').map((row:Wire,index:number)=>{const text=row.app_tool_result?JSON.stringify(row.app_tool_result,null,2):typeof row.app_display_text==='string'?row.app_display_text:row.text??(typeof row.content==='string'?row.content:row.context??'');const reasoning=typeof row.reasoning==='string'&&row.reasoning?row.reasoning:typeof row.reasoning_content==='string'?row.reasoning_content:undefined;return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt:row.timestamp?new Date(row.timestamp*1000).toISOString():undefined,reasoning,toolName:row.name,files:artifacts(botId,row)};});
-      const state=transient.get(sid);const inflight=value.inflight??{};const text=state?.text||inflight.assistant;
-      if(text)rows.push({id:`${sid}-inflight`,role:'assistant',text});
+      const rows:Message[]=history.filter((x:Wire)=>x.display_kind!=='hidden').map((row:Wire,index:number)=>{
+        const text=exposedText(row.app_tool_result)??(typeof row.app_display_text==='string'?row.app_display_text:row.text??(typeof row.content==='string'?row.content:row.context??''));
+        const reasoning=typeof row.reasoning==='string'&&row.reasoning?row.reasoning:typeof row.reasoning_content==='string'?row.reasoning_content:undefined;
+        const createdAt=typeof row.timestamp==='number'&&Number.isFinite(row.timestamp)?new Date(row.timestamp*1000).toISOString():undefined;
+        let toolCall:ToolCall|undefined;
+        if(row.role==='tool') {
+          if(row.app_tool_call&&typeof row.app_tool_call.id==='string'&&typeof row.app_tool_call.name==='string') toolCall=row.app_tool_call;
+          else {
+            const result = row.app_tool_result ?? row.content;
+            toolCall=toolDetails({name:row.name,args:row.args,...(result!==undefined?{result}:{})},String(row.tool_call_id??row.row_id??`${sid}-${index}`),'completed');
+            toolCall.completedAt=createdAt;
+          }
+        }
+        return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:row.name,toolCall,files:artifacts(botId,row)};
+      });
+      const state=transient.get(sid);const inflight=value.inflight??{};
+      const active=!!value.info?.running||!!value.app_run_id;
+      const text=inflight.assistant||(active?state?.text:undefined);
+      const reasoning=typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined;
+      if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
+      if(text||reasoning)rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning});
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];
       const approvals=requests.filter((x:Wire)=>x.method==='approval').map((x:Wire)=>({id:String(x.id),title:'Action approval',detail:x.params?.description??x.params?.command??'Hermes requests approval.',status:'pending' as const}));
       const attention=requests.filter((x:Wire)=>x.method!=='approval').map((x:Wire)=>({id:String(x.id),kind:x.method==='clarify'?'clarify' as const:'official' as const,title:x.method==='clarify'?'Hermes needs your answer':'Continue in the official Hermes client',detail:x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,questions:x.method==='clarify'?(x.params?.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined}));
-      const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':value.info?.running?(state?.state==='working'?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':value.app_run_id?'thinking':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state?.state??'idle';
-      return {botId,sessionId:value.canonical_stored_session_id??value.stored_session_id??value.info?.stored_session_id??sid,messages:rows,activity:{state:value.app_interruption?'interrupted':attention.length?'blocked':activity,runId:value.app_run_id??value.app_interruption?.runId??undefined},approvals,attention,files:rows.flatMap(x=>x.files??[])};},
+      const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls:state?.tools??[];
+      const runningTool=toolCalls.find(tool=>tool.status==='running');
+      const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
+      return {botId,sessionId:value.canonical_stored_session_id??value.stored_session_id??value.info?.stored_session_id??sid,messages:rows,activity:{state:value.app_interruption?'interrupted':attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined},toolCalls:active?toolCalls:[],approvals,attention,files:rows.flatMap(x=>x.files??[])};},
     submit(input){return submit(input);},steer(input){return submit(input,true);},
     async lookupSubmission(requestId){await connect();if(!extension)return null;const result=await rpc('agent-interface.receipt',{request_id:requestId});return result.receipt?receipt(result.receipt):null;},
     async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}});if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},

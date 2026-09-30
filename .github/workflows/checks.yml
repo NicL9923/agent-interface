@@ -33,6 +33,16 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Check Python syntax
-        run: python3 -m compileall -q src/hermes scripts/spike
+        run: python3 -m compileall -q src/hermes scripts
       - name: Check dashboard startup boundaries
         run: python3 scripts/spike/dashboard_contract_test.py
+      - name: Check qualification boundaries
+        run: python3 scripts/spike/qualification_contract_test.py
+      - name: Check upgrade and recovery control plane
+        run: python3 scripts/hermes-upgrade-worker-test.py
+      - name: Check Linux upgrade hooks
+        run: python3 tests/hermes_upgrade_linux_test.py
+      - name: Check persistent gateway maintenance
+        run: python3 tests/hermes_gateway_guard_test.py
+      - name: Check managed dependency fingerprints
+        run: python3 scripts/hermes-qualified-python-test.py

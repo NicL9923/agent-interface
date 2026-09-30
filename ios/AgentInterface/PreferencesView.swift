@@ -84,6 +84,7 @@ struct PreferencesView: View {
             Text(detail).font(.footnote).foregroundStyle(.secondary)
           }
           Button("Reconnect now") { Task { await store.reconnect() } }
+          NavigationLink("Hermes updates") { HermesUpgradeView() }
           Button("Change server") { changeServerConfirm = true }
         }
         Section("Account") {

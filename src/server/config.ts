@@ -13,6 +13,13 @@ export interface Config {
   hermesUrl?: string;
   hermesToken?: string;
   hermesAuthMode: "static" | "service";
+  hermesQualificationFile?: string;
+  hermesUpgrade?: {
+    stateDirectory: string;
+    workerConfig: string;
+    python: string;
+    adminEmails: string[];
+  };
   apns?: {
     teamId: string;
     keyId: string;
@@ -50,13 +57,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hermesUrl: env.HERMES_URL,
     hermesToken: env.HERMES_TOKEN,
     hermesAuthMode: (env.HERMES_AUTH_MODE || "static") as "static" | "service",
+    hermesQualificationFile: env.HERMES_QUALIFICATION_FILE || undefined,
   };
   const origin = parseAppOrigin(config.origin);
+  if (env.HERMES_UPGRADE_ENABLED && !["true", "false"].includes(env.HERMES_UPGRADE_ENABLED))
+    throw new Error("HERMES_UPGRADE_ENABLED must be true or false");
+  if (env.HERMES_UPGRADE_ENABLED === "true") {
+    const adminEmails = (env.HERMES_UPGRADE_ADMINS ?? "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (!adminEmails.length || !env.HERMES_UPGRADE_CONFIG || !env.HERMES_UPGRADE_STATE_DIR || !env.HERMES_UPGRADE_PYTHON)
+      throw new Error("Hermes upgrades require explicit administrators, private worker configuration, state directory and Python interpreter");
+    if (![env.HERMES_UPGRADE_CONFIG, env.HERMES_UPGRADE_STATE_DIR, env.HERMES_UPGRADE_PYTHON].every(x => x!.startsWith("/")))
+      throw new Error("Hermes upgrade paths must be absolute");
+    config.hermesUpgrade = { adminEmails, workerConfig: env.HERMES_UPGRADE_CONFIG,
+      stateDirectory: env.HERMES_UPGRADE_STATE_DIR, python: env.HERMES_UPGRADE_PYTHON };
+  }
   if (!["static", "service"].includes(config.hermesAuthMode)) throw new Error("HERMES_AUTH_MODE must be static or service");
   if (config.hermesAuthMode === "service" && config.hermesToken && !/^[A-Za-z0-9_-]{43}$/.test(config.hermesToken))
     throw new Error("HERMES_TOKEN must be the private 32-byte base64url service key in service mode");
   config.production =
     config.production || !loopback(config.host) || !loopback(origin.hostname);
+  if (config.hermesUpgrade && config.production && config.hermesUpgrade.adminEmails.some(email => !config.householdEmails.includes(email)))
+    throw new Error("Hermes upgrade administrators must belong to the household allowlist");
   if (
     config.localDevAuth &&
     (config.production || !loopback(config.host) || !loopback(origin.hostname))

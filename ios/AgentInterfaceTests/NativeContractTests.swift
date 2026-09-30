@@ -37,6 +37,7 @@ private final class NativeMockServer: @unchecked Sendable {
     private var logoutStatus = 200
     private var connected = true
     private var conversationStatus = 200
+    private var upgradeResponseStatus = 200
     let origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).example.test")!
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
@@ -45,6 +46,7 @@ private final class NativeMockServer: @unchecked Sendable {
     func failLogout() { lock.withLock { logoutStatus = 503 } }
     func disconnect() { lock.withLock { connected = false } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
+    func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
     func receive(_ protocolInstance: NativeMockProtocol) {
         let path = protocolInstance.request.url!.path
@@ -100,10 +102,14 @@ private final class NativeMockServer: @unchecked Sendable {
         } else if path.hasSuffix("/uploads") { data = Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
         else if path == "/api/auth/logout" { status = lock.withLock { logoutStatus } }
+        else if path.hasPrefix("/api/hermes/upgrade") {
+            status = lock.withLock { upgradeResponseStatus }
+            data = status == 200 ? Self.json(["available": true, "phase": "ready", "current": ["revision": "current"], "candidate": ["revision": "candidate"], "message": "Update checked", "checks": [["id": "compatibility", "label": "Compatibility", "status": "passed"]], "canCheck": true, "canInstall": true, "busyBots": []]) : Self.json(["error": "Synthetic update failure"])
+        }
         protocolInstance.respond(status: status, data: data)
     }
     static func json(_ object: Any) -> Data { try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) }
-    private static func body(_ request: URLRequest) -> Data? {
+    static func body(_ request: URLRequest) -> Data? {
         if let body = request.httpBody { return body }
         guard let stream = request.httpBodyStream else { return nil }
         stream.open(); defer { stream.close() }
@@ -272,5 +278,54 @@ private final class NativeMockServer: @unchecked Sendable {
         server.failLogout(); let signedOut = await value.signOut()
         XCTAssertFalse(signedOut); XCTAssertEqual(value.api?.token, "synthetic-native-session")
         XCTAssertEqual(value.bootstrap?.user.id, "two")
+    }
+
+    func testHermesUpgradeUsesAuthenticatedAPIAndRejectsAChangedCandidate() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        await value.refreshUpgrade()
+        XCTAssertEqual(value.upgradeStatus?.candidate?.revision, "candidate")
+        XCTAssertEqual(server.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-native-session")
+        await value.installUpgrade(candidateRevision: "stale-candidate")
+        XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/hermes/upgrade/install" })
+        await value.checkUpgrade()
+        XCTAssertEqual(server.requests.last?.url?.path, "/api/hermes/upgrade/check")
+        XCTAssertEqual(server.requests.last?.httpMethod, "POST")
+        await value.installUpgrade(candidateRevision: "candidate")
+        let request = try XCTUnwrap(server.requests.last)
+        XCTAssertEqual(request.url?.path, "/api/hermes/upgrade/install")
+        let body = try XCTUnwrap(NativeMockServer.body(request))
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(payload["candidateRevision"], "candidate")
+        XCTAssertNotNil(UUID(uuidString: payload["requestId"] ?? ""))
+    }
+
+    func testUncertainUpgradeInstallRequiresAStatusReadAndOlderServersGetUsefulGuidance() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        await value.refreshUpgrade()
+        server.setUpgradeResponseStatus(503)
+        await value.installUpgrade(candidateRevision: "candidate")
+        XCTAssertTrue(value.upgradeInstallUncertain)
+        let requests = server.requests.count
+        await value.installUpgrade(candidateRevision: "candidate")
+        XCTAssertEqual(server.requests.count, requests, "Do not replay an uncertain install")
+        server.setUpgradeResponseStatus(200)
+        await value.refreshUpgrade()
+        XCTAssertFalse(value.upgradeInstallUncertain)
+        server.setUpgradeResponseStatus(404)
+        await value.refreshUpgrade()
+        XCTAssertTrue(value.upgradeError?.contains("update the app server") == true)
+        XCTAssertEqual(value.draft.text, "Send this")
+    }
+
+    func testDelayedUpgradeStatusCannotLeakAcrossAnIdentityChange() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/hermes/upgrade"; server.hold(path)
+        let operation = Task { await value.refreshUpgrade() }
+        try await server.waitForHeld(path)
+        server.user = "two"; await value.refreshBootstrap()
+        XCTAssertFalse(value.upgradeBusy)
+        server.release(path); await operation.value
+        XCTAssertNil(value.upgradeStatus)
+        XCTAssertNil(value.upgradeError)
     }
 }

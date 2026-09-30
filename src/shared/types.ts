@@ -120,6 +120,17 @@ export interface Message {
   files?: FileRef[];
   reasoning?: string;
   toolName?: string;
+  toolCall?: ToolCall;
+}
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments?: string;
+  status: "running" | "completed" | "failed";
+  result?: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
 }
 export interface Approval {
   id: string;
@@ -149,6 +160,7 @@ export interface Conversation {
   activity: Activity;
   approvals: Approval[];
   files: FileRef[];
+  toolCalls?: ToolCall[];
 }
 export interface Tool {
   id: string;

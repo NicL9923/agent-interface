@@ -7,6 +7,7 @@ import type {
   FileRef,
   Preferences,
   SubmissionReceipt,
+  ToolCall,
 } from "./shared/types";
 import { api, ApiError, setCsrf, write } from "./client-api";
 import { Avatar, stateLabels } from "./components/Avatar";
@@ -14,6 +15,7 @@ import { BotSettings } from "./BotSettings";
 import { MessageMarkdown } from "./components/MessageMarkdown";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { SignIn } from "./components/SignIn";
+import { HermesUpgradePanel } from "./components/HermesUpgradePanel";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -102,6 +104,7 @@ export function App() {
   authRef.current = auth;
   const [settings, setSettings] = useState<Bot | "new" | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 620px)").matches);
   const rail = useRef<HTMLElement>(null);
@@ -177,7 +180,7 @@ export function App() {
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
-          setSettings(null); setPreferencesOpen(false); setError("");
+          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setError("");
         }
         setCsrf(next.csrfToken ?? "");
         setBoot((previous) => ({ ...next,
@@ -198,7 +201,7 @@ export function App() {
         if (e instanceof ApiError && e.status === 401) {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
-          setSettings(null); setPreferencesOpen(false); setError("");
+          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setError("");
           setAuth(true); setBoot(null); setCsrf("");
         } else {
           setDisconnected(true); setAppUnavailable(true);
@@ -682,6 +685,9 @@ export function App() {
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
   const allBots = boot.bots;
   const prefs = boot.preferences;
+  const advanced = prefs.presentation === "advanced";
+  const historicalToolIds = new Set(conversation?.messages.flatMap(message => message.toolCall ? [message.toolCall.id] : []) || []);
+  const liveTools = conversation?.toolCalls?.filter(call => !historicalToolIds.has(call.id)) || [];
   const ordered = [...allBots].sort(
     (a, b) =>
       Number(prefs.favorites.includes(b.id)) -
@@ -785,9 +791,12 @@ export function App() {
           >
             ☷ Preferences
           </button>
-          <span className={`connection ${connectionLost ? "attention" : ""}`}>
+          <button className={`connection connection-button ${connectionLost ? "attention" : ""}`}
+            aria-label="Hermes connection and updates" onClick={() => { setRailOpen(false); setUpgradeOpen(true); }}>
+            <span className="connection-dot" aria-hidden="true" />
             {connectionLost ? offline ? "Offline" : "Reconnecting" : "Connected to Hermes"}
-          </span>
+            <span className="connection-chevron" aria-hidden="true">›</span>
+          </button>
         </div>
       </aside>
       {railOpen && (
@@ -928,7 +937,7 @@ export function App() {
           ) : conversation?.messages.length ? (
             <>
               {conversation.messages
-                .filter((message) => message.role !== "tool" || message.files?.length)
+                .filter((message) => message.role !== "tool" || advanced || message.files?.length)
                 .map((message) => (
                   <article
                     className={`message message-${message.role}`}
@@ -955,10 +964,17 @@ export function App() {
                     ) : message.role !== "tool" && (
                       <div className="message-text">{message.text}</div>
                     )}
-                    {message.reasoning && (
+                    {advanced && message.reasoning && (
                       <details className="message-detail">
                         <summary>Reasoning</summary>
                         <p>{message.reasoning}</p>
+                      </details>
+                    )}
+                    {advanced && message.toolCall && <ToolCallDetail call={message.toolCall} disconnected={connectionLost} />}
+                    {advanced && message.role === "tool" && !message.toolCall && (
+                      <details className="message-detail tool-call-detail">
+                        <summary>{message.toolName || "Tool result"}</summary>
+                        <pre>{message.text || "No result was exposed by Hermes."}</pre>
                       </details>
                     )}
                     {message.files?.map((file) => (
@@ -985,6 +1001,9 @@ export function App() {
               )}
             </div>
           )}
+          {advanced && liveTools.map(call => <article className="message message-tool" key={`tool-${call.id}`}>
+            <ToolCallDetail call={call} disconnected={connectionLost} />
+          </article>)}
           {conversation?.attention?.map((request) => (
             <AttentionCard
               key={request.id}
@@ -1039,23 +1058,14 @@ export function App() {
         </div>
         {selected && (
           <footer className="composer-area">
-            <div className={`activity-status state-${state}`} role="status">
-              <span className="state-symbol">
-                {state === "done"
-                  ? "✓"
-                  : state === "blocked"
-                    ? "!"
-                    : state === "disconnected"
-                      ? "?"
-                      : state === "interrupted"
-                        ? "Ⅱ"
-                        : "·"}
-              </span>
-              <span>
-                {stateLabels[state]}
-                {conversation?.activity.detail &&
-                  ` · ${conversation.activity.detail}`}
-              </span>
+            <div className={`activity-status conversation-activity state-${state}`}>
+              <Avatar avatar={selected.avatar} state={state} size={60} name={selected.name} />
+              <div className="activity-copy" role="status">
+                <strong><span className="activity-dot" aria-hidden="true" />{stateLabels[state]}</strong>
+                <p>{connectionLost ? "Restoring activity when Hermes reconnects."
+                  : conversation?.activity.detail || (state === "thinking" ? "Considering your message."
+                    : state === "working" ? "Working on your request." : state === "idle" ? "Here when you need a hand." : "")}</p>
+              </div>
               {active && (
                 <button
                   disabled={!boot.capabilities.stop.supported}
@@ -1082,22 +1092,12 @@ export function App() {
                 continuing.
               </label>
             )}
-            {conversation &&
-              (conversation.messages.some(
-                (message) => message.role === "tool",
-              ) ||
-                prefs.presentation === "advanced") && (
+            {conversation && advanced && (
                 <details className="activity-details">
                   <summary>Activity details</summary>
-                  <p>{conversation.activity.detail || stateLabels[state]}</p>
-                  {conversation.messages
-                    .filter((message) => message.role === "tool")
-                    .slice(-8)
-                    .map((message) => (
-                      <p key={message.id}>
-                        <strong>{message.toolName}</strong> {message.text}
-                      </p>
-                    ))}
+                  <p>{connectionLost ? "Activity is unknown until Hermes reconnects." : conversation.activity.detail || stateLabels[state]}</p>
+                  {conversation.activity.updatedAt && <p>Last reported <time dateTime={conversation.activity.updatedAt}>{new Date(conversation.activity.updatedAt).toLocaleString()}</time></p>}
+                  {conversation.activity.runId && <p>Run <code>{conversation.activity.runId}</code></p>}
                 </details>
               )}
             {pending && (
@@ -1276,6 +1276,8 @@ export function App() {
           onSaved={() => void refresh()}
         />
       )}
+      <HermesUpgradePanel key={boot.user.id} open={upgradeOpen} onClose={() => setUpgradeOpen(false)}
+        bots={allBots} currentVersion={boot.connection.version} />
       {preferencesOpen && (
         <dialog
           ref={preferencesDialog}
@@ -1407,6 +1409,7 @@ export function App() {
                     setRailOpen(false);
                     setReceipt(null);
                     setPreferencesOpen(false);
+                    setUpgradeOpen(false);
                     setAuth(true);
                   } catch (e) {
                     setNotice((e as Error).message);
@@ -1447,6 +1450,20 @@ export function App() {
       )}
     </div>
   );
+}
+function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?: boolean }) {
+  return <details className="message-detail tool-call-detail" data-tool-call-id={call.id}>
+    <summary><span>{call.name}</span><span className={`tool-call-status tool-call-${call.status}`}>{call.status === "running" ? disconnected ? "Last seen running" : "Running" : call.status === "failed" ? "Failed" : "Completed"}</span></summary>
+    <dl>
+      <div><dt>Call</dt><dd><code>{call.id}</code></dd></div>
+      {call.startedAt && <div><dt>Started</dt><dd><time dateTime={call.startedAt}>{new Date(call.startedAt).toLocaleString()}</time></dd></div>}
+      {call.completedAt && <div><dt>Finished</dt><dd><time dateTime={call.completedAt}>{new Date(call.completedAt).toLocaleString()}</time></dd></div>}
+    </dl>
+    {call.arguments !== undefined && <><h3>Arguments</h3><pre>{call.arguments}</pre></>}
+    {call.result !== undefined && <><h3>Result</h3><pre>{call.result}</pre></>}
+    {call.error && <><h3 className="danger">Error</h3><pre className="danger">{call.error}</pre></>}
+    {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
+  </details>;
 }
 function FileLink({ file }: { file: FileRef }) {
   return (

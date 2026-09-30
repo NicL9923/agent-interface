@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import hashlib
+import re
 import urllib.request
 from pathlib import Path
 from guard import verify_target
@@ -43,11 +44,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", type=Path, help="Reuse only an existing marked disposable spike dependency environment")
     parser.add_argument("--app-only", action="store_true", help="Rerun only authenticated app acceptance against a fresh isolated gateway")
-    parser.add_argument("--revision", choices=QUALIFIED_REVISIONS, default=REVISION)
+    parser.add_argument("--revision", default=REVISION)
+    parser.add_argument("--qualification", action="store_true", help="Probe an exact staged candidate in a marked disposable home; never changes production qualification")
     parser.add_argument("--source", type=Path, help="Use a separate detached local qualification checkout without changing it")
     parser.add_argument("--python", type=Path, help="Reuse an existing constrained dependency interpreter with --source; source imports are explicitly isolated")
     parser.add_argument("--source-patch-sha256", help="Required exact git diff HEAD hash for a locally repaired qualification checkout")
     args = parser.parse_args()
+    if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
+        raise SystemExit("Qualification requires an exact Git revision.")
+    if args.revision not in QUALIFIED_REVISIONS and not args.qualification:
+        raise SystemExit("Unknown source revision requires explicit isolated --qualification.")
+    if args.qualification and (not args.source or not args.python or args.reuse or args.app_only):
+        raise SystemExit("Full candidate qualification requires a separate --source and --python; never app-only or reuse.")
     root = args.reuse.resolve() if args.reuse else Path(tempfile.mkdtemp(prefix="agent-interface-spike-"))
     source, home, venv, workspace = (root / name for name in ("source", "home", "venv", "workspace"))
     if args.source:
@@ -100,10 +108,18 @@ approvals:
     (home / "config.yaml").write_text(config)
     (home / ".env").write_text("OPENAI_API_KEY=isolated-fixture\n")
     (home / ".env").chmod(0o600)
-    env = {**os.environ, "HERMES_HOME": str(home), "HERMES_SPIKE_PROVIDER_PORT": str(provider_port), "HERMES_SPIKE_PROVIDER_LOG": str(root / "provider-executions.jsonl"), "HERMES_SPIKE_URL": f"http://127.0.0.1:{gateway_port}", "HERMES_SPIKE_TOKEN": token, "HERMES_DASHBOARD_SESSION_TOKEN": token, "HERMES_SERVE_HEADLESS": "1", "HERMES_SKIP_UPDATE_CHECK": "1"}
+    base_environment = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if key in os.environ}
+    env = {**base_environment, "HERMES_HOME": str(home), "HERMES_SPIKE_PROVIDER_PORT": str(provider_port), "HERMES_SPIKE_PROVIDER_LOG": str(root / "provider-executions.jsonl"), "HERMES_SPIKE_URL": f"http://127.0.0.1:{gateway_port}", "HERMES_SPIKE_TOKEN": token, "HERMES_DASHBOARD_SESSION_TOKEN": token, "HERMES_SERVE_HEADLESS": "1", "HERMES_SKIP_UPDATE_CHECK": "1"}
     env["PYTHONPATH"] = str(source)
     env["HERMES_SPIKE_REVISION"] = args.revision
     env["HERMES_SPIKE_PATCH_SHA256"] = patch_hash or ""
+    if args.qualification:
+        env["HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION"] = args.revision
+    else:
+        env.pop("HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION", None)
+    env.pop("HERMES_AGENT_INTERFACE_QUALIFICATION_FILE", None)
+    env["HERMES_AGENT_INTERFACE_TOKEN"] = token
+    env["HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"] = str(home / "runtime" / "agent-interface-maintenance.json")
     # Keep production API secrets out of this process and every tool it can spawn.
     for key in list(env):
         if any(word in key for word in ("API_KEY", "ACCESS_TOKEN", "SECRET")) and key != "HERMES_SPIKE_TOKEN":
@@ -141,6 +157,7 @@ approvals:
             gateway = start(extension=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/extension_probe.py"), "--verify-restart"], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/routine_probe.py")], cwd=REPO, env=env, check=True)
+            subprocess.run([str(python), str(REPO / "scripts/spike/maintenance_guard_probe.py"), "--source", str(source)], cwd=REPO, env=env, check=True)
         control = root / "app-control"
         control.mkdir(exist_ok=True)
         (control / ".agent-interface-isolated").write_text("agent-interface-disposable-spike")
@@ -164,7 +181,9 @@ approvals:
         if app.returncode:
             raise RuntimeError("Real application probe failed")
         evidence = REPO / "docs/evidence/hermes-environment.json"
-        freeze = subprocess.check_output([str(python), "-m", "pip", "freeze"], text=True)
+        # Native PM generations activate libraries without installing pip into
+        # their base interpreter. Inventory the actual activated distributions.
+        freeze = subprocess.check_output([str(python), "-c", "import importlib.metadata as m; print('\\n'.join(sorted({str(d.metadata.get('Name', 'unknown')) + '==' + d.version for d in m.distributions()})))"], text=True)
         evidence.write_text(json.dumps({"revision": args.revision, "tracked_patch_sha256": patch_hash, "python": sys.version.split()[0], "dependencies": [line for line in freeze.splitlines() if not line.startswith(("#", "-e"))], "provider": "deterministic fixture", "production_access": False}, indent=2) + "\n")
         print("Native and add-on spike passed. Evidence saved under docs/evidence. Disposable private logs: " + str(root))
     finally:

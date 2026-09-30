@@ -43,7 +43,9 @@ const config = loadConfig({
 });
 let server = await createApp(
   config,
-  createHermesRuntime({ url: access.url, token: access.token }),
+  createHermesRuntime({ url: access.url, token: access.token,
+    qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
+      ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
 );
 let origin;
 const start = async () => {
@@ -58,7 +60,10 @@ const scopeFiles = [
   "src/hermes/extension.py",
   "src/hermes/dashboard.py",
   "src/hermes/service_auth.py",
+  "src/hermes/qualification.py",
+  "src/hermes/gateway_guard.py",
   "src/shared/types.ts",
+  "src/shared/upgrades.ts",
   "scripts/spike/app-probe.mjs",
   "package.json",
   "package-lock.json",
@@ -624,7 +629,9 @@ try {
     await server.app.close();
     server = await createApp(
       config,
-      createHermesRuntime({ url: access.url, token: access.token }),
+      createHermesRuntime({ url: access.url, token: access.token,
+        qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
+          ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
     );
     await start();
     const after = await waitCompleted(botId);
