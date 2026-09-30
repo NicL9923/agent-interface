@@ -8,6 +8,9 @@ was not changed.
 
 - Baseline: `8832778`, branch `implement/hermes-client`.
 - PR source fingerprint, 68 files: `sha256:0548548282235d8f442a139d5a973c5782478a98a3e4adeff3f59fc934ac1b66`. The source-state tool excludes this ledger.
+- Follow-up CI/documentation fingerprint, 69 files:
+  `sha256:c9c673729e51ba63d7365e99ab31d8acd4bab85fb27b839805366e467228f385`.
+  Application code is unchanged from `1e3d417`; the successful checks above are reused.
 - Hermes: `b9cb268deffc97946ec11645aa622a7353dd0591`, isolated Python 3.14.7.
 - Application: Node 26.10.0; backend tests also exercised Node 24.21.0.
 - Provider: deterministic local OpenAI wire fixture. Hermes execution, native
@@ -119,6 +122,13 @@ scrollable code blocks on a 390-pixel phone viewport, a 1280-pixel desktop layou
 phone drawer focus wrapping, Escape, and native preferences modality. The closed
 phone drawer is inert. The PR includes a labeled screenshot collage. These checks
 used the T3 collaborative browser and the real isolated Hermes gateway.
+
+## Continuous checks
+
+GitHub Actions runs `npm ci`, the complete application suite, the production build,
+and Python syntax compilation on Node 24.21.0 and 26.10.0. Actions are pinned to
+verified upstream commit SHAs and use read-only repository permissions. Native
+Hermes execution probes remain explicit local checks; CI does not claim them.
 
 ## Remaining external acceptance
 

@@ -59,6 +59,10 @@ acceptance that needs a physical phone or configured external service. Tests wit
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
+Pull requests run the application tests, production build and Python syntax checks
+on both supported Node versions. The isolated Hermes probes remain a separate
+explicit run using the capability matrix's reproduction instructions.
+
 The standalone [avatar specimen](avatar-specimen/index.html) is available at
 `/avatar-specimen/` in the Vite development server. Its
 [reference inventory](docs/AvatarReferenceInventory.md) records observed geometry,
