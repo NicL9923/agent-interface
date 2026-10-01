@@ -75,7 +75,7 @@ private final class NativeMockServer: @unchecked Sendable {
         return Self.json(["user": ["id": user, "name": user, "email": "\(user)@example.test", "picture": NSNull()],
                    "household": [], "preferences": ["presentation": "simple", "theme": "system", "favorites": [], "sections": [], "followBots": []],
                    "bots": isConnected ? [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": "idle"]] : [],
-                   "capabilities": ["chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
+                   "capabilities": ["uploads": ["supported": true], "chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
                    "connection": ["connected": isConnected], "csrfToken": NSNull()])
     }
     func conversationData() -> Data {
@@ -104,7 +104,7 @@ private final class NativeMockServer: @unchecked Sendable {
         else if path == "/api/auth/logout" { status = lock.withLock { logoutStatus } }
         else if path.hasPrefix("/api/hermes/upgrade") {
             status = lock.withLock { upgradeResponseStatus }
-            data = status == 200 ? Self.json(["available": true, "phase": "ready", "current": ["revision": "current"], "candidate": ["revision": "candidate"], "message": "Update checked", "checks": [["id": "compatibility", "label": "Compatibility", "status": "passed"]], "canCheck": true, "canInstall": true, "busyBots": []]) : Self.json(["error": "Synthetic update failure"])
+            data = status == 200 ? Self.json(["available": true, "phase": "ready", "current": ["revision": "current"], "candidate": ["revision": "candidate"], "message": "Update checked", "checks": [["id": "compatibility", "label": "Compatibility", "status": "passed"]], "canCheck": true, "canInstall": true, "canRetry": true, "canCancel": false, "canRestartService": true, "operationId": "failed-update", "busyBots": []]) : Self.json(["error": "Synthetic update failure"])
         }
         protocolInstance.respond(status: status, data: data)
     }
@@ -315,6 +315,54 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.refreshUpgrade()
         XCTAssertTrue(value.upgradeError?.contains("update the app server") == true)
         XCTAssertEqual(value.draft.text, "Send this")
+    }
+
+    func testUpgradeRecoveryFencesStaleOperationsAndDoesNotReplayUncertainRequests() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        await value.refreshUpgrade()
+        let initialCount = server.requests.count
+        await value.controlUpgrade("restart_service", operationId: "stale")
+        await value.controlUpgrade("cancel", operationId: "failed-update")
+        XCTAssertEqual(server.requests.count, initialCount)
+        server.setUpgradeResponseStatus(503)
+        await value.controlUpgrade("restart_service", operationId: "failed-update")
+        let request = try XCTUnwrap(server.requests.last)
+        XCTAssertEqual(request.url?.path, "/api/hermes/upgrade/control")
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(NativeMockServer.body(request))) as? [String: String])
+        XCTAssertEqual(payload["action"], "restart_service")
+        XCTAssertEqual(payload["operationId"], "failed-update")
+        XCTAssertNotNil(UUID(uuidString: payload["requestId"] ?? ""))
+        XCTAssertTrue(value.upgradeInstallUncertain)
+        let count = server.requests.count
+        await value.controlUpgrade("retry", operationId: "failed-update")
+        XCTAssertEqual(server.requests.count, count)
+        server.setUpgradeResponseStatus(200)
+        await value.refreshUpgrade()
+        XCTAssertFalse(value.upgradeInstallUncertain)
+    }
+
+    func testSelectedAppleSnapshotUsesUploadAndPreservesExistingDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let snapshot = AppleDeviceSnapshot(capturedAt: Date(), windowStart: Date(), windowEnd: Date(), events: [], reminders: [])
+        let data = try snapshot.data()
+        XCTAssertTrue(String(data: data, encoding: .utf8)?.contains("snapshot, not a live connection") == true)
+        try await value.attachAppleSnapshot(data, botId: "bot")
+        XCTAssertEqual(value.draft.text, "Send this")
+        XCTAssertEqual(value.draft.attachments.last?.id, "file.signature")
+        XCTAssertTrue(server.requests.contains { $0.url?.path == "/api/bots/bot/uploads" })
+        XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/bots/bot/messages" })
+    }
+
+    func testSelectedReminderWindowExcludesTheDayAfterThroughDate() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 10, day: 1))!
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: start)!
+        XCTAssertTrue(AppleDeviceConnection.includesReminder(due: start, start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertTrue(AppleDeviceConnection.includesReminder(due: nextDay.addingTimeInterval(-1), start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertFalse(AppleDeviceConnection.includesReminder(due: nextDay, start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertFalse(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertTrue(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: true))
     }
 
     func testDelayedUpgradeStatusCannotLeakAcrossAnIdentityChange() async throws {

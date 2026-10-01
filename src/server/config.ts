@@ -14,6 +14,7 @@ export interface Config {
   hermesToken?: string;
   hermesAuthMode: "static" | "service";
   hermesQualificationFile?: string;
+  integrationAdmins?: string[];
   hermesUpgrade?: {
     stateDirectory: string;
     workerConfig: string;
@@ -78,6 +79,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     config.production || !loopback(config.host) || !loopback(origin.hostname);
   if (config.hermesUpgrade && config.production && config.hermesUpgrade.adminEmails.some(email => !config.householdEmails.includes(email)))
     throw new Error("Hermes upgrade administrators must belong to the household allowlist");
+  config.integrationAdmins = env.HERMES_INTEGRATION_ADMINS === undefined
+    ? config.hermesUpgrade?.adminEmails ?? []
+    : [...new Set(env.HERMES_INTEGRATION_ADMINS.split(",").map(email => email.trim().toLowerCase()).filter(Boolean))];
+  if (config.production && config.integrationAdmins.some(email => !config.householdEmails.includes(email)))
+    throw new Error("Integration administrators must belong to the household allowlist");
   if (
     config.localDevAuth &&
     (config.production || !loopback(config.host) || !loopback(origin.hostname))

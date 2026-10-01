@@ -5,7 +5,11 @@ The native implementation uses the web client's settled scope in
 means the native control and authenticated request path exist. The validation
 ledger remains the repository's single source for tested code-state hashes.
 
-The native unit run passed 22 tests on Xcode 27 and iOS 27. Focused phone fixture
+The native unit run passed 25 tests on Xcode 27 and iOS 27. October 1 focused
+simulator UI checks covered account health, the real Calendar permission prompt
+and denial, confirmed service recovery, and disconnect followed by a refreshed
+account state using Hermes's actual response shape. Reminder selection excludes
+the day after the selected Through date. Focused phone fixture
 UI checks covered upgrade qualification, uncertain install recovery, verification,
 and live activity with exposed reasoning and tool arguments. Previous tablet fixture
 UI checks passed in light and dark appearance. The root agent also validated
@@ -42,7 +46,9 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Avatar motion | 280 ms shape/expression transitions, idle blink/drift, depth orbit/back-face occlusion, thinking dots, blocked exclamation, working trails, 600 ms waiting settle, brief done celebration | Same independent formulas and artwork as web; native specimen inspection remains recorded separately from web reference acceptance |
 | Reduced motion and accessibility | System reduced motion halts loops/rotation/trails, stable state language, native Dynamic Type and controls, labelled actions | Native specimen toggle; physical VoiceOver and large Dynamic Type acceptance remains external |
 | Preferences | Simple/advanced presentation, system/light/dark themes, favorites, sections, default bot, follow all activity | Native preferences forms and tablet visual inspection; same persisted per-user server contract |
-| Hermes updates | Preferences entry, installed/candidate versions, check and compatibility details, confirmed pinned-revision install, progress polling, rollback/failure guidance, busy-bot/admin/unavailable guidance; shared server bearer authorization | Native contract tests for authenticated requests, stale candidates, uncertain install recovery and identity fences; focused phone fixture UI covered qualification, uncertain admission, progress and verification |
+| Hermes updates | Preferences entry, installed/candidate versions, check and compatibility details, confirmed pinned-revision install, progress polling, guarded restart/retry/cancel recovery from server action availability, safe-boundary guidance, uncertain recovery without replay, rollback/failure guidance, busy-bot/admin/unavailable guidance; shared server bearer authorization | Native contract tests for authenticated requests, stale candidates, stale recovery operation IDs, uncertain install/control recovery and identity fences; focused phone fixture UI covered guarded restart recovery in addition to qualification, uncertain admission, progress and verification |
+| Integration accounts | Preferences and per-assistant Connections view; checked/configured/expired/permission/outage states, safe account identity and access details, Connect/Reconnect/Disconnect, setup fields, custom MCP and browser sign-in with durable flow polling | Native build and explicit simulator fixture account check and disconnect; real provider sign-in remains external acceptance |
+| Apple Calendar and Reminders | EventKit full-access permission requested explicitly, selected calendars/lists and bounded date window, sanitized preview, refresh, explicit upload into the chosen assistant draft; user sends it from the conversation | Native upload/draft-preservation contract test and simulator permission status/selection view; physical-device permission and real account data sharing remain external acceptance |
 | Native notifications | APNs device registration/opt-out/test, task/routine/follow recipients, validated cold/warm conversation tap | Native route tests and simulated server delivery tests; signed physical-phone delivery remains external |
 | iPad | Adaptive native NavigationSplitView, readable-width transcript, native sheets | Tablet fixture UI navigation, settings and nine-state specimen exercised; portrait/landscape screenshots inspected in both themes |
 
@@ -50,6 +56,8 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 
 These checks require an installed signed build or configured external services:
 
+- Complete real integration OAuth/device-code sign-in and cancellation for each configured provider, including returning to the same native account view.
+- On a physical iPhone, grant and deny EventKit access, choose calendars/reminder lists, inspect a selected snapshot, send its uploaded attachment, and verify Hermes reads the selected data. Data is a manually refreshed snapshot. Hermes has no unattended access to the phone while this app is closed.
 - Complete real Google household sign-in on the configured production origin.
 - Install the app on a physical iPhone, register its APNs token, close the app,
   receive a real completion and approval notification, and confirm each opens

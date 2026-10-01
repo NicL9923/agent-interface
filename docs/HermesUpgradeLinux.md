@@ -219,3 +219,57 @@ Run them with:
 ```sh
 python3 -m unittest discover -s tests -p hermes_upgrade_linux_test.py
 ```
+
+
+## Failed updates and recovery controls
+
+The administrator can retry a failed check, cancel an update, or restart Hermes
+services during a recoverable failed installation. Both clients use
+`POST /api/hermes/upgrade/control` with `action`, the displayed `operationId`, and
+a UUID `requestId`. Actions are `retry`, `cancel`, and `restart_service`. The API
+returns `canRetry`, `canCancel`, and `canRestartService`; clients show only the
+actions permitted by the saved record. A stale operation ID cannot control a
+newer update. Reusing a request ID reconciles that request, including a worker
+that failed to start.
+
+Retry restores and verifies the previous installation when maintenance is held,
+then starts a fresh qualification with a new operation ID. It does not replay an
+installation. Restart services keeps the recorded installed or restored source,
+restarts the existing Hermes user units under the owned gate, verifies the source,
+runtime, sign-in and connections, then releases maintenance. The app unit keeps
+running.
+
+Cancellation is cooperative. The worker finishes the current fixed command and
+checks the saved cancellation intent at its next safe boundary. Clients report
+that wait. Cancellation during qualification leaves the live installation alone.
+During installation it restores the saved baseline when necessary, verifies it,
+and releases maintenance. Once admission release starts, the worker completes
+that release; it does not guess whether stopping Hermes would interrupt newly
+admitted work.
+
+The worker saves the original qualification receipt and installation intents in
+`recovery.json` before its first host hook. The platform saves its baseline,
+archive hashes and phase in `platform.json`, including a release intent before
+opening admission. A detached worker holds `worker.lock`; its hook processes
+inherit the lock so a surviving hook blocks a competing recovery after the worker
+dies. A separate guardian owns and refreshes the native Hermes update marker. A
+pipe inherited by the worker and its hooks keeps that guardian alive until every
+hook exits, so an external native updater cannot claim a dead worker's marker. An app restart reads those files and never installs an update automatically.
+An interrupted control remains recoverable with the same request ID or a new
+explicit action after the worker is gone.
+
+The existing fixed Linux `finish` hook enables recovery automatically when its
+argv names `scripts/hermes-upgrade-linux.py`. The worker uses that same argv with
+`recover` or `restart_service` as the final action. Other installer hooks must
+provide fixed `hooks.recover` and `hooks.restart_service` argv to enable recovery.
+Recovery rejects changed service identities, active or unknown native work, lost
+gate ownership, incomplete archives, and uncertain admission release. These
+failures leave maintenance closed.
+
+Older interrupted installations may have a saved platform baseline but no saved
+original qualification receipt. Service recovery can verify the installed source
+when its exact deployed receipt still exists. Restoring the baseline also requires
+its original receipt, bound to that source and the current integration digest.
+The worker never manufactures qualification evidence. Missing evidence or an
+ambiguous release requires installer review. Updating the app's qualification
+inputs requires new real integration evidence before enabling host recovery.

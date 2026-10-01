@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish")
+ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish", "recover", "restart_service")
 MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
 
 
@@ -41,6 +41,9 @@ def atomic(path, value):
     with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
         json.dump(value, output); output.write("\n"); output.flush(); os.fsync(output.fileno())
     os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
 
 
 def digest(path):
@@ -139,8 +142,9 @@ class Platform:
         if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and "\0" not in arg for arg in argv) or not Path(argv[0]).is_absolute(): raise RuntimeError("Expected a fixed installer-owned argv")
 
     def run(self, argv, capture=False, input=None, env=None, timeout=1800):
-        return subprocess.run(argv, cwd=self.source, env=env or self.child_env, input=input, text=True,
-            stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None, check=True, timeout=timeout).stdout
+        return subprocess.run(argv, cwd=self.source if self.source.exists() else self.home, env=env or self.child_env, input=input, text=True,
+            stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None, check=True, timeout=timeout,
+            pass_fds=tuple(int(self.env[key]) for key in ("HERMES_UPGRADE_LOCK_FD", "HERMES_UPGRADE_CLAIM_FD") if self.env.get(key))).stdout
 
     def git(self, path, *args):
         return self.run(["git", "-C", str(path), *args], capture=True)
@@ -157,10 +161,10 @@ class Platform:
     def save(self, value):
         atomic(self.record, dict(value, operationId=self.operation))
 
-    def unit(self, name):
+    def unit(self, name, require_active=True):
         output = self.run([self.config["systemctl"], "--user", "show", self.config[name], "--property=ActiveState,SubState,MainPID,FragmentPath,ControlGroup"], capture=True, timeout=15)
         value = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
-        if value.get("ActiveState") != "active" or not value.get("MainPID", "").isdigit() or int(value["MainPID"]) < 1: raise RuntimeError("Required native/app user service is not active")
+        if require_active and (value.get("ActiveState") != "active" or not value.get("MainPID", "").isdigit() or int(value["MainPID"]) < 1): raise RuntimeError("Required native/app user service is not active")
         fragment = Path(value["FragmentPath"])
         value["fragmentSha256"] = digest(fragment)
         return value
@@ -460,7 +464,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         for name, expected in record["archives"].items():
             if digest(private(self.backup_dir / name)) != expected: raise RuntimeError("Cold recovery archive integrity failed before restoring")
         self.control("stop")
-        shutil.rmtree(self.source)
+        if self.source.exists(): shutil.rmtree(self.source)
         self.extract("source.tar.gz", self.source.parent)
         # Restore managed generations/selections and tool binaries only. Never
         # restore .env, auth.json, profile OAuth files or sessions from home.tar.gz.
@@ -484,6 +488,71 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save(dict(record, phase="restored"))
         self.control("start")
 
+    def recovery_guard(self):
+        record = self.load()
+        if record["phase"] in ("releasing", "finished", "rejected"):
+            raise RuntimeError("Admission may have reopened. Restarting or rollback requires installer review")
+        gate = json.loads(private(self.config["maintenanceFile"]).read_text())
+        if gate.get("operationId") != self.operation: raise RuntimeError("The persistent maintenance gate belongs to another update")
+        baseline = record["baseline"]
+        if self.settings() != baseline["settings"]: raise RuntimeError("Protected settings changed during interrupted maintenance")
+        states = {}
+        for name, saved in baseline["units"].items():
+            current = self.unit(name, require_active=name == "appUnit")
+            if current["FragmentPath"] != saved["FragmentPath"] or current["fragmentSha256"] != saved["fragmentSha256"]:
+                raise RuntimeError("Saved native/app service identity changed")
+            states[name] = current
+        if states["gatewayUnit"].get("ActiveState") == "active":
+            # Reassert the owned drain before checking current native work.
+            marker = self.home / ".drain_request.json"
+            if marker.exists():
+                if json.loads(private(marker).read_text()).get("principal") != "agent-interface:" + self.operation:
+                    raise RuntimeError("Another owner holds the gateway drain")
+            else: self.native("drain", principal="agent-interface:" + self.operation)
+            self.wait_gateway(draining=True)
+        elif states["gatewayUnit"].get("ActiveState") != "inactive" or states["gatewayUnit"].get("MainPID") != "0":
+            raise RuntimeError("Gateway shutdown is ambiguous")
+        if states["dashboardUnit"].get("ActiveState") == "active":
+            live = self.rpc("status")
+            if live.get("active") is not True or live.get("operationId") != self.operation or live.get("busy") != []:
+                raise RuntimeError("Dashboard gate has active work or lost ownership")
+        elif states["dashboardUnit"].get("ActiveState") != "inactive" or states["dashboardUnit"].get("MainPID") != "0":
+            raise RuntimeError("Dashboard shutdown is ambiguous")
+        return record
+
+    def recovery_receipt(self, path, expected):
+        receipt = json.loads(private(path).read_text())
+        patch = receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest()
+        if (receipt.get("schemaVersion") != 1 or (receipt.get("revision"), patch) != tuple(expected)
+                or receipt.get("checks") != {"realIntegration": True, "hostRegressions": True}
+                or receipt.get("integrationDigest") != self.env.get("HERMES_UPGRADE_INTEGRATION_DIGEST") or not receipt.get("qualifiedAt")):
+            raise RuntimeError("Saved qualification does not attest the recovery source and current integration")
+        return receipt
+
+    def recover(self):
+        record = self.recovery_guard()
+        # Legacy interrupted updates can recover when the deployed baseline
+        # receipt still exists. Never fabricate lost qualification evidence.
+        previous = self.env.get("HERMES_UPGRADE_PREVIOUS_RECEIPT", self.config["qualificationReceipt"])
+        receipt = self.recovery_receipt(previous, record["baseline"]["source"])
+        atomic(self.config["qualificationReceipt"], receipt)
+        if record.get("archives"):
+            self.rollback()
+        else:
+            if self.source_state() != tuple(record["baseline"]["source"]): raise RuntimeError("Source changed without a complete recovery archive")
+            self.control("start")
+        self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
+        self.verify(); self.finish()
+
+    def restart_service(self):
+        record = self.recovery_guard()
+        expected = self.source_state()
+        self.recovery_receipt(self.config["qualificationReceipt"], expected)
+        if expected == tuple(record["baseline"]["source"]): self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
+        elif expected != self.source_state(self.target): raise RuntimeError("Interrupted source differs from the baseline and qualified target")
+        self.control("stop"); self.control("start")
+        self.verify(); self.finish()
+
     def finish(self):
         record = self.load()
         # Backup failures can leave the old source untouched; verify its live
@@ -492,6 +561,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
             self.verify(); record = self.load()
         if record["phase"] != "verified" or tuple(record.get("verifiedSource", ())) != self.source_state(): raise RuntimeError("Release requires verified live source repair and services")
+        self.save(dict(record, phase="releasing"))
         self.clear_drain()
         released = self.rpc("release")
         if released.get("active") is not False: raise RuntimeError("Native gate release was not confirmed")

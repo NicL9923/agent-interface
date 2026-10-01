@@ -96,6 +96,11 @@ def bootstrap():
     spec = importlib.util.spec_from_file_location("agent_interface_extension", Path(__file__).resolve().with_name("extension.py"))
     extension = importlib.util.module_from_spec(spec); spec.loader.exec_module(extension)
     extension.source_state()
+    integration_spec = importlib.util.spec_from_file_location("agent_interface_integrations", Path(__file__).resolve().with_name("integrations.py"))
+    integrations = importlib.util.module_from_spec(integration_spec); integration_spec.loader.exec_module(integrations)
+    integrations.register_file_tool()
+    integrations.register_google_tasks_tool()
+    integrations.register_tool_catalog()
     import gateway.drain_control as drain
     import gateway.run_startup as startup
     import gateway.status as status

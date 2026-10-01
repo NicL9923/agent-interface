@@ -1,4 +1,4 @@
-export type UpgradePhase = "idle" | "checking" | "qualifying" | "ready" | "installing" | "verifying" | "succeeded" | "blocked" | "failed" | "rolled_back";
+export type UpgradePhase = "idle" | "checking" | "qualifying" | "ready" | "installing" | "verifying" | "succeeded" | "blocked" | "failed" | "rolled_back" | "recovering" | "cancelled";
 export interface UpgradeRevision {
   revision: string;
   version?: string;
@@ -19,6 +19,11 @@ export interface UpgradeStatus {
   checks: UpgradeCheck[];
   canCheck: boolean;
   canInstall: boolean;
+  canRetry: boolean;
+  canCancel: boolean;
+  canRestartService: boolean;
+  controlRequestId?: string;
+  controlAction?: UpgradeControlAction;
   operationId?: string;
   error?: string;
   checkedAt?: string;
@@ -27,5 +32,12 @@ export interface UpgradeStatus {
 }
 export interface UpgradeInstallRequest {
   candidateRevision: string;
+  requestId: string;
+}
+
+export type UpgradeControlAction = "retry" | "cancel" | "restart_service";
+export interface UpgradeControlRequest {
+  action: UpgradeControlAction;
+  operationId: string;
   requestId: string;
 }

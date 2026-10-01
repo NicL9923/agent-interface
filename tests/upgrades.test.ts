@@ -1,8 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
@@ -110,4 +111,100 @@ it("fails closed on damaged durable records and rejects shared installer configu
   chmodSync(installation.workerConfig, 0o644);
   expect(() => new HermesUpgrades(installation.config, installation.runtime, vi.fn())).toThrow("inaccessible to other users");
   expect(() => loadConfig({ HERMES_UPGRADE_ENABLED: "true" })).toThrow("explicit administrators");
+});
+
+const administrator = { id: "local-one", email: "one@localhost.invalid", name: "One" };
+it("persists cancellation intent, fences stale operations, and resumes an unstarted recovery once", async () => {
+  const installation = await setup();
+  const operationId = randomUUID(), requestId = randomUUID();
+  installation.save({ phase: "qualifying", operationId, message: "Checking", checks: [], updatedAt: "2020-01-01T00:00:00Z" });
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ phase: "blocked", canRetry: true, canCancel: true });
+  await expect(installation.upgrades.control(administrator, { action: "cancel", operationId: randomUUID(), requestId })).rejects.toThrow("Refresh");
+  const input = { action: "cancel" as const, operationId, requestId };
+  const status = await installation.upgrades.control(administrator, input);
+  expect(status).toMatchObject({ controlRequestId: requestId, controlAction: "cancel", canRetry: false, canCancel: false });
+  expect(installation.launch).toHaveBeenLastCalledWith({ action: "cancel", operationId });
+  await installation.upgrades.control(administrator, input);
+  expect(installation.launch).toHaveBeenCalledOnce();
+  const intentPath = join(installation.directory, "controls", `${operationId}.json`);
+  expect(JSON.parse(readFileSync(intentPath, "utf8"))).toMatchObject({ status: "pending", ...input });
+  const restartedLaunch = vi.fn(), restarted = new HermesUpgrades(installation.config, installation.runtime, restartedLaunch);
+  // Simulate a lost launch after the durable intent was persisted.
+  writeFileSync(intentPath, JSON.stringify({ ...input, status: "pending", startedAt: "2020-01-01T00:00:00Z" }));
+  expect(await restarted.status(administrator)).toMatchObject({ canRetry: true, canCancel: true });
+  await restarted.control(administrator, input);
+  expect(restartedLaunch).toHaveBeenCalledOnce();
+  await expect(restarted.control(administrator, { ...input, action: "retry" })).rejects.toThrow("already belongs");
+});
+
+it("offers only receipt-backed recovery and never rolls back an ambiguous release", async () => {
+  const installation = await setup();
+  const operationId = randomUUID(), stage = join(installation.directory, "stages", "qualification-fixture");
+  mkdirSync(stage, { recursive: true, mode: 0o700 });
+  const original = "a".repeat(40), deployed = join(installation.directory, "deployed.json");
+  writeFileSync(installation.workerConfig, JSON.stringify({ stageRoot: join(installation.directory, "stages"), qualificationReceipt: deployed,
+    hooks: { recover: ["/bin/true"], restart_service: ["/bin/true"] } }));
+  const qualification = { stage, currentRevision: original, currentPatchSha256: null, candidateRevision: revision, candidatePatchSha256: null, integrationDigest: "b".repeat(64) };
+  installation.save({ phase: "failed", operationId, requestId: randomUUID(), maintenance: true, qualification, checks: [], message: "Interrupted", updatedAt: "2020-01-01T00:00:00Z" });
+  writeFileSync(join(stage, "platform.json"), JSON.stringify({ operationId, phase: "installed" }));
+  writeFileSync(deployed, JSON.stringify({ schemaVersion: 1, revision, trackedPatchSha256: null, qualifiedAt: "2026-10-01", checks: { realIntegration: true, hostRegressions: true }, integrationDigest: qualification.integrationDigest }));
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: false, canCancel: false, canRestartService: true });
+  const previousReceipt = Buffer.from(JSON.stringify({ schemaVersion: 1, revision: original, trackedPatchSha256: null, qualifiedAt: "2026-10-01", checks: { realIntegration: true, hostRegressions: true }, integrationDigest: qualification.integrationDigest })).toString("base64");
+  writeFileSync(join(stage, "recovery.json"), JSON.stringify({ operationId, previousReceipt, hostHookStarted: true, releaseStarted: false }));
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: true, canCancel: true, canRestartService: true });
+  writeFileSync(join(stage, "recovery.json"), JSON.stringify({ operationId, previousReceipt, hostHookStarted: true, releaseStarted: true }));
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: false, canCancel: false, canRestartService: false });
+  await expect(installation.upgrades.control(administrator, { action: "cancel", operationId, requestId: randomUUID() })).rejects.toThrow("unavailable");
+  expect(installation.upgrades.maintenance()).toBe(true);
+  expect(installation.launch).not.toHaveBeenCalled();
+});
+
+it("keeps recovery administrator-only and browser CSRF protected", async () => {
+  const installation = await setup(), admin = await login(installation.app), member = await login(installation.app, "two");
+  const operationId = randomUUID();
+  installation.save({ phase: "failed", operationId, message: "Failed check", checks: [] });
+  const payload = { action: "retry", operationId, requestId: randomUUID() };
+  expect((await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/control", headers: member, payload })).statusCode).toBe(403);
+  expect((await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/control", headers: { cookie: admin.cookie, origin }, payload })).statusCode).toBe(403);
+  expect((await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/control", headers: admin, payload: { ...payload, command: "reboot" } })).statusCode).toBe(400);
+});
+
+it("reconciles verified outcomes but keeps unrelated stale receipts behind maintenance", async () => {
+  const installation = await setup(); installation.ready();
+  await installation.upgrades.install(administrator, { candidateRevision: revision, requestId: randomUUID() });
+  const pending = installation.state();
+  installation.save({ ...pending, phase: "succeeded", maintenance: false, message: "Verified", updatedAt: "2020-01-01T00:00:00Z" });
+  expect(installation.upgrades.maintenance()).toBe(false);
+  expect(JSON.parse(readFileSync(join(installation.directory, "requests", `${pending.requestId}.json`), "utf8"))).toMatchObject({ status: "complete" });
+  writeFileSync(join(installation.directory, "requests", `${randomUUID()}.json`), JSON.stringify({ status: "pending", operationId: randomUUID(), candidateRevision: revision }));
+  expect(installation.upgrades.maintenance()).toBe(true);
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canCheck: false, canInstall: false, canRetry: false, canCancel: false, canRestartService: false });
+});
+
+it.each(["cancel", "restart_service"] as const)("reads the actual Python %s recovery result and existing null error records without reentering maintenance", async action => {
+  const installation = await setup(), operationId = randomUUID(), requestId = randomUUID();
+  installation.save({ phase: "failed", operationId, requestId, maintenance: false, error: "qualification_failed", message: "Failed", checks: [] });
+  const receiptPath = join(installation.directory, "requests", `${requestId}.json`);
+  writeFileSync(receiptPath, JSON.stringify({ operationId, candidateRevision: revision, status: "pending" }), { mode: 0o600 });
+  // Run the worker's actual persistence and request completion code. No host
+  // hook runs because this operation failed before taking native maintenance.
+  const python = spawnSync("/usr/bin/python3", ["-c", `import importlib.util,sys
+spec=importlib.util.spec_from_file_location("worker",sys.argv[1])
+worker=importlib.util.module_from_spec(spec);spec.loader.exec_module(worker)
+worker.Worker(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]).recovery(sys.argv[4])`,
+    resolve("scripts/hermes-upgrade-worker.py"), installation.workerConfig, installation.directory, action, operationId], { encoding: "utf8" });
+  expect(python.status, python.stderr).toBe(0);
+  const persisted = installation.state();
+  expect(persisted).not.toHaveProperty("error");
+  expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toMatchObject({ status: "complete" });
+  const phase = action === "cancel" ? "cancelled" : "succeeded";
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ phase, operationId, canCheck: true });
+  expect(installation.upgrades.maintenance()).toBe(false);
+  // Previously shipped recovery records explicitly wrote JSON null. Accept
+  // those records too, so an app restart can read an already verified outcome.
+  installation.save({ ...persisted, error: null });
+  const status = await installation.upgrades.status(administrator);
+  expect(status).toMatchObject({ phase, operationId, canCheck: true });
+  expect(status.error).toBeUndefined();
+  expect(installation.upgrades.maintenance()).toBe(false);
 });

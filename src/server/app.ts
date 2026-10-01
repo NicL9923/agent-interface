@@ -20,6 +20,7 @@ import { installAuth, signedIn } from "./auth.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
+import { installIntegrationsRoutes } from "./integrations.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -130,8 +131,10 @@ export async function createApp(
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
     const path = req.url.split("?")[0];
-    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines"))
-      return reply.code(409).send({ error: "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
+    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/integrations"))
+      return reply.code(409).send({ error: path.startsWith("/api/integrations")
+        ? "Hermes is being upgraded. Try changing connections after the update finishes."
+        : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
   });
   app.setErrorHandler((error, req, reply) => {
     if (error instanceof z.ZodError)
@@ -179,6 +182,14 @@ export async function createApp(
   app.post("/api/hermes/upgrade/install", async req => {
     const input = z.object({ candidateRevision: z.string().regex(/^[a-f0-9]{40}$/), requestId: z.string().uuid() }).strict().parse(req.body);
     return upgrades.install(signedIn(req), input);
+  });
+  app.post("/api/hermes/upgrade/control", async req => {
+    const input = z.object({ action: z.enum(["retry", "cancel", "restart_service"]), operationId: z.string().uuid(), requestId: z.string().uuid() }).strict().parse(req.body);
+    return upgrades.control(signedIn(req), input);
+  });
+  await installIntegrationsRoutes(app, runtime, {
+    origin: config.origin,
+    canManage: req => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase())),
   });
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {

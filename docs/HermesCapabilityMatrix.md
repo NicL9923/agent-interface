@@ -97,6 +97,20 @@ Use `--app-only` with that command when only application code changed. It still 
 
 ## Compatibility and rollback
 
+The October 1 integration follow-up adds profile-scoped connection management
+through the finite private service route. Credential writes delegate to native
+provider and MCP handlers; Google Workspace reuses its existing grant file. The
+selected-folder and Google Tasks adapters register in both dashboard and gateway
+processes. See [Integrations](Integrations.md) for setup, permission meanings and
+external-service acceptance limits. The integration probe exercises these native
+seams in the disposable home before an update can qualify.
+
+New full spike runs save receipts in their disposable `evidence` directory,
+printed at completion. Archive a successful run with
+`.agents/tools/archive-spike-evidence.py` into a new `docs/evidence` directory;
+the tool includes the service and integrations probes and rejects replacement of
+earlier evidence. Existing receipts above describe their original code states.
+
 The production wrapper installs the add-on before the original `hermes dashboard` CLI starts. It preserves the dashboard UI, Google plugins, native lifecycle and owner registration. Keep the existing home, host, port and supervisor. Do not use the isolated spike launcher for a production dashboard.
 
 Install an untracked module symlink beside the existing `hermes_cli` directory. Point it at the deployed release's wrapper so rollback follows the release link:
@@ -113,7 +127,7 @@ The PM-managed launcher supports `--run-module`. Preserve all existing dashboard
 
 The supervisor supplies `HERMES_AGENT_INTERFACE_TOKEN` through a private environment file. Generate 32 random bytes and encode them as unpadded base64url. The app server uses that same key as `HERMES_TOKEN`, with `HERMES_AUTH_MODE=service` and `HERMES_URL=http://127.0.0.1:9119`. Setup and `npm run doctor` forward the selected authentication mode. Keep `HERMES_SERVE_HEADLESS` unset. The wrapper refuses headless and isolated dashboard startup. If its source qualification or service key fails before installation, it logs a fixed warning and starts the original dashboard without the add-on. The app then fails closed because its capabilities are absent. Failures after hook installation stop startup rather than continuing with partial changes.
 
-The service key grants gateway executor authority. It remains on the two servers and never enters a browser, mobile app, WebSocket URL or application notification. The add-on admits it only at `/api/agent-interface/service/` and `/api/agent-interface/service-ticket`, from a direct loopback peer without Origin, Cookie or forwarded headers. A finite method/path list dispatches the existing profile, file and cron handlers. Original dashboard routes keep their existing Google authentication. The ticket endpoint issues a fresh native single-use WebSocket ticket with a 30-second expiry. Public reverse proxies must return 404 for `/api/agent-interface/service*`, even though Hermes also checks the key and peer.
+The service key grants gateway executor authority. It remains on the two servers and never enters a browser, mobile app, WebSocket URL or application notification. The add-on admits it only at `/api/agent-interface/service/` and `/api/agent-interface/service-ticket`, from a direct loopback peer without Origin, Cookie or forwarded headers. A finite method/path list dispatches the existing profile, file and cron handlers and the integration adapter. Only an authenticated private integration invocation can enter native sensitive OAuth handlers through that adapter. Original dashboard routes keep their existing Google authentication. The ticket endpoint issues a fresh native single-use WebSocket ticket with a 30-second expiry. Public reverse proxies must return 404 for `/api/agent-interface/service*`, even though Hermes also checks the key and peer.
 
 The `static` authentication mode remains the default for isolated local fixtures with native session-token authentication. A Google-gated dashboard requires `service`; a copied expiring Google access token is not a service credential.
 

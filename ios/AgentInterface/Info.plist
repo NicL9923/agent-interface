@@ -47,6 +47,10 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Choose calendars to preview and share a snapshot with your assistant. Nothing is shared automatically.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Choose reminder lists to preview and share a snapshot with your assistant. Nothing is shared automatically.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your self-hosted Agent Interface app server.</string>
 	<key>UIApplicationSceneManifest</key>

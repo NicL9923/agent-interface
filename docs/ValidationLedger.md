@@ -1,5 +1,89 @@
 # Validation ledger
 
+## October 1 integrations and failed-update controls
+
+Branch: `feature/integrations-update-recovery`, based on
+`30a56c54a0478ec363628106bde096f5014b3daa`.
+Final source fingerprint, 251 files:
+`sha256:db56714802da303db0e9a0a840b1b99cd7751d29b01f1a79d864c0b28c82793a`.
+The source-state tool excludes this ledger, private fixtures and ignored build
+products. Python and TypeScript independently computed the same integration
+digest: `a9f21dad6508db87c43ee5eede29015526eccc1ca62bb510a2965c577681d885`.
+
+### Native evidence
+
+The [eight receipts and manifest](evidence/integrations-update-recovery-20261001T175600Z/manifest.json)
+record a fresh isolated run against clean upstream Hermes
+`d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`. This run used the actual native
+implementation and Google dependency extra, a disposable home and deterministic
+provider. It did not use production accounts, mutate production, or qualify the
+production OAuth repair or managed runtime.
+
+Native checks passed: 15 native execution checks, 14 extension checks, four
+routine groups, 15 integration checks, nine service checks, 13 maintenance checks
+and 13 authenticated application groups. The app run started at
+`2026-10-01T17:55:01.450Z`; its source digest stayed
+`2c5b20bf66f56d6fc21ade9d80516131c0253ffcddc4bc629e14cdef3a27434f`.
+Executor restart recovered automatically in 824 ms in this local run, preserved
+the interrupted state and required explicit review before new admission. That
+timing is an observation, not a latency guarantee.
+
+The integration probe exercises native credential ownership, effective bearer
+rotation, cancellation of original-dashboard OAuth workers before removal, a
+concurrent start/removal fence, private sensitive-handler authentication, lost
+authorization flows, protected-file and special-file rejection, and independent
+Google Tasks/Selected files toolsets through actual native profile configuration.
+Google OAuth construction uses the real library, PKCE and scopes without a live
+token exchange. Original native sensitive endpoints still reject the service
+principal outside the finite private integration bridge.
+
+### Application, recovery and clients
+
+- 182 application tests and the production build passed on Node 26.10.0.
+- Python checks passed: 35 worker recovery tests, 19 Linux hook tests, ten
+  managed-dependency fingerprint tests, ten integration tests, five dashboard
+  contract tests, three qualification contract tests and six gateway guard tests.
+  Python compilation and whitespace checks passed.
+- Worker coverage includes durable control replay, safe cancellation, recovery
+  after process death, inherited worker locks, actual native update-lock ownership
+  through a guardian, rollback verification and admission-release uncertainty.
+  Two Node/Python checks read the actual persisted recovery output and cover the
+  cleared-error compatibility regression.
+- Native iOS: 25 contract tests passed. The final reminder-window adjustment was
+  followed by its focused boundary test and a native build. Simulator UI exercises
+  covered account health, actual Calendar permission denial, guarded service
+  restart and disconnect refresh after the native flow response.
+- Browser exercises covered desktop and phone layouts in both themes, check and
+  reconnect, device-code cancellation, recovery confirmation and progress. T3's
+  remote preview could not reach this Mac's loopback fixture; Playwright CLI with
+  installed Chromium exercised the local app. The PR includes sanitized web and
+  native screenshot collages.
+
+Successful checks were reused when their inputs stayed unchanged. The full app
+suite and build ran after the worker fixes; final native-only changes were
+followed by the native integration probe, dashboard/gateway checks and complete
+isolated spike. No runtime edits occurred during that final spike. Documentation
+and the evidence archive were finalized afterward.
+
+### Review and limits
+
+Independent GPT-6.1 Sol high review covered the full branch and subsequent fixes.
+Findings addressed recovery JSON parsing, iOS disconnect response decoding,
+reminder end-date inclusion, authorization writes after disconnect, concurrent
+native MCP starts, stale bearer headers, protected folders, broad toolset
+enablement, lost flows and gated native OAuth compatibility. The reviewer verified
+the fixes and reported no outstanding findings.
+
+Live vendor OAuth, installed MCP services, physical-iPhone permission behavior and
+the intended production configuration remain in
+[external acceptance issue #1](https://github.com/NicL9923/agent-interface/issues/1).
+Apple integration shares explicit snapshots with a draft; it does not provide
+unattended server access to the phone. Google grant commits fence the native
+dashboard, not independent gateway or legacy CLI credential writers. Recovery
+without sufficient saved qualification or with uncertain admission release still
+requires installer repair. This branch has not been deployed, and it did not
+install a production Hermes upgrade.
+
 ## October 1 updater recovery
 
 Source digest: `fb157509ca509af5276fba76b6a442dda7474a02c58912281b22141e35b74783`.

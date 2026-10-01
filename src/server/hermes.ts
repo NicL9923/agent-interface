@@ -164,7 +164,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
                 method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(5_000), redirect: 'error',
               });
             } catch { throw unavailable(); }
-            if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
+if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
               response.status === 401 || response.status === 403 ? 'Hermes rejected the private service credential.' : 'Hermes service ticket could not be issued.');
             const body = await response.json() as Wire;
             if (typeof body.ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.ticket))
@@ -359,6 +359,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
     } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
+    if (!response.ok && path === '/api/agent-interface/integrations') {
+      const detail = await response.json().catch(() => ({})) as {error?:unknown};
+      throw Object.assign(new Error(typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.'), {statusCode:response.status});
+    }
     if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
       response.status === 401 || response.status === 403 ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes HTTP ${response.status}: request failed.`);
     return response;
@@ -550,6 +554,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}});if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     async download(id){const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);return {data:Buffer.from(await response.arrayBuffer()),name:file.name,mime:file.mime};},
+    async integrationRequest(input){return await (await http('/api/agent-interface/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).json();},
     async tools(botId):Promise<Tool[]>{const result=await rpc('profiles.describe',{name:botId});return result.toolsets.map((x:Wire)=>({id:x.name,name:x.label||x.name,description:x.description,enabled:x.enabled}));},
     async setTools(botId,ids){const state=await open(botId);const catalog=await rpc('profiles.describe',{name:botId});const known=new Set(catalog.toolsets.map((x:Wire)=>x.name));if(ids.some(x=>!known.has(x)))throw new Error('Unknown Hermes toolset selected.');const disabling=catalog.toolsets.filter((x:Wire)=>x.enabled&&!ids.includes(x.name)).map((x:Wire)=>x.name);const enabling=catalog.toolsets.filter((x:Wire)=>!x.enabled&&ids.includes(x.name)).map((x:Wire)=>x.name);for(const [action,names] of [['disable',disabling],['enable',enabling]] as const){if(names.length){const result=await rpc('tools.configure',{session_id:state.session_id,action,names});if(result.unknown?.length||result.missing_servers?.length)throw new Error('Hermes could not apply all tool selections.');}}},
     async skills(botId):Promise<Skill[]>{const result=await rpc('profiles.describe',{name:botId});return result.skills.map((x:Wire)=>({id:x.name,name:x.name,description:requiredSkills.has(x.name)?'Required by Hermes':'Hermes profile skill',enabled:x.enabled,required:requiredSkills.has(x.name)}));},

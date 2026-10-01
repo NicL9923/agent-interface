@@ -74,7 +74,7 @@ async def main(args):
     if not home.is_absolute() or (home / ".agent-interface-isolated").read_text() != "agent-interface-disposable-spike" or not os.environ.get("HERMES_SPIKE_URL", "").startswith("http://127.0.0.1:"):
         raise SystemExit("Only the launcher's disposable isolated gateway may be mutated.")
     verify_target(home, os.environ["HERMES_SPIKE_URL"], os.environ["HERMES_SPIKE_TOKEN"])
-    destination = Path("docs/evidence/hermes-extension-probe.json")
+    destination = Path(os.environ.get("HERMES_SPIKE_EVIDENCE_DIR", "docs/evidence")) / "hermes-extension-probe.json"
     c = await Client().connect()
     caps = await c.call("agent-interface.capabilities")
     def provider_count():

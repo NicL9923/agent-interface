@@ -55,6 +55,8 @@
     ]
     static var routines: [[String: Any]] = []
     static var upgradePhase = "idle"
+    static var integrationChecked = false
+    static var integrationDisconnected = false
     static var upgradeReadsRemaining = 0
     static var avatar: [String: Any] = [
       "mode": "geometric", "shape": "blob", "color": "#1084FE", "eyes": "oval", "accessory": "none",
@@ -149,8 +151,22 @@
             "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition,
           ]
         }
+      } else if path == "/api/integrations" {
+        object = ["profile": "ranch", "canManage": true, "connections": [
+          ["id": "workspace", "name": "Google Workspace", "category": "productivity", "owner": "Hermes", "profile": "ranch", "account": "test@localhost.invalid", "status": Self.integrationDisconnected ? "not_connected" : Self.integrationChecked ? "connected" : "configured", "detail": "Explicit simulator fixture. Credentials are configured; permissions are checked separately.", "permissions": [["id": "drive", "name": "Drive", "granted": NSNull()]], "actions": ["connect": true, "check": true, "disconnect": !Self.integrationDisconnected], "setup": [], "capabilities": [], "botIds": ["ranch"]],
+          ["id": "github", "name": "GitHub", "category": "development", "owner": "Hermes", "profile": "ranch", "status": "expired", "detail": "This fixture account needs to sign in again.", "permissions": [], "actions": ["connect": true, "check": true, "disconnect": false], "setup": [], "capabilities": [], "botIds": ["ranch"]]
+        ]]
+      } else if path.hasPrefix("/api/integrations/") && path.hasSuffix("/disconnect") {
+        Self.integrationDisconnected = true
+        object = ["kind": "instructions", "status": "approved", "message": "Removed this profile's local Google grant."]
+      } else if path.hasPrefix("/api/integrations/") && path.hasSuffix("/check") {
+        Self.integrationChecked = true
+        object = ["id": "workspace", "name": "Google Workspace", "category": "productivity", "owner": "Hermes", "profile": "ranch", "status": "connected", "detail": "Fixture check passed.", "permissions": [], "actions": ["connect": true, "check": true, "disconnect": false], "setup": [], "capabilities": [], "botIds": ["ranch"]]
       } else if path.hasPrefix("/api/hermes/upgrade") {
-        if path.hasSuffix("/check") {
+        if path.hasSuffix("/control") {
+          Self.upgradePhase = "recovering"
+          Self.upgradeReadsRemaining = 1
+        } else if path.hasSuffix("/check") {
           Self.upgradePhase = "qualifying"
           Self.upgradeReadsRemaining = 1
         } else if path.hasSuffix("/install") {
@@ -166,9 +182,11 @@
           case "qualifying": Self.upgradePhase = "ready"
           case "installing": Self.upgradePhase = "verifying"; Self.upgradeReadsRemaining = 1
           case "verifying": Self.upgradePhase = "succeeded"
+          case "recovering": Self.upgradePhase = "cancelled"
           default: break
           }
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed" }
         let phase = Self.upgradePhase
         let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": "compatibility", "label": "App compatibility", "status": phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
         let fixtureMessage: String
@@ -185,7 +203,7 @@
           "message": fixtureMessage,
           "checks": fixtureChecks,
           "canCheck": ["idle", "ready", "succeeded"].contains(phase),
-          "canInstall": phase == "ready", "busyBots": [],
+          "canInstall": phase == "ready", "canRetry": phase == "failed", "canCancel": phase == "failed", "canRestartService": phase == "failed", "operationId": "fixture-update", "busyBots": [],
         ]
         if status == 503 {
           object = ["error": "Fixture connection lost during update admission"]

@@ -9,3 +9,5 @@
 - `bash .agents/tools/validate-ios.sh SIMULATOR_UUID [test|build|live]` runs the native app's simulator checks on the Mac mini with local ad hoc signing for Keychain, task-local derived data and a unique result bundle. Choose a simulator reserved for this work. `live` explicitly exercises the real loopback app server at port 3004; prepare its isolated Hermes fixture first.
 - `node .agents/tools/backup-app.mjs APP_DATABASE BACKUP_DIRECTORY` makes a private online SQLite backup, checks its integrity, and retains the latest 14 completed copies. It includes committed WAL data and does not back up Hermes or host secrets.
 - `python3 .agents/tools/archive-release.py OUTPUT.tar.gz` packages Git-visible server, build and test inputs without ignored credentials, runtime data or macOS extended-attribute files.
+
+- `node .agents/tools/preview-integrations.mjs` serves the built web client on loopback port 3000 with explicit account/status/update-recovery fixtures. It never contacts Hermes or account providers.

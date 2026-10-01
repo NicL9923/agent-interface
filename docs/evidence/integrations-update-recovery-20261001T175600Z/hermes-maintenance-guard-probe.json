@@ -1,0 +1,17 @@
+{
+  "checks": {
+    "queued_long_rpc_refuses_maintenance": true,
+    "held_lease_blocks_long_rpc_and_deferred_work": true,
+    "deferred_reservation_refuses_maintenance": true,
+    "scheduled_continuation_refuses_maintenance": true,
+    "native_session_lock_order_completes": true,
+    "hidden_reused_tool_rows_preserve_native_identity": true,
+    "native_codex_completion_visible_before_durable_flush": true,
+    "native_codex_durable_result_replaces_live_completion": true,
+    "native_durable_completion_has_one_tool_card": true,
+    "native_reused_old_call_cannot_hide_new_completion": true,
+    "persistent_gateway_fences_internal_and_idle_commands": true,
+    "native_gateway_preflight_counted_until_completion": true,
+    "persistent_gateway_drain_remains_closed": true
+  }
+}

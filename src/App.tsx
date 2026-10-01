@@ -15,6 +15,7 @@ import { BotSettings } from "./BotSettings";
 import { MessageMarkdown } from "./components/MessageMarkdown";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { SignIn } from "./components/SignIn";
+import { IntegrationsPanel } from "./components/IntegrationsPanel";
 import { HermesUpgradePanel } from "./components/HermesUpgradePanel";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
@@ -105,6 +106,7 @@ export function App() {
   const [settings, setSettings] = useState<Bot | "new" | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 620px)").matches);
   const rail = useRef<HTMLElement>(null);
@@ -180,7 +182,7 @@ export function App() {
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
-          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setError("");
+          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setError("");
         }
         setCsrf(next.csrfToken ?? "");
         setBoot((previous) => ({ ...next,
@@ -201,7 +203,7 @@ export function App() {
         if (e instanceof ApiError && e.status === 401) {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
-          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setError("");
+          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setError("");
           setAuth(true); setBoot(null); setCsrf("");
         } else {
           setDisconnected(true); setAppUnavailable(true);
@@ -791,6 +793,7 @@ export function App() {
           >
             ☷ Preferences
           </button>
+          <button onClick={() => { setRailOpen(false); setIntegrationsOpen(true); }}>↗ Integrations</button>
           <button className={`connection connection-button ${connectionLost ? "attention" : ""}`}
             aria-label="Hermes connection and updates" onClick={() => { setRailOpen(false); setUpgradeOpen(true); }}>
             <span className="connection-dot" aria-hidden="true" />
@@ -1276,7 +1279,8 @@ export function App() {
           onSaved={() => void refresh()}
         />
       )}
-      <HermesUpgradePanel key={boot.user.id} open={upgradeOpen} onClose={() => setUpgradeOpen(false)}
+      {integrationsOpen && <IntegrationsPanel key={`integrations:${boot.user.id}`} bots={allBots} accountScope={boot.user.id} onClose={() => setIntegrationsOpen(false)} />}
+      <HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={upgradeOpen} onClose={() => setUpgradeOpen(false)}
         bots={allBots} currentVersion={boot.connection.version} />
       {preferencesOpen && (
         <dialog
@@ -1410,6 +1414,7 @@ export function App() {
                     setReceipt(null);
                     setPreferencesOpen(false);
                     setUpgradeOpen(false);
+                    setIntegrationsOpen(false);
                     setAuth(true);
                   } catch (e) {
                     setNotice((e as Error).message);

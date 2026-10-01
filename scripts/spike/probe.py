@@ -97,7 +97,7 @@ async def main():
     data = json.dumps(result, indent=2).replace(str(home), "<isolated-home>").replace(str(home.parent), "<isolated-root>")
     data = re.sub(r'/Users/[^/"\\\s]+', '<machine-home>', data)
     data = re.sub(r'/private/tmp/agent-interface[^/"\\\s]*', '<isolated-temp>', data)
-    destination = Path("docs/evidence/hermes-native-probe.json")
+    destination = Path(os.environ.get("HERMES_SPIKE_EVIDENCE_DIR", "docs/evidence")) / "hermes-native-probe.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(data + "\n")
     print(json.dumps({"evidence": str(destination), "event_types": result["event_types"], "checks": list(result["checks"])}))

@@ -64,6 +64,8 @@ const scopeFiles = [
   "src/hermes/gateway_guard.py",
   "src/shared/types.ts",
   "src/shared/upgrades.ts",
+  "src/shared/integrations.ts",
+  "src/hermes/integrations.py",
   "scripts/spike/app-probe.mjs",
   "package.json",
   "package-lock.json",
@@ -786,12 +788,12 @@ try {
     process.exitCode = 1;
   }
   writeFileSync(
-    resolve("docs/evidence/app-probe.json"),
+    resolve(process.env.HERMES_SPIKE_EVIDENCE_DIR || "docs/evidence", "app-probe.json"),
     JSON.stringify(report, null, 2) + "\n",
   );
   console.log(
     JSON.stringify({
-      evidence: "docs/evidence/app-probe.json",
+      evidence: resolve(process.env.HERMES_SPIKE_EVIDENCE_DIR || "docs/evidence", "app-probe.json"),
       checks: report.checks,
       failed: report.failed ?? false,
     }),
