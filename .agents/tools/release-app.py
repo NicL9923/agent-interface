@@ -86,7 +86,7 @@ def preparation_problems(facts, built, *, local_web_build, qualification, accept
         problems.append(f"The host built {built['webBuild']}, but the local build is {local_web_build}.")
     if not built["receipt"]["valid"]:
         problems.append(
-            "The Hermes add-on no longer matches the qualification receipt"
+            "The app integration inputs no longer match the qualification receipt"
             + (" supplied." if qualification else ". Qualify this release and pass --qualification.")
             + f" ({built['receipt']['error']})")
     if built["helperSha256"] != prior["fixedHelperSha256"] and not accept_helper_change:
@@ -116,7 +116,7 @@ def ledger_entry(manifest, receipt_name, day):
     pull = f"PR #{manifest['pullRequest']} merged" if manifest.get("pullRequest") else "Merged"
     qualification = ("A fresh qualification receipt was activated with the release."
                      if manifest["qualification"] == "new"
-                     else "The Hermes add-on was unchanged, so the existing qualification receipt "
+                     else "The app integration inputs were unchanged, so the existing qualification receipt "
                           "validated against the release and was reused.")
     return f"""## {day:%B} {day.day} app release {manifest['commit'][:7]}
 
@@ -478,7 +478,7 @@ def main(argv=None):
     step.add_argument("commit")
     step.add_argument("--host", required=True, help="SSH alias of the app host")
     step.add_argument("--app-base", required=True, help="absolute application directory on the host")
-    step.add_argument("--qualification", help="fresh qualification receipt on the host, when the add-on changed")
+    step.add_argument("--qualification", help="fresh qualification receipt on the host, when integration inputs changed")
     step.add_argument("--accept-helper-change", action="store_true",
                       help="confirm a reviewed change to scripts/hermes-upgrade-linux.py")
     step.set_defaults(run=prepare)

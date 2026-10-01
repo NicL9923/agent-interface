@@ -1,0 +1,16 @@
+{
+  "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "trackedPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "appSourceDigest": "7294a3c5f3b12c2282b0a7d0db5f901e1783c0a635f77a8d730800aeb77185d5",
+  "productionAccess": false,
+  "files": {
+    "app-probe.json": "ba14e7a54dcb4da63b1139c46132c6306ade9911cc449fef69856f507d3ff737",
+    "hermes-environment.json": "0919d4be846ccc27076bec0b123f542346389e24a491c112223f84b6846c1532",
+    "hermes-extension-probe.json": "bdf973cbc192e2865d9da828dcd0949caedd5aab8a2f23f7f20404c836101038",
+    "hermes-integrations-probe.json": "7798b93d95ab924c8b80edce4b346539a0aa4037ea8fe0059945a2c6c4c76bbd",
+    "hermes-maintenance-guard-probe.json": "1dcfbc89ddeb93b4b07df8c1e001ce80685cd3395eae300d755c74c8cd34a7bc",
+    "hermes-native-probe.json": "7bcddf333851830fe5f453f7f5ddcdb9a6b03f837c8edb5e719d47ba5f5c83eb",
+    "hermes-routine-probe.json": "44cdc1a366a5aba1de458e86d36c554d32bd26938726ed11109111f03756892d",
+    "hermes-service-probe-upgrade-route-d23.json": "13776368f15a837006cdd924b4aee56a3e4015421415b5a4b4ddd4342cfb861c"
+  }
+}
