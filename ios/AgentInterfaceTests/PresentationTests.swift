@@ -67,7 +67,7 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(blocks.last?.text, "let n = 1")
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
-    for shape in AvatarConfig.shapes {
+    for shape in AvatarConfig.shapes + ["mascot"] {
       let points = AvatarGeometry.points(shape)
       XCTAssertEqual(points.values.count, 144, shape)
       XCTAssertTrue(points.values.allSatisfy(\.isFinite), shape)
@@ -80,5 +80,111 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(NotificationController.botId(from: "https://evil.example/?bot=a", origin: origin))
     XCTAssertNil(NotificationController.botId(from: "//evil.example/?bot=a", origin: origin))
     XCTAssertNil(NotificationController.botId(from: "/api/files/a?bot=b", origin: origin))
+  }
+}
+
+/// Mirrors tests/avatar-motion.test.ts so the native rig keeps the web's motion contract.
+final class AvatarMotionTests: XCTestCase {
+  typealias M = AvatarMotion
+  private func samples(_ from: Double, _ to: Double, _ step: Double = 0.02) -> [Double] {
+    (0..<Int(((to - from) / step).rounded())).map { from + Double($0) * step }
+  }
+
+  func testDisconnectedAndInterruptedNeverMove() {
+    for state in [ActivityState.disconnected, .interrupted] {
+      for t in samples(0, 6, 0.37) { XCTAssertEqual(M.pose(state, t, reduce: false), M.restingPose) }
+    }
+  }
+  func testReducedMotionHoldsEveryStateStill() {
+    for state in [ActivityState.idle, .working, .done, .blocked] {
+      for t in [0, 1.3, 7] { XCTAssertEqual(M.pose(state, t, reduce: true), M.restingPose) }
+    }
+    let snapshot = M.Snapshot.entering(.done, at: Date())
+    let still = M.frame(snapshot, at: Date().addingTimeInterval(0.4), still: true)
+    XCTAssertEqual(still.pose, M.restingPose)
+    XCTAssertEqual(still.trailLevel, 0)
+    XCTAssertEqual(still.expression.happy, 1, "A still completed avatar shows its settled face")
+  }
+  func testTimelinePausesWhenNothingCanMove() {
+    func paused(
+      _ state: ActivityState, reduce: Bool = false, visible: Bool = true, active: Bool = true,
+      settling: Bool = false
+    ) -> Bool {
+      M.timelinePaused(
+        state, reduceMotion: reduce, visible: visible, active: active, settling: settling)
+    }
+    XCTAssertFalse(paused(.working))
+    XCTAssertTrue(paused(.working, reduce: true))
+    XCTAssertTrue(paused(.working, visible: false), "Offscreen avatars stop")
+    XCTAssertTrue(paused(.working, active: false), "Background scenes stop")
+    XCTAssertFalse(paused(.working, visible: true), "Avatars resume when visible again")
+    XCTAssertFalse(paused(.failed, settling: true), "A failure shakes on entry")
+    XCTAssertTrue(paused(.failed), "then holds still")
+    for state in M.frozenStates {
+      XCTAssertTrue(paused(state, settling: true), "\(state) never ticks")
+    }
+  }
+  func testWorkingKeepsTheFaceForwardUntilASpinTurnsItAway() {
+    let scanEnd = M.workCycle - M.workSpin
+    for t in samples(0, scanEnd) {
+      let pose = M.pose(.working, t, reduce: false)
+      XCTAssertTrue(M.project(0, yaw: pose.yaw).visible, "t=\(t)")
+      XCTAssertEqual(pose.trails, 0)
+    }
+    let spin = samples(scanEnd, M.workCycle).map { M.pose(.working, $0, reduce: false) }
+    XCTAssertTrue(spin.contains { !M.project(0, yaw: $0.yaw).visible })
+    XCTAssertGreaterThan(spin.map(\.trails).max() ?? 0, 0.9)
+  }
+  func testCompletionSettlesIntoACalmHappyFace() {
+    let celebrating = samples(0, M.celebration).map { M.pose(.done, $0, reduce: false) }
+    XCTAssertEqual(celebrating.map(\.trails).max(), 1)
+    let after = M.pose(.done, M.celebration + 2, reduce: false)
+    XCTAssertEqual(after.trails, 0)
+    XCTAssertTrue(M.project(0, yaw: after.yaw).visible)
+    XCTAssertEqual(M.expression(for: .done, at: M.celebration + 2).happy, 1)
+    let start = M.expression(for: .working, at: 0)
+    XCTAssertEqual(
+      M.expression(from: start, toward: .done, after: M.celebration + 2).happy, 1, accuracy: 0.001)
+  }
+  func testBlinksAreBrief() {
+    let openness = samples(0, 12, 0.01).map(M.blinkAt)
+    XCTAssertLessThan(openness.min() ?? 1, 0.2)
+    XCTAssertLessThan(Double(openness.filter { $0 < 1 }.count) / Double(openness.count), 0.15)
+  }
+  func testFarSideFeaturesAreHidden() {
+    XCTAssertTrue(M.project(15, yaw: 0).visible)
+    XCTAssertFalse(M.project(15, yaw: .pi).visible)
+  }
+  func testTrailsSplitIntoArcsBehindAndInFrontOfTheBody() {
+    let arcs = M.orbitArcs(head: 1.5 * .pi, length: .pi, rx: 58, ry: 13, tilt: 0)
+    XCTAssertFalse(arcs.back.isEmpty)
+    XCTAssertFalse(arcs.front.isEmpty)
+  }
+  func testFaceInkPicksReadableColors() {
+    XCTAssertEqual(M.faceInk("#1084FE"), "#fff9ee")
+    XCTAssertEqual(M.faceInk("#FFE45C"), "#2b201b")
+    XCTAssertEqual(M.faceInk("#FF9800", mascot: true), "#2b201b")
+    XCTAssertEqual(M.faceInk("#111111", mascot: true), "#fff3db")
+    XCTAssertEqual(M.faceInk("not-a-color"), "#fff9ee")
+    XCTAssertEqual(M.faceInk("#C3C3C3"), "#2b201b")
+    for color in AvatarConfig.colors { XCTAssertEqual(M.faceInk(color), "#fff9ee", color) }
+    XCTAssertEqual(M.tint("#FF9800", 0.45), "#ffc673")
+  }
+  func testSmoothingIsContinuousAcrossStateChanges() {
+    let now = Date()
+    let working = M.Snapshot.entering(.working, at: now)
+    // Leave mid-spin: the trails carry over and fade instead of vanishing.
+    let midSpin = now.addingTimeInterval(M.workCycle - M.workSpin / 2)
+    let before = M.frame(working, at: midSpin, still: false)
+    let waiting = M.next(working, to: .waiting, at: midSpin, still: false)
+    let after = M.frame(waiting, at: midSpin, still: false)
+    XCTAssertGreaterThan(before.trailLevel, 0.9)
+    XCTAssertEqual(after.trailLevel, before.trailLevel, accuracy: 0.0001)
+    XCTAssertEqual(after.expression, before.expression)
+    XCTAssertEqual(M.frame(waiting, at: midSpin.addingTimeInterval(0.7), still: false).trailLevel, 0)
+    // Thinking dots settle in with the morph time constant.
+    let thinking = M.next(M.Snapshot.entering(.idle, at: now), to: .thinking, at: now, still: false)
+    XCTAssertEqual(M.frame(thinking, at: now, still: false).morph.dots, 0)
+    XCTAssertGreaterThan(M.frame(thinking, at: now.addingTimeInterval(0.6), still: false).morph.dots, 0.98)
   }
 }

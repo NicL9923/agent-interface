@@ -76,9 +76,9 @@ struct PreferencesView: View {
         }
         .disabled(notificationBusy || store.sessionExpired)
         Section("Connection") {
-          LabeledContent("Server", value: store.host).font(.footnote)
+          LabeledContent("Server", value: store.host)
           if let version = store.bootstrap?.connection.version {
-            LabeledContent("Hermes", value: version).font(.footnote)
+            LabeledContent("Hermes", value: version)
           }
           if let detail = store.bootstrap?.connection.detail {
             Text(detail).font(.footnote).foregroundStyle(.secondary)
@@ -202,9 +202,22 @@ struct PreferencesView: View {
   struct AvatarSpecimenView: View {
     @State private var avatar = AvatarConfig()
     @State private var reduced = false
+    @State private var matrixWidth: CGFloat = 353
+    /// The web specimen's state matrix: eight characters across every activity state.
+    private let matrix: [(String, AvatarConfig)] = [
+      ("Blob", AvatarConfig()),
+      ("Triangle", AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "visor")),
+      ("Drop", AvatarConfig(shape: "drop", color: "#97683D", accessory: "hat")),
+      ("Hex", AvatarConfig(shape: "hex", color: "#9159FE", accessory: "glasses")),
+      ("Bear", AvatarConfig(mode: "mascot", shape: nil, family: "bear", color: "#FF9800", eyes: "round")),
+      ("Fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
+      ("Sprout", AvatarConfig(mode: "mascot", shape: nil, family: "sprout", color: "#00BCA6", accessory: "hat")),
+      ("Portrait", AvatarConfig(mode: "portrait", shape: nil, origin: "uploaded")),
+    ]
     var body: some View {
       ScrollView {
-        VStack(spacing: 24) {
+        // Lazy, so offscreen specimens stop their animation timelines.
+        LazyVStack(spacing: 24) {
           Picker("Mode", selection: $avatar.mode) {
             Text("Geometric").tag("geometric")
             Text("Mascot").tag("mascot")
@@ -219,6 +232,30 @@ struct PreferencesView: View {
               }
             }
           }
+          VStack(alignment: .leading, spacing: 12) {
+            Text("State matrix").font(.headline)
+            // One row per character, one column per state, sized to fit the width.
+            let cell = min(64, max(28, (matrixWidth - 8 * 8) / 9))
+            Grid(horizontalSpacing: 8, verticalSpacing: 12) {
+              GridRow {
+                ForEach(ActivityState.allCases, id: \.self) { state in
+                  Text(state.label.replacingOccurrences(of: " ", with: "\n"))
+                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(3)
+                    .minimumScaleFactor(0.5).multilineTextAlignment(.center).frame(width: cell)
+                }
+              }
+              ForEach(matrix, id: \.0) { label, config in
+                GridRow {
+                  ForEach(ActivityState.allCases, id: \.self) { state in
+                    AvatarView(
+                      avatar: config, state: state, size: cell, name: label,
+                      forceReducedMotion: reduced)
+                  }
+                }
+              }
+            }.frame(maxWidth: .infinity)
+          }.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { matrixWidth = $0 }
+            .accessibilityElement(children: .contain).accessibilityIdentifier("avatarMatrix")
           ForEach(AvatarConfig.shapes, id: \.self) { shape in
             HStack {
               AvatarView(avatar: AvatarConfig(shape: shape), size: 64)

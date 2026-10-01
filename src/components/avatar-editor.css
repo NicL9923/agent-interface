@@ -1,0 +1,192 @@
+.avatar-editor fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 22px;
+  min-width: 0;
+}
+.avatar-editor legend {
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.avatar-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 28px 16px 14px;
+  margin-bottom: 22px;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 38%, var(--raised) 0 28%, transparent 62%),
+    var(--rail);
+}
+.avatar-stage > p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.avatar-stage-states {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.avatar-stage-states button {
+  font-size: 12px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: var(--raised);
+}
+.avatar-stage-states button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px !important;
+  border-radius: 14px;
+  background: var(--rail);
+}
+.segmented legend {
+  float: left;
+  width: 100%;
+  margin: 2px 6px 8px;
+}
+.segmented label {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+}
+.segmented label span {
+  display: block;
+  padding: 9px 10px;
+  border-radius: 10px;
+  color: var(--muted);
+  transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+.segmented label:hover span {
+  color: var(--ink);
+}
+.segmented input:checked + span {
+  background: var(--raised);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 4px #1b251a1a;
+}
+.segmented input:focus-visible + span,
+.choice input:focus-visible + .choice-art,
+.swatch:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+.choice {
+  margin: 0;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.choice-art {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1.15;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--raised);
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+.choice:hover .choice-art {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.choice input:checked + .choice-art {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+.choice:has(input:checked) .choice-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.swatch {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px #0000001a;
+}
+.swatch:has(input:checked) {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+.swatch-custom {
+  overflow: hidden;
+  background: conic-gradient(#ff263c, #ff9800, #ffd600, #00bca6, #1084fe, #9159fe, #ff309b, #ff263c);
+}
+.swatch-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
+}
+.eye-tuning label {
+  margin-bottom: 14px;
+}
+.eye-tuning label > span {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.eye-tuning output {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.eye-tuning input[type="range"] {
+  accent-color: var(--accent);
+  border: 0;
+  background: transparent;
+}
+.text-button {
+  border: 0;
+  padding: 4px 0;
+  color: var(--accent);
+  font-size: 13px;
+}
+.text-button:hover:enabled {
+  background: transparent;
+  text-decoration: underline;
+}
+@media (max-width: 620px) {
+  .choice-grid {
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .segmented label span,
+  .choice-art {
+    transition: none;
+  }
+}

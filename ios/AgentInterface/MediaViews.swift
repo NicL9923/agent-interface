@@ -210,12 +210,13 @@ struct MarkdownView: View {
           VStack(alignment: .trailing, spacing: 0) {
             Button("Copy code", systemImage: "doc.on.doc") {
               UIPasteboard.general.string = block.text
-            }.font(.caption).padding(8)
+            }.font(.caption).padding(.horizontal, 12).padding(.top, 8)
             ScrollView(.horizontal) {
               Text(block.text).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-                .padding(12)
+                .padding([.horizontal, .bottom], 12).padding(.top, 2)
             }
-          }.background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 8))
+          }.background(Palette.rail(scheme), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.line))
         case "heading": Text(block.text).font(.headline).textSelection(.enabled)
         case "list":
           VStack(alignment: .leading, spacing: 8) {

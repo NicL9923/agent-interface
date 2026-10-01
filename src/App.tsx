@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   AttentionRequest,
   Bootstrap,
@@ -14,9 +14,10 @@ import { Avatar, stateLabels } from "./components/Avatar";
 import { BotSettings } from "./BotSettings";
 import { MessageMarkdown } from "./components/MessageMarkdown";
 import { ConnectionPanel } from "./components/ConnectionPanel";
-import { SignIn } from "./components/SignIn";
+import { AvatarTrio, SignIn } from "./components/SignIn";
 import { IntegrationsPanel } from "./components/IntegrationsPanel";
 import { HermesUpgradePanel } from "./components/HermesUpgradePanel";
+import { Icon } from "./components/Icon";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -169,6 +170,31 @@ export function App() {
     if (positionTimer.current) clearTimeout(positionTimer.current);
   }, [boot?.user.id]);
   const scroll = useRef<HTMLDivElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
+  const fitComposer = useCallback(() => {
+    // Grow the composer with its draft up to the CSS max-height, then scroll.
+    const input = composerInput.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+  }, []);
+  useLayoutEffect(fitComposer, [draft.text, botId, fitComposer]);
+  const composerRef = useCallback((input: HTMLTextAreaElement | null) => {
+    composerInput.current = input;
+    if (!input || typeof ResizeObserver === "undefined") return;
+    // Rotation or a narrower window rewraps the same draft.
+    let width = input.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      fitComposer();
+    });
+    observer.observe(input);
+    return () => {
+      observer.disconnect();
+      composerInput.current = null;
+    };
+  }, [fitComposer]);
   const bottom = useRef(true);
   const activeBotRef = useRef(botId);
   activeBotRef.current = botId;
@@ -671,6 +697,7 @@ export function App() {
     return (
       <main className="welcome">
         <p className="eyebrow">Agent Interface</p>
+        <AvatarTrio />
         <h1>
           Your assistants,
           <br />
@@ -695,35 +722,40 @@ export function App() {
       Number(prefs.favorites.includes(b.id)) -
       Number(prefs.favorites.includes(a.id)),
   );
-  const renderBot = (bot: Bot) => (
-    <button
-      className={`bot-item ${bot.id === botId ? "selected" : ""}`}
-      key={bot.id}
-      onClick={() => selectBot(bot.id)}
-    >
-      <Avatar
-        avatar={bot.avatar}
-        state={
-          connectionLost
-            ? "disconnected"
-            : bot.id === botId
-              ? state
-              : bot.activity
-        }
-        size={40}
-        name={bot.name}
-      />
-      <span>
-        <strong>{bot.name}</strong>
-        <small>{bot.shared ? "Shared assistant" : "Personal assistant"}</small>
-      </span>
-      {prefs.favorites.includes(bot.id) && (
-        <span className="favorite-star" aria-label="Favorite">
-          ☆
+  const renderBot = (bot: Bot) => {
+    const botState = connectionLost
+      ? "disconnected"
+      : bot.id === botId
+        ? state
+        : bot.activity;
+    // The rail says what each assistant is doing in words, not only through motion.
+    const reportsActivity = !connectionLost && botState !== "idle";
+    return (
+      <button
+        className={`bot-item ${bot.id === botId ? "selected" : ""}`}
+        key={bot.id}
+        aria-current={bot.id === botId ? "page" : undefined}
+        onClick={() => selectBot(bot.id)}
+      >
+        <Avatar avatar={bot.avatar} state={botState} size={40} name={bot.name} />
+        <span>
+          <strong>{bot.name}</strong>
+          <small className={reportsActivity ? `bot-activity state-${botState}` : undefined}>
+            {reportsActivity
+              ? stateLabels[botState]
+              : bot.shared
+                ? "Shared assistant"
+                : "Personal assistant"}
+          </small>
         </span>
-      )}
-    </button>
-  );
+        {prefs.favorites.includes(bot.id) && (
+          <span className="favorite-star" role="img" aria-label="Favorite">
+            <Icon name="star" size={15} filled />
+          </span>
+        )}
+      </button>
+    );
+  };
   return (
     <div className="app-shell">
       <aside
@@ -736,14 +768,14 @@ export function App() {
         inert={mobile && !railOpen}
       >
         <div className="rail-brand">
-          <span className="brand-mark">a.</span>
+          <span className="brand-mark" aria-hidden="true">a.</span>
           <strong>Agent Interface</strong>
           <button
             className="mobile-only icon-button"
             aria-label="Close assistants"
             onClick={() => setRailOpen(false)}
           >
-            ×
+            <Icon name="close" />
           </button>
         </div>
         <div className="household-label">
@@ -777,13 +809,13 @@ export function App() {
               </p>
             )}
           </section>
-          <button className="new-bot" onClick={() => {
-            setRailOpen(false);
-            setSettings("new");
-          }}>
-            ＋ New assistant
-          </button>
         </div>
+        <button className="new-bot" onClick={() => {
+          setRailOpen(false);
+          setSettings("new");
+        }}>
+          <Icon name="plus" size={18} /> New assistant
+        </button>
         <div className="rail-footer">
           <button
             onClick={() => {
@@ -791,14 +823,14 @@ export function App() {
               setPreferencesOpen(!preferencesOpen);
             }}
           >
-            ☷ Preferences
+            <Icon name="sliders" size={18} /> Preferences
           </button>
-          <button onClick={() => { setRailOpen(false); setIntegrationsOpen(true); }}>↗ Integrations</button>
+          <button onClick={() => { setRailOpen(false); setIntegrationsOpen(true); }}><Icon name="plug" size={18} /> Integrations</button>
           <button className={`connection connection-button ${connectionLost ? "attention" : ""}`}
             aria-label="Hermes connection and updates" onClick={() => { setRailOpen(false); setUpgradeOpen(true); }}>
             <span className="connection-dot" aria-hidden="true" />
             {connectionLost ? offline ? "Offline" : "Reconnecting" : "Connected to Hermes"}
-            <span className="connection-chevron" aria-hidden="true">›</span>
+            <Icon name="chevron" size={16} className="connection-chevron" />
           </button>
         </div>
       </aside>
@@ -821,7 +853,7 @@ export function App() {
               setRailOpen(true);
             }}
           >
-            ☰
+            <Icon name="menu" />
           </button>
           {selected ? (
             <>
@@ -838,17 +870,20 @@ export function App() {
               <button
                 className="icon-button"
                 aria-label="Edit assistant"
+                title="Assistant settings"
                 onClick={() => setSettings(selected)}
               >
-                ⚙
+                <Icon name="gear" />
               </button>
               <button
-                className="icon-button"
+                className={`icon-button favorite-toggle ${prefs.favorites.includes(selected.id) ? "on" : ""}`}
                 aria-label={
                   prefs.favorites.includes(selected.id)
                     ? "Remove favorite"
                     : "Favorite assistant"
                 }
+                aria-pressed={prefs.favorites.includes(selected.id)}
+                title={prefs.favorites.includes(selected.id) ? "Remove favorite" : "Favorite"}
                 onClick={() =>
                   void savePreferences({
                     ...prefs,
@@ -858,7 +893,7 @@ export function App() {
                   })
                 }
               >
-                ☆
+                <Icon name="star" filled={prefs.favorites.includes(selected.id)} />
               </button>
             </>
           ) : (
@@ -893,7 +928,7 @@ export function App() {
           <div className="notice error" role="alert">
             {error}
             <button aria-label="Dismiss error" onClick={() => setError("")}>
-              ×
+              <Icon name="close" size={16} />
             </button>
           </div>
         )}
@@ -1080,7 +1115,7 @@ export function App() {
                     ).catch((e) => setError(e.message))
                   }
                 >
-                  Stop
+                  <Icon name="stop" size={14} /> Stop
                 </button>
               )}
             </div>
@@ -1166,7 +1201,7 @@ export function App() {
                         }))
                       }
                     >
-                      ×
+                      <Icon name="close" size={14} />
                     </button>
                   </span>
                 ))}
@@ -1175,6 +1210,7 @@ export function App() {
                 Message {selected.name}
               </label>
               <textarea
+                ref={composerRef}
                 id="message"
                 value={draft.botId === botId ? draft.text : ""}
                 placeholder={
@@ -1219,7 +1255,8 @@ export function App() {
                   className={`attach-control ${!boot.capabilities.uploads.supported ? "disabled" : ""}`}
                   title={boot.capabilities.uploads.reason}
                 >
-                  <span>＋ Attach</span>
+                  <Icon name="attach" size={18} />
+                  <span>Attach</span>
                   <input
                     aria-label="Attach images, PDFs, or text"
                     type="file"
@@ -1259,7 +1296,7 @@ export function App() {
                     (!draft.text.trim() && !draft.attachments.length)
                   }
                 >
-                  ↑
+                  <Icon name="send" size={19} />
                 </button>
               </div>
             </form>
@@ -1297,7 +1334,7 @@ export function App() {
               aria-label="Close preferences"
               onClick={() => setPreferencesOpen(false)}
             >
-              ×
+              <Icon name="close" />
             </button>
           </header>
           <label>
@@ -1485,7 +1522,7 @@ function FileLink({ file }: { file: FileRef }) {
           loading="lazy"
         />
       )}
-      <span>↓ {file.name}</span>
+      <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>
     </a>
   );
 }
@@ -1507,6 +1544,7 @@ function SectionEditor({
           <div className="actions">
             <strong>{section.name}</strong>
             <button
+              className="icon-button"
               aria-label={`Remove section ${section.name}`}
               onClick={() =>
                 void save({
@@ -1517,7 +1555,7 @@ function SectionEditor({
                 })
               }
             >
-              ×
+              <Icon name="close" size={16} />
             </button>
           </div>
           {bots.map((bot) => (

@@ -173,6 +173,9 @@ struct ConversationView: View {
         nearBottom = true
         visibleMessage = nil
         if let message = store.conversation?.restorableReadAnchor(store.readMessageId()) {
+          // The lazy bottom sentinel may never load here, so assume the user is away
+          // from the latest message until it appears.
+          nearBottom = message == store.conversation?.messages.last?.id
           visibleMessage = message
           proxy.scrollTo(message, anchor: .top)
         } else if store.conversation?.messages.isEmpty == true {
@@ -182,13 +185,16 @@ struct ConversationView: View {
         }
       }
       .overlay(alignment: .bottomTrailing) {
-        Button {
-          proxy.scrollTo("latest", anchor: .bottom)
-          store.markRead(store.conversation?.messages.last?.id)
-        } label: {
-          Image(systemName: "arrow.down").padding(10).background(.regularMaterial, in: Circle())
-        }.accessibilityLabel("Jump to latest message").padding(12)
+        if !nearBottom {
+          Button {
+            proxy.scrollTo("latest", anchor: .bottom)
+            store.markRead(store.conversation?.messages.last?.id)
+          } label: {
+            Image(systemName: "arrow.down").padding(10).background(.regularMaterial, in: Circle())
+          }.accessibilityLabel("Jump to latest message").padding(12).transition(.opacity)
+        }
       }
+      .animation(.easeOut(duration: 0.15), value: nearBottom)
       .refreshable {
         await store.refreshConversation()
         await store.reconcilePending()
@@ -323,7 +329,10 @@ struct ConversationView: View {
             systemName: store.sending
               ? "hourglass" : store.active ? "arrow.turn.up.right" : "arrow.up"
           ).font(.headline).frame(width: 44, height: 44)
-        }.buttonStyle(.borderedProminent).clipShape(Circle()).disabled(!store.canSend)
+            .foregroundStyle(store.canSend ? Palette.surface(scheme) : Palette.muted)
+            .background(store.canSend ? Palette.accent : Palette.line, in: Circle())
+            .contentShape(Circle())
+        }.buttonStyle(.plain).disabled(!store.canSend)
           .accessibilityLabel(store.active ? "Send guidance" : "Send message")
           .accessibilityIdentifier("sendMessage")
       }

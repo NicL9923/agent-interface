@@ -16,7 +16,6 @@ enum ActivityState: String, Codable, CaseIterable {
     }
   }
   var active: Bool { [.thinking, .working, .waiting, .blocked].contains(self) }
-  var animates: Bool { ![.disconnected, .failed, .interrupted].contains(self) }
 }
 struct AvatarConfig: Codable, Equatable {
   var mode = "geometric"

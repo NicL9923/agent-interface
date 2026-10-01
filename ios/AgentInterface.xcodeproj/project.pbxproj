@@ -62,11 +62,13 @@ F0086F30C4C2CB095CBFEC92 = {isa = PBXFileReference; lastKnownFileType = sourceco
 F5786952B9DF214AB6A85859 = {isa = PBXBuildFile; fileRef = F0086F30C4C2CB095CBFEC92;};
 94E1A506610292815C52C7A4 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NativeFlowTests.swift"; sourceTree = "<group>";};
 B10E24BCD6A6E1D475C333B6 = {isa = PBXBuildFile; fileRef = 94E1A506610292815C52C7A4;};
+C1938A43CF31C5A19D62AC85 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenshotTourTests.swift"; sourceTree = "<group>";};
+A112EAE4CE3FD8B299CA087D = {isa = PBXBuildFile; fileRef = C1938A43CF31C5A19D62AC85;};
 3B54DC34B4F9843DC9F89664 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TabletPresentationTests.swift"; sourceTree = "<group>";};
 9C338A0B9D82DDCA29219914 = {isa = PBXBuildFile; fileRef = 3B54DC34B4F9843DC9F89664;};
-E60C6626675AB771279B3D62 = {isa = PBXGroup; children = (F0086F30C4C2CB095CBFEC92, 94E1A506610292815C52C7A4, 3B54DC34B4F9843DC9F89664); path = "AgentInterfaceUITests"; sourceTree = "<group>";};
+E60C6626675AB771279B3D62 = {isa = PBXGroup; children = (F0086F30C4C2CB095CBFEC92, 94E1A506610292815C52C7A4, C1938A43CF31C5A19D62AC85, 3B54DC34B4F9843DC9F89664); path = "AgentInterfaceUITests"; sourceTree = "<group>";};
 2A697AD6D0F1040795701DD5 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = "AgentInterfaceUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR;};
-62864827DCF06138C8B1E430 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F5786952B9DF214AB6A85859, B10E24BCD6A6E1D475C333B6, 9C338A0B9D82DDCA29219914); runOnlyForDeploymentPostprocessing = 0;};
+62864827DCF06138C8B1E430 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F5786952B9DF214AB6A85859, B10E24BCD6A6E1D475C333B6, A112EAE4CE3FD8B299CA087D, 9C338A0B9D82DDCA29219914); runOnlyForDeploymentPostprocessing = 0;};
 39905F23C8861B0912A5FC23 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
 EF065EA111F1C46AAD3F33E2 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
 9EC78AED3AE9F3D637FDC2D4 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = "dev.agentinterface.ios.AgentInterfaceUITests"; SDKROOT = "iphoneos"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; IPHONEOS_DEPLOYMENT_TARGET = "17.0"; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_VERSION = "5.0"; CODE_SIGN_STYLE = "Automatic"; ENABLE_USER_SCRIPT_SANDBOXING = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; GENERATE_INFOPLIST_FILE = "YES"; TEST_TARGET_NAME = "AgentInterface"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; ENABLE_TESTABILITY = "YES"; ONLY_ACTIVE_ARCH = "YES";}; name = Debug;};

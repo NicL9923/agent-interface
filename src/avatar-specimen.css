@@ -155,3 +155,28 @@ input[type="file"] {
     scroll-behavior: auto;
   }
 }
+.spec-matrix {
+  display: grid;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+.spec-matrix > div {
+  display: grid;
+  grid-template-columns: 80px repeat(9, minmax(76px, 1fr));
+  align-items: center;
+  gap: 6px;
+}
+.spec-matrix [role="columnheader"] {
+  font-size: 11px;
+  text-align: center;
+  opacity: 0.7;
+}
+.spec-matrix [role="rowheader"] {
+  font-size: 13px;
+}
+.spec-matrix [role="cell"] {
+  display: grid;
+  place-items: center;
+  padding: 10px 0;
+}

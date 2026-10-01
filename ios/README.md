@@ -47,7 +47,7 @@ xcodebuild -project ios/AgentInterface.xcodeproj \
 ```
 
 `AgentInterfaceTests` covers API contracts, draft/admission recovery, identity
-changes, offline sign-out, Markdown, avatar geometry, and notification routing.
+changes, offline sign-out, Markdown, avatar geometry and motion, and notification routing.
 `AgentInterfaceUITests` exercises native controls with an explicit Debug-only
 transport fixture. These tests establish client behavior; they do not establish
 Hermes execution or delivery from APNs. Release builds omit the fixture code.

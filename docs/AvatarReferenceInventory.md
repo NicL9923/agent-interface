@@ -39,14 +39,19 @@ Tour dwell durations were verified in the article implementation. They are demo 
 
 | State | Demo duration | Observed motion and transitions | Specimen treatment |
 | --- | --- | --- | --- |
-| Idle | 4200 ms | Calm body; slight turn/tilt, gaze and blink. Upright rounded eyes. | Very small body drift and blink, no busy indication. |
-| Working | 4600 ms | Body rotates in depth; eyes track across the curved face and vanish on the back. Small rhythmic effort motion; occasional spins produce colored trail strokes. | Horizontal facial orbit with cosine compression and back-face occlusion, rhythmic effort motion, colored orbital strokes. |
-| Waiting | 4200 ms | Relaxed horizontal eyes, slower/drooped pose. Transition retains residual trails while settling. | Flattened lids, relaxed pose. |
-| Blocked | 4200 ms | Body shrinks/morphs into an exclamation mark with separate circular dot. A small attention emphasis. | Body-to-exclamation cross-morph; stable attention symbol. |
-| Thinking | 4600 ms | Character morphs into three small animated dots. Their size/opacity changes in sequence. | Body-to-dots cross-morph specific to this state. |
-| Done | 4200 ms | Wild spin with multiple colored trails, expressive eyes; celebratory movement. | Brief multi-axis eye spin/orbital trails then calm completed character with check. |
+| Idle | 4200 ms | Calm body; slight turn/tilt, gaze and blink. Upright rounded eyes. | Breathing squash, glances that turn the face slightly, and occasional double blinks. No busy indication. |
+| Working | 4600 ms | Body rotates in depth; eyes track across the curved face and vanish on the back. Small rhythmic effort motion; occasional spins produce colored trail strokes. | A 3.8 s cycle: the face scans side to side with small effort hops, then one full spin. Each eye is projected separately onto a sphere, so it compresses and disappears on the back. Trails appear only during the spin and pass behind and in front of the body. |
+| Waiting | 4200 ms | Relaxed horizontal eyes, slower/drooped pose. Transition retains residual trails while settling. | Lidded eyes widen into horizontal shapes, slow breathing and a slight sag. Residual trails keep sweeping for 600 ms after any state change. |
+| Blocked | 4200 ms | Body shrinks/morphs into an exclamation mark with separate circular dot. A small attention emphasis. | The body shrinks and narrows while the exclamation grows from its center, then wiggles briefly every 2.6 s. |
+| Thinking | 4600 ms | Character morphs into three small animated dots. Their size/opacity changes in sequence. | The body shrinks into three dots that spread from its center, then rise and brighten in sequence. |
+| Done | 4200 ms | Wild spin with multiple colored trails, expressive eyes; celebratory movement. | A 1.8 s celebration of two spins, two hops, a damped roll and wrapped trails. The face then settles into closed happy eyes with a check badge. |
 
 The article's thinking morph is intentionally distinct from applying a generic dot loader to all activity. The source combines springs, expression changes, shape interpolation, depth geometry and trails. Our implementation recreates the observable state language using simpler independent SVG geometry. It does not copy the proprietary motion engine and is not claimed to be pixel-identical. Working needs review in motion, not only a screenshot, because a rear-face frame legitimately has no visible eyes.
+
+Every state change also gets a short damped scale "boop". Expressions such as
+eye openness, tilt, happy eyes and mascot mouth curve ease over about 90 ms
+instead of snapping. The motion model is a pure module,
+`src/components/avatar-motion.ts`, which the native client mirrors and tests cover.
 
 ## Additional backend states
 
@@ -54,9 +59,9 @@ Disconnection, failure and interruption are app requirements not shown as lifecy
 
 ## Three modes and reduced motion
 
-1. Geometric: controlled silhouette, color, eyes and accessories. These avatars carry state through expression/morph/motion, alongside an explicit status label.
-2. Mascot: bounded original sprout/fox/bear family with soft outlines, eyes, muzzle and accessories. This takes Muse's personal companion direction while retaining a single animatable rig. An arbitrary generated character is not automatically animated.
-3. Portrait: generated or uploaded static image. It requires a separate persistent state label/indicator. Upload and generation need real application storage and Hermes capabilities; the specimen file picker only previews a local image.
+1. Geometric: controlled silhouette, color, eyes and accessories. These avatars carry state through expression/morph/motion, alongside an explicit status label. Each silhouette has its own face anchor, so a triangle or drop looks out from its wide base. Eye color switches to a dark ink on light custom colors.
+2. Mascot: bounded original sprout/fox/bear family with ears or leaves, a muzzle, glossy eyes with highlights, cheeks and a mouth that follows the expression. This takes Muse's personal companion direction while retaining a single animatable rig. Ears and face features turn with the head. An arbitrary generated character is not automatically animated.
+3. Portrait: generated or uploaded static image. It requires a separate persistent state label/indicator. A ring shows activity: a rotating arc while working, a rotating dashed ring while thinking, and a colored ring with a badge for the other non-idle states. Upload and generation need real application storage and Hermes capabilities; the specimen file picker only previews a local image.
 
 Reduced motion stops animation-frame loops and removes trails, rotation and drift. Stable eyes, the thinking dots, blocked exclamation and terminal-state badges preserve meaning. Backend state updates remain immediate. A reduced-motion setting must not hide completion, failure or pending attention.
 

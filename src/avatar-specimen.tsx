@@ -9,6 +9,21 @@ import {
 } from "./components/Avatar";
 import type { ActivityState, Avatar as AvatarConfig } from "./shared/types";
 import "./avatar-specimen.css";
+const portrait =
+  "data:image/svg+xml," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#d9c7a3"/><circle cx="40" cy="31" r="15" fill="#6b4f3a"/><path d="M12 80c4-20 16-29 28-29s24 9 28 29Z" fill="#3f6b57"/></svg>',
+  );
+const matrix: [string, AvatarConfig][] = [
+  ["Blob", defaultAvatar],
+  ["Triangle", { ...defaultAvatar, shape: "triangle", color: "#FF309B", eyes: "visor" }],
+  ["Drop", { ...defaultAvatar, shape: "drop", color: "#97683D", accessory: "hat" }],
+  ["Hex", { ...defaultAvatar, shape: "hex", color: "#9159FE", accessory: "glasses" }],
+  ["Bear", { mode: "mascot", family: "bear", color: "#FF9800", eyes: "round", accessory: "none" }],
+  ["Fox", { mode: "mascot", family: "fox", color: "#FF6700", eyes: "oval", accessory: "none" }],
+  ["Sprout", { mode: "mascot", family: "sprout", color: "#00BCA6", eyes: "oval", accessory: "hat" }],
+  ["Portrait", { mode: "portrait", src: portrait, origin: "uploaded" }],
+];
 function Specimen() {
   const [state, setState] = useState<ActivityState>("idle");
   const [avatar, setAvatar] = useState<AvatarConfig>(defaultAvatar);
@@ -215,6 +230,31 @@ function Specimen() {
             }}
           />
         </label>
+      </section>
+      <section>
+        <h2>State matrix</h2>
+        <p>
+          Every mode in every state. Thinking and blocked morph into symbols;
+          portraits use a ring and badge instead of a face.
+        </p>
+        <div className="spec-matrix" role="table" aria-label="Avatar state matrix">
+          <div role="row">
+            <span role="columnheader" />
+            {avatarStates.map((s) => (
+              <span role="columnheader" key={s}>{stateLabels[s]}</span>
+            ))}
+          </div>
+          {matrix.map(([label, config]) => (
+            <div role="row" key={label}>
+              <span role="rowheader">{label}</span>
+              {avatarStates.map((s) => (
+                <span role="cell" key={s}>
+                  <Avatar avatar={config} state={s} size={64} reducedMotion={reduce} name={label} />
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
       </section>
       <section>
         <h2>All states at sidebar size</h2>

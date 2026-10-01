@@ -3,6 +3,7 @@ import { api, ApiError, write } from "../client-api";
 import type { Bot } from "../shared/types";
 import type { UpgradePhase, UpgradeRevision, UpgradeStatus, UpgradeControlAction } from "../shared/upgrades";
 import "./hermes-upgrade.css";
+import { Icon } from "./Icon";
 
 const runningPhases: UpgradePhase[] = ["checking", "qualifying", "installing", "verifying", "recovering"];
 const titles: Record<UpgradePhase, string> = {
@@ -157,10 +158,10 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
     onCancel={onClose} onClose={onClose}>
     <header className="upgrade-header">
       <p className="eyebrow">Hermes updates</p>
-      <button className="icon-button" aria-label="Close Hermes updates" onClick={onClose}>×</button>
+      <button className="icon-button" aria-label="Close Hermes updates" onClick={onClose}><Icon name="close" /></button>
     </header>
     <div className={`upgrade-mark ${active || submitting || uncertain ? "is-working" : ""} ${failed ? "needs-attention" : ""}`} aria-hidden="true">
-      {status?.phase === "succeeded" ? "✓" : status?.phase === "rolled_back" ? "↶" : "↗"}
+      <Icon size={28} name={status?.phase === "succeeded" ? "check" : status?.phase === "rolled_back" ? "undo" : "upgrade"} />
     </div>
     <h2 id="hermes-upgrade-title">{status ? titles[status.phase] : "A little care for Hermes"}</h2>
     <p className="upgrade-description" role="status">

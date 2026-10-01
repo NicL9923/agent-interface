@@ -11,7 +11,9 @@ import type {
 } from "./shared/types";
 import { api, ApiError, write } from "./client-api";
 import { IntegrationList } from "./components/IntegrationsPanel";
-import { Avatar, avatarColors, defaultAvatar } from "./components/Avatar";
+import { Icon } from "./components/Icon";
+import { defaultAvatar } from "./components/Avatar";
+import { AvatarEditor } from "./components/AvatarEditor";
 export function BotSettings({
   bot,
   bootstrap,
@@ -175,7 +177,7 @@ export function BotSettings({
           aria-label="Close assistant settings"
           onClick={onClose}
         >
-          ×
+          <Icon name="close" />
         </button>
       </header>
       <nav className="settings-tabs" aria-label="Settings sections">
@@ -404,231 +406,75 @@ export function BotSettings({
         )}
         {tab === "avatar" && (
           <>
-            <div className="avatar-settings-preview">
-              <Avatar
-                avatar={avatar}
-                state="idle"
-                size={115}
-                name={existing?.name}
-              />
-            </div>
-            <label>
-              Avatar mode
-              <select
-                value={avatar.mode}
-                onChange={(e) =>
-                  setAvatar(
-                    e.target.value === "geometric"
-                      ? defaultAvatar
-                      : e.target.value === "mascot"
-                        ? {
-                            mode: "mascot",
-                            family: "fox",
-                            color: "#FF9800",
-                            eyes: "oval",
-                            accessory: "none",
-                          }
-                        : { mode: "portrait", src: "", origin: "uploaded" },
-                  )
-                }
-              >
-                <option value="geometric">Geometric</option>
-                <option value="mascot">Animated mascot</option>
-                <option value="portrait">Static portrait</option>
-              </select>
-            </label>
-            {avatar.mode === "geometric" && (
-              <label>
-                Shape
-                <select
-                  value={avatar.shape}
-                  onChange={(e) =>
-                    setAvatar({
-                      ...avatar,
-                      shape: e.target.value as typeof avatar.shape,
-                    })
-                  }
-                >
-                  {[
-                    "blob",
-                    "pebble",
-                    "squircle",
-                    "capsule",
-                    "triangle",
-                    "hex",
-                    "cloud",
-                    "drop",
-                    "circle",
-                  ].map((shape) => (
-                    <option key={shape}>{shape}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {avatar.mode === "mascot" && (
-              <label>
-                Mascot family
-                <select
-                  value={avatar.family}
-                  onChange={(e) =>
-                    setAvatar({
-                      ...avatar,
-                      family: e.target.value as typeof avatar.family,
-                    })
-                  }
-                >
-                  {["sprout", "fox", "bear"].map((family) => (
-                    <option key={family}>{family}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {avatar.mode !== "portrait" ? (
-              <>
-                <fieldset>
-                  <legend>Color</legend>
-                  <div className="palette">
-                    {avatarColors.map((color) => (
-                      <button
-                        key={color}
-                        className={avatar.color === color ? "selected" : ""}
-                        style={{ background: color }}
-                        aria-label={`Color ${color}`}
-                        aria-pressed={avatar.color === color}
-                        onClick={() => setAvatar({ ...avatar, color })}
-                      />
-                    ))}
-                  </div>
+            <AvatarEditor
+              avatar={avatar}
+              onChange={setAvatar}
+              name={existing?.name}
+              portraitControls={avatar.mode === "portrait" && (
+                <>
+                  <p className="muted">
+                    Portraits stay still. Activity appears in a separate state
+                    indicator.
+                  </p>
                   <label>
-                    Custom color
+                    Upload portrait
                     <input
-                      type="color"
-                      value={avatar.color}
-                      onChange={(e) =>
-                        setAvatar({ ...avatar, color: e.target.value })
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={
+                        !existing ||
+                        busy ||
+                        !bootstrap.capabilities.uploads.supported
                       }
+                      onChange={(e) => void uploadPortrait(e.target.files?.[0])}
                     />
                   </label>
-                </fieldset>
-                <div className="form-row">
+                  <p className="muted">PNG, JPEG, or WebP, up to 2 MB.</p>
+                  {unavailable("uploads")}
                   <label>
-                    Eyes
-                    <select
-                      value={avatar.eyes}
-                      onChange={(e) =>
-                        setAvatar({
-                          ...avatar,
-                          eyes: e.target.value as typeof avatar.eyes,
-                        })
-                      }
-                    >
-                      {["oval", "round", "visor", "spark"].map((eyes) => (
-                        <option key={eyes}>{eyes}</option>
-                      ))}
-                    </select>
+                    Generate a portrait
+                    <textarea
+                      rows={3}
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      placeholder="Describe the portrait you want…"
+                    />
                   </label>
-                  <label>
-                    Accessory
-                    <select
-                      value={avatar.accessory}
-                      onChange={(e) =>
-                        setAvatar({
-                          ...avatar,
-                          accessory: e.target.value as typeof avatar.accessory,
-                        })
-                      }
-                    >
-                      {["none", "hat", "glasses"].map((accessory) => (
-                        <option key={accessory}>{accessory}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {(["eyeWidth", "eyeHeight", "eyeSpacing"] as const).map(
-                  (key, i) => (
-                    <label key={key}>
-                      {["Eye width", "Eye height", "Eye spacing"][i]}
-                      <input
-                        type="range"
-                        min="0.6"
-                        max="1.5"
-                        step="0.05"
-                        value={avatar[key] ?? 1}
-                        onChange={(e) =>
-                          setAvatar({
-                            ...avatar,
-                            [key]: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                  ),
-                )}
-              </>
-            ) : (
-              <>
-                <p className="muted">
-                  Portraits stay still. Activity appears in a separate state
-                  indicator.
-                </p>
-                <label>
-                  Upload portrait
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                  <button
                     disabled={
                       !existing ||
                       busy ||
-                      !bootstrap.capabilities.uploads.supported
+                      !prompt.trim() ||
+                      !bootstrap.capabilities.portraitGeneration.supported
                     }
-                    onChange={(e) => void uploadPortrait(e.target.files?.[0])}
-                  />
-                </label>
-                <p className="muted">PNG, JPEG, or WebP, up to 2 MB.</p>
-                {unavailable("uploads")}
-                <label>
-                  Generate a portrait
-                  <textarea
-                    rows={3}
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="Describe the portrait you want…"
-                  />
-                </label>
-                <button
-                  disabled={
-                    !existing ||
-                    busy ||
-                    !prompt.trim() ||
-                    !bootstrap.capabilities.portraitGeneration.supported
-                  }
-                  onClick={() =>
-                    void run(async () => {
-                      const result = await write<FileRef>(
-                        `/bots/${encodeURIComponent(existing!.id)}/portrait`,
-                        { prompt },
-                      );
-                      setAvatar({
-                        mode: "portrait",
-                        src:
-                          result.url ||
-                          `/api/files/${encodeURIComponent(result.id)}`,
-                        origin: "generated",
-                      });
-                    }, "Portrait generated. Save avatar to apply it.")
-                  }
-                >
-                  Generate portrait
-                </button>
-                {unavailable("portraitGeneration")}
-              </>
-            )}
+                    onClick={() =>
+                      void run(async () => {
+                        const result = await write<FileRef>(
+                          `/bots/${encodeURIComponent(existing!.id)}/portrait`,
+                          { prompt },
+                        );
+                        setAvatar({
+                          mode: "portrait",
+                          src:
+                            result.url ||
+                            `/api/files/${encodeURIComponent(result.id)}`,
+                          origin: "generated",
+                        });
+                      }, "Portrait generated. Save avatar to apply it.")
+                    }
+                  >
+                    Generate portrait
+                  </button>
+                  {unavailable("portraitGeneration")}
+                </>
+              )}
+            />
             {!existing && (
               <p className="muted">
                 Create the assistant before saving an avatar.
               </p>
             )}
-            <div className="actions">
+            <div className="actions sticky-actions">
               <button
                 className="primary"
                 disabled={

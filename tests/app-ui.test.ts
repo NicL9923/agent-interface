@@ -92,7 +92,7 @@ describe("conversation state", () => {
     const original = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/integrations") ? { profile: "shared", canManage: true, connections: [] } as T : original(path) as Promise<T>);
     await render();
-    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "↗ Integrations")!.click());
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Integrations")!.click());
     await advance(30_000);
     expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
     expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
