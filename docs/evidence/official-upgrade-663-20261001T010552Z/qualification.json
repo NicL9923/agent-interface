@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "revision": "663362680b6ffa4fbffeb58f6682564239a1953b",
+  "trackedPatchSha256": "2d92905c98fd12e5a2e3035c5a1ea088fca0accba78560dcb7963aaf3335e425",
+  "integrationDigest": "8099c54b0edcee869cdb947f3d56ef49a539f502167b50354a2f845a25b1b406",
+  "qualifiedAt": "2026-10-01T00:58:54.682847+00:00",
+  "checks": {
+    "realIntegration": true,
+    "hostRegressions": true
+  }
+}

@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,7 @@ elif action=='backup':
     target=pathlib.Path(os.environ['HERMES_UPGRADE_BACKUP_DIR']); target.mkdir()
     revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD']).decode().strip()
     (target/'revision').write_text(revision)
+    (target/'repair.patch').write_bytes(subprocess.check_output(['git','-C',str(source),'diff','HEAD','--binary']))
 elif action=='install':
     assert (stage/'gate').exists() and (stage/'backup/revision').exists()
     subprocess.run(['git','-C',str(source),'reset','--hard',os.environ['HERMES_UPGRADE_CANDIDATE']],check=True)
@@ -44,7 +46,7 @@ elif action=='verify':
     if (stage/'fail-rollback-verify').exists() and os.environ.get('HERMES_UPGRADE_ROLLBACK')=='1': raise SystemExit(1)
 elif action=='rollback':
     subprocess.run(['git','-C',str(source),'reset','--hard',(stage/'backup/revision').read_text()],check=True)
-    repair=subprocess.check_output(['git','-C',str(stage/'source'),'diff','HEAD','--binary'])
+    repair=(stage/'backup/repair.patch').read_bytes()
     if repair: subprocess.run(['git','-C',str(source),'apply','--index','-'],input=repair,check=True)
 elif action=='finish':
     (stage/'gate').unlink(missing_ok=True)
@@ -96,9 +98,13 @@ class QualificationWorkerTests(unittest.TestCase):
             "hooks":{**{action:[sys.executable,str(hook),action] for action in ['quiescence','backup','install','verify','rollback','finish']},
                 "regressions":[[sys.executable,str(hook),'regressions']]}})
         self.original_run = worker.Worker.run
+        self.fixture_upstream = self.source
         def run(instance, argv, **kwargs):
-            # Keep fetch deterministic and offline. All remaining Git and hook commands run.
+            # Only replace the fixed network URL with the local Git fixture.
+            # The staging fetch, object transfer and checkout all run for real.
             if argv[:4] == ["git", "-C", str(self.source), "fetch"]: return
+            if argv[3:6] == ["remote", "add", "origin"] and argv[-1] == worker.OFFICIAL_UPSTREAM:
+                argv = [*argv[:-1], self.fixture_upstream.as_uri()]
             return self.original_run(instance, argv, **kwargs)
         self.interception = patch.object(worker.Worker, "run", run); self.interception.start()
 
@@ -120,6 +126,230 @@ class QualificationWorkerTests(unittest.TestCase):
             with self.assertRaises(Exception): instance.main()
         else: instance.main()
         return json.loads((self.state / "requests" / (request+'.json')).read_text())
+
+    def offset_repair(self, artifact=True):
+        oauth = self.source / 'oauth.py'
+        oauth.write_text(''.join('context-%02d\n' % line for line in range(30)).replace('context-15', 'unrepaired-shared-source'))
+        (self.source / 'provider.bin').write_bytes(b'\0original provider')
+        (self.source / 'repair-tool.py').write_text('# native repair helper\n')
+        self.git('add', '.'); self.git('commit', '-m', 'repair baseline')
+        self.old = self.git('rev-parse', 'HEAD').decode().strip()
+        oauth.write_text('upstream insertion\n' * 6 + oauth.read_text())
+        self.git('add', '.'); self.git('commit', '-m', 'upstream moves repair hunk')
+        self.new = self.git('rev-parse', 'HEAD').decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        self.git('checkout', '--detach', self.old)
+        oauth.write_text(oauth.read_text().replace('unrepaired-shared-source', 'approved-shared-source'))
+        (self.source / 'provider.bin').write_bytes(b'\0approved provider')
+        (self.source / 'repair-tool.py').chmod(0o755)
+        (self.source / 'shared_oauth_regression.py').write_text('# exact approved added regression\n')
+        self.git('add', '.')
+        approved = self.git('diff', 'HEAD', '--binary')
+        path = self.root / 'approved-repair.patch'; path.write_bytes(approved); path.chmod(0o600)
+        config = json.loads(self.config.read_text()); config['requiredPatchSha256'] = worker.sha(approved)
+        if artifact: config['approvedPatchFile'] = str(path)
+        worker.atomic(self.config, config)
+        # Real Git verifies that the qualification command receives the staged
+        # candidate identity, rather than the current checkout's original diff.
+        (self.app / 'scripts/spike/run.py').write_text('''import hashlib, subprocess, sys
+source = sys.argv[sys.argv.index('--source') + 1]
+expected = sys.argv[sys.argv.index('--source-patch-sha256') + 1]
+actual = subprocess.check_output(['git','-C',source,'diff','HEAD','--binary'])
+assert hashlib.sha256(actual).hexdigest() == expected
+print('fixture real candidate patch identity passed')
+''')
+        return approved, path
+
+    def test_approved_artifact_preserves_repair_across_changed_diff_headers_and_next_upgrade(self):
+        approved, path = self.offset_repair()
+        stage = self.check(); qualification = self.status()['qualification']
+        candidate_patch = worker.git(stage / 'source', 'diff', 'HEAD', '--binary')
+        self.assertNotEqual(candidate_patch, approved)
+        self.assertEqual(qualification['currentPatchSha256'], worker.sha(approved))
+        self.assertEqual(qualification['candidatePatchSha256'], worker.sha(candidate_patch))
+        self.assertEqual(json.loads((stage / 'qualification.json').read_text())['trackedPatchSha256'], worker.sha(candidate_patch))
+        self.assertEqual((stage / 'preserved.patch').read_bytes(), approved)
+        self.install()
+        self.assertEqual(self.status()['phase'], 'succeeded')
+        self.assertEqual(self.git('diff', 'HEAD', '--binary'), candidate_patch)
+        upstream = self.root / 'second-upstream'
+        subprocess.run(['git','clone','--no-hardlinks',str(self.source),str(upstream)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        oauth = upstream / 'oauth.py'; oauth.write_text('second upstream insertion\n' + oauth.read_text())
+        for argv in (['config','user.email','fixture@example.invalid'], ['config','user.name','Fixture'], ['add','.'], ['commit','-m','next upstream hunk move']):
+            subprocess.run(['git','-C',str(upstream),*argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git','-C',str(upstream),'rev-parse','HEAD']).decode().strip()
+        self.git('fetch', upstream.as_uri(), self.new)
+        self.git('update-ref', 'refs/remotes/origin/main', self.new); self.fixture_upstream = upstream
+        stage = self.check(); qualification = self.status()['qualification']
+        self.assertEqual(qualification['currentPatchSha256'], worker.sha(candidate_patch))
+        self.assertNotEqual(qualification['candidatePatchSha256'], worker.sha(candidate_patch))
+        self.assertEqual((stage / 'preserved.patch').read_bytes(), approved)
+        self.assertEqual(path.read_bytes(), approved)
+        self.install()
+        self.assertEqual(self.status()['phase'], 'succeeded')
+        self.assertEqual((self.source / 'provider.bin').read_bytes(), b'\0approved provider')
+        self.assertTrue((self.source / 'repair-tool.py').stat().st_mode & 0o111)
+        self.assertEqual((self.source / 'shared_oauth_regression.py').read_text(), '# exact approved added regression\n')
+
+    def test_candidate_hash_rollback_restores_the_distinct_current_repair_hash(self):
+        approved, _ = self.offset_repair()
+        stage = self.check(); (stage / 'fail-verify').touch()
+        self.assertNotEqual(self.status()['qualification']['candidatePatchSha256'], worker.sha(approved))
+        self.install()
+        self.assertEqual(self.status()['phase'], 'rolled_back')
+        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+        self.assertEqual(self.git('diff', 'HEAD', '--binary'), approved)
+
+    def test_approved_tree_proof_rejects_content_mode_binary_and_added_file_drift_without_git_mutation(self):
+        approved, _ = self.offset_repair()
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+        instance = worker.Worker(self.config, self.state, 'check', operation)
+        def metadata():
+            return (self.git('for-each-ref'), (self.source / '.git/index').read_bytes(),
+                (self.source / '.git/config').read_bytes(),
+                {str(path.relative_to(self.source)): (path.read_bytes(), path.stat().st_mtime_ns) for path in (self.source / '.git/objects').rglob('*') if path.is_file()})
+        before = metadata()
+        self.assertEqual(instance.approved_repair(self.old, worker.sha(approved), approved), approved)
+        self.assertEqual(metadata(), before)
+        files = ('oauth.py', 'repair-tool.py', 'provider.bin', 'shared_oauth_regression.py')
+        for name in files:
+            path = self.source / name; original = path.read_bytes(); mode = path.stat().st_mode
+            with self.subTest(path=name):
+                if name == 'repair-tool.py': path.chmod(0o644)
+                elif name == 'shared_oauth_regression.py': path.unlink()
+                else: path.write_bytes(original + b'unapproved byte')
+                actual = self.git('diff', 'HEAD', '--binary'); before = metadata()
+                with self.assertRaises(worker.UnsupportedRepair): instance.approved_repair(self.old, worker.sha(actual), actual)
+                self.assertEqual(metadata(), before)
+            path.write_bytes(original); path.chmod(mode)
+
+    def test_missing_artifact_mode_remains_strict_when_upstream_moves_patch_headers(self):
+        self.offset_repair(artifact=False)
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
+        self.assertEqual(self.status()['phase'], 'blocked')
+        self.assertEqual(self.status()['error'], 'repair_requires_review')
+
+    def test_candidate_repair_conflict_is_blocked_with_clear_reason_and_current_source_unchanged(self):
+        approved, _ = self.offset_repair()
+        conflicting = self.root / 'conflicting-upstream'
+        self.git('worktree', 'add', '--detach', str(conflicting), self.new)
+        oauth = conflicting / 'oauth.py'
+        oauth.write_text(oauth.read_text().replace('unrepaired-shared-source', 'incompatible-upstream-source'))
+        subprocess.run(['git','-C',str(conflicting),'add','oauth.py'], check=True)
+        subprocess.run(['git','-C',str(conflicting),'commit','-m','incompatible upstream change'], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git','-C',str(conflicting),'rev-parse','HEAD']).decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
+        self.assertEqual(self.status()['phase'], 'blocked')
+        self.assertEqual(self.status()['error'], 'repair_requires_review')
+        self.assertIn('cannot be applied', self.status()['message'])
+        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+        self.assertEqual(self.git('diff', 'HEAD', '--binary'), approved)
+        self.assertNotIn('qualification', self.status())
+
+    def test_approved_artifact_changes_invalidate_qualification_before_host_hooks(self):
+        _, path = self.offset_repair()
+        stage = self.check(); path.write_bytes(path.read_bytes() + b'changed approved artifact')
+        self.install(expect_error=True)
+        self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
+        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+
+    def test_approved_artifact_rejects_wrong_original_hash_symlink_and_relative_path(self):
+        _, path = self.offset_repair()
+        original = path.read_bytes()
+        for invalid in ('hash', 'symlink', 'relative'):
+            with self.subTest(invalid=invalid):
+                config = json.loads(self.config.read_text())
+                if invalid == 'hash': path.write_bytes(original + b'wrong original bytes')
+                elif invalid == 'symlink':
+                    target = self.root / 'actual-repair.patch'; target.write_bytes(original); target.chmod(0o600)
+                    path.unlink(); path.symlink_to(target)
+                else: config['approvedPatchFile'] = 'approved-repair.patch'; worker.atomic(self.config, config)
+                operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+                with self.assertRaises(RuntimeError): worker.Worker(self.config, self.state, 'check', operation).main()
+                self.assertNotIn('qualification', self.status())
+                if path.is_symlink(): path.unlink()
+                path.write_bytes(original); path.chmod(0o600)
+
+    def test_staging_is_complete_and_independent_of_installed_partial_clone(self):
+        self.git('tag', '-a', 'v0.1.0', self.old, '-m', 'installed release identity')
+        upstream = self.root / 'fixture-upstream'
+        self.source.rename(upstream)
+        self.fixture_upstream = upstream
+        for key in ('uploadpack.allowFilter', 'uploadpack.allowAnySHA1InWant'):
+            subprocess.run(['git', '-C', str(upstream), 'config', key, 'true'], check=True)
+        subprocess.run(['git', 'clone', '--filter=tree:0', '--no-checkout', upstream.as_uri(), str(self.source)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.git('checkout', '--detach', self.old)
+        # Publish the candidate AFTER the current checkout materialized. Its
+        # new tree cannot have arrived incidentally with the old checkout.
+        (upstream / 'candidate-only.txt').write_text('new candidate tree')
+        subprocess.run(['git', '-C', str(upstream), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(upstream), 'commit', '-m', 'candidate after partial clone'],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git', '-C', str(upstream), 'rev-parse', 'HEAD']).decode().strip()
+        subprocess.run(['git', '-C', str(upstream), 'tag', 'v9.0.0', self.new], check=True)
+        self.git('fetch', '--no-tags', '--filter=tree:0', 'origin', self.new)
+        tree = self.git('cat-file', '-p', self.new).decode().splitlines()[0].split()[1]
+        offline = dict(os.environ, GIT_NO_LAZY_FETCH='1')
+        missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(missing.returncode, 0, 'The fixture must lack the candidate tree')
+        self.assertEqual(self.git('config', '--get', 'remote.origin.promisor').decode().strip(), 'true')
+        self.git('remote', 'set-url', 'origin', worker.OFFICIAL_UPSTREAM)
+        operation = str(uuid.uuid4())
+        worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        instance = worker.Worker(self.config, self.state, 'check', operation)
+        target = self.root / 'independent-stage'
+        with (self.root / 'staging.log').open('w') as output:
+            instance.log = output
+            instance.stage_source(target, self.new)
+        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+        self.assertEqual(worker.git_tag_refs(target), worker.git_tag_refs(self.source))
+        self.assertEqual(worker.git(target, 'tag', '--merged', 'HEAD', '--list', 'v[0-9]*').decode().strip(), 'v0.1.0')
+        self.assertEqual(worker.git(target, 'rev-list', '--count', 'v0.1.0..HEAD'), self.git('rev-list', '--count', 'v0.1.0..' + self.new))
+        self.assertFalse((target / '.git/shallow').exists())
+        still_missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(still_missing.returncode, 0, 'Staging must not hydrate installed Git objects')
+        self.assertFalse((target / '.git/objects/info/alternates').exists())
+        self.assertFalse(list((target / '.git/objects/pack').glob('*.promisor')))
+        shutil.rmtree(self.source)
+        shutil.rmtree(upstream)
+        subprocess.run(['git', '-C', str(target), 'fsck', '--full'], env=offline, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(['git', '-C', str(target), 'reset', '--hard', self.new], env=offline, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual((target / 'candidate-only.txt').read_text(), 'new candidate tree')
+
+    def test_native_version_tag_changes_make_qualification_stale_before_host_hooks(self):
+        stage = self.check()
+        self.git('tag', 'v9.0.0', self.new)
+        self.install(expect_error=True)
+        self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
+        self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+
+    def test_staged_native_version_tag_changes_make_qualification_stale(self):
+        stage = self.check()
+        subprocess.run(['git', '-C', str(stage / 'source'), 'tag', 'v9.0.0'], check=True)
+        self.install(expect_error=True)
+        self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
+
+    def test_shallow_installed_history_requires_installer_repair_before_staging(self):
+        upstream = self.root / 'fixture-upstream'
+        self.source.rename(upstream)
+        subprocess.run(['git', 'clone', '--depth=1', upstream.as_uri(), str(self.source)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        operation = str(uuid.uuid4())
+        worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        instance = worker.Worker(self.config, self.state, 'check', operation)
+        target = self.root / 'blocked-stage'
+        with self.assertRaisesRegex(RuntimeError, 'complete version history'):
+            instance.stage_source(target, self.new)
+        self.assertFalse(target.exists())
 
     def test_qualifies_then_installs_exact_tree_with_durable_receipt(self):
         stage=self.check()

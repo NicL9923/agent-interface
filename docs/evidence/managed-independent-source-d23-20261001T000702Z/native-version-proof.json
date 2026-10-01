@@ -1,0 +1,19 @@
+{
+  "nativeCurrentVersionParity": true,
+  "installedAndStagedCurrent": {
+    "base_version": "0.21.5",
+    "derived_version": "0.21.5+4743.gd23cc6b.dirty",
+    "distance": 4743,
+    "commit": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+    "dirty": true,
+    "commit_date": 1790722193
+  },
+  "stagedCandidate": {
+    "base_version": "0.21.5",
+    "derived_version": "0.21.5+4977.g12e4d3e",
+    "distance": 4977,
+    "commit": "12e4d3e2dd5281adf289f70e5d6c7f33427d6982",
+    "dirty": false,
+    "commit_date": 1790808133
+  }
+}

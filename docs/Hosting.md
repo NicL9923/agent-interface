@@ -68,19 +68,41 @@ These copies protect against an application mistake. They are on the same host,
 so they do not establish disaster recovery from loss of that host. Existing Hermes
 backups remain separate.
 
-## Hermes upgrade follow-up
+## Hermes upgrades and activity
 
-PR #2 has been merged. The upgrade implementation adds private host configuration,
-an explicit administrator allowlist, a staged qualification receipt and persistent
-maintenance guards. These controls are opt-in. This follow-up has not been deployed
-to the household installation, and it has not run a production Hermes upgrade.
+PR #3 is merged and deployed. Web and iOS have an administrator update flow with
+separate qualification and installation actions. The working avatar animates
+during native activity; Advanced view shows the reasoning and tool details Hermes
+actually exposes.
 
-Enabling host upgrades requires the [Linux installer contract](HermesUpgradeLinux.md),
-including its original Google authentication verifier and private OAuth/plugin
-regressions. Verify the guarded native gateway under its existing supervisor
-before enabling the update action. Keep the production source repair and both
-Discord connections intact. The local validation ledger records isolated
-execution separately from production acceptance.
+The household host has private upgrade configuration, an explicit administrator
+allowlist, original Google HTTP/fresh-WebSocket verification, and pinned private
+shared OAuth and Google-plugin regressions. Its supervised gateway loads the
+persistent maintenance guard. The installer verified the gate and both Discord
+connections before opening admission. Profile settings and the installed Hermes
+revision stayed unchanged. No production Hermes upgrade has been performed.
+
+Deployment exposed and repaired integration issues. The installer now uses
+the actual native `/api/ws` maintenance transport. Update staging fetches a
+complete independent checkout from official upstream, retaining the installed
+tag identities and native version metadata. The Linux hook prepares missing
+candidate objects locally before stopping services, so cutover does not depend
+on fetching source files while Hermes is offline.
+
+The host also keeps the original approved OAuth patch as an immutable private
+artifact. Qualification proves its exact result on the current tree and binds
+the candidate's resulting fingerprint separately. Upstream line shifts can then
+qualify without weakening the checks for changed repair code or extra local edits.
+
+The production Check for update action qualified official candidate
+`663362680b6ffa4fbffeb58f6682564239a1953b` in a disposable managed home. All
+source, repair, dependency, integration and private authentication checks passed.
+It is ready for the administrator's separate installation action; the running
+Hermes version remains d23.
+
+See the [Linux installer contract](HermesUpgradeLinux.md) for host configuration
+and recovery requirements. The [validation ledger](ValidationLedger.md) records
+isolated execution separately from production activation and update checks.
 
 ## Native distribution
 

@@ -11,6 +11,14 @@ extras into an isolated home. The installed native interpreter and dependency
 content must match that tested generation before services restart. The simpler
 worker mode supports only unchanged dependency inputs and refuses other targets.
 
+The candidate checkout has its own complete Git object store. The worker fetches
+the exact candidate SHA and the installed tag object identities from official
+Hermes upstream. It copies no object alternates or partial-clone settings from
+the live checkout. Full ancestry and the same tags preserve native version and
+plugin compatibility decisions. A shallow installed checkout requires installer
+repair before qualification. The qualification record binds these history and tag facts, so
+changing them requires a fresh check.
+
 ## Private configuration
 
 Keep both configuration files owned by the app/service user with mode `0600`.
@@ -144,6 +152,22 @@ script in worker `qualificationFiles`. Their exact bytes must remain unchanged
 between qualification and install. The worker also binds its configuration,
 platform helper, and directly referenced hook files.
 
+For an installation with an approved source repair, save the original
+`git diff HEAD --binary` bytes in an owner-only immutable file. Set worker
+`approvedPatchFile` to that absolute path and `requiredPatchSha256` to its SHA256.
+The worker proves that applying those exact bytes to the current upstream tree
+produces the installed tracked tree. Temporary indices and object stores leave
+the installed Git index, working files and objects alone. Extra local edits fail
+that proof.
+
+The candidate receives the same original patch bytes. Its resulting Git diff can
+have different line numbers and blob IDs after upstream edits; the qualification
+record binds that candidate fingerprint separately from the current fingerprint.
+The native receipt and installation use the candidate fingerprint. Rollback uses
+the original installed fingerprint. A configuration without `approvedPatchFile`
+keeps the stricter requirement that the current diff's raw SHA match the configured
+repair SHA.
+
 ## Cutover and recovery
 
 The quiescence hook takes the persistent native dashboard admission gate and
@@ -156,6 +180,11 @@ Other failures keep maintenance closed for installer review.
 
 After quiescence, the backup hook stops the gateway and dashboard and creates
 private cold archives of source, Git branch/configuration, and the shared home.
+Before stopping either service, the helper imports the qualified candidate's
+reachable Git objects from staging into the installed object store and proves
+they can be read without upstream access. This bounded private pack transfer
+changes no installed branches, tags, Git configuration, index, or working files.
+It avoids fetching missing objects during checkout while Hermes is offline.
 The install hook checks out the already-qualified SHA, applies the identical
 OAuth repair, including staged additions in Git's index. The worker holds and
 refreshes the native update lock from before quiescence through finish or verified

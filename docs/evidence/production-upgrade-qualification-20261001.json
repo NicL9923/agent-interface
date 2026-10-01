@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-01T01:02:43.665498+00:00",
+  "productionGoogleAuthentication": true,
+  "hermesConnected": true,
+  "canonicalBotsAvailable": true,
+  "upgradeAdminEnabled": true,
+  "phase": "ready",
+  "currentRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "currentPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "candidateRevision": "663362680b6ffa4fbffeb58f6682564239a1953b",
+  "candidatePatchSha256": "2d92905c98fd12e5a2e3035c5a1ea088fca0accba78560dcb7963aaf3335e425",
+  "approvedArtifactSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "integrationDigest": "8099c54b0edcee869cdb947f3d56ef49a539f502167b50354a2f845a25b1b406",
+  "qualificationChecks": {
+    "realIntegration": true,
+    "hostRegressions": true
+  },
+  "checks": [
+    {
+      "id": "source",
+      "status": "passed"
+    },
+    {
+      "id": "repair",
+      "status": "passed"
+    },
+    {
+      "id": "upstream",
+      "status": "passed"
+    },
+    {
+      "id": "staging",
+      "status": "passed"
+    },
+    {
+      "id": "dependencies",
+      "status": "passed"
+    },
+    {
+      "id": "integration",
+      "status": "passed"
+    },
+    {
+      "id": "regressions",
+      "status": "passed"
+    }
+  ],
+  "runtimeMode": "managed",
+  "installAvailable": true,
+  "sourceUpgradePerformed": false,
+  "liveSourceUnchanged": true
+}

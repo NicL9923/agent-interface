@@ -1,0 +1,33 @@
+{
+  "webBuild": "404c0d099b21f1bb",
+  "hermesRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "hermesVersionUnchanged": true,
+  "repairPreserved": true,
+  "profileSettingsPreserved": true,
+  "originalGoogleHttpAndFreshWebsocket": true,
+  "gatewayGuardVerified": true,
+  "bothDiscordConnected": true,
+  "actualInstallerMaintenanceRpc": true,
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-01T00:53:52.603091+00:00",
+  "integrationDigest": "8099c54b0edcee869cdb947f3d56ef49a539f502167b50354a2f845a25b1b406",
+  "approvedRepairSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "qualifiedArchiveSha256": "a769bf7bdcb4b7f287cfdff69d51926c62046e50e5f9c8e4c98cf188c70f2178",
+  "deployedFileCount": 93,
+  "deployedManifestSha256": "d86c5bfdad3e279629851977dd0218f6f2e702a3f7c37b681f34da41ed7ea9be",
+  "allDeployedFilesMatchQualifiedArchive": true,
+  "maintenanceReleased": true,
+  "applicationBackupVerified": true,
+  "sourceUpgradePerformed": false,
+  "approvedRepairArtifactBound": true,
+  "services": {
+    "app": "active",
+    "dashboard": "active",
+    "gateway": "active",
+    "applicationBackupTimer": "active"
+  },
+  "networkServices": {
+    "httpsProxy": "active",
+    "vpn": "active"
+  }
+}

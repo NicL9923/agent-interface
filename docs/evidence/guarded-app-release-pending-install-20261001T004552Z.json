@@ -1,0 +1,12 @@
+{
+  "kind": "Exact guarded deployment AST, pending install persisted during app stop after preflight",
+  "deploymentToolSha256": "a82c6ad9a8f9016e703ae016c22c359bf8cd73897f5e9cda20416b0e7c937b6f",
+  "productionMutation": false,
+  "checks": {
+    "pendingInstallPreserved": true,
+    "nativeMaintenanceNotAcquired": true,
+    "nativeOwnersNotStopped": true,
+    "ambiguousDeploymentRequiresReview": true
+  },
+  "completedAt": "2026-10-01T00:45:52.191371+00:00"
+}

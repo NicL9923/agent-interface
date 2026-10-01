@@ -136,6 +136,71 @@ class PlatformTests(unittest.TestCase):
             self.assertFalse(self.platform.gate)
             self.assertFalse((self.home / ".drain_request.json").exists())
 
+    def test_partial_clone_candidate_materializes_before_stop_and_installs_without_upstream(self):
+        upstream = self.directory / "upstream"
+        subprocess.run(["git", "clone", "--no-hardlinks", str(self.source), str(upstream)],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for name in ("uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"):
+            subprocess.run(["git", "-C", str(upstream), "config", name, "true"], check=True)
+        partial = self.directory / "partial"
+        subprocess.run(["git", "clone", "--filter=tree:0", "--no-checkout", upstream.as_uri(), str(partial)],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "-C", str(partial), "checkout", "--detach", self.old],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "-C", str(upstream), "checkout", "--detach", self.candidate],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        (upstream / "candidate-only.txt").write_text("published after partial checkout")
+        for argv in (["config", "user.email", "fixture@example.test"], ["config", "user.name", "Fixture"],
+                ["add", "candidate-only.txt"], ["commit", "-m", "new candidate tree"]):
+            subprocess.run(["git", "-C", str(upstream), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.candidate = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"]).decode().strip()
+        subprocess.run(["git", "-C", str(self.target), "fetch", "--no-tags", upstream.as_uri(), self.candidate],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "-C", str(self.target), "checkout", "--detach", self.candidate],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.platform.candidate = self.candidate
+        self.platform.env["HERMES_UPGRADE_CANDIDATE"] = self.candidate
+        linux.atomic(self.stage / "qualification.json", {"revision": self.candidate, "trackedPatchSha256": self.platform.source_state(self.target)[1]})
+        shutil.rmtree(self.source / ".git")
+        shutil.move(str(partial / ".git"), self.source / ".git")
+        self.git("add", "repair.py", "staged-repair.py")
+        self.git("fetch", "--filter=tree:0", "origin", self.candidate)
+        offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+        tree = self.git("cat-file", "-p", self.candidate).splitlines()[0].split()[1]
+        missing = subprocess.run(["git", "-C", str(self.source), "cat-file", "-e", tree], env=offline,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(missing.returncode, 0, "The production fixture must lack the candidate tree")
+        self.assertEqual(self.git("config", "--get", "remote.origin.partialclonefilter").strip(), "tree:0")
+        self.platform.quiescence()
+        before = {name: (self.source / ".git" / name).read_bytes() if (self.source / ".git" / name).exists() else None
+            for name in ("config", "HEAD", "index", "shallow")}
+        refs = self.git("for-each-ref")
+        original_control = self.platform.control
+        def control(action):
+            if action == "stop":
+                subprocess.run(["git", "-C", str(self.source), "cat-file", "-e", tree], env=offline, check=True)
+                self.assertEqual(self.git("for-each-ref"), refs)
+                for name, data in before.items():
+                    self.assertEqual((self.source / ".git" / name).read_bytes() if (self.source / ".git" / name).exists() else None, data)
+                shutil.rmtree(upstream)
+            original_control(action)
+        self.platform.control = control
+        self.platform.backup()
+        self.platform.install(); self.platform.verify(); self.platform.finish()
+        self.assertEqual(self.platform.source_state(), self.platform.source_state(self.target))
+        self.assertEqual((self.source / "app.py").read_text(), "new runtime\n")
+        self.assertEqual(self.git("config", "--get", "remote.origin.promisor").strip(), "true")
+        self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
+
+    def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
+        self.platform.quiescence()
+        before = self.states.read_bytes()
+        shutil.rmtree(self.target / ".git/objects")
+        with self.assertRaises(subprocess.CalledProcessError): self.platform.backup()
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+        self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
+
     def test_rollback_restores_source_branch_and_runtime_but_keeps_refreshed_oauth(self):
         self.platform.quiescence(); self.platform.backup(); self.platform.install()
         (self.home / "auth.json").write_text("fresh-live-grant")
@@ -157,6 +222,39 @@ class PlatformTests(unittest.TestCase):
         (self.target / "uv.lock").write_text("new dependencies")
         with self.assertRaises(RuntimeError): self.platform.install()
         self.assertEqual(self.platform.source_state()[0], self.old)
+
+    def test_qualified_candidate_diff_can_differ_from_current_and_is_verified_exactly(self):
+        # A new upstream blob changes Git's diff fingerprint on its new base.
+        # The qualified candidate receipt binds that resulting tracked tree.
+        (self.target / "repair.py").write_text("upstream unrelated heading\nrepair old\n")
+        subprocess.run(["git", "-C", str(self.target), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "--only", "-m", "new upstream base", "--", "repair.py"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.candidate = self.platform.git(self.target, "rev-parse", "HEAD").strip()
+        self.platform.candidate = self.candidate
+        self.platform.env["HERMES_UPGRADE_CANDIDATE"] = self.candidate
+        (self.target / "repair.py").write_text("upstream unrelated heading\nrepair fixed\n")
+        self.platform.quiescence(); self.platform.backup()
+        target = self.platform.source_state(self.target)
+        self.assertNotEqual(target[1], self.platform.load()["baseline"]["source"][1])
+        linux.atomic(self.stage / "qualification.json", {"revision": self.candidate, "trackedPatchSha256": target[1]})
+        self.platform.install(); self.platform.verify()
+        self.assertEqual(tuple(self.platform.load()["verifiedSource"]), target)
+        self.platform.finish()
+        self.assertFalse(self.platform.gate)
+
+    def test_repair_changes_before_verification_or_release_keep_admission_closed(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        repair = self.source / "repair.py"
+        original = repair.read_bytes()
+        repair.write_text("unexpected repair edit before verification\n")
+        with self.assertRaisesRegex(RuntimeError, "Source repair"): self.platform.verify()
+        self.assertTrue(self.platform.gate)
+        repair.write_bytes(original)
+        self.platform.verify()
+        repair.write_text("unexpected repair edit after verification\n")
+        with self.assertRaisesRegex(RuntimeError, "verified live source repair"): self.platform.finish()
+        self.assertTrue(self.platform.gate)
+        self.assertTrue((self.home / ".drain_request.json").exists())
 
     def test_changed_source_patch_or_backup_archive_cannot_be_installed_or_restored(self):
         self.platform.quiescence(); self.platform.backup()
