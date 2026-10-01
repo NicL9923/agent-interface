@@ -109,6 +109,7 @@ def activate_readonly(source, home):
     site.addsitedir(str(packages))
     sys.path.insert(0, str(source))
     os.environ["HERMES_QUALIFIED_SOURCE"] = str(source)
+    os.environ["HERMES_QUALIFIED_SITE_PACKAGES"] = str(packages)
     return python, selected
 
 
@@ -116,11 +117,31 @@ def active_fingerprint():
     """Inspect metadata from the actual activated import path, including editable snapshots."""
     source = os.environ.get("HERMES_QUALIFIED_SOURCE")
     identity = source_identity(Path(source)) if source else None
+    packages_path = os.environ.get("HERMES_QUALIFIED_SITE_PACKAGES")
+    if not packages_path or not Path(packages_path).is_absolute() or not Path(packages_path).is_dir():
+        raise RuntimeError("Fingerprint requires the selected managed site-packages tree")
+    # Ignore duplicate checkout egg-info only when the selected generation
+    # attests that same editable package, including PM's workspace snapshots.
+    # The source identity and actual editable tree are hashed below. Keep dependencies made
+    # importable by .pth files in the inventory as well.
+    editable_source_names = set()
+    for distribution in importlib.metadata.distributions(path=[packages_path]):
+        direct = distribution.read_text("direct_url.json")
+        if source and direct and distribution.read_text("RECORD") is not None:
+            value = json.loads(direct)
+            url = urllib.parse.urlparse(value.get("url", ""))
+            if (value.get("dir_info", {}).get("editable") and url.scheme == "file"
+                    and url.netloc in ("", "localhost")):
+                editable_source_names.add(distribution.metadata.get("Name", "").lower().replace("_", "-"))
     distributions = []
     for distribution in importlib.metadata.distributions():
         name = distribution.metadata.get("Name")
         if not name or not distribution.version:
             raise RuntimeError("Dependency metadata has no package identity")
+        if (source and name.lower().replace("_", "-") in editable_source_names
+                and Path(distribution.locate_file("")).resolve() == Path(source).resolve()
+                and distribution.read_text("RECORD") is None and distribution.read_text("PKG-INFO") is not None):
+            continue
         direct = distribution.read_text("direct_url.json")
         replacements = {}
         if direct:
@@ -301,6 +322,7 @@ def launch(descriptor, arguments):
     if str(pm.environments.committed_venv(source)) != value["generation"]:
         raise RuntimeError("Qualified dependency generation changed")
     import hermes_bootstrap
+    os.environ["HERMES_QUALIFIED_SITE_PACKAGES"] = str(pm.environments.site_packages(Path(value["generation"])))
     if fixture_home:
         os.environ["HERMES_HOME"] = fixture_home
     sys.executable = value["wrapper"]

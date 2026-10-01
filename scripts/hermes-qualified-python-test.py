@@ -43,7 +43,8 @@ class ManagedFingerprintTests(unittest.TestCase):
         return importlib.metadata.PathDistribution(metadata)
 
     def fingerprint(self, distribution, source=None):
-        environment = {"HERMES_QUALIFIED_SOURCE": str(source or self.source)}
+        environment = {"HERMES_QUALIFIED_SOURCE": str(source or self.source),
+                       "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file(""))}
         with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, environment):
             return qualified.active_fingerprint()
 
@@ -122,12 +123,69 @@ class ManagedFingerprintTests(unittest.TestCase):
 
     def test_unknown_editable_source_and_missing_installed_records_are_rejected(self):
         distribution = self.distribution(self.root / "libs", self.source)
-        with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, {}, clear=True):
+        with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, {"HERMES_QUALIFIED_SITE_PACKAGES": str(self.root / "libs")}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "exact managed source"):
                 qualified.active_fingerprint()
         (self.root / "libs" / "fixture-1.0.dist-info" / "RECORD").unlink()
         with self.assertRaisesRegex(RuntimeError, "RECORD"):
             self.fingerprint(distribution)
+
+    def test_source_egg_info_does_not_override_installed_generation_attestation(self):
+        packages = self.root / "libs"
+        self.distribution(packages, self.source)
+        egg_info = self.source / "fixture.egg-info"
+        egg_info.mkdir()
+        (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: 99\n")
+        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(packages)}
+        with patch.dict(os.environ, environment), patch.object(sys, "path", [str(self.source), str(packages)]):
+            self.assertEqual(len(list(importlib.metadata.distributions(path=[str(packages)]))), 1)
+            before = qualified.active_fingerprint()
+            (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: 100\n")
+            self.assertEqual(before, qualified.active_fingerprint())
+            (packages / "fixture.py").write_text("changed installed code\n")
+            self.assertNotEqual(before, qualified.active_fingerprint())
+            (packages / "fixture-1.0.dist-info/RECORD").unlink()
+            with self.assertRaisesRegex(RuntimeError, "RECORD"):
+                qualified.active_fingerprint()
+
+    def test_pth_added_dependency_metadata_and_bytes_remain_attested(self):
+        import site
+        packages = self.root / "libs"
+        self.distribution(packages, self.source)
+        external = self.root / "external-libs"
+        distribution = self.distribution(external, self.source)
+        metadata = external / "fixture-1.0.dist-info"
+        (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: external\nVersion: 1.0\n")
+        (packages / "external.pth").write_text(str(external) + "\n")
+        with (packages / "fixture-1.0.dist-info/RECORD").open("a") as record:
+            record.write("external.pth,,\n")
+        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(packages)}
+        with patch.dict(os.environ, environment), patch.object(sys, "path", []):
+            site.addsitedir(str(packages))
+            before = qualified.active_fingerprint()
+            (external / "fixture.py").write_text("changed external dependency\n")
+            self.assertNotEqual(before, qualified.active_fingerprint())
+            (metadata / "RECORD").unlink()
+            with self.assertRaisesRegex(RuntimeError, "RECORD"):
+                qualified.active_fingerprint()
+
+    def test_pm_editable_workspace_snapshot_supersedes_checkout_egg_info(self):
+        packages = self.root / "libs"
+        workspace = self.root / "pm-workspace"
+        workspace.mkdir()
+        (workspace / "fixture.py").write_text("workspace package\n")
+        self.distribution(packages, workspace)
+        egg_info = self.source / "fixture.egg-info"
+        egg_info.mkdir()
+        (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.1\nName: fixture\nVersion: 99\n")
+        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(packages)}
+        with patch.dict(os.environ, environment), patch.object(sys, "path", [str(self.source), str(packages)]):
+            before = qualified.active_fingerprint()
+            (workspace / "fixture.py").write_text("changed workspace package\n")
+            self.assertNotEqual(before, qualified.active_fingerprint())
+            (workspace / "fixture.py").write_text("workspace package\n")
+            (self.source / "core.py").write_text("changed source\n")
+            self.assertNotEqual(before, qualified.active_fingerprint())
 
     def test_native_pm_stage_requires_private_active_markers_and_contained_source(self):
         stage = self.root / "qualification"
