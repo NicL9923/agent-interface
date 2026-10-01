@@ -7,6 +7,9 @@ struct BotSettingsView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var form = BotInput()
   @State private var avatar = AvatarConfig()
+  @State private var lastDrawn = AvatarConfig()
+  @State private var lastPortrait: AvatarConfig?
+  @State private var previewState: ActivityState = .idle
   @State private var tab = "Details"
   @State private var tools: [CapabilityItem] = []
   @State private var skills: [CapabilityItem] = []
@@ -61,8 +64,16 @@ struct BotSettingsView: View {
         .onAppear {
           form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
           avatar = bot?.avatar ?? AvatarConfig()
+          if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
         }
         .task(id: tab) { await loadTab() }
+        .onChange(of: avatar) { _, value in
+          if value.mode != "portrait" {
+            lastDrawn = value
+          } else if !(value.src ?? "").isEmpty {
+            lastPortrait = value
+          }
+        }
         .confirmationDialog(
           "Change the shared model for both household members?", isPresented: $confirmModel,
           titleVisibility: .visible
@@ -188,19 +199,19 @@ struct BotSettingsView: View {
       Section { Text("Create the assistant before configuring its avatar.") }
     } else {
       Section {
-        AvatarView(avatar: avatar, state: .idle, size: 128, name: bot?.name ?? "Assistant").frame(
-          maxWidth: .infinity
-        ).padding(.vertical, 16)
-      }
-      Section("Avatar mode") {
-        Picker("Mode", selection: $avatar.mode) {
+        AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? "Assistant")
+      }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+      Section("Style") {
+        Picker("Style", selection: Binding(get: { avatar.mode }, set: switchAvatarMode)) {
           Text("Geometric").tag("geometric")
           Text("Mascot").tag("mascot")
           Text("Portrait").tag("portrait")
-        }
+        }.pickerStyle(.segmented).accessibilityIdentifier("avatarStyle")
       }
       if avatar.mode == "portrait" {
         Section("Portrait") {
+          Text("Portraits stay still. Activity appears in a separate state indicator.")
+            .font(.caption).foregroundStyle(.secondary)
           Button("Upload portrait") { portraitImport = true }.disabled(
             !store.supports("uploads") || !store.connected)
           unavailable("uploads")
@@ -210,62 +221,54 @@ struct BotSettingsView: View {
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || portraitPrompt.count > 2000)
           unavailable("portraitGeneration")
-          Text(
-            "Use a PNG, JPEG, or WebP image up to 2 MB. Generated and uploaded portraits use a separate visible activity badge."
-          ).font(.caption).foregroundStyle(.secondary)
+          Text("Use a PNG, JPEG, or WebP image up to 2 MB.").font(.caption).foregroundStyle(
+            .secondary)
         }
       } else {
-        Section("Character") {
-          if avatar.mode == "geometric" {
-            Picker("Shape", selection: stringBinding(\AvatarConfig.shape, default: "blob")) {
-              ForEach(AvatarConfig.shapes, id: \.self) { Text($0.capitalized).tag($0) }
-            }
-          } else {
-            Picker("Family", selection: stringBinding(\AvatarConfig.family, default: "sprout")) {
-              ForEach(["sprout", "fox", "bear"], id: \.self) { Text($0.capitalized).tag($0) }
-            }
+        if avatar.mode == "geometric" {
+          Section("Shape") {
+            AvatarTiles(
+              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.capitalized) },
+              selected: avatar.shape ?? "blob",
+              preview: { var a = avatar; a.shape = $0; a.accessory = "none"; return a },
+              select: { avatar.shape = $0 })
           }
-          ScrollView(.horizontal) {
-            HStack {
-              ForEach(AvatarConfig.colors, id: \.self) { hex in
-                Button {
-                  avatar.color = hex
-                } label: {
-                  Circle().fill(Color(hex: hex)).frame(width: 38, height: 38).overlay {
-                    if avatar.color == hex {
-                      Image(systemName: "checkmark").foregroundStyle(.white)
-                    }
-                  }
-                }.accessibilityLabel("Avatar color \(hex)")
-              }
-            }.padding(.vertical, 4)
+        } else {
+          Section("Character") {
+            AvatarTiles(
+              group: "family", options: ["bear", "fox", "sprout"].map { ($0, $0.capitalized) },
+              selected: avatar.family ?? "sprout",
+              preview: { var a = avatar; a.family = $0; a.accessory = "none"; return a },
+              select: { avatar.family = $0 })
           }
-          ColorPicker(
-            "Custom color",
-            selection: Binding(
-              get: { Color(hex: avatar.color ?? "#1084FE") },
-              set: { color in
-                let ui = UIColor(color)
-                var r: CGFloat = 0
-                var g: CGFloat = 0
-                var b: CGFloat = 0
-                var a: CGFloat = 0
-                if ui.getRed(&r, green: &g, blue: &b, alpha: &a) {
-                  avatar.color = String(
-                    format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
-                }
-              }), supportsOpacity: false)
-          Picker("Eyes", selection: stringBinding(\AvatarConfig.eyes, default: "oval")) {
-            ForEach(["round", "oval", "visor", "spark"], id: \.self) {
-              Text($0.capitalized).tag($0)
-            }
-          }
-          Picker("Accessory", selection: stringBinding(\AvatarConfig.accessory, default: "none")) {
-            ForEach(["none", "hat", "glasses"], id: \.self) { Text($0.capitalized).tag($0) }
-          }
+        }
+        Section("Color") { colorSwatches }
+        Section("Eyes") {
+          AvatarTiles(
+            group: "eyes", options: ["oval", "round", "visor", "spark"].map { ($0, $0.capitalized) },
+            selected: avatar.eyes ?? "oval",
+            preview: { var a = avatar; a.eyes = $0; a.accessory = "none"; return a },
+            select: { avatar.eyes = $0 })
+        }
+        Section("Accessory") {
+          AvatarTiles(
+            group: "accessory",
+            options: [("none", "None"), ("hat", "Cowboy hat"), ("glasses", "Glasses")],
+            selected: avatar.accessory ?? "none",
+            preview: { var a = avatar; a.accessory = $0; return a },
+            select: { avatar.accessory = $0 })
+        }
+        Section("Fine-tune eyes") {
           slider("Eye width", \AvatarConfig.eyeWidth)
           slider("Eye height", \AvatarConfig.eyeHeight)
           slider("Eye spacing", \AvatarConfig.eyeSpacing)
+          if [avatar.eyeWidth, avatar.eyeHeight, avatar.eyeSpacing].contains(where: { ($0 ?? 1) != 1 }) {
+            Button("Reset eyes") {
+              avatar.eyeWidth = 1
+              avatar.eyeHeight = 1
+              avatar.eyeSpacing = 1
+            }
+          }
         }
       }
       Section {
@@ -273,6 +276,60 @@ struct BotSettingsView: View {
           !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
       }
     }
+  }
+  private var colorSwatches: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 8) {
+      ForEach(AvatarConfig.colors, id: \.self) { hex in
+        let selected = avatar.color?.lowercased() == hex.lowercased()
+        Button {
+          avatar.color = hex
+        } label: {
+          Circle().fill(Color(hex: hex)).overlay(Circle().strokeBorder(.black.opacity(0.1)))
+            .frame(width: 32, height: 32).padding(4)
+            .overlay(Circle().strokeBorder(selected ? Palette.accent : .clear, lineWidth: 2))
+        }.buttonStyle(.plain).accessibilityLabel("Color \(hex)")
+          .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+      ColorPicker(
+        "Custom color",
+        selection: Binding(
+          get: { Color(hex: avatar.color ?? "#1084FE") },
+          set: { color in
+            var r: CGFloat = 0
+            var g: CGFloat = 0
+            var b: CGFloat = 0
+            var a: CGFloat = 0
+            if UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) {
+              func byte(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
+              avatar.color = String(format: "#%02X%02X%02X", byte(r), byte(g), byte(b))
+            }
+          }), supportsOpacity: false
+      ).labelsHidden().frame(width: 40, height: 40)
+    }.padding(.vertical, 4)
+  }
+  /// Switching styles keeps the drawn character's color, eyes, accessory, and eye tuning,
+  /// returning from Portrait restores the last drawn character, and returning to Portrait
+  /// restores the last portrait.
+  private func switchAvatarMode(_ mode: String) {
+    guard mode != avatar.mode else { return }
+    if mode == "portrait" {
+      // Restore the last uploaded, generated, or saved portrait from this session.
+      if let lastPortrait {
+        avatar = lastPortrait
+        return
+      }
+      var next = avatar
+      next.mode = "portrait"
+      next.src = nil
+      next.origin = "uploaded"
+      avatar = next
+      return
+    }
+    var next = lastDrawn
+    next.mode = mode
+    if mode == "geometric" { next.shape = lastDrawn.shape ?? "blob" }
+    if mode == "mascot" { next.family = lastDrawn.family ?? "bear" }
+    avatar = next
   }
   @ViewBuilder private func capabilities(_ kind: String) -> some View {
     Section {
@@ -367,17 +424,17 @@ struct BotSettingsView: View {
   @ViewBuilder private func unavailable(_ key: String) -> some View {
     if !store.supports(key) { Text(store.reason(key)).font(.footnote).foregroundStyle(.secondary) }
   }
-  private func stringBinding(
-    _ key: WritableKeyPath<AvatarConfig, String?>, default fallback: String
-  ) -> Binding<String> {
-    Binding(get: { avatar[keyPath: key] ?? fallback }, set: { avatar[keyPath: key] = $0 })
-  }
   private func slider(_ title: String, _ key: WritableKeyPath<AvatarConfig, Double?>) -> some View {
-    VStack(alignment: .leading) {
-      Text(title).font(.subheadline)
+    let value = avatar[keyPath: key] ?? 1
+    return VStack(alignment: .leading, spacing: 2) {
+      HStack {
+        Text(title)
+        Spacer()
+        Text("\(Int((value * 100).rounded()))%").monospacedDigit().foregroundStyle(.secondary)
+      }.font(.subheadline)
       Slider(
-        value: Binding(get: { avatar[keyPath: key] ?? 1 }, set: { avatar[keyPath: key] = $0 }),
-        in: 0.6...1.5
+        value: Binding(get: { value }, set: { avatar[keyPath: key] = ($0 * 20).rounded() / 20 }),
+        in: 0.6...1.5, step: 0.05
       ).accessibilityLabel(title)
     }
   }
@@ -559,6 +616,123 @@ struct RoutineEditor: View {
         onSaved()
         dismiss()
       } catch { self.error = error.localizedDescription }
+    }
+  }
+}
+
+/// The editor's preview: the avatar large, with chips to try each live state.
+private struct AvatarStage: View {
+  var avatar: AvatarConfig
+  @Binding var state: ActivityState
+  var name: String
+  @Environment(\.colorScheme) private var scheme
+  private let states: [ActivityState] = [.idle, .thinking, .working, .waiting, .blocked, .done]
+  var body: some View {
+    VStack(spacing: 18) {
+      AvatarView(avatar: avatar, state: state, size: 124, name: name).padding(.top, 12)
+      ChipFlow(spacing: 6) {
+        ForEach(states, id: \.self) { option in
+          let selected = option == state
+          Button(option.label) { state = option }.buttonStyle(.plain).font(.caption)
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .foregroundStyle(selected ? Palette.surface(scheme) : Color.primary)
+            .background(selected ? Palette.accent : Palette.raised(scheme), in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? Palette.accent : Palette.line))
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityIdentifier("previewState.\(option.rawValue)")
+        }
+      }
+      Text("Preview only. The real state always comes from Hermes.").font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+    .frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 14)
+    .background(
+      RadialGradient(
+        stops: [
+          .init(color: Palette.raised(scheme), location: 0.28),
+          .init(color: Palette.rail(scheme), location: 0.62),
+        ], center: UnitPoint(x: 0.5, y: 0.38), startRadius: 0, endRadius: 260),
+      in: RoundedRectangle(cornerRadius: 18))
+  }
+}
+
+/// A grid of mini static avatars, one per choice, like the web editor's tile pickers.
+private struct AvatarTiles: View {
+  var group: String
+  var options: [(String, String)]
+  var selected: String
+  var preview: (String) -> AvatarConfig
+  var select: (String) -> Void
+  @Environment(\.colorScheme) private var scheme
+  @ScaledMetric(relativeTo: .caption) private var tileWidth: CGFloat = 64
+  var body: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: tileWidth), spacing: 8)], spacing: 10) {
+      ForEach(options, id: \.0) { value, label in
+        let on = value == selected
+        Button {
+          select(value)
+        } label: {
+          VStack(spacing: 6) {
+            AvatarView(avatar: preview(value), size: 40, name: label, forceReducedMotion: true)
+              .frame(maxWidth: .infinity).frame(height: 56)
+              .background(
+                on ? Palette.accentSoft : Palette.raised(scheme),
+                in: RoundedRectangle(cornerRadius: 14)
+              )
+              .overlay(
+                RoundedRectangle(cornerRadius: 14).strokeBorder(
+                  on ? Palette.accent : Palette.line, lineWidth: on ? 2 : 1))
+            Text(label).font(.caption).fontWeight(on ? .semibold : .regular)
+              .foregroundStyle(on ? Color.primary : Color.secondary).lineLimit(2)
+              .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+          }.contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityElement(children: .ignore).accessibilityLabel(label)
+          .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+          .accessibilityIdentifier("avatarTile.\(group).\(value)")
+      }
+    }.padding(.vertical, 4)
+  }
+}
+
+/// Wraps chips onto centered rows.
+private struct ChipFlow: Layout {
+  var spacing: CGFloat
+  private func rows(_ width: CGFloat, _ subviews: Subviews) -> [[(Int, CGSize)]] {
+    var rows: [[(Int, CGSize)]] = [[]]
+    var x: CGFloat = 0
+    for (index, view) in subviews.enumerated() {
+      let size = view.sizeThatFits(.unspecified)
+      if x > 0 && x + size.width > width {
+        rows.append([])
+        x = 0
+      }
+      rows[rows.count - 1].append((index, size))
+      x += size.width + spacing
+    }
+    return rows
+  }
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let width = proposal.width ?? .infinity
+    let rows = rows(width, subviews)
+    let height = rows.map { $0.map(\.1.height).max() ?? 0 }.reduce(0, +)
+      + spacing * CGFloat(max(rows.count - 1, 0))
+    let widest = rows.map { $0.map(\.1.width).reduce(0, +) + spacing * CGFloat(max($0.count - 1, 0)) }
+      .max() ?? 0
+    return CGSize(width: proposal.width ?? widest, height: height)
+  }
+  func placeSubviews(
+    in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+  ) {
+    var y = bounds.minY
+    for row in rows(bounds.width, subviews) {
+      let rowWidth = row.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(row.count - 1, 0))
+      let rowHeight = row.map(\.1.height).max() ?? 0
+      var x = bounds.midX - rowWidth / 2
+      for (index, size) in row {
+        subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+        x += size.width + spacing
+      }
+      y += rowHeight + spacing
     }
   }
 }

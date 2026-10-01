@@ -53,7 +53,7 @@ struct ConnectionView: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 24) {
-          AvatarView(size: 90, name: "Agent Interface").frame(maxWidth: .infinity).padding(.top, 36)
+          AvatarTrio().padding(.top, 28)
           VStack(alignment: .leading, spacing: 8) {
             Text(store.api == nil ? "Bring your assistants along" : "Your household, connected")
               .font(.largeTitle.bold())
@@ -130,8 +130,25 @@ struct ErrorBanner: View {
     ).accessibilityElement(children: .contain)
   }
 }
+/// A small household of assistants, so the first screen shows who is waiting.
+struct AvatarTrio: View {
+  var body: some View {
+    HStack(alignment: .bottom, spacing: 6) {
+      AvatarView(
+        avatar: AvatarConfig(shape: "blob", color: "#1084FE", eyes: "oval"), size: 64
+      ).rotationEffect(.degrees(-6))
+      AvatarView(
+        avatar: AvatarConfig(mode: "mascot", shape: nil, family: "bear", color: "#FF9800", eyes: "round"),
+        size: 84)
+      AvatarView(
+        avatar: AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "oval"), size: 64
+      ).rotationEffect(.degrees(5))
+    }.accessibilityHidden(true)
+  }
+}
 struct BotListView: View {
   @EnvironmentObject private var store: AppStore
+  @Environment(\.colorScheme) private var scheme
   var openPreferences: () -> Void
   var create: () -> Void
   var openBot: () -> Void
@@ -165,7 +182,8 @@ struct BotListView: View {
           }
         }
       }
-    }.navigationTitle("Your assistants")
+    }.scrollContentBackground(.hidden).background(Palette.surface(scheme))
+      .navigationTitle("Your assistants")
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
           Button(action: openPreferences) { Image(systemName: "slider.horizontal.3") }
@@ -185,25 +203,32 @@ struct BotListView: View {
     }
   }
   private func row(_ bot: Bot) -> some View {
-    Button {
+    let state =
+      !store.connected
+      ? ActivityState.disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
+    // The list says what each assistant is doing in words, not only through motion.
+    let reportsActivity = store.connected && state != .idle
+    return Button {
       openBot()
       Task { await store.select(bot.id) }
     } label: {
       HStack(spacing: 12) {
-        AvatarView(
-          avatar: bot.avatar ?? AvatarConfig(),
-          state: store.connected ? bot.activity : .disconnected, name: bot.name)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, name: bot.name)
         VStack(alignment: .leading, spacing: 3) {
           Text(bot.name).foregroundStyle(.primary).font(.headline)
-          Text(bot.shared ? "Shared · \(bot.activity.label)" : "Personal · \(bot.activity.label)")
-            .font(.caption).foregroundStyle(.secondary)
+          if reportsActivity {
+            ActivityLabel(state: state)
+          } else {
+            Text(bot.shared ? "Shared assistant" : "Personal assistant")
+              .font(.caption).foregroundStyle(.secondary)
+          }
         }
         Spacer(minLength: 0)
         if bot.id == store.selectedBotId {
           Image(systemName: "checkmark").foregroundStyle(Palette.accent)
         }
       }.padding(.vertical, 4)
-    }.accessibilityIdentifier("bot.\(bot.id)")
+    }.accessibilityIdentifier("bot.\(bot.id)").listRowBackground(Palette.raised(scheme))
       .contextMenu {
         Button(
           store.bootstrap?.preferences.favorites.contains(bot.id) == true
@@ -223,5 +248,30 @@ struct BotListView: View {
           Task { await store.select(bot.id) }
         }
       }
+  }
+}
+
+/// An assistant's current activity in words, with a dot in the state's color.
+struct ActivityLabel: View {
+  var state: ActivityState
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private var color: Color {
+    switch state {
+    case .blocked: Palette.attention
+    case .failed: Palette.danger
+    case .waiting, .interrupted, .disconnected: Palette.muted
+    default: Palette.accent
+    }
+  }
+  var body: some View {
+    let breathes = !reduceMotion && (state == .thinking || state == .working)
+    HStack(spacing: 6) {
+      TimelineView(.animation(minimumInterval: 1 / 20, paused: !breathes)) { timeline in
+        let phase = timeline.date.timeIntervalSinceReferenceDate / 1.8 * 2 * .pi
+        Circle().fill(color).frame(width: 6, height: 6)
+          .opacity(breathes ? 0.675 + 0.325 * cos(phase) : 1)
+      }.frame(width: 6, height: 6)
+      Text(state.label).fontWeight(.medium)
+    }.font(.caption).foregroundStyle(color)
   }
 }
