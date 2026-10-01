@@ -1,5 +1,24 @@
 # Validation ledger
 
+## October 1 interface and avatar deployment
+
+PR #8 merged at `7fac68e44e7dbe9b28885a03eed2782778e3fbea`. The release is live
+at `https://agentui.wildflowersranch.com`, web build `3dc4598be2f7b72b`, from the
+archive with SHA256
+`6aea21c1bd4824d97c948d0a9e077f4c2d85c020728898b0062d4c4800c547ae`. The host
+build reproduced the locally verified web build.
+
+The release changes clients only, so the existing qualification receipt validated
+against it and was reused. The upgrade helper and profile settings were unchanged.
+The guarded release tool's no-change preflight passed. Activation then drained
+idle native work, switched the release and verified original Google HTTP and
+fresh WebSockets, both Discord connections and the gateway guard before clearing
+maintenance. The [production receipt](evidence/production-ui-avatars-activation-20261001.json)
+records the result. Hermes remains at d23. The public service worker reports the
+new build, the sign-in page renders without errors, and API requests still
+require sign-in. A signed-in household session was not exercised after
+activation.
+
 ## October 1 interface and avatar pass
 
 Branch: `t3code/ui-avatar-animation-improvements`, based on
