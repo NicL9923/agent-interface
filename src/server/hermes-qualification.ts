@@ -12,6 +12,7 @@ const integrationFiles = [
   "scripts/spike/requirements.lock.txt", "package-lock.json",
   "scripts/spike/provider.py",
   "scripts/spike/maintenance_guard_probe.py",
+  "scripts/spike/service_probe.py",
   "scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py", "scripts/hermes-qualified-python.py",
 ].sort();
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");

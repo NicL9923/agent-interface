@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import shutil
 import stat
 import subprocess
@@ -23,6 +24,7 @@ import urllib.request
 import uuid
 
 ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish")
+MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
 
 
 def private(path, directory=False):
@@ -71,7 +73,7 @@ elif v['action']=='rpc':
     from websockets.sync.client import connect
     req=urllib.request.Request(v['origin']+'/api/agent-interface/service-ticket',data=b'{}',headers={'Authorization':'Bearer '+v['key'],'Content-Type':'application/json'})
     with urllib.request.urlopen(req,timeout=10) as r: ticket=json.load(r)['ticket']
-    with connect(v['origin'].replace('http://','ws://',1)+'/ws?ticket='+ticket,open_timeout=10,close_timeout=5) as ws:
+    with connect(v['origin'].replace('http://','ws://',1)+'/api/ws?ticket='+ticket,open_timeout=10,close_timeout=5) as ws:
         ws.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'agent-interface.maintenance','params':{'action':v['method'],'operation_id':v['operation'],'service_key':v['key']}}))
         for _ in range(100):
             result=json.loads(ws.recv(timeout=15))
@@ -335,6 +337,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
         record = self.load()
         if record["phase"] != "quiescent": raise RuntimeError("Cold backup requires verified quiescence")
         self.gateway(draining=True)
+        self.materialize_candidate()
+        self.gateway(draining=True)
         self.control("stop")
         self.save(dict(record, phase="stopped"))
         try:
@@ -354,6 +358,40 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.wait_gateway(draining=True)
             self.save(dict(record, phase="quiescent"))
             raise
+
+    def materialize_candidate(self):
+        # A production promisor clone can have the candidate commit but none of
+        # its trees. Transfer the tested closure locally before service downtime;
+        # fetch negotiation would skip objects for that already-present commit.
+        offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+        def read_git(*args):
+            return subprocess.check_output(["git", "-C", str(self.source), *args], env=offline, stderr=subprocess.PIPE).decode()
+        def metadata():
+            rows = [read_git("rev-parse", "HEAD"), read_git("diff", "HEAD", "--binary"), read_git("for-each-ref", "--format=%(objectname) %(refname)"),
+                read_git("rev-parse", "--symbolic-full-name", "HEAD"), read_git("config", "--local", "--null", "--list")]
+            for name in ("index", "shallow"):
+                filename = Path(read_git("rev-parse", "--git-path", name).strip())
+                if not filename.is_absolute(): filename = self.source / filename
+                rows.append(digest(filename) if filename.exists() else None)
+            return rows
+        before = metadata()
+        if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate: raise RuntimeError("Qualified candidate changed before object preparation")
+        pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
+        try:
+            with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
+                subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"],
+                    input=(self.candidate + "\n").encode(), stdout=output, stderr=subprocess.PIPE, env=offline,
+                    check=True, timeout=180, preexec_fn=bounded_pack)
+                output.flush(); os.fsync(output.fileno())
+            with pack.open("rb") as payload:
+                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+            subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+            if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
+        finally:
+            pack.unlink(missing_ok=True)
 
     def install(self):
         record = self.load()
@@ -380,8 +418,13 @@ print(json.dumps({'ok':True,'state':'synced'}))
     def verify(self):
         record = self.load()
         baseline = record["baseline"]
-        expected = baseline["source"][0] if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1" else self.candidate
-        if self.source_state()[0] != expected or self.settings() != baseline["settings"]: raise RuntimeError("Source or protected household settings changed")
+        if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1":
+            expected = tuple(baseline["source"])
+        else:
+            receipt = json.loads(private(self.env["HERMES_UPGRADE_RECEIPT"]).read_text())
+            expected = (receipt["revision"], receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest())
+            if expected[0] != self.candidate: raise RuntimeError("Candidate qualification changed")
+        if self.source_state() != expected or self.settings() != baseline["settings"]: raise RuntimeError("Source repair or protected household settings changed")
         for name, original in baseline["units"].items():
             current = self.unit(name)
             if current["FragmentPath"] != original["FragmentPath"] or current["fragmentSha256"] != original["fragmentSha256"]: raise RuntimeError("A native/app unit changed")
@@ -396,7 +439,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.anonymous_rejection(); self.google()
         expected_runtime = baseline["runtime"] if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1" else json.loads(self.env["HERMES_UPGRADE_RUNTIME_FINGERPRINT"])
         self.runtime(expected_runtime)
-        self.save(dict(record, phase="verified", verifiedRevision=expected))
+        self.save(dict(record, phase="verified", verifiedRevision=expected[0], verifiedSource=expected))
 
     def extract(self, name, destination, prefix=None):
         record = self.load()
@@ -444,7 +487,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if record["phase"] == "quiescent":
             self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
             self.verify(); record = self.load()
-        if record["phase"] != "verified" or record["verifiedRevision"] != self.source_state()[0]: raise RuntimeError("Release requires verified live source and services")
+        if record["phase"] != "verified" or tuple(record.get("verifiedSource", ())) != self.source_state(): raise RuntimeError("Release requires verified live source repair and services")
         self.clear_drain()
         released = self.rpc("release")
         if released.get("active") is not False: raise RuntimeError("Native gate release was not confirmed")

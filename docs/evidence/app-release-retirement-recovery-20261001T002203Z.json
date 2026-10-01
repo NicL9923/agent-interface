@@ -1,0 +1,20 @@
+{
+  "kind": "Actual upstream RetirementFence and exact deployment recovery AST, isolated transport/service faults",
+  "deploymentToolSha256": "06aaa4bd67e6a2d04b189e0162ad7170e619ce6295717654f3e27c096304032f",
+  "nativeRetirementSourceSha256": "1122ace38dea6bd7cc298c2e1f59aefa757a7ed88d8a01dc7bddc14a47c55c55",
+  "hermesRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "productionMutation": false,
+  "checks": {
+    "lost_commit_reply": true,
+    "expired_permit_idle": true,
+    "expired_permit_busy": true,
+    "proof_unavailable": true,
+    "google_unavailable": true,
+    "gateway_busy": true,
+    "gateway_wrong_pid": true,
+    "gateway_wrong_source": true,
+    "gateway_wrong_home": true,
+    "gateway_stale": true
+  },
+  "completedAt": "2026-10-01T00:22:03.533389+00:00"
+}

@@ -1,5 +1,114 @@
 # Validation ledger
 
+## September 30 production activation and upgrade hardening
+
+PR #3 merged at `9fd1b88335ec179ac1d4ef787a3f2376cefbdf24`. The web release
+is deployed at `https://agentui.wildflowersranch.com`. Upgrade controls, working
+avatar animation and Advanced activity details are live. The installed Hermes
+revision remains `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`; this work has not
+performed a production Hermes upgrade. Earlier sections record their original
+code states.
+
+### Integration and source state
+
+- Final source fingerprint, 228 files:
+  `sha256:4fb3aa0d0acff2199589fdc2b2526e83a61c229ca04210a0950e13e5e2c13932`.
+  The source-state tool excludes this ledger, private data and ignored build products.
+- Final integration digest:
+  `8099c54b0edcee869cdb947f3d56ef49a539f502167b50354a2f845a25b1b406`.
+  Its [nine receipts and manifest](evidence/managed-approved-repair-d23-20261001T004802Z/manifest.json)
+  record the complete managed d23 native, recovery, routine, service9,
+  maintenance13 and app13 run. Digest and the exact original repair were
+  unchanged before and after the run.
+- The earlier deployment hardening qualification bound digest
+  `7d7d8d81513e47ad487c4ae29f857abcea39104a7fdf12417a73d2dac349629d`.
+  Its [11 receipts and manifest](evidence/managed-independent-source-d23-20261001T000702Z/manifest.json)
+  preserve the complete managed d23 run separately from earlier evidence.
+  Native execution, actual executor death/recovery without replay, routines,
+  service transport, maintenance and authenticated application checks passed.
+- The mandatory nine-check service probe launches the actual native listener and
+  runs the exact Linux installer helper. It proves the `/api/ws` maintenance
+  route, rejects the former route, wrong keys and foreign lease releases, and
+  retains fixture Google authentication under maintenance. Both integration
+  digest implementations bind this probe.
+- The candidate Git checkout fetches complete official objects and the 106 exact
+  installed tag identities. An actual independent fetch passed full `git fsck`.
+  Native current-version metadata matched the installed source, including commit
+  distance. The installed partial checkout stayed unchanged.
+- Candidate object import precedes native shutdown. A real partial-clone fixture
+  removed upstream access at the first service stop and completed install,
+  verification and release offline. Missing objects refuse service shutdown.
+- Nine focused Node qualification/update checks passed on the final source state.
+  The pinned Linux Node 24.21.0 build and full type checking passed. CI runs the
+  complete 159 Node tests and 64 Python checks on its two Node versions.
+- All 29 worker checks and 14 Linux checks passed. They cover
+  exact approved repair trees, changed diff headers, a second update after the
+  first repair fingerprint shifts, content/mode/binary/added-file changes,
+  conflict refusal, archive integrity, separate candidate/rollback fingerprints,
+  and a repair edit between verification and admission release.
+- The new bootstrap deployment tool passed ten isolated fault injections against
+  the actual native retirement fence and exact recovery code. Lost commit replies
+  recover through confirmed retirement ownership. Expired busy permits,
+  unavailable proof and stale or mismatched gateway records preserve native
+  processes. [Recovery receipt](evidence/app-release-retirement-recovery-20261001T002203Z.json).
+- The subsequent guarded deployment tool rejected an install request created
+  during app shutdown, preserving the request and native owners before lease
+  acquisition. [Pending-request race receipt](evidence/guarded-app-release-pending-install-20261001T004552Z.json).
+- [Actual provenance checks](evidence/approved-repair-provenance-20261001T004552Z.json)
+  prove the same original approved repair on installed d23 and staged official
+  `663362680b6ffa4fbffeb58f6682564239a1953b`. Independent object stores preserve
+  installed Git metadata, object bytes and object modification times.
+- Native source and artwork are unchanged from the recorded 24-file fingerprint
+  `d2ecb032929967e44450107ebf23b210e2b6eea7ac9f8685cd724bf05e0987db`.
+  The prior 22 native unit tests and affected simulator interactions remain
+  applicable. The web assets still have build `404c0d099b21f1bb`.
+
+These execution probes use a deterministic provider. Hermes execution, persistence
+and recovery are real; they do not establish live model quality.
+
+### Production checks
+
+- A guarded cutover held the worker and native updater locks, owned the persistent
+  maintenance lease, required a fresh drain acknowledgement and exact idle work
+  record, and proved a clean native gateway shutdown before switching releases.
+- Original Google protected HTTP and two fresh authenticated WebSockets passed
+  before and after restart. Both Discord connections, profile settings and the
+  approved OAuth repair were preserved. App, dashboard, gateway, backup timer,
+  Caddy and WireGuard are active. Maintenance and the owned drain were released.
+- The [final production activation receipt](evidence/production-upgrades-repair-activation-20261001.json)
+  records 93 files matching the reviewed, qualified archive and the final digest.
+  The exact approved repair artifact is bound to the private host configuration.
+- The [first hardening activation receipt](evidence/production-upgrades-activation-20261001T002047Z.json)
+  records 92 files matching the qualified archive. Public anonymous bootstrap
+  returns 401 and local development sign-in returns 403. An actual Google identity
+  authenticated to the app and read canonical bots with Hermes connected. The
+  administrator update endpoint is enabled.
+- The shared production browser loads the matching JavaScript, Google sign-in
+  button and healthy API without horizontal overflow. The unchanged activity
+  and upgrade layouts reuse PR #3's reviewed screenshots.
+- The actual update check exposed a diff-header false refusal after applying the
+  original OAuth patch to a newer official candidate. Upstream moved the repair
+  hunk six lines; all repair body, context, paths and modes were identical.
+  The fix keeps the original approved artifact immutable, proves its full tracked
+  tree result, and binds the candidate's resulting diff fingerprint separately.
+
+- The [actual production update check](evidence/production-upgrade-qualification-20261001.json)
+  reached `ready` for official candidate
+  `663362680b6ffa4fbffeb58f6682564239a1953b`. All seven source, repair, upstream,
+  staging, dependency, integration and host regression checks passed.
+  The candidate binds resulting patch
+  `2d92905c98fd12e5a2e3035c5a1ea088fca0accba78560dcb7963aaf3335e425`;
+  the original approved artifact remains
+  `2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c`.
+  Installation was available to the administrator. The live source stayed on d23.
+  [Eight full candidate receipts and manifest](evidence/official-upgrade-663-20261001T010552Z/manifest.json)
+  preserve this official candidate separately from the known-d23 runs.
+
+Independent GPT-6.1 Sol high reviews found and resolved the lost retirement-reply
+recovery issue and tightened repair verification through final admission release.
+No production Hermes install or physical-device acceptance is claimed. External
+acceptance remains in [issue #1](https://github.com/NicL9923/agent-interface/issues/1).
+
 ## September 30 Hermes upgrades and live activity
 
 PR #2 was merged at `1ec8ff5f3ff58afcc9c03b60c5161fc400bceccd` before this

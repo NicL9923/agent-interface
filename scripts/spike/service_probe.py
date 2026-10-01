@@ -4,11 +4,15 @@ Uses a verified-session provider double, no Google credentials/network and a fre
 Run with the constrained Hermes interpreter and PYTHONPATH set to the qualified source checkout.
 """
 import json
+import importlib.util
 import os
 import secrets
+import socket
+import subprocess
 import sys
 import tempfile
 import time
+import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -27,6 +31,10 @@ from hermes_cli.dashboard_auth.registry import clear_providers
 from hermes_cli.dashboard_auth.ws_tickets import consume_ticket, TicketInvalid
 from extension import install, source_state
 from service_auth import install_service_auth, validate_secret, PREFIX, TICKET_PATH
+
+secret = secrets.token_urlsafe(32)
+os.environ["HERMES_AGENT_INTERFACE_TOKEN"] = secret
+os.environ["HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"] = str(home / "maintenance.json")
 
 
 class VerifiedGoogleFixture(DashboardAuthProvider):
@@ -48,7 +56,6 @@ web.app.state.auth_required = True
 web.app.state.bound_host = "127.0.0.1"
 web.app.state.trusted_public_hosts = frozenset({"fixture.example.test", "127.0.0.1"})
 install()
-secret = secrets.token_urlsafe(32)
 install_service_auth(web, secret)
 client = TestClient(web.app, base_url="http://127.0.0.1", client=("127.0.0.1", 40000))
 headers = {"Authorization": "Bearer " + secret}
@@ -124,9 +131,60 @@ for weak in ["", "a" * 43, "short", "x" * 44]:
         pass
 checks["strong_private_key_requirement"] = True
 
+# Run the exact installer transport against real native HTTP/WS listeners. The
+# TestClient checks above do not exercise the subprocess helper's upgrade URL.
+import hermes_cli
+import uvicorn
+spec = importlib.util.spec_from_file_location("qualified_linux_hooks", REPO / "scripts/hermes-upgrade-linux.py")
+linux = importlib.util.module_from_spec(spec); spec.loader.exec_module(linux)
+listener = socket.socket(); listener.bind(("127.0.0.1", 0))
+origin = "http://127.0.0.1:" + str(listener.getsockname()[1])
+server = uvicorn.Server(uvicorn.Config(web.app, log_level="error", lifespan="off"))
+thread = threading.Thread(target=lambda: server.run(sockets=[listener]), daemon=True)
+thread.start()
+try:
+    deadline = time.monotonic() + 10
+    while not server.started:
+        assert thread.is_alive() and time.monotonic() < deadline, "Native HTTP/WS listener did not start"
+        time.sleep(.02)
+    operation = "qualification-service-lease"
+    source = str(Path(hermes_cli.__file__).resolve().parents[1])
+    def installer_rpc(action, *, key=secret, owner=operation, code=linux.NATIVE, success=True):
+        payload = {"action": "rpc", "source": source, "home": str(home), "origin": origin,
+                   "key": key, "method": action, "operation": owner}
+        result = subprocess.run([sys.executable, "-I", "-c", code], input=json.dumps(payload),
+            text=True, capture_output=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=30)
+        if not success:
+            assert result.returncode != 0, "An unauthorized installer maintenance request succeeded"
+            return
+        assert result.returncode == 0, "Installer maintenance transport failed; inspect the private disposable probe"
+        return json.loads(result.stdout)
+    assert installer_rpc("status")["active"] is False
+    installer_rpc("acquire", key="wrong-service-key", success=False)
+    assert not (home / "maintenance.json").exists()
+    acquired = installer_rpc("acquire")
+    assert acquired == {"active": True, "operationId": operation, "busy": []}
+    assert installer_rpc("status")["active"] is True
+    installer_rpc("release", owner="qualification-other-owner", success=False)
+    assert json.loads((home / "maintenance.json").read_text())["operationId"] == operation
+    installer_rpc("release", code=linux.NATIVE.replace("/api/ws?ticket=", "/ws?ticket="), success=False)
+    assert (home / "maintenance.json").exists(), "The wrong native URL released admission"
+    for path in ("/api/profiles", "/api/config"):
+        assert client.get(path, headers={"Authorization": "Bearer verified-google-fixture"}).status_code == 200
+    assert installer_rpc("release")["active"] is False
+    assert not (home / "maintenance.json").exists()
+    checks["installer_service_ticket_native_maintenance_status_acquire_release"] = True
+    checks["installer_wrong_route_key_and_owner_cannot_release_lease"] = True
+    checks["original_google_http_reads_preserved_under_maintenance"] = True
+finally:
+    server.should_exit = True
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "Disposable native HTTP/WS listener did not stop"
+    listener.close()
+
 report = {"kind": "Actual native gated HTTP and WS, verified Google-session fixture, fresh isolated home, no production mutation",
     "revision": revision, "tracked_patch_sha256": patch, "checks": checks}
-destination = REPO / "docs/evidence" / ("hermes-service-probe-" + revision[:3] + ".json")
+destination = REPO / "docs/evidence" / ("hermes-service-probe-upgrade-route-" + revision[:3] + ".json")
 destination.write_text(json.dumps(report, indent=2) + "\n")
 print(json.dumps({"evidence": str(destination.relative_to(REPO)), "checks": checks}))
 client.close(); remote.close()

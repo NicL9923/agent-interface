@@ -1,0 +1,16 @@
+{
+  "kind": "Actual native gated HTTP and WS, verified Google-session fixture, fresh isolated home, no production mutation",
+  "revision": "663362680b6ffa4fbffeb58f6682564239a1953b",
+  "tracked_patch_sha256": "2d92905c98fd12e5a2e3035c5a1ea088fca0accba78560dcb7963aaf3335e425",
+  "checks": {
+    "original_google_cookie_and_native_http_ws_unchanged": true,
+    "credential_origin_cookie_and_direct_peer_guards": true,
+    "one_time_native_gateway_ticket_and_actual_revision": true,
+    "finite_native_handler_allowlist_and_encoded_path_guards": true,
+    "native_profile_mutation_and_file_policy_preserved": true,
+    "strong_private_key_requirement": true,
+    "installer_service_ticket_native_maintenance_status_acquire_release": true,
+    "installer_wrong_route_key_and_owner_cannot_release_lease": true,
+    "original_google_http_reads_preserved_under_maintenance": true
+  }
+}

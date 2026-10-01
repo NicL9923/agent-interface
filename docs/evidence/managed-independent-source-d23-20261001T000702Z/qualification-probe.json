@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "trackedPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+  "integrationDigest": "7d7d8d81513e47ad487c4ae29f857abcea39104a7fdf12417a73d2dac349629d",
+  "realIntegration": true,
+  "productionAccess": false,
+  "qualificationCompletedAt": "2026-10-01T00:08:57.895267+00:00"
+}

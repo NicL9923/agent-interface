@@ -14,13 +14,18 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
+
+OFFICIAL_UPSTREAM = "https://github.com/NousResearch/hermes-agent.git"
+MAX_REPAIR_SNAPSHOT_PACK_BYTES = 512 * 1024 * 1024
 
 
 def private_file(path):
@@ -53,6 +58,17 @@ def now():
 
 def git(source, *args):
     return subprocess.check_output(["git", "-C", str(source), *args], stderr=subprocess.PIPE)
+
+
+def git_tag_refs(source):
+    return [line.split(" ") for line in git(source, "for-each-ref", "--format=%(refname) %(objectname)", "refs/tags").decode().splitlines()]
+
+
+def complete_history(source):
+    shallow = git(source, "rev-parse", "--is-shallow-repository").strip()
+    if shallow != b"false":
+        raise RuntimeError("Installed Hermes history is incomplete. The installer must restore complete version history before qualifying an update.")
+    return shallow
 
 
 def source_state(source, dashboard_target=None):
@@ -96,6 +112,10 @@ def runtime_fingerprint(python):
 
 
 class UnsupportedDependencies(RuntimeError):
+    pass
+
+
+class UnsupportedRepair(RuntimeError):
     pass
 
 
@@ -206,6 +226,12 @@ class Worker:
     def host_fingerprint(self):
         files = {str(self.config_file): sha(private_file(self.config_file).read_bytes()),
             str(Path(__file__).resolve()): sha(Path(__file__).read_bytes())}
+        if self.config.get("approvedPatchFile"):
+            path = private_file(self.config["approvedPatchFile"])
+            files[str(path)] = sha(path.read_bytes())
+        # Native release facts affect requires_hermes and PM plugin selection.
+        files["git:" + str(self.source) + ":refs/tags"] = sha(json.dumps(git_tag_refs(self.source)).encode())
+        files["git:" + str(self.source) + ":history"] = sha(complete_history(self.source))
         if self.config.get("managedLauncher"):
             utility = self.app / "scripts/hermes-qualified-python.py"
             files[str(utility)] = sha(utility.read_bytes())
@@ -264,6 +290,11 @@ class Worker:
         if self.config.get("managedLauncher") or self.config.get("managedHome"):
             for key in ("managedLauncher", "managedHome"):
                 if not isinstance(self.config.get(key), str) or not Path(self.config[key]).is_absolute(): raise RuntimeError("Managed qualification requires an absolute launcher and Hermes home")
+        if self.config.get("approvedPatchFile") is not None:
+            path = self.config["approvedPatchFile"]
+            if not isinstance(path, str) or not Path(path).is_absolute(): raise RuntimeError("Approved repair path must be fixed and absolute")
+            private_file(path)
+            if not re.fullmatch(r"[a-f0-9]{64}", str(self.config.get("requiredPatchSha256", ""))): raise RuntimeError("Approved repair requires an exact original artifact hash")
         if self.config.get("upstreamRef", "refs/remotes/origin/main") != "refs/remotes/origin/main":
             raise RuntimeError("Only the trusted upstream main branch is supported")
         remote = git(self.source, "remote", "get-url", "origin").decode().strip().removesuffix(".git")
@@ -308,13 +339,81 @@ class Worker:
     def revision(self, value):
         return {"revision": value, "version": value[:12], "notesUrl": "https://github.com/NousResearch/hermes-agent/commit/" + value}
 
+    def stage_source(self, source, candidate):
+        # Installed checkouts may be promisor clones. Sharing their object store
+        # loses lazy-fetch ownership and also couples retained stages to live GC.
+        # Fetch the exact trusted commit into a complete independent repository.
+        if not re.fullmatch(r"[a-f0-9]{40}", candidate):
+            raise RuntimeError("Staging requires an exact trusted Git revision")
+        complete_history(self.source)
+        tags = git_tag_refs(self.source)
+        self.run(["git", "init", str(source)])
+        self.run(["git", "-C", str(source), "remote", "add", "origin", OFFICIAL_UPSTREAM])
+        # Full ancestry and installed tag object identities preserve native
+        # version and plugin compatibility decisions. Never fetch moving tags.
+        objects = [candidate, *sorted({identity for _, identity in tags} - {candidate})]
+        self.run(["git", "-C", str(source), "fetch", "--no-tags", "--no-filter", "origin", *objects], timeout=180)
+        for ref, identity in tags:
+            self.run(["git", "-C", str(source), "update-ref", ref, identity])
+        self.run(["git", "-C", str(source), "checkout", "--detach", candidate])
+        if git(source, "rev-parse", "HEAD").decode().strip() != candidate:
+            raise RuntimeError("Staged source differs from the exact trusted candidate")
+
+    def approved_repair(self, revision, actual_hash, actual_patch):
+        filename = self.config.get("approvedPatchFile")
+        if filename is None:
+            if actual_hash != self.config.get("requiredPatchSha256"):
+                raise UnsupportedRepair("The installed Hermes repair differs from the approved repair. Ask the installer to review it before updating.")
+            return actual_patch
+        patch = private_file(filename).read_bytes()
+        if sha(patch) != self.config["requiredPatchSha256"]:
+            raise UnsupportedRepair("The approved Hermes repair file changed. Ask the installer to restore its reviewed copy.")
+        # Compare exact tracked trees, not regenerated diff headers. Copy only
+        # the captured commit's tree/blob closure. Live alternates can freshen
+        # object mtimes even with a separate writable object directory.
+        with tempfile.TemporaryDirectory(prefix="agent-interface-repair-proof-") as temporary:
+            root = Path(temporary); repository = root / "repository"
+            environment = dict(self.environment, GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
+            def read_source(*args):
+                return subprocess.check_output(["git", "-C", str(self.source), *args], env=environment, stderr=subprocess.PIPE, timeout=60)
+            def tree(name, data):
+                env = dict(environment, GIT_INDEX_FILE=str(root / name))
+                def command(*args, input=None):
+                    return subprocess.check_output(["git", "--git-dir", str(repository), *args], input=input,
+                        env=env, stderr=subprocess.PIPE, timeout=60)
+                command("read-tree", revision)
+                if data: command("apply", "--cached", "--binary", "-", input=data)
+                return command("write-tree")
+            try:
+                subprocess.run(["git", "init", "--bare", str(repository)], env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=60)
+                root_tree = read_source("rev-parse", revision + "^{tree}").decode().strip()
+                rows = read_source("ls-tree", "-r", "-t", "--format=%(objecttype) %(objectname)", revision).decode().splitlines()
+                objects = {revision, root_tree, *(identity for kind, identity in (row.split(" ") for row in rows) if kind in ("tree", "blob"))}
+                with (root / "snapshot.pack").open("xb") as output:
+                    def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_REPAIR_SNAPSHOT_PACK_BYTES, MAX_REPAIR_SNAPSHOT_PACK_BYTES))
+                    subprocess.run(["git", "-C", str(self.source), "pack-objects", "--stdout"],
+                        input=("\n".join(sorted(objects)) + "\n").encode(), env=environment, stdout=output,
+                        stderr=subprocess.PIPE, check=True, timeout=180, preexec_fn=bounded_pack)
+                with (root / "snapshot.pack").open("rb") as payload:
+                    subprocess.run(["git", "--git-dir", str(repository), "index-pack", "--stdin"], stdin=payload,
+                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=180)
+                expected = tree("expected-index", patch)
+                actual = tree("actual-index", actual_patch)
+            except subprocess.CalledProcessError as error:
+                raise UnsupportedRepair("The approved Hermes repair needs installer review before this version can be updated.") from error
+            if expected != actual:
+                raise UnsupportedRepair("The installed Hermes files differ from the approved repair. Ask the installer to review them before updating.")
+        self.environment.update({"HERMES_UPGRADE_APPROVED_PATCH_FILE": filename,
+            "HERMES_UPGRADE_APPROVED_PATCH_SHA256": self.config["requiredPatchSha256"]})
+        return patch
+
     def qualify(self):
         self.update(phase="checking", message="Checking Hermes and preserving the current repair.", checks=[], maintenance=False)
         current, current_patch, patch = self.check_step("source", "Current source and shared OAuth repair", lambda: self.snapshot(self.source))
         dashboard_link = self.dashboard_link()
         host_fingerprint = self.host_fingerprint()
-        if current_patch != self.config.get("requiredPatchSha256"):
-            raise RuntimeError("Installed repair differs from the installer-approved repair")
+        patch = self.check_step("repair", "Exact approved repair provenance", lambda: self.approved_repair(current, current_patch, patch))
         self.update(current=self.revision(current))
         digest = integration_digest(self.app)
         def fetch():
@@ -346,15 +445,18 @@ class Worker:
             "HERMES_UPGRADE_STAGE_SOURCE": str(source), "HERMES_UPGRADE_RECEIPT": str(stage / "qualification.json"),
             "HERMES_UPGRADE_BACKUP_DIR": str(stage / "backup")})
         def prepare():
-            self.run(["git", "clone", "--shared", "--no-checkout", str(self.source), str(source)])
-            self.run(["git", "-C", str(source), "checkout", "--detach", candidate])
+            self.stage_source(source, candidate)
             if patch:
                 patch_path = stage / "preserved.patch"; patch_path.write_bytes(patch); patch_path.chmod(0o600)
-                self.run(["git", "-C", str(source), "apply", "--index", str(patch_path)])
+                try: self.run(["git", "-C", str(source), "apply", "--index", str(patch_path)])
+                except subprocess.CalledProcessError as error:
+                    raise UnsupportedRepair("The approved Hermes repair cannot be applied to this update. Ask the installer to review it before updating.") from error
             actual, patch_hash, _ = self.snapshot(source)
-            if actual != candidate or patch_hash != current_patch:
-                raise RuntimeError("The shared repair changed on the candidate; manual reconciliation is required")
-        self.check_step("staging", "Disposable target and unchanged OAuth repair", prepare)
+            if actual != candidate or not self.config.get("approvedPatchFile") and patch_hash != current_patch:
+                raise UnsupportedRepair("The shared Hermes repair changed on the candidate. Ask the installer to review it before updating.")
+            return patch_hash
+        candidate_patch = self.check_step("staging", "Disposable target and unchanged OAuth repair", prepare)
+        if candidate_patch: self.environment["HERMES_UPGRADE_CANDIDATE_PATCH_SHA256"] = candidate_patch
         if managed:
             def prepare_dependencies():
                 result = subprocess.run([self.config["qualificationPython"], str(self.app / "scripts/hermes-qualified-python.py"), "prepare",
@@ -383,23 +485,24 @@ class Worker:
         (isolated_app / "node_modules").symlink_to(self.app / "node_modules", target_is_directory=True)
         command = [qualified_python, str(isolated_app / "scripts/spike/run.py"),
             "--qualification", "--revision", candidate, "--source", str(source), "--python", qualified_python]
-        if current_patch: command.extend(["--source-patch-sha256", current_patch])
+        if candidate_patch: command.extend(["--source-patch-sha256", candidate_patch])
         self.check_step("integration", "Real isolated Hermes integration and recovery", lambda: self.run(command, cwd=isolated_app, timeout=self.config.get("qualificationTimeoutSeconds", 3600)))
         def regressions():
             for argv in self.config["hooks"]["regressions"]: self.run(argv)
         self.check_step("regressions", "Host OAuth, Google authentication and profile regressions", regressions)
-        if self.snapshot(self.source)[:2] != (current, current_patch) or self.snapshot(source)[:2] != (candidate, current_patch) or integration_digest(self.app) != digest or self.dashboard_link() != dashboard_link or self.host_fingerprint() != host_fingerprint:
+        if self.snapshot(self.source)[:2] != (current, current_patch) or self.snapshot(source)[:2] != (candidate, candidate_patch) or git_tag_refs(source) != git_tag_refs(self.source) or integration_digest(self.app) != digest or self.dashboard_link() != dashboard_link or self.host_fingerprint() != host_fingerprint:
             raise RuntimeError("Qualification inputs changed while tests were running")
         if (self.managed_fingerprint(qualified_python) if managed else runtime_fingerprint(qualified_python)) != runtime:
             raise RuntimeError("The dependency environment changed during qualification")
-        receipt = {"schemaVersion": 1, "revision": candidate, "trackedPatchSha256": current_patch,
+        receipt = {"schemaVersion": 1, "revision": candidate, "trackedPatchSha256": candidate_patch,
             "integrationDigest": digest, "qualifiedAt": now(), "checks": {"realIntegration": True, "hostRegressions": True}}
         atomic(stage / "qualification.json", receipt)
         self.update(phase="ready", message="The Hermes update passed its checks and is ready to install.", checkedAt=now(),
             qualification={"stage": str(stage), "currentRevision": current, "currentPatchSha256": current_patch,
-                "candidateRevision": candidate, "integrationDigest": digest, "runtimeFingerprint": runtime,
+                "candidateRevision": candidate, "candidatePatchSha256": candidate_patch, "integrationDigest": digest, "runtimeFingerprint": runtime,
                 "qualificationPython": qualified_python, "runtimeMode": "managed" if managed else "venv",
-                "runtimeDescriptor": runtime_descriptor, "dashboardLink": dashboard_link, "hostFingerprint": host_fingerprint})
+                "runtimeDescriptor": runtime_descriptor, "dashboardLink": dashboard_link, "hostFingerprint": host_fingerprint,
+                "tagRefs": git_tag_refs(source)})
 
     def install(self):
         if self.config.get("managedLauncher"):
@@ -416,11 +519,13 @@ class Worker:
         if stage.parent.resolve() != Path(self.config["stageRoot"]).resolve(): raise RuntimeError("Invalid qualification stage")
         receipt = json.loads(private_file(stage / "qualification.json").read_text())
         old = (qualification["currentRevision"], qualification["currentPatchSha256"])
-        target = (qualification["candidateRevision"], qualification["currentPatchSha256"])
+        target = (qualification["candidateRevision"], qualification["candidatePatchSha256"])
         expected = {"schemaVersion": 1, "revision": target[0], "trackedPatchSha256": target[1],
             "integrationDigest": qualification["integrationDigest"], "checks": {"realIntegration": True, "hostRegressions": True}}
         if any(receipt.get(key) != value for key, value in expected.items()) or not receipt.get("qualifiedAt"):
             raise RuntimeError("The target is not fully qualified")
+        if git_tag_refs(stage / "source") != qualification["tagRefs"]:
+            raise RuntimeError("The staged native version tags changed after qualification")
         if self.state.get("candidate", {}).get("revision") != target[0] or self.snapshot(self.source)[:2] != old or self.snapshot(stage / "source")[:2] != target or integration_digest(self.app) != receipt["integrationDigest"] or self.dashboard_link() != qualification.get("dashboardLink") or self.host_fingerprint() != qualification["hostFingerprint"]:
             raise RuntimeError("Qualification is stale; check this update again")
         if self.qualified_fingerprint(qualification) != qualification["runtimeFingerprint"]:
@@ -430,6 +535,10 @@ class Worker:
             "HERMES_UPGRADE_BACKUP_DIR": str(stage / "backup")})
         self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] = qualification["qualificationPython"]
         self.environment["HERMES_UPGRADE_RUNTIME_FINGERPRINT"] = json.dumps(qualification["runtimeFingerprint"])
+        if self.config.get("approvedPatchFile"):
+            self.environment.update({"HERMES_UPGRADE_APPROVED_PATCH_FILE": self.config["approvedPatchFile"],
+                "HERMES_UPGRADE_APPROVED_PATCH_SHA256": self.config["requiredPatchSha256"]})
+        if target[1]: self.environment["HERMES_UPGRADE_CANDIDATE_PATCH_SHA256"] = target[1]
         if qualification.get("runtimeDescriptor"): self.environment["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = qualification["runtimeDescriptor"]
         deployed_receipt = Path(self.config["qualificationReceipt"])
         previous_receipt = private_file(deployed_receipt).read_bytes() if deployed_receipt.exists() else None
@@ -506,8 +615,8 @@ class Worker:
                     import traceback
                     traceback.print_exc(file=output)
                     safe_rejection = self.action == "install" and not self.host_hook_started
-                    unsupported = isinstance(error, UnsupportedDependencies)
-                    self.update(phase="blocked" if safe_rejection or unsupported else "failed", error="dependencies_require_qualification" if unsupported else "qualification_failed" if self.action == "check" else "qualification_stale" if safe_rejection else "install_requires_review",
+                    unsupported = isinstance(error, (UnsupportedDependencies, UnsupportedRepair))
+                    self.update(phase="blocked" if safe_rejection or unsupported else "failed", error="repair_requires_review" if isinstance(error, UnsupportedRepair) else "dependencies_require_qualification" if unsupported else "qualification_failed" if self.action == "check" else "qualification_stale" if safe_rejection else "install_requires_review",
                         message=str(error) if unsupported else "The update check failed. Ask the installer to review its private log." if self.action == "check"
                         else "The qualified update changed before installation. Check again before installing it." if safe_rejection
                         else "The update stopped without a verified recovery. Hermes changes stay paused until the installer reviews it.",
