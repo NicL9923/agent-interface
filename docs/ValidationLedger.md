@@ -1,5 +1,46 @@
 # Validation ledger
 
+## October 1 integrations deployment
+
+PR #6 merged at `8515fff1eecbf5458e5085c8b9e97bbebb12790e`. The release is live
+at `https://agentui.wildflowersranch.com`, web build `974365546ec56e79`.
+Source fingerprint including the installer follow-up and receipts, 261 files:
+`sha256:5c3cb2f49b6b8ac206e28d85dabbf163f353e32f9dab08f74659863409d01704`.
+The [production receipt](evidence/production-integrations-activation-20261001.json)
+binds the reviewed deployment helper, all 104 packaged inputs and archive SHA256
+`a2dc6478f866d7297bc42ec3defa5a6837a423589637144256ea39730676f1ab`.
+
+The [managed-runtime evidence](evidence/managed-integrations-d23-20261001T183800Z/manifest.json)
+records the full native, extension, routines, integration, service, maintenance
+and application run using an isolated PM generation and an exact copy of the
+installed Hermes source. It includes the original approved OAuth repair
+`2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c`.
+All probe groups and 18 private shared-OAuth/Google-plugin regressions passed.
+The integration digest remains
+`a9f21dad6508db87c43ee5eede29015526eccc1ca62bb510a2965c577681d885`.
+Earlier application/iOS checks remain applicable because the follow-up changes
+only the deployment tool and evidence, not runtime or client inputs.
+
+Installer preflight verified both updater locks, idle native work and original
+Google HTTP/fresh-ticket WebSockets before service changes. Independent GPT-6.1
+Sol high review corrected the native guardian PID handoff and verified the receipt
+activation sequence. The first cutover stopped cleanly and paused before changing
+the release because the legacy installation had no qualification file. The tool
+now records that absence explicitly instead of assuming a previous receipt exists.
+An independently reviewed continuation rechecked operation, release, lease, drain,
+inactive services, source/repair and settings under both locks. It resumed the
+same owned operation without replaying shutdown, activated the verified receipt,
+started the new release, verified recovery and cleared maintenance.
+
+Production checks verified original Google HTTP and fresh WebSockets, both Discord
+connections, both profile model responses in canonical history, actual terminal
+output in canonical tool messages, both integration inventories and a live provider
+health check. App, dashboard, gateway, backup timer, Caddy and WireGuard are active.
+Both profile settings and the approved repair stayed unchanged. The public sign-in
+page and Google button render; a fresh household app sign-in was not repeated.
+Hermes remains at d23; deployment did not install a new Hermes version. Live new
+vendor consent and physical-iPhone acceptance remain in external acceptance issue #1.
+
 ## October 1 integrations and failed-update controls
 
 Branch: `feature/integrations-update-recovery`, based on

@@ -32,6 +32,18 @@ assert hashlib.sha256((release/"scripts/hermes-upgrade-linux.py").read_bytes()).
 assert c["webBuild"] in (release/"dist/client/sw.js").read_text()
 configs=[Path(path) for path in c["profileHashes"]];hashes=lambda:{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in configs}
 assert hashes()==c["profileHashes"]
+qualification_target=Path(c["qualificationReceipt"])
+qualification_input=Path(c.get("newQualificationReceipt",c["qualificationReceipt"]))
+read_receipt=runpy.run_path(str(release/"src/hermes/qualification.py"))["read_receipt"]
+qualified_receipt=read_receipt(qualification_input,release)
+qualified_bytes=qualification_input.read_bytes()
+assert json.loads(qualified_bytes)==qualified_receipt
+assert qualified_receipt["revision"]==c["hermesRevision"] and qualified_receipt["trackedPatchSha256"]==c["repairSha256"]
+assert qualification_target.is_absolute() and not qualification_target.is_symlink()
+assert c["newWorkerConfig"]["qualificationReceipt"]==str(qualification_target)
+for environment,key in ((service_env,"HERMES_AGENT_INTERFACE_QUALIFICATION_FILE"),(app_env,"HERMES_QUALIFICATION_FILE")):
+ values=dict(line.split("=",1) for line in environment.read_text().splitlines() if "=" in line)
+ assert values.get(key)==str(qualification_target)
 def rpc(action):
  code="import runpy; m=runpy.run_path("+repr(str(release/"scripts/hermes-upgrade-linux.py"))+"); exec(m['NATIVE'])"
  secret=dict(line.split("=",1) for line in service_env.read_text().splitlines() if "=" in line)["HERMES_AGENT_INTERFACE_TOKEN"]
@@ -45,7 +57,7 @@ def gateway_idle(after=None):
 claim=runpy.run_path(str(release/"scripts/hermes-upgrade-worker.py"))["NativeUpdateClaim"](source,home)
 opened=False
 with claim:
- os.environ["HERMES_UPDATE_HANDOFF_PID"]=str(os.getpid())
+ os.environ["HERMES_UPDATE_HANDOFF_PID"]=str(claim.owner_pid)
  assert run(["git","-C",str(source),"rev-parse","HEAD"]).strip()==c["hermesRevision"]
  assert hashlib.sha256(subprocess.check_output(["git","-C",str(source),"diff","HEAD","--binary"])).hexdigest()==c["repairSha256"]
  gate=rpc("status");assert gate["active"] is False and gate["busy"]==[]
@@ -84,6 +96,13 @@ with claim:
   assert (home/".clean_shutdown").stat().st_mtime>=stopped_at
   record=gateway_state();assert record["pid"]==old_pid and record["gateway_state"]=="stopped" and datetime.datetime.fromisoformat(record["updated_at"]).timestamp()>=stopped_at
   assert hashes()==c["profileHashes"]
+  # Bind the new add-on only after all native readers stopped. Retain the
+  # matching old receipt before replacing it; recovery restores both together.
+  previous_qualification=qualification_target.read_bytes() if qualification_target.exists() else None
+  atomic(ops/"previous-qualification-state.json",(json.dumps({"path":str(qualification_target),"existed":previous_qualification is not None,
+    "sha256":hashlib.sha256(previous_qualification).hexdigest() if previous_qualification is not None else None})+"\n").encode())
+  if previous_qualification is not None:atomic(ops/"previous-qualification.json",previous_qualification)
+  atomic(qualification_target,qualified_bytes)
   atomic(base/"shared/hermes-worker.json",json.dumps(c["newWorkerConfig"],indent=2).encode()+b"\n")
   switch(release);journal("release-switched")
   system("start","hermes-dashboard.service","hermes-gateway.service","agent-interface.service")
