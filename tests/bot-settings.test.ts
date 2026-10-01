@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotSettings } from "../src/BotSettings";
-import { api, write } from "../src/client-api";
+import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
 
@@ -36,7 +36,7 @@ const onSaved = vi.fn();
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  vi.mocked(api).mockReset().mockResolvedValue({});
+  vi.mocked(api).mockReset().mockResolvedValue({ providers: [], provider: "", model: "" });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true, value: vi.fn(),
@@ -45,6 +45,7 @@ beforeEach(async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
+  vi.mocked(api).mockClear();
 });
 
 describe.each(["tools", "skills"])("%s configuration", (tab) => {
@@ -116,4 +117,21 @@ describe("assistant deletion", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
+});
+
+it("clears expensive-model confirmation when a different model is selected", async () => {
+  vi.mocked(api).mockResolvedValueOnce([]).mockResolvedValueOnce({ provider: "provider", model: "test", providers: [
+    { id: "provider", name: "Provider", authenticated: true, models: [{ id: "other", name: "Other model", available: true }] },
+  ] });
+  // Reload only the selector by visiting another section and returning to details.
+  await click("tools");
+  await click("details");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+  await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(container.textContent).toContain("Confirm this model");
+  await click("Other model");
+  expect(container.textContent).not.toContain("Confirm this model");
+  expect(container.textContent).not.toContain("This model has a higher price");
+  await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({ provider: "provider", model: "other", shared: true, confirmModel: false }), "PATCH");
 });

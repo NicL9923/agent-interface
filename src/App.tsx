@@ -712,6 +712,8 @@ export function App() {
     ? "disconnected"
     : conversation?.activity.state || selected?.activity || "idle";
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
+  const showActivity = state !== "idle" && state !== "done";
+  const avatarState = state === "done" ? "idle" : state;
   const allBots = boot.bots;
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -729,7 +731,7 @@ export function App() {
         ? state
         : bot.activity;
     // The rail says what each assistant is doing in words, not only through motion.
-    const reportsActivity = !connectionLost && botState !== "idle";
+    const reportsActivity = !connectionLost && botState !== "idle" && botState !== "done";
     return (
       <button
         className={`bot-item ${bot.id === botId ? "selected" : ""}`}
@@ -737,7 +739,7 @@ export function App() {
         aria-current={bot.id === botId ? "page" : undefined}
         onClick={() => selectBot(bot.id)}
       >
-        <Avatar avatar={bot.avatar} state={botState} size={40} name={bot.name} />
+        <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={40} name={bot.name} />
         <span>
           <strong>{bot.name}</strong>
           <small className={reportsActivity ? `bot-activity state-${botState}` : undefined}>
@@ -859,7 +861,7 @@ export function App() {
             <>
               <Avatar
                 avatar={selected.avatar}
-                state={state}
+                state={avatarState}
                 size={42}
                 name={selected.name}
               />
@@ -1021,11 +1023,11 @@ export function App() {
                   </article>
                 ))}
             </>
-          ) : (
+          ) : !showActivity ? (
             <div className="empty-state">
               <Avatar
                 avatar={selected.avatar}
-                state={state}
+                state={avatarState}
                 size={112}
                 name={selected.name}
               />
@@ -1038,10 +1040,35 @@ export function App() {
                 <p className="muted">{boot.capabilities.chat.reason}</p>
               )}
             </div>
-          )}
+          ) : null}
           {advanced && liveTools.map(call => <article className="message message-tool" key={`tool-${call.id}`}>
             <ToolCallDetail call={call} disconnected={connectionLost} />
           </article>)}
+          {selected && showActivity && (
+            <div className={`activity-status conversation-activity message-activity state-${state}`}>
+              <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} />
+              <div className="activity-copy" role="status">
+                <strong>{stateLabels[state]}</strong>
+                <p>{connectionLost ? "Restoring activity when Hermes reconnects."
+                  : conversation?.activity.detail || (state === "thinking" ? "Considering your message."
+                    : state === "working" ? "Working on your request." : "")}</p>
+              </div>
+              {active && (
+                <button
+                  disabled={!boot.capabilities.stop.supported}
+                  title={boot.capabilities.stop.reason}
+                  onClick={() =>
+                    void write(
+                      `/bots/${encodeURIComponent(botId)}/stop`,
+                      {},
+                    ).catch((e) => setError(e.message))
+                  }
+                >
+                  <Icon name="stop" size={14} /> Stop
+                </button>
+              )}
+            </div>
+          )}
           {conversation?.attention?.map((request) => (
             <AttentionCard
               key={request.id}
@@ -1096,29 +1123,6 @@ export function App() {
         </div>
         {selected && (
           <footer className="composer-area">
-            <div className={`activity-status conversation-activity state-${state}`}>
-              <Avatar avatar={selected.avatar} state={state} size={60} name={selected.name} />
-              <div className="activity-copy" role="status">
-                <strong><span className="activity-dot" aria-hidden="true" />{stateLabels[state]}</strong>
-                <p>{connectionLost ? "Restoring activity when Hermes reconnects."
-                  : conversation?.activity.detail || (state === "thinking" ? "Considering your message."
-                    : state === "working" ? "Working on your request." : state === "idle" ? "Here when you need a hand." : "")}</p>
-              </div>
-              {active && (
-                <button
-                  disabled={!boot.capabilities.stop.supported}
-                  title={boot.capabilities.stop.reason}
-                  onClick={() =>
-                    void write(
-                      `/bots/${encodeURIComponent(botId)}/stop`,
-                      {},
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  <Icon name="stop" size={14} /> Stop
-                </button>
-              )}
-            </div>
             {state === "interrupted" && (
               <label className="interruption-review">
                 <input
@@ -1130,7 +1134,7 @@ export function App() {
                 continuing.
               </label>
             )}
-            {conversation && advanced && (
+            {conversation && advanced && showActivity && (
                 <details className="activity-details">
                   <summary>Activity details</summary>
                   <p>{connectionLost ? "Activity is unknown until Hermes reconnects." : conversation.activity.detail || stateLabels[state]}</p>

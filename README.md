@@ -11,6 +11,12 @@ The self-hoster connects this server to Hermes once. Web users sign in to that
 installation. iOS users enter its HTTPS address, then sign in to the same
 household. The mobile app connects to this server, not directly to Hermes.
 
+Web assistant settings load model options from the connected Hermes profile.
+Expand provider groups or search the catalog, then star models to keep personal
+favorites. Shared assistants keep one shared model. Existing selections remain
+saved when a provider is unavailable, and Hermes model warnings still require
+confirmation.
+
 ## Run locally
 
 Use Node 24.21 or 26.10 and npm. `.node-version` selects the tested Node 24 LTS
@@ -102,8 +108,10 @@ Cancellation restores the previous version when needed; recovery never clears
 maintenance without verifying the resulting runtime. Unverifiable legacy failures
 still require installer repair. The app does not silently update Hermes.
 
-Conversations show an animated avatar beside the composer while Hermes thinks
-or uses tools. Advanced view adds collapsed tool inputs, outputs, errors and
+Conversations show an animated avatar inline after the latest message while
+Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
+tilt and upward gaze. Completed work leaves the final reply without a separate
+Done status. Advanced view adds collapsed tool inputs, outputs, errors and
 timestamps, plus reasoning Hermes exposes. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
 

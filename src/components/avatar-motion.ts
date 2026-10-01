@@ -106,10 +106,15 @@ export function avatarPose(state: ActivityState, t: number, reduce: boolean): Po
       pose.yaw = x * 0.16;
       break;
     }
-    case "thinking":
+    case "thinking": {
+      const b = breathe(2.1, 0.018);
       pose.gazeX = Math.sin(t * 1.3) * 0.5;
       pose.gazeY = -0.8;
+      pose.yaw = Math.sin(t * 1.3) * 0.18;
+      pose.roll = -5 + Math.sin(t * 1.3) * 2;
+      pose.lift = -1.5 - b;
       break;
+    }
     case "working": {
       const u = t % WORK_CYCLE;
       const scanEnd = WORK_CYCLE - WORK_SPIN;

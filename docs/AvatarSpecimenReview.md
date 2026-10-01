@@ -42,3 +42,15 @@ Checked in Chromium at 1200 px with motion and with reduced motion, and from
 frame strips sampled every 160 to 330 ms. Reduced motion and the frozen states
 (disconnected, interrupted) return the resting pose; `tests/avatar-motion.test.ts`
 covers this and the working, done and blink timing.
+
+## Inline conversation activity
+
+The October 1 conversation update keeps the thinking character visible with a
+gentle tilt, breathing and an upward gaze, replacing the earlier three-dot
+morph. The specimen uses the same updated web rig. Its Done state remains
+available for reference, while conversations return completed avatars to idle
+and leave the final reply as the result.
+
+Live activity now appears after messages in the transcript. Failure, interrupted
+work, pending attention and unknown connectivity still show their current state.
+Reduced motion keeps the character and status visible while stopping movement.

@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
 const port = Number(process.env.PREVIEW_PORT || 3000);
+const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
 // PREVIEW_THEME=light|dark|system and PREVIEW_PRESENTATION=simple|advanced pick the initial preferences.
 const portrait = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#d9c7a3"/><circle cx="40" cy="31" r="15" fill="#6b4f3a"/><path d="M12 80c4-20 16-29 28-29s24 9 28 29Z" fill="#3f6b57"/></svg>');
@@ -16,7 +17,12 @@ const bots = [
   { id: 'fox', name: 'Trail scout with a long name for wrapping', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'done', avatar: { mode: 'mascot', family: 'fox', color: '#FF6700', eyes: 'oval', accessory: 'none' } },
   { id: 'guide', name: 'Trail guide', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'failed', avatar: { mode: 'portrait', src: portrait, origin: 'uploaded' } },
 ];
-const preferences = { theme: process.env.PREVIEW_THEME || 'system', presentation: process.env.PREVIEW_PRESENTATION || 'simple', favorites: ['ranch'], sections: [{ id: 'house', name: 'Around the house', botIds: ['ranch', 'kitchen', 'garden'] }], followBots: [] };
+const preferences = { theme: process.env.PREVIEW_THEME || 'system', presentation: process.env.PREVIEW_PRESENTATION || 'simple', favorites: ['ranch'], sections: [{ id: 'house', name: 'Around the house', botIds: ['ranch', 'kitchen', 'garden'] }], followBots: [], modelFavorites: [] };
+const modelCatalog = { provider: 'openrouter', model: 'configured-model', providers: [
+  { id: 'openrouter', name: 'OpenRouter', authenticated: true, models: [{ id: 'configured-model', name: 'Configured model', available: true }, { id: 'openai/gpt-6.1-sol', name: 'GPT-6.1 Sol', available: true }, { id: 'anthropic/claude-sonnet', name: 'Claude Sonnet', available: true }] },
+  { id: 'openai-codex', name: 'OpenAI subscription', authenticated: true, models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', available: true }] },
+  { id: 'xai', name: 'xAI', authenticated: false, warning: 'Connect this provider in Integrations to use its models.', models: [{ id: 'grok-4.6', name: 'Grok 4.6', available: false }] },
+] };
 const at = (minutes) => new Date(Date.UTC(2026, 9, 1, 16, minutes)).toISOString();
 const ranchMessages = [
   { id: 'm1', role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: 'The north gate sensor keeps saying it is open. Can you check its history and tell me if it is the battery?', createdAt: at(2) },
@@ -52,6 +58,7 @@ const flows = new Map();
 let signedIn = process.env.PREVIEW_SIGNED_OUT !== '1';
 const json = (response, data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(data)); };
 createServer(async (request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
   let body = {}; if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); try { body = JSON.parse(Buffer.concat(chunks)); } catch {} }
   if (url.pathname.startsWith('/api/')) {
@@ -59,7 +66,9 @@ createServer(async (request, response) => {
     if (path === '/auth/config') return json(response, { localDevAuth: true, nativeAuthVersion: 1 });
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
-    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, connection: { connected: true, version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    if (path === '/models') return json(response, modelCatalog);
+    if (path === '/preferences/models') { preferences.modelFavorites = body.modelFavorites || []; return json(response, { modelFavorites: preferences.modelFavorites }); }
     if (path === '/integrations') return json(response, { profile: 'ranch', canManage: true, connections });
     if (path.includes('/integrations/flows/')) { const flow = flows.get(path.split('/')[3]); if (request.method === 'DELETE') flow.status = 'cancelled'; return json(response, flow || { status: 'expired', kind: 'instructions', message: 'Sign-in expired.' }); }
     if (path === '/integrations/mcp') { const item = { ...connections[0], id: body.name, name: body.name, category: 'custom', account: undefined, status: 'configured', detail: 'Custom server saved. Check the connection to verify it.', permissions: [], setup: [] }; connections.push(item); return json(response, item); }
@@ -75,4 +84,4 @@ createServer(async (request, response) => {
   }
   try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = await readFile(url.pathname === '/' ? resolve(root, 'index.html') : file); response.writeHead(200, { 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await readFile(resolve(root, 'index.html')); response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
-}).listen(port, '127.0.0.1', () => process.stdout.write(`Fixture-only preview: http://127.0.0.1:${port}\n`));
+}).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));

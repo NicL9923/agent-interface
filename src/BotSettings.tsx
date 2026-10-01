@@ -14,6 +14,7 @@ import { IntegrationList } from "./components/IntegrationsPanel";
 import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
+import { ModelSelector } from "./components/ModelSelector";
 export function BotSettings({
   bot,
   bootstrap,
@@ -36,14 +37,6 @@ export function BotSettings({
     shared: existing?.shared ?? true,
     enabledMcpServers: existing?.enabledMcpServers || [],
   });
-  const modelChoices = Array.from(
-    new Map(
-      bootstrap.bots.map((b) => [
-        JSON.stringify([b.provider || "", b.model]),
-        { provider: b.provider || "", model: b.model },
-      ]),
-    ).values(),
-  );
   const [avatar, setAvatar] = useState<AvatarConfig>(
     existing?.avatar || defaultAvatar,
   );
@@ -259,86 +252,18 @@ export function BotSettings({
                 placeholder="How should this assistant help?"
               />
             </label>
-            <label>
-              Connected model
-              <select
-                required
-                value={JSON.stringify([form.provider || "", form.model])}
-                onChange={(event) => {
-                  const [provider, model] = JSON.parse(event.target.value);
-                  setForm({ ...form, provider, model });
-                }}
-              >
-                <option value={JSON.stringify(["", ""])}>
-                  Choose a connected model
-                </option>
-                {!modelChoices.some(
-                  (choice) =>
-                    choice.provider === (form.provider || "") &&
-                    choice.model === form.model,
-                ) &&
-                  form.model && (
-                    <option
-                      value={JSON.stringify([form.provider || "", form.model])}
-                    >
-                      Advanced: {form.provider} / {form.model}
-                    </option>
-                  )}
-                {modelChoices.map((choice) => (
-                  <option
-                    key={JSON.stringify([choice.provider, choice.model])}
-                    value={JSON.stringify([choice.provider, choice.model])}
-                  >
-                    {choice.provider} / {choice.model}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <details className="model-advanced">
-              <summary>Advanced model choice</summary>
-              <div className="form-row">
-                <label>
-                  Existing provider
-                  <input
-                    required
-                    list="known-providers"
-                    value={form.provider}
-                    onChange={(e) =>
-                      setForm({ ...form, provider: e.target.value })
-                    }
-                  />
-                  <datalist id="known-providers">
-                    {Array.from(
-                      new Set(modelChoices.map((c) => c.provider)),
-                    ).map((provider) => (
-                      <option key={provider}>{provider}</option>
-                    ))}
-                  </datalist>
-                </label>
-                <label>
-                  Model
-                  <input
-                    required
-                    list="known-models"
-                    value={form.model}
-                    onChange={(e) =>
-                      setForm({ ...form, model: e.target.value })
-                    }
-                  />
-                  <datalist id="known-models">
-                    {Array.from(new Set(modelChoices.map((c) => c.model))).map(
-                      (model) => (
-                        <option key={model}>{model}</option>
-                      ),
-                    )}
-                  </datalist>
-                </label>
-              </div>
-            </details>
-            <p className="muted">
-              Use a provider already connected in Hermes. Add new sign-ins in
-              the official Hermes interface.
-            </p>
+            <ModelSelector
+              value={{ provider: form.provider || "", model: form.model }}
+              profile={existing?.id}
+              favorites={bootstrap.preferences.modelFavorites || []}
+              disabled={busy || !bootstrap.capabilities.botConfiguration.supported}
+              onChange={({ provider, model }) => {
+                setForm({ ...form, provider, model });
+                setConfirmModel(false);
+                setError("");
+              }}
+              onFavoritesSaved={onSaved}
+            />
             <label className="checkbox-label">
               <input
                 type="checkbox"
@@ -377,7 +302,7 @@ export function BotSettings({
               <button
                 className="primary"
                 disabled={
-                  busy || !bootstrap.capabilities.botConfiguration.supported
+                  busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
                 {busy

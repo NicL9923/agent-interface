@@ -30,7 +30,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   };
   const readMethods = new Set([
     'agent-interface.capabilities', 'agent-interface.receipt', 'agent-interface.discover',
-    'profiles.list', 'profiles.describe', 'session.history',
+    'profiles.list', 'profiles.describe', 'session.history', 'model.options',
   ]);
   let connection: Connection | undefined;
   let connecting: Promise<void> | undefined;
@@ -454,6 +454,26 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
   return {
+    async modelOptions(profile) {
+      // Use Hermes's account-aware catalog, including custom provider aliases.
+      // This native RPC already runs under authenticated profile scope.
+      const result = await rpc('model.options', { ...(profile ? {profile} : {}), explicit_only: true });
+      if (!Array.isArray(result.providers)) throw new Error('Hermes returned an unreadable model catalog.');
+      return {
+        provider: typeof result.provider === 'string' ? result.provider : '',
+        model: typeof result.model === 'string' ? result.model : '',
+        providers: result.providers.flatMap((row: Wire) => {
+          if (typeof row.slug !== 'string' || !row.slug || !Array.isArray(row.models)) return [];
+          const unavailable = new Set(Array.isArray(row.unavailable_models) ? row.unavailable_models : []);
+          return [{ id: row.slug, name: typeof row.name === 'string' ? row.name : row.slug,
+            aliases: Array.isArray(row.aliases) ? row.aliases.filter((value: unknown) => typeof value === 'string') : [],
+            authenticated: row.authenticated !== false,
+            ...(typeof row.warning === 'string' ? { warning: row.warning } : {}),
+            models: [...new Set(row.models.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0))].map(model => ({id: model as string, name: model as string, available: row.authenticated !== false && !unavailable.has(model)})),
+          }];
+        }),
+      };
+    },
     status: runtimeStatus,
     reconnect,
     async capabilities() {
@@ -501,7 +521,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const config:Wire={name,soul:input.instructions,description:input.description??'',ui_meta:{'hermes-bots':{...previous?.ui_meta?.['hermes-bots'],title:input.name},agent_interface:{...previous?.ui_meta?.agent_interface,name:input.name,shared:input.shared}},ui_meta_expected_revisions:{'hermes-bots':previous?.ui_meta_revisions?.['hermes-bots']??0,agent_interface:previous?.ui_meta_revisions?.agent_interface??0}};
       if(input.model && input.model!=='Inherited'){config.model=input.model;config.provider=input.provider??(await rpc('profiles.describe',{name})).model.provider;if(input.confirmModel)config.confirm_expensive_model=true;}if(input.enabledMcpServers)config.enabled_mcp_servers=input.enabledMcpServers;
       if(input.enabledSkills){const all=await rpc('profiles.describe',{name});config.disabled_skills=all.skills.filter((x:Wire)=>!input.enabledSkills!.includes(x.name)).map((x:Wire)=>x.name);}
-      const result=await rpc('profiles.configure',config);if(result.confirm_required)throw Object.assign(new Error('Hermes requires confirmation for this model.'),{statusCode:409,code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
+      const result=await rpc('profiles.configure',config);if(result.confirm_required)throw Object.assign(new Error(typeof result.confirm_message === 'string' ? result.confirm_message.slice(0, 2000) : 'Hermes requires confirmation for this model.'),{statusCode:409,code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
       const roster=await rpc('profiles.list',{include_sessions:true});return bot(roster.profiles.find((x:Wire)=>x.name===name),await rpc('profiles.describe',{name}));}catch(error){if(created){try{await http(`/api/profiles/${encodeURIComponent(name)}`,{method:'DELETE'});live.delete(name);}catch{throw Object.assign(new Error('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot '+name+'.'),{createdBotId:name,cause:error});}}throw error;}},
     async deleteBot(id){await http(`/api/profiles/${encodeURIComponent(id)}`,{method:'DELETE'});live.delete(id);},
     async stop(botId){const state=await open(botId);await rpc('session.interrupt',{session_id:state.session_id,profile:botId});},

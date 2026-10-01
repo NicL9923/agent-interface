@@ -11,6 +11,11 @@
 .message-markdown > :last-child {
   margin-bottom: 0;
 }
+.message-markdown img,
+.message-markdown video {
+  max-width: 100%;
+  height: auto;
+}
 .message-markdown p,
 .message-markdown ul,
 .message-markdown ol,
@@ -107,6 +112,7 @@
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .markdown-code-header button {
   flex-shrink: 0;

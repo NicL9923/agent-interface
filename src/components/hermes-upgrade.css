@@ -1,5 +1,5 @@
 .hermes-upgrade-panel {
-  width: min(470px, calc(100vw - 32px));
+  width: min(470px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right))));
   max-height: calc(100dvh - 40px);
   overflow: auto;
   color: var(--ink);
@@ -40,7 +40,7 @@
 .upgrade-checked-at { font-size: 10px; color: var(--muted); margin: 18px 0 0; }
 @keyframes upgrade-breathe { 50% { opacity: .55; transform: translateY(-2px); } }
 @media (max-width: 620px) {
-  .hermes-upgrade-panel { padding: 22px; border-radius: 20px; }
+  .hermes-upgrade-panel { padding: 22px; border-radius: 20px; max-height: calc(100dvh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom))); }
   .hermes-upgrade-panel h2 { font-size: 23px; }
 }
 @media (prefers-reduced-motion: reduce) { .upgrade-mark.is-working { animation: none; } }

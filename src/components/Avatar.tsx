@@ -166,7 +166,6 @@ function trailsAt(pose: { trails: number; sweep: number }, t: number, carry: num
 }
 
 const morphTargets = (state: ActivityState) => ({
-  dots: state === "thinking" ? 1 : 0,
   bang: state === "blocked" ? 1 : 0,
 });
 
@@ -247,10 +246,9 @@ export function Avatar({
       const targets = morphTargets(state);
       const k = 1 - Math.exp(-dt / 0.13);
       morph.current = {
-        dots: morph.current.dots + (targets.dots - morph.current.dots) * k,
         bang: morph.current.bang + (targets.bang - morph.current.bang) * k,
       };
-      const settling = Math.abs(targets.dots - morph.current.dots) + Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
+      const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
       // Small sidebar avatars repaint at about 30 fps to spare battery.
       if (size >= 56 || now - painted > 32) {
         painted = now;
@@ -273,8 +271,8 @@ export function Avatar({
       ? trailsAt(pose, 0, clock.level, clock.sweep)
       : trailsAt(pose, t, clock.carry, clock.carrySweep);
   const face = expression.current;
-  const { dots, bang } = morph.current;
-  const symbolic = Math.max(dots, bang);
+  const { bang } = morph.current;
+  const symbolic = bang;
 
   const mascot = avatar.mode === "mascot" ? avatar : null;
   const color = avatar.mode === "portrait" ? "#1084FE" : avatar.color;
@@ -519,19 +517,6 @@ export function Avatar({
                 <circle cx="50" cy="79" r="7.5" />
               </g>
             )}
-            {dots > 0.01 &&
-              [-1, 0, 1].map((offset, i) => {
-                const wave = still ? 0.5 : Math.max(0, Math.sin(t * 4.2 - i * 0.9));
-                return (
-                  <circle
-                    key={offset}
-                    cx={50 + offset * 25 * dots}
-                    cy={50 - wave * 7 * dots}
-                    r={8.5 * Math.sqrt(dots)}
-                    opacity={smoothstep(dots) * (still ? 1 - i * 0.25 : 0.5 + 0.5 * wave)}
-                  />
-                );
-              })}
           </g>
         </svg>
       )}
