@@ -11,6 +11,7 @@ import re
 PREFIX = "/api/agent-interface/service/"
 TICKET_PATH = "/api/agent-interface/service-ticket"
 OPERATIONS = (
+    ("POST", re.compile(r"/api/agent-interface/integrations")),
     ("GET", re.compile(r"/api/profiles")),
     ("DELETE", re.compile(r"/api/profiles/[A-Za-z0-9_-]{1,200}")),
     ("GET", re.compile(r"/api/files/download")),
@@ -81,6 +82,7 @@ class ServiceAuthMiddleware:
         trusted["path"] = native_path
         trusted["raw_path"] = native_path.encode()
         trusted["state"] = dict(scope.get("state", {}), token_authenticated=True,
+            agent_interface_service_authenticated=True,
             token_principal=TokenPrincipal(principal="agent-interface", provider="agent-interface-service", scopes=("executor",)))
         # Preserve method, body streaming and query bytes. Native dependencies and path policies run unchanged.
         await self.app(trusted, receive, send)

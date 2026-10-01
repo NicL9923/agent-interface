@@ -21,7 +21,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   status = { available: true, phase: "idle", current: { revision: "original", version: "1.0" },
-    message: "Check for an update.", checks: [], canCheck: true, canInstall: false, busyBots: [] };
+    message: "Check for an update.", checks: [], canCheck: true, canInstall: false, canRetry: false, canCancel: false, canRestartService: false, busyBots: [] };
   vi.mocked(api).mockImplementation(async () => status as never);
   container = document.createElement("div");
   document.body.append(container);
@@ -89,6 +89,40 @@ describe("Hermes updates", () => {
     expect(container.querySelector<HTMLDetailsElement>(".upgrade-checks")!.open).toBe(false);
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.textContent).not.toContain("Hermes is up to date");
+  });
+
+  it("confirms restart, sends a fenced request, and reconciles uncertain recovery without replay", async () => {
+    status = { ...status, phase: "failed", operationId: "failed-operation", canCheck: false, canRestartService: true, canRetry: true };
+    vi.mocked(write).mockRejectedValue(new ApiError("Lost connection", 503));
+    await render();
+    const button = (text: string) => Array.from(container.querySelectorAll("button")).find(b => b.textContent === text)!;
+    await act(async () => button("Restart Hermes").click());
+    expect(write).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("briefly disconnect everyone");
+    await act(async () => button("Yes, restart Hermes").click());
+    expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/control", {
+      action: "restart_service", operationId: "failed-operation", requestId: expect.stringMatching(/^[\da-f-]{36}$/),
+    });
+    expect(button("Restart Hermes").disabled).toBe(true);
+    status = { ...status, phase: "recovering", message: "Waiting for a safe stopping point.", canRestartService: false, canRetry: false };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("Waiting for a safe stopping point");
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores safe recovery actions after reopening and confirms cancellation", async () => {
+    status = { ...status, phase: "installing", operationId: "ongoing", canCheck: false, canCancel: true };
+    vi.mocked(write).mockResolvedValue({ ...status, phase: "recovering", canCancel: false });
+    await render(false);
+    await render();
+    const button = (text: string) => Array.from(container.querySelectorAll("button")).find(b => b.textContent === text)!;
+    await act(async () => button("Cancel update").click());
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => button("Yes, cancel update").click());
+    expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/control", {
+      action: "cancel", operationId: "ongoing", requestId: expect.any(String),
+    });
+    expect(container.textContent).toContain("Restoring the connection");
   });
 
   it("keeps an offline state actionable and restores focus to its opener", async () => {

@@ -1,0 +1,37 @@
+.integrations-panel { width: min(820px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 24px; padding: 26px; box-shadow: 0 24px 90px #14201926; }
+.integrations-panel::backdrop { background: #14201955; }
+.integrations-panel > header, .integration-toolbar, .integration-card-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.integrations-panel h2 { margin: 4px 0 12px; }
+.integrations-panel > .muted { max-width: 58ch; font-size: 14px; }
+.integration-profile { max-width: 320px; margin-block: 20px; }
+.integration-toolbar { margin: 16px 0; font-size: 12px; }
+.integration-group > h3 { color: var(--muted); font-size: 12px; font-weight: 600; margin: 26px 0 12px; }
+.integration-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.integration-card { border: 1px solid var(--line); border-radius: 16px; padding: 18px; min-width: 0; }
+.integration-card-heading { align-items: flex-start; flex-wrap: wrap; }
+.integration-card h4 { margin: 0; font-size: 15px; }
+.integration-status { font-size: 11px; color: var(--muted); border-radius: 6px; background: var(--rail); padding: 4px 7px; }
+.integration-card[data-status="connected"] .integration-status { color: var(--accent); background: var(--accent-soft); }
+.integration-card[data-status="expired"] .integration-status, .integration-card[data-status="missing_permission"] .integration-status, .integration-card[data-status="unavailable"] .integration-status { color: var(--danger); }
+.integration-card > p { font-size: 12px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.integration-card > .integration-account { font-size: 13px; color: var(--ink); margin-bottom: 4px; }
+.integration-card dl { font-size: 11px; margin: 14px 0; }
+.integration-card dl > div { display: flex; gap: 10px; margin-block: 6px; }
+.integration-card dt { width: 80px; flex-shrink: 0; color: var(--muted); }
+.integration-card dd { margin: 0; overflow-wrap: anywhere; }
+.integration-card details { font-size: 12px; border-top: 1px solid var(--line); padding-block: 12px; }
+.integration-card summary { cursor: pointer; }
+.integration-card ul { padding-left: 18px; }
+.integration-card li { margin-block: 8px; }
+.integration-card li span { display: block; color: var(--muted); font-size: 11px; }
+.integration-card .actions { margin-top: 14px; flex-wrap: wrap; gap: 6px; }
+.integration-card button { font-size: 12px; min-height: 40px; }
+.integration-flow, .integration-setup { background: var(--rail); border-radius: 14px; padding: 18px; margin-block: 16px; font-size: 13px; overflow-wrap: anywhere; }
+.integration-flow p { line-height: 1.6; }
+.integration-flow > button { margin: 12px 0 0 12px; }
+.integration-flow a { color: var(--accent); }
+.integration-code { font-size: 20px; letter-spacing: 3px; }
+.integration-custom { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; }
+.integration-custom form { max-width: 440px; padding-top: 16px; }
+.integration-confirmation { padding-top: 6px; font-size: 12px; }
+@media (max-width: 650px) { .integrations-panel { padding: 20px; } .integration-cards { grid-template-columns: 1fr; } .integration-toolbar { align-items: flex-start; } }

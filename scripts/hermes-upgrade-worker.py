@@ -6,6 +6,7 @@ an isolated app/source copy, never the production Hermes home. Installation is a
 separate action and revalidates all qualification inputs under an exclusive lock.
 """
 import argparse
+import base64
 import datetime
 import fcntl
 import hashlib
@@ -15,12 +16,12 @@ import os
 from pathlib import Path
 import re
 import resource
+import select
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 
@@ -111,6 +112,10 @@ def runtime_fingerprint(python):
     return {"interpreterSha256": sha(Path(python).resolve().read_bytes()), "dependenciesSha256": sha("\n".join(packages).encode())}
 
 
+class Cancelled(RuntimeError):
+    pass
+
+
 class UnsupportedDependencies(RuntimeError):
     pass
 
@@ -143,15 +148,19 @@ class NativeUpdateClaim:
             sys.path.remove(str(source)); sys.dont_write_bytecode = self.original_bytecode; raise
         self.source_path = str(source)
         self.lock = module.UpdateLock(path=self.path)
-        self.stop = threading.Event()
         self.failure = None
-        self.thread = None
+        self.guardian_pid = None
+        self.guardian_fd = None
+        self.owner_pid = os.getpid()
 
     def validate(self):
+        if self.guardian_pid and os.waitpid(self.guardian_pid, os.WNOHANG)[0]:
+            self.guardian_pid = None
+            self.failure = RuntimeError("The native update guardian exited")
         if self.failure is not None: raise RuntimeError("The native updater claim was lost") from self.failure
         marker = private_file(self.path)
         lines = marker.read_text().splitlines()
-        if len(lines) != 2 or int(lines[0]) != os.getpid() or not 0 <= time.time() - float(lines[1]) < 1200:
+        if len(lines) != 2 or int(lines[0]) != self.owner_pid or not 0 <= time.time() - float(lines[1]) < 1200:
             raise RuntimeError("The native updater claim changed")
 
     def refresh(self):
@@ -160,9 +169,9 @@ class NativeUpdateClaim:
         fd = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
         with os.fdopen(fd, "r+") as output:
             info = os.fstat(output.fileno())
-            if info.st_ino != self.path.lstat().st_ino or int(output.readline().strip()) != os.getpid():
+            if info.st_ino != self.path.lstat().st_ino or int(output.readline().strip()) != self.owner_pid:
                 raise RuntimeError("The native updater claim changed")
-            output.seek(0); output.write(f"{os.getpid()}\n{int(time.time())}\n"); output.truncate(); output.flush(); os.fsync(output.fileno())
+            output.seek(0); output.write(f"{self.owner_pid}\n{int(time.time())}\n"); output.truncate(); output.flush(); os.fsync(output.fileno())
 
     def __enter__(self):
         try:
@@ -170,20 +179,50 @@ class NativeUpdateClaim:
             if not self.lock.acquire() or not self.lock.acquired:
                 raise RuntimeError("Another updater owns Hermes, or the native updater claim is unavailable")
             self.validate()
-            def refresh_loop():
-                while not self.stop.wait(30):
-                    try: self.refresh()
-                    except BaseException as error:
-                        self.failure = error; return
-            self.thread = threading.Thread(target=refresh_loop, daemon=True)
-            self.thread.start()
+            # The marker owner must outlive orphan hooks. Native UpdateLock is a
+            # PID marker, not an inherited OS lock, so a dead worker PID is unsafe.
+            read_fd, write_fd = os.pipe()
+            ready_read, ready_write = os.pipe()
+            worker_pid = os.getpid()
+            guardian = os.fork()
+            if guardian == 0:
+                os.close(write_fd); os.close(ready_read)
+                try:
+                    marker_fd = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
+                    with os.fdopen(marker_fd, "r+") as output:
+                        if int(output.readline().strip()) != worker_pid: raise RuntimeError("Native claim changed during handoff")
+                        self.owner_pid = os.getpid()
+                        output.seek(0); output.write(f"{self.owner_pid}\n{int(time.time())}\n"); output.truncate(); output.flush(); os.fsync(output.fileno())
+                    os.write(ready_write, b"1"); os.close(ready_write)
+                    while True:
+                        readable, _, _ = select.select([read_fd], [], [], 30)
+                        if readable and not os.read(read_fd, 1): break
+                        self.refresh()
+                    self.lock.release()
+                    os._exit(0)
+                except BaseException:
+                    # Ownership loss must never remove somebody else's marker.
+                    os._exit(1)
+            os.close(read_fd); os.close(ready_write)
+            self.guardian_pid, self.guardian_fd, self.owner_pid = guardian, write_fd, guardian
+            try:
+                if not select.select([ready_read], [], [], 5)[0] or os.read(ready_read, 1) != b"1":
+                    raise RuntimeError("The native update guardian could not start")
+            finally: os.close(ready_read)
+            self.validate()
             return self
         except BaseException:
+            self.close_guardian()
             self.lock.release(); sys.path.remove(self.source_path); sys.dont_write_bytecode = self.original_bytecode; raise
 
+    def close_guardian(self):
+        if self.guardian_fd is not None:
+            os.close(self.guardian_fd); self.guardian_fd = None
+        if self.guardian_pid:
+            os.waitpid(self.guardian_pid, 0); self.guardian_pid = None
+
     def __exit__(self, *_error):
-        self.stop.set()
-        if self.thread: self.thread.join()
+        self.close_guardian()
         self.lock.release()
         sys.path.remove(self.source_path)
         sys.dont_write_bytecode = self.original_bytecode
@@ -208,6 +247,9 @@ class Worker:
         self.host_hook_started = False
         self.stage = None
         self.native_claim = None
+        self.lock_fd = None
+        self.recovering = False
+        self.release_started = False
         self.environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ["HOME"], "LANG": "C.UTF-8"}
         self.environment.update({"HERMES_UPGRADE_SOURCE": str(self.source), "HERMES_UPGRADE_OPERATION_ID": operation})
 
@@ -312,10 +354,32 @@ class Worker:
     def update(self, **fields):
         current = json.loads(self.state_file.read_text())
         if current.get("operationId") != self.operation: raise RuntimeError("Operation was superseded")
+        # Optional wire fields are omitted when cleared. JSON null would fail
+        # readers expecting an optional string and strand verified recovery.
+        if "error" in fields and fields["error"] is None:
+            fields.pop("error")
+            self.state.pop("error", None)
         self.state.update(fields, workerPid=os.getpid(), updatedAt=now())
         atomic(self.state_file, self.state)
 
+    def intent(self):
+        path = self.directory / "controls" / (self.operation + ".json")
+        return json.loads(private_file(path).read_text()) if path.exists() else None
+
+    def cancellation(self):
+        intent = self.intent()
+        if not self.recovering and not self.release_started and intent and intent.get("status") == "pending" and intent.get("action") == "cancel":
+            raise Cancelled("The administrator cancelled this update")
+
+    def complete_control(self):
+        intent = self.intent()
+        if not intent or intent.get("status") != "pending": return
+        intent.update(status="complete", result=self.state)
+        atomic(self.directory / "controls" / (self.operation + ".json"), intent)
+        atomic(self.directory / "controls" / ("request-" + intent["requestId"] + ".json"), intent)
+
     def check_step(self, identifier, label, work):
+        self.cancellation()
         checks = self.state.setdefault("checks", [])
         item = next((item for item in checks if item["id"] == identifier), None)
         if item is None:
@@ -325,15 +389,25 @@ class Worker:
         except Exception:
             item["status"] = "failed"; self.update(checks=checks); raise
         item["status"] = "passed"; self.update(checks=checks)
+        self.cancellation()
         return result
 
     def run(self, argv, cwd=None, environment=None, timeout=1800):
         subprocess.run(argv, cwd=cwd or self.app, env=environment or self.environment,
-            stdout=self.log, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+            stdout=self.log, stderr=subprocess.STDOUT, check=True, timeout=timeout,
+            pass_fds=tuple(fd for fd in (self.lock_fd, self.native_claim.guardian_fd if self.native_claim else None) if fd is not None))
 
     def hook(self, name):
         if self.native_claim: self.native_claim.validate()
-        self.run(self.config["hooks"][name], timeout=self.config.get("hookTimeoutSeconds", 1800))
+        argv = self.config["hooks"].get(name)
+        if argv is None and name in ("recover", "restart_service"):
+            finish = self.config["hooks"]["finish"]
+            if finish[-1] != "finish" or not any(arg.endswith("/hermes-upgrade-linux.py") for arg in finish):
+                raise RuntimeError("This installer has not enabled safe recovery hooks")
+            argv = [*finish[:-1], name]
+        self.environment["HERMES_UPGRADE_LOCK_FD"] = str(self.lock_fd) if self.lock_fd is not None else ""
+        self.environment["HERMES_UPGRADE_CLAIM_FD"] = str(self.native_claim.guardian_fd) if self.native_claim and self.native_claim.guardian_fd is not None else ""
+        self.run(argv, timeout=self.config.get("hookTimeoutSeconds", 1800))
         if self.native_claim: self.native_claim.validate()
 
     def revision(self, value):
@@ -504,11 +578,79 @@ class Worker:
                 "runtimeDescriptor": runtime_descriptor, "dashboardLink": dashboard_link, "hostFingerprint": host_fingerprint,
                 "tagRefs": git_tag_refs(source)})
 
+    def configure_install(self, qualification):
+        stage = Path(qualification["stage"])
+        if stage.parent.resolve() != Path(self.config["stageRoot"]).resolve(): raise RuntimeError("Invalid qualification stage")
+        old = (qualification["currentRevision"], qualification["currentPatchSha256"])
+        target = (qualification["candidateRevision"], qualification["candidatePatchSha256"])
+        self.environment.update({"HERMES_UPGRADE_CURRENT": old[0], "HERMES_UPGRADE_CANDIDATE": target[0], "HERMES_UPGRADE_STAGE_HOME": str(stage),
+            "HERMES_UPGRADE_STAGE_SOURCE": str(stage / "source"), "HERMES_UPGRADE_RECEIPT": str(stage / "qualification.json"),
+            "HERMES_UPGRADE_BACKUP_DIR": str(stage / "backup"), "HERMES_UPGRADE_QUALIFICATION_PYTHON": qualification["qualificationPython"],
+            "HERMES_UPGRADE_RUNTIME_FINGERPRINT": json.dumps(qualification["runtimeFingerprint"]),
+            "HERMES_UPGRADE_INTEGRATION_DIGEST": integration_digest(self.app)})
+        if self.config.get("approvedPatchFile"):
+            self.environment.update({"HERMES_UPGRADE_APPROVED_PATCH_FILE": self.config["approvedPatchFile"], "HERMES_UPGRADE_APPROVED_PATCH_SHA256": self.config["requiredPatchSha256"]})
+        if target[1]: self.environment["HERMES_UPGRADE_CANDIDATE_PATCH_SHA256"] = target[1]
+        if qualification.get("runtimeDescriptor"): self.environment["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = qualification["runtimeDescriptor"]
+        return stage, old, target
+
+    def recovery(self, action):
+        self.recovering = True
+        try:
+            if self.state.get("maintenance"):
+                qualification = self.state["qualification"]
+                stage, old, target = self.configure_install(qualification)
+                journal_path = stage / "recovery.json"
+                journal = json.loads(private_file(journal_path).read_text()) if journal_path.exists() else None
+                if journal and journal.get("operationId") != self.operation: raise RuntimeError("Recovery journal belongs to another update")
+                if journal and journal.get("releaseStarted"): raise RuntimeError("Admission release may already have happened. Installer review is required before restarting or restoring Hermes")
+                platform = stage / "platform.json"
+                unstarted = not journal and not platform.exists() and not any(check["id"] in ("quiescence", "backup", "install") for check in self.state.get("checks", []))
+                if unstarted or journal and not journal.get("hostHookStarted"):
+                    self.update(maintenance=False)
+                else:
+                    self.host_hook_started = True
+                    self.update(phase="recovering", maintenance=True, message="Recovering Hermes under its saved maintenance gate. Conversations remain paused until verification succeeds.")
+                    if action != "restart_service":
+                        if journal:
+                            previous = journal.get("previousReceipt")
+                            if previous is None: raise RuntimeError("The previous installation has no saved qualification receipt")
+                            self.environment["HERMES_UPGRADE_PREVIOUS_RECEIPT"] = str(stage / "previous-qualification.json")
+                            data = base64.b64decode(previous, validate=True)
+                            receipt = json.loads(data)
+                            if receipt.get("revision") != old[0] or receipt.get("trackedPatchSha256") != old[1] or receipt.get("integrationDigest") != integration_digest(self.app):
+                                raise RuntimeError("The previous qualification receipt does not match the saved baseline and current integration")
+                            atomic(stage / "previous-qualification.json", receipt)
+                    source = self.source if self.source.exists() else stage / "source"
+                    if self.native_claim:
+                        self.hook("restart_service" if action == "restart_service" else "recover")
+                    elif self.config.get("managedLauncher"):
+                        with NativeUpdateClaim(source, self.config["managedHome"]) as claim:
+                            self.native_claim = claim
+                            self.environment["HERMES_UPDATE_HANDOFF_PID"] = str(claim.owner_pid)
+                            try: self.hook("restart_service" if action == "restart_service" else "recover")
+                            finally: self.native_claim = None
+                    else: self.hook("restart_service" if action == "restart_service" else "recover")
+                    current = self.snapshot(self.source)
+                    self.update(current=self.revision(current[0]), maintenance=False)
+            self.update(phase="cancelled" if action == "cancel" else "succeeded", maintenance=False,
+                message="The update was cancelled. Hermes is verified and ready." if action == "cancel" else "Hermes is verified and ready.", error=None)
+            self.complete_request(); self.complete_control()
+            if action == "retry":
+                # Retrying means a new qualification, never replaying an install.
+                self.operation = str(uuid.uuid4())
+                self.state = {"operationId": self.operation, "phase": "checking", "checks": [], "message": "Checking the update again."}
+                atomic(self.state_file, self.state)
+                self.environment["HERMES_UPGRADE_OPERATION_ID"] = self.operation
+                self.recovering = False
+                self.qualify()
+        finally: self.recovering = False
+
     def install(self):
         if self.config.get("managedLauncher"):
             with NativeUpdateClaim(self.source, self.config["managedHome"]) as claim:
                 self.native_claim = claim
-                self.environment["HERMES_UPDATE_HANDOFF_PID"] = str(os.getpid())
+                self.environment["HERMES_UPDATE_HANDOFF_PID"] = str(claim.owner_pid)
                 try: self.install_claimed()
                 finally: self.native_claim = None
         else: self.install_claimed()
@@ -530,30 +672,30 @@ class Worker:
             raise RuntimeError("Qualification is stale; check this update again")
         if self.qualified_fingerprint(qualification) != qualification["runtimeFingerprint"]:
             raise RuntimeError("The tested dependency environment changed; qualify it again")
-        self.environment.update({"HERMES_UPGRADE_CURRENT": old[0], "HERMES_UPGRADE_CANDIDATE": target[0], "HERMES_UPGRADE_STAGE_HOME": str(stage),
-            "HERMES_UPGRADE_STAGE_SOURCE": str(stage / "source"), "HERMES_UPGRADE_RECEIPT": str(stage / "qualification.json"),
-            "HERMES_UPGRADE_BACKUP_DIR": str(stage / "backup")})
-        self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] = qualification["qualificationPython"]
-        self.environment["HERMES_UPGRADE_RUNTIME_FINGERPRINT"] = json.dumps(qualification["runtimeFingerprint"])
-        if self.config.get("approvedPatchFile"):
-            self.environment.update({"HERMES_UPGRADE_APPROVED_PATCH_FILE": self.config["approvedPatchFile"],
-                "HERMES_UPGRADE_APPROVED_PATCH_SHA256": self.config["requiredPatchSha256"]})
-        if target[1]: self.environment["HERMES_UPGRADE_CANDIDATE_PATCH_SHA256"] = target[1]
-        if qualification.get("runtimeDescriptor"): self.environment["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = qualification["runtimeDescriptor"]
+        self.configure_install(qualification)
         deployed_receipt = Path(self.config["qualificationReceipt"])
         previous_receipt = private_file(deployed_receipt).read_bytes() if deployed_receipt.exists() else None
         atomic(stage / ".agent-interface-upgrade-install", {"operationId": self.operation, "requestId": self.state["requestId"], "startedAt": now()})
+        journal = {"operationId": self.operation, "requestId": self.state["requestId"],
+            "previousReceipt": base64.b64encode(previous_receipt).decode() if previous_receipt is not None else None,
+            "hostHookStarted": False, "installStarted": False, "releaseStarted": False}
+        atomic(stage / "recovery.json", journal)
         attempted = False
         lease = False
         release_started = False
         try:
-            self.host_hook_started = True
-            self.check_step("quiescence", "No active native Hermes work", lambda: self.hook("quiescence")); lease = True
+            self.cancellation()
+            def acquire():
+                journal["hostHookStarted"] = True; atomic(stage / "recovery.json", journal)
+                self.host_hook_started = True
+                return self.hook("quiescence")
+            self.check_step("quiescence", "No active native Hermes work", acquire); lease = True
             if self.snapshot(self.source)[:2] != old or integration_digest(self.app) != receipt["integrationDigest"] or self.dashboard_link() != qualification.get("dashboardLink") or self.host_fingerprint() != qualification["hostFingerprint"]:
                 raise RuntimeError("The running source changed before installation")
             self.check_step("backup", "Recoverable source, runtime and household backup", lambda: self.hook("backup"))
             self.update(phase="installing", maintenance=True, message="Installing Hermes. Your conversations and settings are backed up.")
             attempted = True
+            journal["installStarted"] = True; atomic(stage / "recovery.json", journal)
             atomic(deployed_receipt, receipt)
             self.check_step("install", "Managed Hermes installation", lambda: self.hook("install"))
             self.update(phase="verifying", message="Checking Hermes and both household profiles after installation.")
@@ -562,10 +704,17 @@ class Worker:
                 self.hook("verify")
             self.check_step("verify", "Original sign-in, profiles, services and fresh connections", verify)
             self.update(current=self.revision(target[0]))
+            self.cancellation()
             release_started = True
+            self.release_started = True
+            journal["releaseStarted"] = True; atomic(stage / "recovery.json", journal)
             self.check_step("release", "Resume household Hermes work", lambda: self.hook("finish")); lease = False
             self.update(phase="succeeded", maintenance=False, current=self.revision(target[0]), message="Hermes is updated and ready.")
+        except Cancelled:
+            self.recovery("cancel")
+            return
         except Exception as install_error:
+            self.recovering = True # Rollback is already the safe response to a pending cancellation.
             if release_started:
                 # A timed-out release may already admit native/Discord work.
                 # Never kill that work by guessing it is safe to roll back.
@@ -582,19 +731,25 @@ class Worker:
                     self.environment["HERMES_UPGRADE_ROLLBACK"] = "1"
                     self.hook("verify")
                 self.check_step("rollback", "Restore and verify the previous Hermes installation", rollback)
+                self.release_started = True
+                journal["releaseStarted"] = True; atomic(stage / "recovery.json", journal)
                 self.check_step("release", "Resume the restored Hermes installation", lambda: self.hook("finish")); lease = False
                 self.update(phase="rolled_back", maintenance=False, current=self.revision(old[0]), message="The update could not be verified. The previous Hermes is restored and ready.", error="upgrade_rolled_back")
             else:
                 if not lease and not (isinstance(install_error, subprocess.CalledProcessError) and install_error.returncode == 75):
                     raise
-                if lease: self.hook("finish"); lease = False
+                if lease:
+                    self.release_started = True
+                    journal["releaseStarted"] = True; atomic(stage / "recovery.json", journal)
+                    self.hook("finish"); lease = False
                 self.update(phase="blocked", maintenance=False, message="The update was stopped before installation. Check again after the installer resolves the failed check.", error="install_precondition_failed")
         self.complete_request()
 
     def complete_request(self):
-        if self.action == "install" and not self.state.get("maintenance"):
+        if self.state.get("requestId") and not self.state.get("maintenance"):
             request = self.directory / "requests" / (self.state["requestId"] + ".json")
             record = json.loads(private_file(request).read_text())
+            if record.get("operationId") != self.operation: raise RuntimeError("Install receipt belongs to another update")
             record.update(status="complete", result=self.state)
             atomic(request, record)
 
@@ -602,7 +757,13 @@ class Worker:
         fd = os.open(self.directory / "worker.lock", os.O_RDWR | os.O_CREAT, 0o600)
         with os.fdopen(fd, "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            log_path = self.directory / (self.operation + ".log")
+            self.lock_fd = lock.fileno()
+            # Read again under ownership. A delayed launch must never replay a completed operation.
+            self.state = json.loads(private_file(self.state_file).read_text())
+            if self.state.get("operationId") != self.operation: raise RuntimeError("Operation was superseded")
+            if self.action in ("check", "install") and self.state.get("phase") not in ("checking", "installing"): return
+            if self.action in ("retry", "cancel", "restart_service") and not (self.intent() or {}).get("status") == "pending": return
+            log_path = self.directory / (self.operation + "-" + uuid.uuid4().hex + ".log")
             log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(log_fd, "w") as output:
                 self.log = output
@@ -610,25 +771,32 @@ class Worker:
                 try:
                     self.validate_config()
                     if self.action == "check": self.qualify()
-                    else: self.install()
+                    elif self.action == "install": self.install()
+                    else: self.recovery(self.action)
+                    self.cancellation()
+                    self.complete_control()
+                except Cancelled:
+                    self.update(phase="cancelled", maintenance=False, error=None, message="The update check was cancelled. Hermes was unchanged.")
+                    self.complete_control()
                 except Exception as error:
                     import traceback
                     traceback.print_exc(file=output)
                     safe_rejection = self.action == "install" and not self.host_hook_started
                     unsupported = isinstance(error, (UnsupportedDependencies, UnsupportedRepair))
-                    self.update(phase="blocked" if safe_rejection or unsupported else "failed", error="repair_requires_review" if isinstance(error, UnsupportedRepair) else "dependencies_require_qualification" if unsupported else "qualification_failed" if self.action == "check" else "qualification_stale" if safe_rejection else "install_requires_review",
-                        message=str(error) if unsupported else "The update check failed. Ask the installer to review its private log." if self.action == "check"
+                    checking = self.action == "check" or self.state.get("phase") in ("checking", "qualifying")
+                    self.update(phase="blocked" if safe_rejection or unsupported else "failed", error="repair_requires_review" if isinstance(error, UnsupportedRepair) else "dependencies_require_qualification" if unsupported else "qualification_failed" if checking else "qualification_stale" if safe_rejection else "install_requires_review",
+                        message=str(error) if unsupported else "The update check failed. Ask the installer to review its private log." if checking
                         else "The qualified update changed before installation. Check again before installing it." if safe_rejection
                         else "The update stopped without a verified recovery. Hermes changes stay paused until the installer reviews it.",
-                        maintenance=self.action == "install" and not safe_rejection)
+                        maintenance=bool(self.state.get("maintenance")) and not safe_rejection)
                     self.complete_request()
+                    self.complete_control()
                     raise
                 finally:
-                    if self.action == "check":
-                        if self.stage:
-                            marker = json.loads((self.stage / ".agent-interface-upgrade-stage").read_text())
-                            marker.update(state="completed", completedAt=now())
-                            atomic(self.stage / ".agent-interface-upgrade-stage", marker)
+                    if self.stage:
+                        marker = json.loads((self.stage / ".agent-interface-upgrade-stage").read_text())
+                        marker.update(state="completed", completedAt=now())
+                        atomic(self.stage / ".agent-interface-upgrade-stage", marker)
                         # Retention failure must not invalidate a successful probe.
                         try: self.retain_qualification_stages()
                         except OSError:
@@ -640,7 +808,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--state-dir", required=True)
-    parser.add_argument("--action", choices=["check", "install"], required=True)
+    parser.add_argument("--action", choices=["check", "install", "retry", "cancel", "restart_service"], required=True)
     parser.add_argument("--operation-id", required=True)
     args = parser.parse_args()
     os.umask(0o077)

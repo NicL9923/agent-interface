@@ -86,6 +86,18 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("keeps one integrations dialog across repeated household refreshes", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/integrations") ? { profile: "shared", canManage: true, connections: [] } as T : original(path) as Promise<T>);
+    await render();
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "↗ Integrations")!.click());
+    await advance(30_000);
+    expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
+    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
+  });
+
   it("shows the current work beside a prominent avatar and stops claiming work during a disconnect", async () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" } };
     await render();

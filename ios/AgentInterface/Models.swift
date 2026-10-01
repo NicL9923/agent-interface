@@ -228,12 +228,15 @@ struct UpgradeStatus: Codable {
   var checks: [UpgradeCheck]
   var canCheck: Bool
   var canInstall: Bool
+  var canRetry: Bool?
+  var canCancel: Bool?
+  var canRestartService: Bool?
   var operationId: String?
   var error: String?
   var checkedAt: String?
   var updatedAt: String?
   var busyBots: [String]
-  var inProgress: Bool { ["checking", "qualifying", "installing", "verifying"].contains(phase) }
+  var inProgress: Bool { ["checking", "qualifying", "installing", "verifying", "recovering"].contains(phase) }
   var installing: Bool { ["installing", "verifying"].contains(phase) }
   var title: String {
     switch phase {
@@ -242,6 +245,8 @@ struct UpgradeStatus: Codable {
     case "ready": "Update ready"
     case "installing": "Updating Hermes"
     case "verifying": "Verifying Hermes"
+    case "recovering": "Restoring the connection"
+    case "cancelled": "Update cancelled"
     case "succeeded": "Hermes is up to date"
     case "rolled_back": "Previous version restored"
     case "blocked": "Update needs attention"
@@ -249,6 +254,11 @@ struct UpgradeStatus: Codable {
     default: available ? "Keep Hermes up to date" : "Updates aren't available"
     }
   }
+}
+struct UpgradeControlRequest: Encodable {
+  var action: String
+  var operationId: String
+  var requestId: String
 }
 struct UpgradeInstallRequest: Encodable {
   var candidateRevision: String

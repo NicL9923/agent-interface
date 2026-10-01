@@ -257,7 +257,7 @@ def main():
         probe_tool_projection(server, checks)
         probe_gateway(home, checks)
         native_pool.shutdown(wait=True)
-    destination = Path(__file__).resolve().parents[2] / "docs/evidence/hermes-maintenance-guard-probe.json"
+    destination = Path(os.environ.get("HERMES_SPIKE_EVIDENCE_DIR", str(Path(__file__).resolve().parents[2] / "docs/evidence"))) / "hermes-maintenance-guard-probe.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps({"checks": checks}, indent=2) + "\n")
     print(json.dumps(checks))

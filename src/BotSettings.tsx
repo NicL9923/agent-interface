@@ -10,6 +10,7 @@ import type {
   Tool,
 } from "./shared/types";
 import { api, ApiError, write } from "./client-api";
+import { IntegrationList } from "./components/IntegrationsPanel";
 import { Avatar, avatarColors, defaultAvatar } from "./components/Avatar";
 export function BotSettings({
   bot,
@@ -178,7 +179,7 @@ export function BotSettings({
         </button>
       </header>
       <nav className="settings-tabs" aria-label="Settings sections">
-        {["details", "avatar", "tools", "skills", "routines"].map((t) => (
+        {["details", "avatar", "connections", "tools", "skills", "routines"].map((t) => (
           <button
             aria-current={tab === t ? "page" : undefined}
             key={t}
@@ -729,6 +730,7 @@ export function BotSettings({
             )}
           </>
         )}
+        {tab === "connections" && (existing ? <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} /> : <p>Create the assistant before connecting its services.</p>)}
         {tab === "routines" && (
           <>
             {unavailable("routines")}

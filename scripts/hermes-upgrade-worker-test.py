@@ -4,6 +4,10 @@ These prove durable upgrade/rollback ordering, not Hermes integration. The shipp
 worker separately requires the complete real Hermes qualification suite.
 """
 import importlib.util
+import base64
+import fcntl
+import signal
+import time
 import json
 import os
 from pathlib import Path
@@ -19,7 +23,7 @@ spec = importlib.util.spec_from_file_location("worker", Path(__file__).with_name
 worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
 
 HOOK = r'''
-import json, os, pathlib, subprocess, sys
+import json, os, pathlib, subprocess, sys, time
 source=pathlib.Path(os.environ['HERMES_UPGRADE_SOURCE'])
 stage=pathlib.Path(os.environ['HERMES_UPGRADE_STAGE_HOME'])
 action=sys.argv[1]
@@ -37,6 +41,9 @@ elif action=='backup':
     (target/'revision').write_text(revision)
     (target/'repair.patch').write_bytes(subprocess.check_output(['git','-C',str(source),'diff','HEAD','--binary']))
 elif action=='install':
+    if (stage/'pause-install').exists():
+        (stage/'install-entered').touch()
+        while not (stage/'resume-install').exists(): time.sleep(.02)
     assert (stage/'gate').exists() and (stage/'backup/revision').exists()
     subprocess.run(['git','-C',str(source),'reset','--hard',os.environ['HERMES_UPGRADE_CANDIDATE']],check=True)
     repair=subprocess.check_output(['git','-C',str(stage/'source'),'diff','HEAD','--binary'])
@@ -48,6 +55,18 @@ elif action=='rollback':
     subprocess.run(['git','-C',str(source),'reset','--hard',(stage/'backup/revision').read_text()],check=True)
     repair=(stage/'backup/repair.patch').read_bytes()
     if repair: subprocess.run(['git','-C',str(source),'apply','--index','-'],input=repair,check=True)
+elif action=='recover':
+    assert (stage/'gate').exists()
+    if (stage/'backup/revision').exists():
+        subprocess.run(['git','-C',str(source),'reset','--hard',(stage/'backup/revision').read_text()],check=True)
+        repair=(stage/'backup/repair.patch').read_bytes()
+        if repair: subprocess.run(['git','-C',str(source),'apply','--index','-'],input=repair,check=True)
+    receipt=pathlib.Path(os.environ['HERMES_UPGRADE_PREVIOUS_RECEIPT'])
+    pathlib.Path(os.environ.get('FIXTURE_DEPLOYED_RECEIPT', str(source.parent/'deployed-qualification.json'))).write_bytes(receipt.read_bytes())
+    (stage/'gate').unlink()
+elif action=='restart_service':
+    assert (stage/'gate').exists()
+    (stage/'gate').unlink()
 elif action=='finish':
     (stage/'gate').unlink(missing_ok=True)
     if (stage/'fail-finish').exists(): raise SystemExit(1)
@@ -95,7 +114,7 @@ class QualificationWorkerTests(unittest.TestCase):
         self.config = self.root / "config.json"
         worker.atomic(self.config, {"source":str(self.source),"appRoot":str(self.app),"stageRoot":str(self.root/'stages'),
             "qualificationPython":sys.executable,"qualificationReceipt":str(self.receipt),"requiredPatchSha256":None,
-            "hooks":{**{action:[sys.executable,str(hook),action] for action in ['quiescence','backup','install','verify','rollback','finish']},
+            "hooks":{**{action:[sys.executable,str(hook),action] for action in ['quiescence','backup','install','verify','rollback','finish','recover','restart_service']},
                 "regressions":[[sys.executable,str(hook),'regressions']]}})
         self.original_run = worker.Worker.run
         self.fixture_upstream = self.source
@@ -126,6 +145,114 @@ class QualificationWorkerTests(unittest.TestCase):
             with self.assertRaises(Exception): instance.main()
         else: instance.main()
         return json.loads((self.state / "requests" / (request+'.json')).read_text())
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 10
+        while not predicate():
+            if time.monotonic() > deadline: self.fail("Timed out waiting for worker fault boundary")
+            time.sleep(.02)
+
+    def control(self, action):
+        operation = self.status()["operationId"]
+        controls = self.state / "controls"; controls.mkdir(mode=0o700, exist_ok=True)
+        intent = {"operationId": operation, "requestId": str(uuid.uuid4()), "action": action, "status": "pending"}
+        worker.atomic(controls / (operation + ".json"), intent)
+        worker.atomic(controls / ("request-" + intent["requestId"] + ".json"), intent)
+        return operation
+
+    def test_cancel_staged_check_and_retry_create_a_new_qualification(self):
+        self.check()
+        operation = self.control("cancel")
+        worker.Worker(self.config, self.state, "cancel", operation).main()
+        self.assertEqual(self.status()["phase"], "cancelled")
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+        operation = self.control("retry")
+        worker.Worker(self.config, self.state, "retry", operation).main()
+        self.assertEqual(self.status()["phase"], "ready")
+        self.assertNotEqual(self.status()["operationId"], operation)
+
+    def test_saved_cancel_before_check_runs_no_qualification_or_host_hook(self):
+        operation = str(uuid.uuid4())
+        worker.atomic(self.state / "status.json", {"operationId": operation, "phase": "checking", "checks": [], "message": "Checking"})
+        self.control("cancel")
+        worker.Worker(self.config, self.state, "check", operation).main()
+        self.assertEqual(self.status()["phase"], "cancelled")
+        self.assertFalse(self.status()["maintenance"])
+        self.assertFalse((self.root / "stages").exists())
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+
+    def test_sigterm_keeps_orphan_hook_lock_and_cancel_recovers_saved_baseline(self):
+        stage = self.check()
+        worker.atomic(self.receipt, {"schemaVersion": 1, "revision": self.old, "trackedPatchSha256": None,
+            "integrationDigest": "a" * 64, "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
+        (stage / "pause-install").touch()
+        operation, request = str(uuid.uuid4()), str(uuid.uuid4())
+        state = self.status(); state.update(operationId=operation, requestId=request, phase="installing", maintenance=True)
+        worker.atomic(self.state / "status.json", state)
+        worker.atomic(self.state / "requests" / (request + ".json"), {"operationId": operation, "candidateRevision": self.new, "status": "pending"})
+        program = Path(worker.__file__).resolve()
+        child = subprocess.Popen([sys.executable, str(program), "--config", str(self.config), "--state-dir", str(self.state), "--action", "install", "--operation-id", operation], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.wait_for(lambda: (stage / "install-entered").exists())
+            child.send_signal(signal.SIGTERM); child.wait(timeout=5)
+            self.assertEqual(child.returncode, -signal.SIGTERM)
+            with (self.state / "worker.lock").open("r+") as lock:
+                with self.assertRaises(BlockingIOError): fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.control("cancel")
+            with self.assertRaises(BlockingIOError): worker.Worker(self.config, self.state, "cancel", operation).main()
+            (stage / "resume-install").touch()
+            def released():
+                with (self.state / "worker.lock").open("r+") as lock:
+                    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB); return True
+                    except BlockingIOError: return False
+            self.wait_for(released)
+            self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.new)
+            instance = worker.Worker(self.config, self.state, "cancel", operation)
+            instance.environment["FIXTURE_DEPLOYED_RECEIPT"] = str(self.receipt)
+            instance.main()
+            self.assertEqual(self.status()["phase"], "cancelled")
+            self.assertFalse(self.status()["maintenance"])
+            self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+            self.assertEqual(json.loads(self.receipt.read_text())["revision"], self.old)
+            self.assertEqual(json.loads((self.state / "requests" / (request + ".json")).read_text())["status"], "complete")
+            self.assertEqual(json.loads((stage / "recovery.json").read_text())["operationId"], operation)
+        finally:
+            (stage / "resume-install").touch()
+            if child.poll() is None: child.terminate(); child.wait(timeout=5)
+
+    def test_live_install_cancellation_waits_for_boundary_then_restores(self):
+        stage = self.check()
+        worker.atomic(self.receipt, {"schemaVersion": 1, "revision": self.old, "trackedPatchSha256": None,
+            "integrationDigest": "a" * 64, "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
+        (stage / "pause-install").touch()
+        operation, request = str(uuid.uuid4()), str(uuid.uuid4())
+        state = self.status(); state.update(operationId=operation, requestId=request, phase="installing", maintenance=True)
+        worker.atomic(self.state / "status.json", state)
+        worker.atomic(self.state / "requests" / (request + ".json"), {"operationId": operation, "candidateRevision": self.new, "status": "pending"})
+        child = subprocess.Popen([sys.executable, worker.__file__, "--config", str(self.config), "--state-dir", str(self.state), "--action", "install", "--operation-id", operation], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.wait_for(lambda: (stage / "install-entered").exists())
+            self.control("cancel")
+            self.assertIsNone(child.poll())
+            self.assertTrue((stage / "gate").exists())
+            (stage / "resume-install").touch()
+            self.assertEqual(child.wait(timeout=10), 0)
+            self.assertEqual(self.status()["phase"], "cancelled")
+            self.assertFalse(self.status()["maintenance"])
+            self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.old)
+            self.assertEqual((stage / "hook-order.txt").read_text().splitlines()[-2:], ["install", "recover"])
+        finally:
+            (stage / "resume-install").touch()
+            if child.poll() is None: child.terminate(); child.wait(timeout=5)
+
+    def test_ambiguous_release_refuses_cancel_without_touching_source_or_gate(self):
+        stage = self.check(); (stage / "fail-finish").touch(); self.install(expect_error=True)
+        operation = self.control("cancel")
+        before = self.git("rev-parse", "HEAD")
+        with self.assertRaisesRegex(RuntimeError, "Admission release"):
+            worker.Worker(self.config, self.state, "cancel", operation).main()
+        self.assertTrue(self.status()["maintenance"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
 
     def offset_repair(self, artifact=True):
         oauth = self.source / 'oauth.py'
@@ -202,7 +329,7 @@ print('fixture real candidate patch identity passed')
 
     def test_approved_tree_proof_rejects_content_mode_binary_and_added_file_drift_without_git_mutation(self):
         approved, _ = self.offset_repair()
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
         instance = worker.Worker(self.config, self.state, 'check', operation)
         def metadata():
             return (self.git('for-each-ref'), (self.source / '.git/index').read_bytes(),
@@ -225,7 +352,7 @@ print('fixture real candidate patch identity passed')
 
     def test_missing_artifact_mode_remains_strict_when_upstream_moves_patch_headers(self):
         self.offset_repair(artifact=False)
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
         with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
         self.assertEqual(self.status()['phase'], 'blocked')
         self.assertEqual(self.status()['error'], 'repair_requires_review')
@@ -241,7 +368,7 @@ print('fixture real candidate patch identity passed')
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.new = subprocess.check_output(['git','-C',str(conflicting),'rev-parse','HEAD']).decode().strip()
         self.git('update-ref', 'refs/remotes/origin/main', self.new)
-        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
         with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
         self.assertEqual(self.status()['phase'], 'blocked')
         self.assertEqual(self.status()['error'], 'repair_requires_review')
@@ -268,7 +395,7 @@ print('fixture real candidate patch identity passed')
                     target = self.root / 'actual-repair.patch'; target.write_bytes(original); target.chmod(0o600)
                     path.unlink(); path.symlink_to(target)
                 else: config['approvedPatchFile'] = 'approved-repair.patch'; worker.atomic(self.config, config)
-                operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation})
+                operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
                 with self.assertRaises(RuntimeError): worker.Worker(self.config, self.state, 'check', operation).main()
                 self.assertNotIn('qualification', self.status())
                 if path.is_symlink(): path.unlink()
@@ -486,6 +613,44 @@ if __name__=="__main__":
             marker.write_text('999999\n0\n')
             with self.assertRaisesRegex(RuntimeError,'claim changed'): claim.validate()
         self.assertEqual(marker.read_text(),'999999\n0\n')
+
+    def test_real_native_guardian_outlives_worker_and_orphan_hook(self):
+        native_source = Path(os.environ.get("HERMES_NATIVE_LOCK_SOURCE", str(Path(__file__).resolve().parents[1] / ".private/hermes-integrations-spike/source")))
+        if not (native_source / "hermes_cli/update_lock.py").exists(): self.skipTest("Set HERMES_NATIVE_LOCK_SOURCE to an actual prepared Hermes source")
+        home = self.root / "actual-native-lock-home"; home.mkdir(mode=0o700)
+        entered, resume = self.root / "guardian-entered", self.root / "guardian-resume"
+        program = self.root / "guardian-test.py"
+        program.write_text(r"""import fcntl,importlib.util,json,os,subprocess,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('guard_worker',sys.argv[1]); w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
+os.umask(0o077)
+fd=os.open(sys.argv[2],os.O_RDWR|os.O_CREAT,0o600);fcntl.flock(fd,fcntl.LOCK_EX)
+with w.NativeUpdateClaim(sys.argv[3],sys.argv[4]) as claim:
+ child=subprocess.Popen([sys.executable,'-c','import pathlib,sys,time\nwhile not pathlib.Path(sys.argv[1]).exists():time.sleep(.02)',sys.argv[6]],pass_fds=(fd,claim.guardian_fd))
+ Path(sys.argv[5]).write_text(json.dumps({'guardian':claim.owner_pid,'hook':child.pid}))
+ child.wait()
+""")
+        child = subprocess.Popen([sys.executable, str(program), worker.__file__, str(self.state / "worker.lock"), str(native_source), str(home), str(entered), str(resume)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.wait_for(entered.exists)
+            guardian = json.loads(entered.read_text())["guardian"]
+            marker = home / ".hermes-update-in-progress"
+            self.assertEqual(int(marker.read_text().splitlines()[0]), guardian)
+            child.send_signal(signal.SIGTERM); child.wait(timeout=5)
+            os.kill(guardian, 0)
+            with self.assertRaisesRegex(RuntimeError, "Another updater"):
+                with worker.NativeUpdateClaim(native_source, home): pass
+            with (self.state / "worker.lock").open("r+") as lock:
+                with self.assertRaises(BlockingIOError): fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            resume.touch()
+            self.wait_for(lambda: not marker.exists())
+            previous_mask = os.umask(0o077)
+            try:
+                with worker.NativeUpdateClaim(native_source, home) as claim: claim.validate()
+            finally: os.umask(previous_mask)
+        finally:
+            resume.touch()
+            if child.poll() is None: child.terminate(); child.wait(timeout=5)
 
     def test_native_best_effort_claim_without_owned_marker_is_rejected(self):
         (self.source/'hermes_cli/update_lock.py').write_text(UPDATE_LOCK.replace('self.acquired=True; return True','return True'))

@@ -5,6 +5,9 @@ struct HermesUpgradeView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var confirmedRevision: String?
   @State private var showInstallConfirmation = false
+  @State private var recoveryAction: String?
+  @State private var recoveryOperation: String?
+  @State private var showRecoveryConfirmation = false
   var body: some View {
     Form {
       Section {
@@ -49,6 +52,24 @@ struct HermesUpgradeView: View {
         }
       } footer: {
         Text("Updates affect the shared household installation. Your conversations stay saved. Hermes may disconnect briefly while it restarts.")
+      }
+      if let status = store.upgradeStatus, status.canRetry == true || status.canCancel == true || status.canRestartService == true {
+        Section {
+          if status.canRetry == true {
+            Button("Retry update") { recover("retry", status: status) }
+              .accessibilityIdentifier("retryHermesUpdate")
+          }
+          if status.canRestartService == true {
+            Button("Restart Hermes") { recover("restart_service", status: status) }
+              .accessibilityIdentifier("restartHermesService")
+          }
+          if status.canCancel == true {
+            Button("Cancel update", role: .destructive) { recover("cancel", status: status) }
+              .accessibilityIdentifier("cancelHermesUpdate")
+          }
+        } header: { Text("Update recovery") } footer: {
+          Text("Recovery waits for a safe stopping point and checks the connection before assistants can work again.")
+        }.disabled(store.upgradeBusy || store.sessionExpired || store.upgradeInstallUncertain)
       }
       if let error = store.upgradeError {
         Section {
@@ -108,6 +129,20 @@ struct HermesUpgradeView: View {
       } message: {
         Text("The server will update and verify Hermes. If verification fails, it will try to restore the previous version.")
       }
+      .confirmationDialog(recoveryAction == "cancel" ? "Cancel this update and restore a working version?" : recoveryAction == "restart_service" ? "Restart Hermes and check the connection?" : "Retry this update?", isPresented: $showRecoveryConfirmation, titleVisibility: .visible) {
+        Button(recoveryAction == "cancel" ? "Cancel update" : recoveryAction == "restart_service" ? "Restart Hermes" : "Retry update", role: recoveryAction == "cancel" ? .destructive : nil) {
+          guard let action = recoveryAction, let operationId = recoveryOperation else { return }
+          Task { await store.controlUpgrade(action, operationId: operationId) }
+        }
+      } message: {
+        Text("This affects the household installation. The server verifies recovery before reopening work.")
+      }
+  }
+  private func recover(_ action: String, status: UpgradeStatus) {
+    guard let operationId = status.operationId else { return }
+    recoveryAction = action
+    recoveryOperation = operationId
+    showRecoveryConfirmation = true
   }
   private var statusSymbol: String {
     switch store.upgradeStatus?.phase {

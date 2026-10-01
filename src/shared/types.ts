@@ -1,3 +1,4 @@
+import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -233,6 +234,7 @@ export interface RuntimeStatus {
   lastConnectedAt?: string;
 }
 export interface Runtime {
+  integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;

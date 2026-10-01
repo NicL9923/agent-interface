@@ -512,6 +512,39 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       } catch { if currentGeneration == generation { report(error) } }
     }
   }
+  func attachAppleSnapshot(_ data: Data, botId: String) async throws {
+    guard let api, connected, supports("uploads"), !uploading, !sending, pending == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
+      throw APIError(message: "Reconnect to this assistant before sharing a snapshot.", status: 409)
+    }
+    let currentGeneration = generation
+    let localKey = key("draft", botId)
+    var target: Draft
+    if selectedBotId == botId {
+      guard draftReady else { throw APIError(message: "Wait for this assistant's draft to finish loading.", status: 409) }
+      target = draft
+    } else {
+      let remote: Draft? = try await api.get("/bots/\(APIClient.component(botId))/draft")
+      let cached: Draft? = read(localKey)
+      target = cached?.dirty == true ? cached! : remote ?? cached ?? Draft()
+    }
+    guard target.attachments.count < 10 else { throw APIError(message: "This draft already has 10 attachments. Send or remove one first.", status: 400) }
+    uploading = true
+    defer { if currentGeneration == generation { uploading = false } }
+    let file = try await api.upload(botId: botId, name: "apple-selected-snapshot.txt", mime: "text/plain", data: data)
+    guard currentGeneration == generation else { throw CancellationError() }
+    // Draft editing remains possible during uploads. Read it again before appending.
+    if selectedBotId == botId { target = draft }
+    else if let cached: Draft = read(localKey), cached.dirty == true { target = cached }
+    guard target.attachments.count < 10 else { throw APIError(message: "This draft filled up while uploading. Remove an attachment before sharing again.", status: 409) }
+    target.attachments.append(file)
+    if target.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { target.text = "Use this selected Calendar and Reminders snapshot. It was shared from my iPhone and is current only as of its capture time." }
+    target.dirty = true
+    if selectedBotId == botId { updateDraft(target) }
+    else {
+      save(target, localKey)
+      let _: Draft = try await api.write("/bots/\(APIClient.component(botId))/draft", target, method: "PUT")
+    }
+  }
   func open(_ file: FileRef) {
     fileTask?.cancel()
     let currentGeneration = generation
@@ -587,6 +620,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     await upgradeOperation("install")
   }
+  func controlUpgrade(_ action: String, operationId: String) async {
+    guard let status = upgradeStatus, status.operationId == operationId, !upgradeInstallUncertain else { return }
+    let permitted = action == "retry" ? status.canRetry : action == "cancel" ? status.canCancel : action == "restart_service" ? status.canRestartService : false
+    guard permitted == true else { return }
+    await upgradeOperation(action)
+  }
   private func upgradeOperation(_ action: String?) async {
     guard let api, api.token != nil, !sessionExpired, !upgradeBusy else { return }
     let currentGeneration = generation
@@ -596,6 +635,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let value: UpgradeStatus
       if action == "install", let upgradeRequest {
         value = try await api.write("/hermes/upgrade/install", upgradeRequest)
+      } else if let action, ["retry", "cancel", "restart_service"].contains(action), let operationId = upgradeStatus?.operationId {
+        value = try await api.write("/hermes/upgrade/control", UpgradeControlRequest(action: action, operationId: operationId, requestId: UUID().uuidString))
       } else if action == "check" {
         value = try await api.write("/hermes/upgrade/check", [String: String]())
       } else {
@@ -615,7 +656,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       } else {
         upgradeError = error.localizedDescription
       }
-      if action == "install", status == nil || status == 0 || (status ?? 0) >= 500 {
+      if action != nil, status == nil || status == 0 || (status ?? 0) >= 500 {
         upgradeInstallUncertain = true
         upgradeError = "The update request may have reached the server. Refresh its status before trying again. \(error.localizedDescription)"
       }

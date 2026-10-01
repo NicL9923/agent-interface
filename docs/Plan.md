@@ -20,6 +20,17 @@ OAuth repair and existing connections, stop new native work during cutover, and
 verify recovery before reopening admission. An update request does not authorize
 an unattended production Hermes upgrade.
 
+The October 1 follow-up adds profile-aware integrations in both clients: Google
+Workspace, GitHub, selected files and NAS mounts, Discord health, Supabase,
+Cloudflare and VPS health, Home Assistant, model/search/image providers, and
+custom MCP servers. Show account identity, saved permissions and checked health
+without exposing credentials. Keep credential storage and execution in Hermes.
+Apple Calendar and Reminders use native device permission and explicit selected
+snapshots attached to a bot's draft; they do not promise unattended server access.
+Failed updates must offer retry, safe cancellation and service restart when the
+recorded operation can prove recovery safe. This work belongs in a new PR;
+merging, deployment and a production Hermes update are separate actions.
+
 ## Purpose
 
 Build an installable PWA and a native SwiftUI iOS app for two household members

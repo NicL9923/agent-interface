@@ -49,8 +49,11 @@ from one Fastify process.
 
 Hermes runs separately from this application. Guided setup saves `HERMES_URL` and
 `HERMES_TOKEN` on the app server. An existing HTTPS gateway is supported; cleartext
-HTTP is restricted to loopback. Keep provider credentials in Hermes, and establish
-new provider or service connections through the official Hermes interface.
+HTTP is restricted to loopback. Provider credentials remain in Hermes. Open
+**Integrations** to inspect the selected profile's accounts, check their health,
+and connect or reconnect supported services. Connection changes require an
+integration administrator. See the [integration guide](docs/Integrations.md) for
+supported services, one-time hosting configuration and device limitations.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -93,7 +96,11 @@ and administrator allowlist first. Installation waits for native work to finish,
 backs up the current source and runtime, and verifies the original sign-in and
 connections before releasing maintenance. Failed verification restores the
 previous version when rollback is safe. A failed or uncertain recovery keeps
-maintenance closed for installer review. The app does not silently update Hermes.
+maintenance closed. Administrators can retry a failed update, request safe
+cancellation, or restart and verify Hermes when the recorded operation allows it.
+Cancellation restores the previous version when needed; recovery never clears
+maintenance without verifying the resulting runtime. Unverifiable legacy failures
+still require installer repair. The app does not silently update Hermes.
 
 Conversations show an animated avatar beside the composer while Hermes thinks
 or uses tools. Advanced view adds collapsed tool inputs, outputs, errors and

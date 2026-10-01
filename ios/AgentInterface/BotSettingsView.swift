@@ -24,7 +24,7 @@ struct BotSettingsView: View {
   @State private var catalogReady: Set<String> = []
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
-  let tabs = ["Details", "Avatar", "Tools", "Skills", "Routines"]
+  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines"]
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
@@ -40,7 +40,10 @@ struct BotSettingsView: View {
           ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
         }
         if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
-        Form {
+        if tab == "Connections" {
+          if let bot { IntegrationsView(botId: bot.id) }
+          else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
+        } else { Form {
           switch tab {
           case "Details": details
           case "Avatar": avatarEditor
@@ -48,7 +51,7 @@ struct BotSettingsView: View {
           case "Skills": capabilities("skills")
           default: routineList
           }
-        }.disabled(busy)
+        }.disabled(busy) }
       }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
@@ -133,7 +136,7 @@ struct BotSettingsView: View {
         text: Binding(get: { form.provider ?? "" }, set: { form.provider = $0.isEmpty ? nil : $0 })
       ).textInputAutocapitalization(.never).autocorrectionDisabled()
       Text(
-        "Provider sign-ins are managed in the official Hermes interface. A shared assistant uses one model for everyone."
+        "Connect and check providers in Connections. A shared assistant uses one model for everyone."
       ).font(.caption).foregroundStyle(.secondary)
     }
     Section("Existing MCP connections") {

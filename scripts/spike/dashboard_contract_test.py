@@ -23,13 +23,14 @@ class DashboardContract(unittest.TestCase):
         def step(name):
             events.append(name)
             if name == failure:
-                if name == "extension": raise RuntimeError("Hook installation failed")
+                if name in ("extension", "integrations"): raise RuntimeError("Hook installation failed")
                 raise SystemExit("Integration unavailable")
         extension = types.SimpleNamespace(source_state=lambda: step("qualify"), install=lambda: step("extension"))
         def validate(secret):
             events.append(("secret", secret))
             if failure == "secret": raise SystemExit("Invalid service key")
         service = types.SimpleNamespace(validate_secret=validate, install_service_auth=lambda web, secret: events.append(("service", web, secret)))
+        integrations = types.SimpleNamespace(install=lambda web: step("integrations"))
         cli = types.ModuleType("hermes_cli.main")
         cli.main = lambda: events.append(("cli", list(sys.argv)))
         web = types.ModuleType("hermes_cli.web_server")
@@ -40,17 +41,17 @@ class DashboardContract(unittest.TestCase):
             dashboard = load("dashboard", link)
             def sibling_spec(name, path):
                 self.assertEqual(Path(path).parent, ROOT)
-                module = extension if name.endswith("extension") else service
+                module = extension if name.endswith("extension") else integrations if name.endswith("integrations") else service
                 return importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))))
             with patch.object(sys, "argv", argv), patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private", "HERMES_SERVE_HEADLESS": ""}), patch.dict(sys.modules, {"hermes_cli": package, "hermes_cli.main": cli, "hermes_cli.web_server": web}), patch.object(dashboard.importlib.util, "spec_from_file_location", sibling_spec):
-                if failure == "extension":
+                if failure in ("extension", "integrations"):
                     with self.assertRaises(RuntimeError): dashboard.main()
                 else: dashboard.main()
         return events, argv, web
 
     def test_original_cli_receives_unchanged_dashboard_arguments_after_install(self):
         events, argv, web = self.exercise()
-        self.assertEqual(events, [("secret", "private"), "qualify", "extension", ("service", web, "private"), ("cli", argv)])
+        self.assertEqual(events, [("secret", "private"), "qualify", "extension", "integrations", ("service", web, "private"), ("cli", argv)])
 
     def test_source_or_key_failure_preserves_native_dashboard_without_installing_hooks(self):
         for failure in ["qualify", "secret"]:
@@ -61,9 +62,10 @@ class DashboardContract(unittest.TestCase):
                 self.assertFalse(any(isinstance(event, tuple) and event[0] == "service" for event in events))
 
     def test_partial_install_failure_never_continues_native_cli(self):
-        events, _, _ = self.exercise("extension")
-        self.assertEqual(events[-1], "extension")
-        self.assertFalse(any(isinstance(event, tuple) and event[0] == "cli" for event in events))
+        for failure in ("extension", "integrations"):
+            events, _, _ = self.exercise(failure)
+            self.assertEqual(events[-1], failure)
+            self.assertFalse(any(isinstance(event, tuple) and event[0] == "cli" for event in events))
 
     def test_headless_isolated_and_wrong_command_fail_before_install(self):
         dashboard = load("dashboard")

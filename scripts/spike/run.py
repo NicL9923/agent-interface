@@ -110,6 +110,9 @@ approvals:
     (home / ".env").chmod(0o600)
     base_environment = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if key in os.environ}
     env = {**base_environment, "HERMES_HOME": str(home), "HERMES_SPIKE_PROVIDER_PORT": str(provider_port), "HERMES_SPIKE_PROVIDER_LOG": str(root / "provider-executions.jsonl"), "HERMES_SPIKE_URL": f"http://127.0.0.1:{gateway_port}", "HERMES_SPIKE_TOKEN": token, "HERMES_DASHBOARD_SESSION_TOKEN": token, "HERMES_SERVE_HEADLESS": "1", "HERMES_SKIP_UPDATE_CHECK": "1"}
+    evidence_root = root / "evidence"
+    evidence_root.mkdir(exist_ok=True)
+    env["HERMES_SPIKE_EVIDENCE_DIR"] = str(evidence_root)
     env["PYTHONPATH"] = str(source)
     env["HERMES_SPIKE_REVISION"] = args.revision
     env["HERMES_SPIKE_PATCH_SHA256"] = patch_hash or ""
@@ -157,6 +160,7 @@ approvals:
             gateway = start(extension=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/extension_probe.py"), "--verify-restart"], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/routine_probe.py")], cwd=REPO, env=env, check=True)
+            subprocess.run([str(python), str(REPO / "scripts/spike/integrations_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/service_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/maintenance_guard_probe.py"), "--source", str(source)], cwd=REPO, env=env, check=True)
         control = root / "app-control"
@@ -181,12 +185,12 @@ approvals:
             time.sleep(0.1)
         if app.returncode:
             raise RuntimeError("Real application probe failed")
-        evidence = REPO / "docs/evidence/hermes-environment.json"
+        evidence = evidence_root / "hermes-environment.json"
         # Native PM generations activate libraries without installing pip into
         # their base interpreter. Inventory the actual activated distributions.
         freeze = subprocess.check_output([str(python), "-c", "import importlib.metadata as m; print('\\n'.join(sorted({str(d.metadata.get('Name', 'unknown')) + '==' + d.version for d in m.distributions()})))"], text=True)
         evidence.write_text(json.dumps({"revision": args.revision, "tracked_patch_sha256": patch_hash, "python": sys.version.split()[0], "dependencies": [line for line in freeze.splitlines() if not line.startswith(("#", "-e"))], "provider": "deterministic fixture", "production_access": False}, indent=2) + "\n")
-        print("Native and add-on spike passed. Evidence saved under docs/evidence. Disposable private logs: " + str(root))
+        print("Native and add-on spike passed. Evidence: " + str(evidence_root) + ". Disposable private logs: " + str(root))
     finally:
         if gateway: stop(gateway)
         stop(provider)

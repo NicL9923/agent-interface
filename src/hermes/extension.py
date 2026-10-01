@@ -682,4 +682,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=19119)
     args = parser.parse_args()
     install()
+    integration_spec = importlib.util.spec_from_file_location("agent_interface_integrations", Path(__file__).resolve().with_name("integrations.py"))
+    integrations = importlib.util.module_from_spec(integration_spec); integration_spec.loader.exec_module(integrations)
+    integrations.install(web)
     web.start_server(host="127.0.0.1", port=args.port, open_browser=False, headless=True, isolated=True)

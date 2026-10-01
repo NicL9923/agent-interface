@@ -184,7 +184,7 @@ finally:
 
 report = {"kind": "Actual native gated HTTP and WS, verified Google-session fixture, fresh isolated home, no production mutation",
     "revision": revision, "tracked_patch_sha256": patch, "checks": checks}
-destination = REPO / "docs/evidence" / ("hermes-service-probe-upgrade-route-" + revision[:3] + ".json")
+destination = Path(os.environ.get("HERMES_SPIKE_EVIDENCE_DIR", str(REPO / "docs/evidence"))) / ("hermes-service-probe-upgrade-route-" + revision[:3] + ".json")
 destination.write_text(json.dumps(report, indent=2) + "\n")
-print(json.dumps({"evidence": str(destination.relative_to(REPO)), "checks": checks}))
+print(json.dumps({"evidence": str(destination), "checks": checks}))
 client.close(); remote.close()

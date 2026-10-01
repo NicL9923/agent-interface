@@ -29,8 +29,11 @@ reuse licenses rather than assuming assets are reusable.
 
 Preserve the settled shared-chat, shared-model, steering, approval, upload, and
 notification rules. Keep execution and canonical history in Hermes. Preserve
-drafts and reconcile interrupted connections without duplicate actions. Keep new
-provider and service sign-ins in the official Hermes interface initially.
+drafts and reconcile interrupted connections without duplicate actions. The
+October 1 follow-up adds integrated account setup and health in both clients,
+backed by Hermes's native credentials and execution. It also requires retry,
+safe cancellation and service restart for failed update operations. Follow
+`docs/Integrations.md` and `docs/HermesUpgradeLinux.md` for these extensions.
 
 Carry work through meaningful tests and browser validation at phone and desktop
 sizes, including both themes and reduced motion. Keep one validation ledger tied

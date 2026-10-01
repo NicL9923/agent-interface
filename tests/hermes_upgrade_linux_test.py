@@ -32,8 +32,12 @@ class FixturePlatform(linux.Platform):
 
     def rpc(self, method):
         self.rpc_calls.append(method)
-        if method == "acquire": self.gate = True
-        if method == "release": self.gate = False
+        if method == "acquire":
+            self.gate = True
+            linux.atomic(self.config["maintenanceFile"], {"operationId": self.operation})
+        if method == "release":
+            self.gate = False
+            Path(self.config["maintenanceFile"]).unlink(missing_ok=True)
         return {"active": self.gate, "operationId": self.operation if self.gate else None, "busy": []}
 
     def clear_drain(self):
@@ -105,6 +109,7 @@ class PlatformTests(unittest.TestCase):
         self.environment = dict(os.environ, HERMES_UPDATE_HANDOFF_PID=str(os.getpid()), HERMES_UPGRADE_OPERATION_ID=str(uuid.uuid4()), HERMES_UPGRADE_SOURCE=str(self.source), HERMES_UPGRADE_CURRENT=self.old,
             HERMES_UPGRADE_CANDIDATE=self.candidate, HERMES_UPGRADE_STAGE_HOME=str(self.stage), HERMES_UPGRADE_STAGE_SOURCE=str(self.target),
             HERMES_UPGRADE_BACKUP_DIR=str(self.stage / "backup"), HERMES_UPGRADE_RECEIPT=str(self.stage / "qualification.json"), HERMES_UPGRADE_QUALIFICATION_PYTHON=os.sys.executable, HERMES_UPGRADE_RUNTIME_FINGERPRINT=json.dumps({"interpreterSha256": "fixed-python", "dependenciesSha256": "fixed-generation"}))
+        self.environment["HERMES_UPGRADE_INTEGRATION_DIGEST"] = "a" * 64
         self.platform = FixturePlatform(self.config, self.environment)
         self.platform.states = self.states; self.platform.rpc_calls = []; self.platform.gate = False; self.platform.active_work = 0; self.platform.pending_ingress = 0
         self.platform.write_gateway("running")
@@ -112,6 +117,65 @@ class PlatformTests(unittest.TestCase):
 
     def tearDown(self): self.temp.cleanup()
     def git(self, *args): return subprocess.check_output(["git", "-C", str(self.source), *args], stderr=subprocess.PIPE).decode()
+
+    def baseline_receipt(self):
+        receipt = {"schemaVersion": 1, "revision": self.old,
+            "trackedPatchSha256": self.platform.source_state()[1], "integrationDigest": "a" * 64,
+            "qualifiedAt": dt.datetime.now(dt.timezone.utc).isoformat(), "checks": {"realIntegration": True, "hostRegressions": True}}
+        previous = self.stage / "previous-qualification.json"
+        linux.atomic(previous, receipt)
+        self.platform.env["HERMES_UPGRADE_PREVIOUS_RECEIPT"] = str(previous)
+        return receipt
+
+    def test_recovery_restores_crashed_cutover_from_saved_baseline_and_preserves_tokens(self):
+        receipt = self.baseline_receipt()
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        (self.home / "auth.json").write_text("new rotating token")
+        # A process crash can leave both services stopped and source incomplete.
+        self.platform.control("stop"); shutil.rmtree(self.source)
+        self.platform.recover()
+        self.assertEqual(self.platform.source_state()[0], self.old)
+        self.assertEqual((self.home / "auth.json").read_text(), "new rotating token")
+        self.assertEqual(json.loads(Path(self.platform.config["qualificationReceipt"]).read_text()), receipt)
+        self.assertFalse(self.platform.gate)
+        self.assertEqual(self.platform.load()["phase"], "finished")
+
+    def test_restart_service_recovers_legacy_candidate_with_exact_qualification(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        candidate = self.platform.source_state()
+        linux.atomic(self.platform.config["qualificationReceipt"], {"schemaVersion": 1, "revision": candidate[0], "trackedPatchSha256": candidate[1],
+            "integrationDigest": "a" * 64, "qualifiedAt": "2026-10-01", "checks": {"realIntegration": True, "hostRegressions": True}})
+        self.platform.restart_service()
+        self.assertEqual(self.platform.source_state(), candidate)
+        self.assertFalse(self.platform.gate)
+
+    def test_recovery_refuses_lost_owner_active_work_and_ambiguous_release(self):
+        self.baseline_receipt(); self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        before = self.platform.source_state()
+        linux.atomic(self.platform.config["maintenanceFile"], {"operationId": str(uuid.uuid4())})
+        with self.assertRaisesRegex(RuntimeError, "belongs to another"): self.platform.recover()
+        linux.atomic(self.platform.config["maintenanceFile"], {"operationId": self.platform.operation})
+        self.platform.active_work = 1; self.platform.write_gateway("draining")
+        with self.assertRaises(linux.ActiveWork): self.platform.recover()
+        self.platform.active_work = 0; self.platform.write_gateway("draining")
+        self.platform.save(dict(self.platform.load(), phase="releasing"))
+        with self.assertRaisesRegex(RuntimeError, "Admission may have reopened"): self.platform.recover()
+        self.assertEqual(self.platform.source_state(), before)
+        self.assertTrue(self.platform.gate)
+
+    def test_recovery_rejects_missing_old_receipt_and_changed_unit_before_stopping_services(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        units = self.states.read_bytes()
+        with self.assertRaises(FileNotFoundError): self.platform.recover()
+        self.assertEqual(self.states.read_bytes(), units)
+        receipt = self.baseline_receipt()
+        receipt["revision"] = self.candidate
+        linux.atomic(self.platform.env["HERMES_UPGRADE_PREVIOUS_RECEIPT"], receipt)
+        with self.assertRaisesRegex(RuntimeError, "qualification"): self.platform.recover()
+        self.assertEqual(self.states.read_bytes(), units)
+        self.unit_file.write_text("changed service")
+        with self.assertRaisesRegex(RuntimeError, "service identity changed"): self.platform.restart_service()
+        self.assertEqual(self.states.read_bytes(), units)
 
     def test_cold_backup_exact_install_verify_and_finish_preserve_native_settings(self):
         baseline = self.platform.settings()
