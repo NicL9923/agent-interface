@@ -1,5 +1,46 @@
 # Validation ledger
 
+## October 1 app release 0e42a3f
+
+PR #11 merged at `0e42a3f44c4098aa8bc0af531ce55124d23c3303`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `f1e15cb6a74e9439`, from the archive with SHA256
+`d2afecadff0529f614965e6135e625f63f2d793d7c7e06c11a99f96c86786a4a`. The host build reproduced the local web build.
+
+The initial preparation stopped before service changes because adapter/API/type
+changes invalidated the previous integration receipt. Full qualification then
+ran against the exact staged release, an independent repaired d23 checkout,
+a separate native PM generation and disposable app/Hermes homes. All eight
+probe groups and the 18 private shared-OAuth/Google authentication regressions
+completed. The [managed evidence](evidence/managed-assistant-controls-d23-20261001T233630Z/manifest.json)
+binds the source and successful probe files. Integration digest:
+`4f8b9446f59c800296f75675647c200d92baeaa771119ffa1483a252f78eabd8`.
+
+Follow-up source fingerprint, 297 files:
+`sha256:135e034fd3474aebfc3b3f552a10b146dc0acf7c07c3dfd4a129641f31ca1af3`.
+
+The new repository qualification tool automates that procedure, checks its
+archive, source, repair, regression files and dependency fingerprint, and issues
+a private receipt only after the complete run. Independent GPT-6.1 Sol high
+review approved it; local/remote program syntax and the 18 release-wrapper tests
+also passed. Review found a staged HOME path in the new native probe receipt.
+The archive tool now redacts that disposable HOME, refuses remaining raw home
+paths before writing, and hashes the public bytes. Raw private evidence remains
+intact. The new public receipt and its manifest were regenerated. CI now compiles
+the repository's Python tools. Application checks
+from PR #11 remain applicable because this follow-up changes deployment tools,
+documentation and evidence only.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-0e42a3f4-20261001T234055Z.json) records the result. Hermes remains
+at `d23cc6b06455`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. The production sign-in page and Google button rendered
+at 402×874 and 1280×800, filling both viewports without horizontal overflow.
+A signed-in household session was not exercised.
+
 ## October 1 assistant controls, artifacts and device notifications
 
 Branch `t3code/animated-avatar-model-selector`, based on
@@ -25,8 +66,10 @@ uses mocks; physical Web Push delivery was not exercised.
 
 A read-only native RPC on the installed Hermes d23 source returned 105 model
 identifiers across four authenticated providers, including `gpt-6.1-sol`.
-No paid inference or profile mutation was part of that check. The Hermes add-on,
-qualification inputs and upgrade helper are unchanged.
+No paid inference or profile mutation was part of that check. The Python Hermes
+add-on and upgrade helper are unchanged. The model adapter, API and shared types
+change the integration fingerprint, so deployment requires a fresh qualification
+receipt. The release guard rejected reuse of the previous receipt before cutover.
 
 The T3 collaborative browser exercised 402×874 portrait, 874×402 landscape,
 320×568 narrow layouts and desktop widths. The phone dimensions use Apple's
