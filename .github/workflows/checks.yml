@@ -48,3 +48,5 @@ jobs:
         run: python3 tests/hermes_gateway_guard_test.py
       - name: Check managed dependency fingerprints
         run: python3 scripts/hermes-qualified-python-test.py
+      - name: Check release wrapper rules
+        run: python3 tests/release_app_test.py
