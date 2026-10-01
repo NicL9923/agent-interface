@@ -1,42 +1,52 @@
 # Validation ledger
 
-## October 1 inline avatars, model choices and phone reflow
+## October 1 assistant controls, artifacts and device notifications
 
 Branch `t3code/animated-avatar-model-selector`, based on
-`84f143a8e58f607e84784a78a2eed96f059a226a`. Final source fingerprint, 277 files:
-`sha256:7c1bc72329807b6abe7f9dc112b1385aadf0674c87c7ae8af672681606b71c2c`.
-Web build `ba9261e9e5132bc9`.
+`84f143a8e58f607e84784a78a2eed96f059a226a`. Final source fingerprint, 286 files:
+`sha256:ebba534861498fa17a517354bbb4cbabea95e63620802b8cbf220854f73d773b`.
+Web build `f1e15cb6a74e9439`.
 
-All 216 application tests passed. Final typecheck, production build, Python
-syntax compilation, fixture script syntax and diff whitespace checks passed.
-The suite covers profile-scoped model catalogs, sanitized native provider data,
-custom aliases, unavailable models, search, favorite save failures, personal
-favorite isolation, older-client preferences and model-confirmation resets.
-Activity tests cover working/thinking characters, settled replies and retained
-failure, interruption and disconnect guidance. Existing reduced-motion and
-animation-loop tests remain applicable. Only CSS changed after the full suite;
-the final build and browser checks cover those changes.
+All 245 application tests passed. Final typecheck, production build, fixture
+script syntax and diff whitespace checks passed. Earlier Python syntax checks
+remain applicable because Python inputs are unchanged. Tests cover native model
+catalogs, saved aliases, unavailable choices, search, personal favorites, older
+clients and confirmation resets. Activity tests cover working/thinking characters,
+settled replies and failure, interruption and disconnect guidance. Existing
+reduced-motion and animation-loop tests remain applicable.
+
+New behavioral checks cover the settings overflow menu and its keyboard focus,
+artifact deduplication, filtering, source labels, bounded text previews,
+cancellation, errors/retry, safe MIME handling and controlled media. Notification
+checks cover account-owned status, CSRF, subscription registration, explicit
+permission gestures, one-time onboarding, account changes, failed registration,
+uncertain disable responses and signout cleanup. Browser subscription behavior
+uses mocks; physical Web Push delivery was not exercised.
 
 A read-only native RPC on the installed Hermes d23 source returned 105 model
-identifiers across four authenticated providers. It included `gpt-6.1-sol`.
-No paid inference or profile mutation was part of that catalog check. The
-Hermes add-on, qualification inputs and upgrade helper are unchanged.
+identifiers across four authenticated providers, including `gpt-6.1-sol`.
+No paid inference or profile mutation was part of that check. The Hermes add-on,
+qualification inputs and upgrade helper are unchanged.
 
 The T3 collaborative browser exercised 402×874 portrait, 874×402 landscape,
-320×568 narrow layouts and a 1280×800 desktop. The phone dimensions use Apple's
+320×568 narrow layouts and desktop widths. The phone dimensions use Apple's
 iPhone 18 Pro display resolution with inferred 3× CSS scaling. Checks covered
-light/dark sign-in, assistant navigation, working/thinking and attention states,
-all six assistant settings tabs, avatar controls, routines, preferences,
-integrations, failed-update recovery, disconnected guidance, Markdown tables and
-oversized media. Documents did not overflow horizontally. Text fields use 16px
-at phone widths. Working and thinking avatars changed across sampled frames;
-the PR includes screenshots and a short recording. Provider disclosures, model
-search, favorite persistence and model selection were also exercised manually.
+full-screen light/dark sign-in, assistant navigation, working/thinking and
+attention states, all six settings sections, the keyboard-operated More menu,
+avatar controls, routines, preferences, integrations, failed-update recovery,
+disconnected guidance, Markdown tables and oversized media. Documents did not
+overflow horizontally; phone fields use 16px text. Provider disclosures, model
+search, favorites and selection were exercised directly. Avatars changed across
+sampled frames; PR screenshots and a recording show their motion.
 
-Independent GPT-6.1 Sol high review approved the full diff and final CSS delta.
-The review's mobile field typography concern was addressed across portrait and
-landscape forms. These checks use fixtures and Chromium layout viewports; they
-do not establish physical Safari keyboard behavior or nonzero notch insets.
+Final artifact checks verified image layout, scrolling actions, text errors/retry
+and download-only active content at all three phone sizes. Notification
+preferences showed the truthful unsupported/disabled state. A visual-only
+first-use fixture showed the invitation at 402 and 320 px; dismissal persisted
+after reload and the composer stayed reachable. Independent GPT-6.1 Sol high
+review approved this exact source fingerprint with no blockers. These fixture
+and Chromium layout checks do not establish physical Safari keyboard behavior
+or nonzero notch insets.
 Native iOS client code was not changed or revalidated in this pass.
 
 ## October 1 interface and avatar deployment

@@ -17,6 +17,12 @@ favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
 confirmation.
 
+Preferences > Notifications shows whether this account has notifications enabled
+on the current device. Turn the switch on or off there. A new browser asks once
+whether to enable notifications and explains where to change the setting later.
+On iPhone or iPad, add the app to the Home Screen and open it before enabling
+notifications.
+
 ## Run locally
 
 Use Node 24.21 or 26.10 and npm. `.node-version` selects the tested Node 24 LTS
@@ -114,6 +120,11 @@ tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Advanced view adds collapsed tool inputs, outputs, errors and
 timestamps, plus reasoning Hermes exposes. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
+
+Open Artifacts in the conversation header to browse that assistant's generated
+outputs and shared attachments. Search filenames, filter by type, and preview
+images, text, or supported media. PDFs and other files can be opened or downloaded.
+External file sources open only when you choose their link.
 
 ## Validate
 

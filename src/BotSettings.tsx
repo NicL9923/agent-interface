@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   Avatar as AvatarConfig,
   Bootstrap,
@@ -15,6 +15,20 @@ import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
 import { ModelSelector } from "./components/ModelSelector";
+const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines"];
+function useCompactSettings() {
+  const query = "(max-width: 620px)";
+  const [compact, setCompact] = useState(() => typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const changed = () => setCompact(media.matches);
+    changed();
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
+  return compact;
+}
 export function BotSettings({
   bot,
   bootstrap,
@@ -28,6 +42,10 @@ export function BotSettings({
 }) {
   const existing = bot === "new" ? null : bot;
   const [tab, setTab] = useState("details");
+  const compactSettings = useCompactSettings();
+  const overflowMenu = useRef<HTMLDetailsElement>(null);
+  const overflowTrigger = useRef<HTMLElement>(null);
+  const overflowMenuId = useId();
   const [form, setForm] = useState<BotInput>({
     name: existing?.name || "",
     description: existing?.description || "",
@@ -152,6 +170,13 @@ export function BotSettings({
           "This capability is unavailable from the connected Hermes installation."}
       </p>
     ) : null;
+  const selectTab = (section: string, fromOverflow = false) => {
+    setTab(section);
+    setError("");
+    setNotice("");
+    if (overflowMenu.current) overflowMenu.current.open = false;
+    if (fromOverflow) overflowTrigger.current?.focus();
+  };
   return (
     <dialog
       ref={dialog}
@@ -173,20 +198,35 @@ export function BotSettings({
           <Icon name="close" />
         </button>
       </header>
-      <nav className="settings-tabs" aria-label="Settings sections">
-        {["details", "avatar", "connections", "tools", "skills", "routines"].map((t) => (
+      <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
+        {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
           <button
+            type="button"
             aria-current={tab === t ? "page" : undefined}
             key={t}
-            onClick={() => {
-              setTab(t);
-              setError("");
-              setNotice("");
-            }}
+            onClick={() => selectTab(t)}
           >
             {t}
           </button>
         ))}
+        {compactSettings && <details className="settings-tabs-overflow" ref={overflowMenu}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || !overflowMenu.current?.open) return;
+            event.preventDefault();
+            event.stopPropagation();
+            overflowMenu.current.open = false;
+            overflowTrigger.current?.focus();
+          }}>
+          <summary className="settings-more-trigger" ref={overflowTrigger} aria-controls={overflowMenuId}
+            aria-current={settingsSections.slice(2).includes(tab) ? "page" : undefined}
+            aria-label={settingsSections.slice(2).includes(tab) ? `More settings, ${tab}` : "More settings"}>
+            <span>{settingsSections.slice(2).includes(tab) ? tab : "More"}</span><Icon name="chevron" size={16} />
+          </summary>
+          <div className="settings-more-menu" id={overflowMenuId}>
+            {settingsSections.slice(2).map((section) => <button type="button" key={section}
+              aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</button>)}
+          </div>
+        </details>}
       </nav>
       <div className="settings-content">
         {error && (

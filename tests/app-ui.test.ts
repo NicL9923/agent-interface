@@ -86,6 +86,28 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("removes this device's push registration and browser subscription before signing out", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+    const order: string[] = [];
+    const endpoint = "https://push.example.invalid/this-device";
+    vi.stubGlobal("navigator", { onLine: true, serviceWorker: {
+      getRegistration: vi.fn(async () => ({ pushManager: { getSubscription: vi.fn(async () => ({ endpoint,
+        unsubscribe: vi.fn(async () => { order.push("unsubscribe"); return true; }),
+      })) } })), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } });
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/auth/config" ? { localDevAuth: true } as T : original(path) as Promise<T>);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => { order.push(path); return {} as T; });
+    await render();
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Preferences")!.click());
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
+    expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
+    expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
+    expect(container.querySelector(".sign-in")).not.toBeNull();
+    vi.mocked(write).mockReset().mockResolvedValue({});
+  });
+
   it("keeps one integrations dialog across repeated household refreshes", async () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, write } from "../client-api";
 import { Avatar } from "./Avatar";
 import { SetupCommand } from "./ConnectionPanel";
+import "./sign-in.css";
 
 type AuthConfig = { localDevAuth: boolean; googleClientId?: string };
 type GoogleIdentity = { accounts: { id: {
@@ -99,11 +100,15 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
   return <main className="welcome sign-in">
     <p className="eyebrow">Agent Interface</p>
-    <AvatarTrio />
-    <h1>{needsSetup ? "Let's get your household ready." : "Your assistants are waiting."}</h1>
-    <p>{needsSetup
-      ? "Set up this installation once. Then everyone can sign in and return to the same conversations."
-      : "Sign in to return to your household conversations."}</p>
+    <div className="sign-in-content">
+      <div className="sign-in-intro">
+        <AvatarTrio />
+        <h1>{needsSetup ? "Let's get your household ready." : "Your assistants are waiting."}</h1>
+        <p>{needsSetup
+          ? "Set up this installation once. Then everyone can sign in and return to the same conversations."
+          : "Sign in to return to your household conversations."}</p>
+      </div>
+      <div className="sign-in-access">
     {!config && !configError && <p role="status">Checking sign-in…</p>}
     {needsSetup && <div className="sign-in-setup">
       <h2>Start on the computer running this app</h2>
@@ -136,5 +141,7 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
       <p role="alert">{error || configError}</p>
       <button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</button>
     </div>}
+      </div>
+    </div>
   </main>;
 }

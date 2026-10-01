@@ -576,6 +576,10 @@ export async function createApp(
     store.routineRecipients(params(req).id, []);
     return { ok: true };
   });
+  app.post("/api/push/subscriptions/status", async (req) => {
+    const { endpoint } = z.object({ endpoint: z.string().url().max(8192) }).strict().parse(req.body);
+    return { registered: store.hasSubscription(signedIn(req).id, endpoint) };
+  });
   app.post("/api/push/subscriptions", async (req) => {
     if (!config.vapidPublicKey)
       throw failure(409, "Web Push is not configured");

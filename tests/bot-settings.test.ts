@@ -135,3 +135,62 @@ it("clears expensive-model confirmation when a different model is selected", asy
   await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({ provider: "provider", model: "other", shared: true, confirmModel: false }), "PATCH");
 });
+
+describe("compact settings navigation", () => {
+  const compact = async () => {
+    const media = { matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    vi.stubGlobal("matchMedia", vi.fn(() => media));
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved }));
+    });
+    return media;
+  };
+
+  it("uses a single disclosure for secondary sections and keeps the selected section visible", async () => {
+    await compact();
+    const nav = container.querySelector<HTMLElement>('[aria-label="Settings sections"]')!;
+    expect(Array.from(nav.children).map((child) => child.tagName)).toEqual(["BUTTON", "BUTTON", "DETAILS"]);
+    const menu = nav.querySelector("details")!;
+    const summary = nav.querySelector("summary")!;
+    expect(summary.textContent).toBe("More");
+    menu.open = true;
+    const tools = Array.from(menu.querySelectorAll("button")).find((button) => button.textContent === "tools")!;
+    vi.mocked(api).mockResolvedValueOnce([]);
+    await act(async () => tools.click());
+    expect(menu.open).toBe(false);
+    expect(summary.textContent).toBe("tools");
+    expect(summary.getAttribute("aria-current")).toBe("page");
+    expect(document.activeElement).toBe(summary);
+    expect(nav.querySelectorAll('button[aria-current="page"]')).toHaveLength(1);
+    expect(container.textContent).toContain("Save tools");
+  });
+
+  it("Escape closes the overflow and restores focus without closing assistant settings", async () => {
+    await compact();
+    const menu = container.querySelector<HTMLDetailsElement>(".settings-tabs-overflow")!;
+    const summary = menu.querySelector("summary")!;
+    menu.open = true;
+    menu.querySelector("button")!.focus();
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => menu.querySelector("button")!.dispatchEvent(escape));
+    expect(menu.open).toBe(false);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(summary);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("updates navigation on viewport changes and cleans up its media listener", async () => {
+    const media = await compact();
+    const changed = media.addEventListener.mock.calls[0][1] as () => void;
+    expect(container.querySelector(".settings-tabs-overflow")).not.toBeNull();
+    media.matches = false;
+    await act(async () => changed());
+    const nav = container.querySelector('[aria-label="Settings sections"]')!;
+    expect(nav.querySelector("details")).toBeNull();
+    expect(nav.querySelectorAll("button")).toHaveLength(6);
+    await act(async () => root.unmount());
+    expect(media.removeEventListener).toHaveBeenCalledWith("change", changed);
+  });
+});
