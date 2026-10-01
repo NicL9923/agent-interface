@@ -9,6 +9,18 @@ type GoogleIdentity = { accounts: { id: {
   renderButton: (element: HTMLElement, options: unknown) => void;
 } } };
 
+const trio = [
+  { mode: "geometric", shape: "blob", color: "#1084FE", eyes: "oval", accessory: "none" },
+  { mode: "mascot", family: "bear", color: "#FF9800", eyes: "round", accessory: "none" },
+  { mode: "geometric", shape: "triangle", color: "#FF309B", eyes: "oval", accessory: "none" },
+] as const;
+/** A small household of assistants, so the first screen shows who is waiting. */
+export function AvatarTrio() {
+  return <div className="avatar-trio" aria-hidden="true">
+    {trio.map((avatar, i) => <Avatar key={i} avatar={avatar} size={i === 1 ? 84 : 64} />)}
+  </div>;
+}
+
 export function SignIn({ onSuccess }: { onSuccess: () => void }) {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [error, setError] = useState("");
@@ -87,7 +99,7 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
   return <main className="welcome sign-in">
     <p className="eyebrow">Agent Interface</p>
-    <Avatar size={90} />
+    <AvatarTrio />
     <h1>{needsSetup ? "Let's get your household ready." : "Your assistants are waiting."}</h1>
     <p>{needsSetup
       ? "Set up this installation once. Then everyone can sign in and return to the same conversations."

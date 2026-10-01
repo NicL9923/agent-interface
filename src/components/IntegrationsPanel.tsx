@@ -3,6 +3,7 @@ import { api, ApiError, write } from "../client-api";
 import type { Bot } from "../shared/types";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../shared/integrations";
 import "./integrations.css";
+import { Icon } from "./Icon";
 
 const statusLabels: Record<IntegrationConnection["status"], string> = {
   connected: "Connected", configured: "Configured · not checked", not_connected: "Not connected",
@@ -23,7 +24,7 @@ export function IntegrationsPanel({ bots, accountScope, onClose }: { bots: Bot[]
     return () => { dialog.current?.close(); if (previous?.isConnected) previous.focus(); };
   }, []);
   return <dialog ref={dialog} className="integrations-panel" aria-labelledby="integrations-title" onCancel={onClose} onClose={onClose}>
-    <header><div><p className="eyebrow">Your household workspace</p><h2 id="integrations-title">Integrations</h2></div><button className="icon-button" aria-label="Close integrations" onClick={onClose}>×</button></header>
+    <header><div><p className="eyebrow">Your household workspace</p><h2 id="integrations-title">Integrations</h2></div><button className="icon-button" aria-label="Close integrations" onClick={onClose}><Icon name="close" /></button></header>
     <p className="muted">Connect the accounts and services your assistants use. A saved connection is checked separately from its permissions.</p>
     {bots.length > 1 && <label className="integration-profile">Connections for<select value={profile} onChange={e => setProfile(e.target.value)}>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label>}
     {profile ? <IntegrationList key={profile} profile={profile} bots={bots} accountScope={accountScope} /> : <p>Create an assistant before connecting its services.</p>}
@@ -120,7 +121,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
       <strong>{flow.status === "approved" || flow.kind === "connected" ? "Connection ready" : flow.status === "pending" ? "Finish connecting your account" : "Sign-in status"}</strong>
       <p>{flow.message}</p>
       {flow.userCode && <p>Enter this code: <code className="integration-code">{flow.userCode}</code></p>}
-      {flow.status === "pending" && authorizationUrl(flow.url) && <a href={authorizationUrl(flow.url)} target="_blank" rel="noopener noreferrer">Open sign-in ↗</a>}
+      {flow.status === "pending" && authorizationUrl(flow.url) && <a href={authorizationUrl(flow.url)} target="_blank" rel="noopener noreferrer">Open sign-in <Icon name="external" size={15} /></a>}
       {flow.callbackInput && flow.status === "pending" && <form onSubmit={e => { e.preventDefault(); void finishFlow(); }}><label>Returned address<input type="url" required value={callback} onChange={e => setCallback(e.target.value)} placeholder="Paste the full browser address after sign-in" autoComplete="off" /></label><button disabled={!!busy}>Finish connection</button></form>}
       {flow.status === "pending" ? <button disabled={!!busy} onClick={() => void finishFlow(true)}>Cancel sign-in</button> : <button onClick={() => setFlow(undefined)}>Dismiss</button>}
     </section>}
@@ -141,7 +142,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
       </div>}
     </article>)}</div></section>)}
     {catalog && catalog.connections.length === 0 && <p className="muted">Hermes has not reported any connections for this assistant.</p>}
-    {catalog?.canManage && <section className="integration-custom"><button aria-expanded={custom} onClick={() => setCustom(!custom)}>＋ Add custom MCP connection</button>{custom && <form onSubmit={async e => {
+    {catalog?.canManage && <section className="integration-custom"><button aria-expanded={custom} onClick={() => setCustom(!custom)}><Icon name="plus" size={18} /> Add custom MCP connection</button>{custom && <form onSubmit={async e => {
       e.preventDefault(); if (locked.current) return; locked.current = true; setBusy("mcp"); setError("");
       try { const next = await write<IntegrationFlow | IntegrationConnection>("/integrations/mcp", { profile, ...mcp, token: mcp.auth === "bearer" ? mcp.token : undefined }); if (alive.current) { if ("kind" in next) acceptFlow(next); setMcp({ name: "", url: "", auth: "none", token: "" }); setCustom(false); await refresh(); } }
       catch (e) { if (alive.current) setError(actionError(e)); }

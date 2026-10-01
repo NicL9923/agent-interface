@@ -1,4 +1,6 @@
 .avatar-wrap {
+  --avatar-badge: clamp(15px, calc(var(--avatar-size, 48px) * 0.34), 26px);
+  --avatar-ring-color: transparent;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -13,38 +15,72 @@
   overflow: visible;
 }
 .avatar-portrait {
+  position: relative;
   height: 100%;
   width: 100%;
   border-radius: 50%;
   object-fit: cover;
+  background: var(--rail, #eeeee6);
 }
 .avatar-wrap[data-state="disconnected"],
 .avatar-wrap[data-state="interrupted"] {
   filter: saturate(0.25);
+  opacity: 0.88;
 }
-.avatar-indicator {
+.avatar-badge {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
-  min-width: 17px;
-  height: 17px;
+  right: -2px;
+  bottom: -2px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: var(--avatar-badge);
+  height: var(--avatar-badge);
   border-radius: 50%;
-  background: #fff9ee;
-  color: #1a6551;
-  border: 2px solid var(--surface, #fff9ee);
-  font: 700 12px/13px sans-serif;
-  text-align: center;
-  box-shadow: 0 0 0 1px #1a65514d;
+  background: var(--accent, #246f59);
+  color: var(--surface, #faf8f2);
+  box-shadow: 0 0 0 2px var(--surface, #faf8f2);
+  animation: avatar-badge-in 360ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
-.avatar-wrap[data-state="failed"] .avatar-indicator {
-  background: #ad3838;
-  color: white;
+.avatar-badge svg {
+  width: 72%;
+  height: 72%;
 }
-.avatar-wrap[data-state="disconnected"] .avatar-indicator,
-.avatar-wrap[data-state="interrupted"] .avatar-indicator {
-  background: #e6d8bc;
-  color: #403a32;
+.avatar-wrap[data-state="failed"] .avatar-badge {
+  background: var(--danger, #a33c32);
 }
+.avatar-wrap[data-state="blocked"] .avatar-badge {
+  background: var(--attention, #b5813a);
+}
+.avatar-wrap[data-state="disconnected"] .avatar-badge,
+.avatar-wrap[data-state="interrupted"] .avatar-badge,
+.avatar-wrap[data-state="waiting"] .avatar-badge {
+  background: var(--muted, #697268);
+}
+
+/* Portraits never animate the face, so a ring carries their activity. */
+.avatar-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: var(--avatar-ring-color);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+.avatar-wrap[data-state="working"] .avatar-ring {
+  background: conic-gradient(var(--accent, #246f59) 0 32%, transparent 32% 100%);
+  animation: avatar-ring-spin 1.1s linear infinite;
+}
+.avatar-wrap[data-state="thinking"] .avatar-ring {
+  background: repeating-conic-gradient(var(--accent, #246f59) 0 22deg, transparent 22deg 120deg);
+  animation: avatar-ring-spin 2.6s linear infinite;
+}
+.avatar-wrap[data-state="waiting"] .avatar-ring { --avatar-ring-color: var(--line, #d9ded2); }
+.avatar-wrap[data-state="blocked"] .avatar-ring { --avatar-ring-color: var(--attention, #b5813a); }
+.avatar-wrap[data-state="done"] .avatar-ring { --avatar-ring-color: var(--accent, #246f59); }
+.avatar-wrap[data-state="failed"] .avatar-ring { --avatar-ring-color: var(--danger, #a33c32); }
+
 .avatar-caption {
   position: absolute;
   top: calc(100% + 10px);
@@ -58,30 +94,29 @@
 .avatar-body {
   transition: fill 280ms ease;
 }
-.avatar-eye {
-  animation: avatar-eye-in 280ms ease;
-}
-.avatar-trails-settle {
-  animation: avatar-trails-out 600ms ease forwards;
-}
-@keyframes avatar-eye-in {
+@keyframes avatar-badge-in {
   from {
-    opacity: 0.2;
-  }
-  to {
-    opacity: 1;
+    transform: scale(0.3);
+    opacity: 0;
   }
 }
-@keyframes avatar-trails-out {
+@keyframes avatar-ring-spin {
   to {
-    opacity: 0;
+    transform: rotate(1turn);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .avatar-body {
     transition: none;
   }
-  .avatar-eye {
-    animation: none;
+  .avatar-badge,
+  .avatar-ring {
+    animation: none !important;
   }
+}
+.avatar-wrap[data-state="disconnected"] .avatar-badge,
+.avatar-wrap[data-state="interrupted"] .avatar-badge,
+.avatar-wrap[data-reduced-motion="true"] .avatar-badge,
+.avatar-wrap[data-reduced-motion="true"] .avatar-ring {
+  animation: none;
 }
