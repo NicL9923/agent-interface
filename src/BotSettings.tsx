@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   Avatar as AvatarConfig,
   Bootstrap,
@@ -14,6 +14,21 @@ import { IntegrationList } from "./components/IntegrationsPanel";
 import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
+import { ModelSelector } from "./components/ModelSelector";
+const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines"];
+function useCompactSettings() {
+  const query = "(max-width: 620px)";
+  const [compact, setCompact] = useState(() => typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const changed = () => setCompact(media.matches);
+    changed();
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
+  return compact;
+}
 export function BotSettings({
   bot,
   bootstrap,
@@ -27,6 +42,10 @@ export function BotSettings({
 }) {
   const existing = bot === "new" ? null : bot;
   const [tab, setTab] = useState("details");
+  const compactSettings = useCompactSettings();
+  const overflowMenu = useRef<HTMLDetailsElement>(null);
+  const overflowTrigger = useRef<HTMLElement>(null);
+  const overflowMenuId = useId();
   const [form, setForm] = useState<BotInput>({
     name: existing?.name || "",
     description: existing?.description || "",
@@ -36,14 +55,6 @@ export function BotSettings({
     shared: existing?.shared ?? true,
     enabledMcpServers: existing?.enabledMcpServers || [],
   });
-  const modelChoices = Array.from(
-    new Map(
-      bootstrap.bots.map((b) => [
-        JSON.stringify([b.provider || "", b.model]),
-        { provider: b.provider || "", model: b.model },
-      ]),
-    ).values(),
-  );
   const [avatar, setAvatar] = useState<AvatarConfig>(
     existing?.avatar || defaultAvatar,
   );
@@ -159,6 +170,13 @@ export function BotSettings({
           "This capability is unavailable from the connected Hermes installation."}
       </p>
     ) : null;
+  const selectTab = (section: string, fromOverflow = false) => {
+    setTab(section);
+    setError("");
+    setNotice("");
+    if (overflowMenu.current) overflowMenu.current.open = false;
+    if (fromOverflow) overflowTrigger.current?.focus();
+  };
   return (
     <dialog
       ref={dialog}
@@ -180,20 +198,35 @@ export function BotSettings({
           <Icon name="close" />
         </button>
       </header>
-      <nav className="settings-tabs" aria-label="Settings sections">
-        {["details", "avatar", "connections", "tools", "skills", "routines"].map((t) => (
+      <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
+        {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
           <button
+            type="button"
             aria-current={tab === t ? "page" : undefined}
             key={t}
-            onClick={() => {
-              setTab(t);
-              setError("");
-              setNotice("");
-            }}
+            onClick={() => selectTab(t)}
           >
             {t}
           </button>
         ))}
+        {compactSettings && <details className="settings-tabs-overflow" ref={overflowMenu}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || !overflowMenu.current?.open) return;
+            event.preventDefault();
+            event.stopPropagation();
+            overflowMenu.current.open = false;
+            overflowTrigger.current?.focus();
+          }}>
+          <summary className="settings-more-trigger" ref={overflowTrigger} aria-controls={overflowMenuId}
+            aria-current={settingsSections.slice(2).includes(tab) ? "page" : undefined}
+            aria-label={settingsSections.slice(2).includes(tab) ? `More settings, ${tab}` : "More settings"}>
+            <span>{settingsSections.slice(2).includes(tab) ? tab : "More"}</span><Icon name="chevron" size={16} />
+          </summary>
+          <div className="settings-more-menu" id={overflowMenuId}>
+            {settingsSections.slice(2).map((section) => <button type="button" key={section}
+              aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</button>)}
+          </div>
+        </details>}
       </nav>
       <div className="settings-content">
         {error && (
@@ -259,86 +292,18 @@ export function BotSettings({
                 placeholder="How should this assistant help?"
               />
             </label>
-            <label>
-              Connected model
-              <select
-                required
-                value={JSON.stringify([form.provider || "", form.model])}
-                onChange={(event) => {
-                  const [provider, model] = JSON.parse(event.target.value);
-                  setForm({ ...form, provider, model });
-                }}
-              >
-                <option value={JSON.stringify(["", ""])}>
-                  Choose a connected model
-                </option>
-                {!modelChoices.some(
-                  (choice) =>
-                    choice.provider === (form.provider || "") &&
-                    choice.model === form.model,
-                ) &&
-                  form.model && (
-                    <option
-                      value={JSON.stringify([form.provider || "", form.model])}
-                    >
-                      Advanced: {form.provider} / {form.model}
-                    </option>
-                  )}
-                {modelChoices.map((choice) => (
-                  <option
-                    key={JSON.stringify([choice.provider, choice.model])}
-                    value={JSON.stringify([choice.provider, choice.model])}
-                  >
-                    {choice.provider} / {choice.model}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <details className="model-advanced">
-              <summary>Advanced model choice</summary>
-              <div className="form-row">
-                <label>
-                  Existing provider
-                  <input
-                    required
-                    list="known-providers"
-                    value={form.provider}
-                    onChange={(e) =>
-                      setForm({ ...form, provider: e.target.value })
-                    }
-                  />
-                  <datalist id="known-providers">
-                    {Array.from(
-                      new Set(modelChoices.map((c) => c.provider)),
-                    ).map((provider) => (
-                      <option key={provider}>{provider}</option>
-                    ))}
-                  </datalist>
-                </label>
-                <label>
-                  Model
-                  <input
-                    required
-                    list="known-models"
-                    value={form.model}
-                    onChange={(e) =>
-                      setForm({ ...form, model: e.target.value })
-                    }
-                  />
-                  <datalist id="known-models">
-                    {Array.from(new Set(modelChoices.map((c) => c.model))).map(
-                      (model) => (
-                        <option key={model}>{model}</option>
-                      ),
-                    )}
-                  </datalist>
-                </label>
-              </div>
-            </details>
-            <p className="muted">
-              Use a provider already connected in Hermes. Add new sign-ins in
-              the official Hermes interface.
-            </p>
+            <ModelSelector
+              value={{ provider: form.provider || "", model: form.model }}
+              profile={existing?.id}
+              favorites={bootstrap.preferences.modelFavorites || []}
+              disabled={busy || !bootstrap.capabilities.botConfiguration.supported}
+              onChange={({ provider, model }) => {
+                setForm({ ...form, provider, model });
+                setConfirmModel(false);
+                setError("");
+              }}
+              onFavoritesSaved={onSaved}
+            />
             <label className="checkbox-label">
               <input
                 type="checkbox"
@@ -377,7 +342,7 @@ export function BotSettings({
               <button
                 className="primary"
                 disabled={
-                  busy || !bootstrap.capabilities.botConfiguration.supported
+                  busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
                 {busy

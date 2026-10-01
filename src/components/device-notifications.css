@@ -1,0 +1,24 @@
+.notification-settings { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; min-width: 0; }
+.notification-settings-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.notification-settings-header h3 { margin: 0; font-size: 15px; }
+.notification-settings .notification-toggle { display: flex; flex-direction: row; align-items: center; gap: 9px; margin: 0; min-height: 44px; cursor: pointer; }
+.notification-toggle input { appearance: none; position: relative; width: 36px; height: 22px; padding: 0; margin: 0; flex-shrink: 0; border: 1px solid var(--muted); border-radius: 999px; background: var(--line); cursor: pointer; }
+.notification-toggle input::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); }
+.notification-toggle input:checked { background: var(--accent); border-color: var(--accent); }
+.notification-toggle input:checked::before { transform: translateX(14px); background: var(--surface); }
+.notification-toggle input:disabled { cursor: default; opacity: 0.65; }
+.notification-settings p { font-size: 13px; line-height: 1.5; margin: 7px 0; overflow-wrap: anywhere; }
+.notification-settings .notification-device-note { font-size: 12px; margin-bottom: 18px; }
+.notification-onboarding { display: flex; align-items: center; gap: 18px; padding: 16px 24px; background: var(--accent-soft); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.notification-onboarding > div:first-child { min-width: 0; flex: 1; }
+.notification-onboarding h3 { margin: 0 0 6px; font-size: 15px; }
+.notification-onboarding p { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.notification-onboarding .actions { flex-shrink: 0; margin: 0; }
+.notification-onboarding button, .notification-settings button { min-height: 44px; }
+@media (max-width: 760px) {
+  .notification-onboarding { align-items: stretch; flex-direction: column; gap: 10px; padding: 12px 16px; }
+  .notification-onboarding .actions { flex-wrap: wrap; }
+}
+@media (max-height: 500px) {
+  .notification-onboarding { max-height: 35dvh; overflow-y: auto; }
+}

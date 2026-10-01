@@ -86,6 +86,28 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("removes this device's push registration and browser subscription before signing out", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+    const order: string[] = [];
+    const endpoint = "https://push.example.invalid/this-device";
+    vi.stubGlobal("navigator", { onLine: true, serviceWorker: {
+      getRegistration: vi.fn(async () => ({ pushManager: { getSubscription: vi.fn(async () => ({ endpoint,
+        unsubscribe: vi.fn(async () => { order.push("unsubscribe"); return true; }),
+      })) } })), addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } });
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/auth/config" ? { localDevAuth: true } as T : original(path) as Promise<T>);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => { order.push(path); return {} as T; });
+    await render();
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Preferences")!.click());
+    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
+    expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
+    expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
+    expect(container.querySelector(".sign-in")).not.toBeNull();
+    vi.mocked(write).mockReset().mockResolvedValue({});
+  });
+
   it("keeps one integrations dialog across repeated household refreshes", async () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
@@ -98,18 +120,39 @@ describe("conversation state", () => {
     expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
   });
 
-  it("shows the current work beside a prominent avatar and stops claiming work during a disconnect", async () => {
+  it("shows current work inline in the transcript and stops claiming work during a disconnect", async () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" } };
     await render();
-    expect(container.querySelector('.conversation-activity [data-avatar-size="60"]')?.getAttribute("data-avatar-state")).toBe("working");
+    expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Running terminal");
+    const stop = container.querySelector<HTMLButtonElement>(".conversation-activity button")!;
+    await act(async () => stop.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
       if (path === "/bots/shared/conversation") throw new Error("Disconnected");
       return (path === "/bootstrap" ? bootstrap : savedDraft) as T;
     });
     await advance(1500);
-    expect(container.querySelector('.conversation-activity [data-avatar-size="60"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
+    expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Running terminal");
+  });
+
+  it("replaces inline thinking with the final reply when work completes", async () => {
+    conversation = { ...conversation, activity: { state: "thinking" }, messages: [
+      { id: "question", role: "user", text: "Where is the file?" },
+    ] };
+    await render();
+    const activity = container.querySelector(".message-activity")!;
+    expect(activity.previousElementSibling?.getAttribute("data-message-id")).toBe("question");
+    expect(activity.querySelector("[data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("thinking");
+    conversation = { ...conversation, activity: { state: "done", detail: "Finished finding the file." }, messages: [
+      ...conversation.messages,
+      { id: "answer", role: "assistant", text: "The file is in your Documents folder." },
+    ] };
+    await advance(1500);
+    expect(container.querySelector(".transcript")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
+    expect(container.querySelector(".conversation-activity")).toBeNull();
+    expect(container.querySelector(".chat-header [data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("idle");
   });
 
   it("keeps Simple readable and exposes real reasoning and deduplicated tool details in Advanced", async () => {

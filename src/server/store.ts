@@ -440,6 +440,9 @@ export class Store {
       .prepare("DELETE FROM subscriptions WHERE user_id=? AND endpoint=?")
       .run(userId, endpoint);
   }
+  hasSubscription(userId: string, endpoint: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM subscriptions WHERE user_id=? AND endpoint=?").get(userId, endpoint);
+  }
   outbox() {
     return this.db
       .prepare(

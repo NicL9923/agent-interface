@@ -68,6 +68,21 @@ afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('reads the native account catalog under profile scope and preserves custom aliases and unavailable models', async () => {
+    beforeSend = (request, socket) => {
+      if (request.method !== 'model.options') return;
+      queueMicrotask(() => socket.receive({jsonrpc:'2.0',id:request.id,result:{provider:'custom:house',model:'current',providers:[
+        {slug:'house',name:'House provider',aliases:['custom:house','house'],authenticated:true,models:['current','other','other',null],unavailable_models:['other'],api_url:'https://private.invalid',api_key:'never-expose'},
+        {slug:'lost',name:'Disconnected',authenticated:false,models:['saved'],warning:'Reconnect this account'},
+      ]}}));
+    };
+    const result = await runtime.modelOptions!('shared');
+    expect(calls.find(call => call.method === 'model.options')?.params).toEqual({profile:'shared',explicit_only:true});
+    expect(result).toEqual({provider:'custom:house',model:'current',providers:[
+      {id:'house',name:'House provider',aliases:['custom:house','house'],authenticated:true,models:[{id:'current',name:'current',available:true},{id:'other',name:'other',available:false}]},
+      {id:'lost',name:'Disconnected',aliases:[],authenticated:false,warning:'Reconnect this account',models:[{id:'saved',name:'saved',available:false}]},
+    ]});
+  });
   it('exposes real streamed reasoning and keeps working while a tool is running', async () => {
     snapshot.info.running = true;
     await runtime.conversation('shared');

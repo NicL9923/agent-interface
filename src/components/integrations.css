@@ -1,4 +1,4 @@
-.integrations-panel { width: min(820px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 24px; padding: 26px; box-shadow: 0 24px 90px #14201926; }
+.integrations-panel { width: min(820px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)))); max-height: calc(100dvh - 40px); overflow: auto; background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 24px; padding: 26px; box-shadow: 0 24px 90px #14201926; }
 .integrations-panel::backdrop { background: #14201955; }
 .integrations-panel > header, .integration-toolbar, .integration-card-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .integrations-panel h2 { margin: 4px 0 12px; }
@@ -18,7 +18,7 @@
 .integration-card dl { font-size: 11px; margin: 14px 0; }
 .integration-card dl > div { display: flex; gap: 10px; margin-block: 6px; }
 .integration-card dt { width: 80px; flex-shrink: 0; color: var(--muted); }
-.integration-card dd { margin: 0; overflow-wrap: anywhere; }
+.integration-card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .integration-card details { font-size: 12px; border-top: 1px solid var(--line); padding-block: 12px; }
 .integration-card summary { cursor: pointer; }
 .integration-card ul { padding-left: 18px; }
@@ -34,4 +34,9 @@
 .integration-custom { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; }
 .integration-custom form { max-width: 440px; padding-top: 16px; }
 .integration-confirmation { padding-top: 6px; font-size: 12px; }
-@media (max-width: 650px) { .integrations-panel { padding: 20px; } .integration-cards { grid-template-columns: 1fr; } .integration-toolbar { align-items: flex-start; } }
+@media (max-width: 650px) {
+  .integrations-panel { padding: 20px; max-height: calc(100dvh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom))); }
+  .integrations-panel > header > div { min-width: 0; overflow-wrap: anywhere; }
+  .integration-cards { grid-template-columns: 1fr; }
+  .integration-toolbar { align-items: flex-start; flex-wrap: wrap; }
+}

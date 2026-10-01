@@ -11,6 +11,7 @@ import type {
 } from "./shared/types";
 import { api, ApiError, setCsrf, write } from "./client-api";
 import { Avatar, stateLabels } from "./components/Avatar";
+import { ArtifactsButton } from "./components/Artifacts";
 import { BotSettings } from "./BotSettings";
 import { MessageMarkdown } from "./components/MessageMarkdown";
 import { ConnectionPanel } from "./components/ConnectionPanel";
@@ -18,6 +19,8 @@ import { AvatarTrio, SignIn } from "./components/SignIn";
 import { IntegrationsPanel } from "./components/IntegrationsPanel";
 import { HermesUpgradePanel } from "./components/HermesUpgradePanel";
 import { Icon } from "./components/Icon";
+import { useDeviceNotifications } from "./components/use-device-notifications";
+import { NotificationSettings, NotificationOnboarding } from "./components/DeviceNotifications";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -78,6 +81,7 @@ function clearSavedDraft(user: string, submission: Pending) {
 }
 export function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
+  const notifications = useDeviceNotifications(boot?.user.id, boot?.vapidPublicKey);
   const [auth, setAuth] = useState(false);
   const [error, setError] = useState("");
   const [botId, setBotId] = useState(
@@ -650,44 +654,6 @@ export function App() {
       if (epoch === identityEpoch.current) setUploading(false);
     }
   };
-  const enablePush = async () => {
-    if (!boot?.vapidPublicKey) {
-      setNotice("Notifications are not configured on this installation.");
-      return;
-    }
-    try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window))
-        throw new Error(
-          "This browser does not support Web Push. On iPhone, install the app first.",
-        );
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted")
-        throw new Error(
-          "Notification permission was not granted. You can enable it in browser settings.",
-        );
-      const existingRegistration =
-        await navigator.serviceWorker.getRegistration();
-      if (!existingRegistration)
-        throw new Error(
-          "Open the installed app to enable notifications. The development preview does not register its worker.",
-        );
-      const registration = await navigator.serviceWorker.ready;
-      const bytes = Uint8Array.from(
-        atob(boot.vapidPublicKey.replace(/-/g, "+").replace(/_/g, "/")),
-        (c) => c.charCodeAt(0),
-      );
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: bytes,
-      });
-      await write("/push/subscriptions", subscription.toJSON());
-      setNotice(
-        "Notifications enabled. Verify delivery with the installed phone app closed.",
-      );
-    } catch (e) {
-      setNotice((e as Error).message);
-    }
-  };
   if (auth) return <SignIn onSuccess={() => {
     identityEpoch.current++;
     bootstrapRequest.current = null;
@@ -712,6 +678,8 @@ export function App() {
     ? "disconnected"
     : conversation?.activity.state || selected?.activity || "idle";
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
+  const showActivity = state !== "idle" && state !== "done";
+  const avatarState = state === "done" ? "idle" : state;
   const allBots = boot.bots;
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -729,7 +697,7 @@ export function App() {
         ? state
         : bot.activity;
     // The rail says what each assistant is doing in words, not only through motion.
-    const reportsActivity = !connectionLost && botState !== "idle";
+    const reportsActivity = !connectionLost && botState !== "idle" && botState !== "done";
     return (
       <button
         className={`bot-item ${bot.id === botId ? "selected" : ""}`}
@@ -737,7 +705,7 @@ export function App() {
         aria-current={bot.id === botId ? "page" : undefined}
         onClick={() => selectBot(bot.id)}
       >
-        <Avatar avatar={bot.avatar} state={botState} size={40} name={bot.name} />
+        <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={40} name={bot.name} />
         <span>
           <strong>{bot.name}</strong>
           <small className={reportsActivity ? `bot-activity state-${botState}` : undefined}>
@@ -859,7 +827,7 @@ export function App() {
             <>
               <Avatar
                 avatar={selected.avatar}
-                state={state}
+                state={avatarState}
                 size={42}
                 name={selected.name}
               />
@@ -867,6 +835,7 @@ export function App() {
                 <h1>{selected.name}</h1>
                 <p>{`${selected.shared ? "Shared with your household" : "Your personal assistant"} · ${selected.provider ? selected.provider + " / " : ""}${selected.model}`}</p>
               </div>
+              <ArtifactsButton key={`${boot.user.id}:${selected.id}`} bot={selected} conversation={conversation} unavailable={connectionLost} />
               <button
                 className="icon-button"
                 aria-label="Edit assistant"
@@ -932,6 +901,7 @@ export function App() {
             </button>
           </div>
         )}
+        <NotificationOnboarding notifications={notifications} />
         <div
           className="transcript"
           ref={scroll}
@@ -1021,11 +991,11 @@ export function App() {
                   </article>
                 ))}
             </>
-          ) : (
+          ) : !showActivity ? (
             <div className="empty-state">
               <Avatar
                 avatar={selected.avatar}
-                state={state}
+                state={avatarState}
                 size={112}
                 name={selected.name}
               />
@@ -1038,10 +1008,35 @@ export function App() {
                 <p className="muted">{boot.capabilities.chat.reason}</p>
               )}
             </div>
-          )}
+          ) : null}
           {advanced && liveTools.map(call => <article className="message message-tool" key={`tool-${call.id}`}>
             <ToolCallDetail call={call} disconnected={connectionLost} />
           </article>)}
+          {selected && showActivity && (
+            <div className={`activity-status conversation-activity message-activity state-${state}`}>
+              <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} />
+              <div className="activity-copy" role="status">
+                <strong>{stateLabels[state]}</strong>
+                <p>{connectionLost ? "Restoring activity when Hermes reconnects."
+                  : conversation?.activity.detail || (state === "thinking" ? "Considering your message."
+                    : state === "working" ? "Working on your request." : "")}</p>
+              </div>
+              {active && (
+                <button
+                  disabled={!boot.capabilities.stop.supported}
+                  title={boot.capabilities.stop.reason}
+                  onClick={() =>
+                    void write(
+                      `/bots/${encodeURIComponent(botId)}/stop`,
+                      {},
+                    ).catch((e) => setError(e.message))
+                  }
+                >
+                  <Icon name="stop" size={14} /> Stop
+                </button>
+              )}
+            </div>
+          )}
           {conversation?.attention?.map((request) => (
             <AttentionCard
               key={request.id}
@@ -1096,29 +1091,6 @@ export function App() {
         </div>
         {selected && (
           <footer className="composer-area">
-            <div className={`activity-status conversation-activity state-${state}`}>
-              <Avatar avatar={selected.avatar} state={state} size={60} name={selected.name} />
-              <div className="activity-copy" role="status">
-                <strong><span className="activity-dot" aria-hidden="true" />{stateLabels[state]}</strong>
-                <p>{connectionLost ? "Restoring activity when Hermes reconnects."
-                  : conversation?.activity.detail || (state === "thinking" ? "Considering your message."
-                    : state === "working" ? "Working on your request." : state === "idle" ? "Here when you need a hand." : "")}</p>
-              </div>
-              {active && (
-                <button
-                  disabled={!boot.capabilities.stop.supported}
-                  title={boot.capabilities.stop.reason}
-                  onClick={() =>
-                    void write(
-                      `/bots/${encodeURIComponent(botId)}/stop`,
-                      {},
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  <Icon name="stop" size={14} /> Stop
-                </button>
-              )}
-            </div>
             {state === "interrupted" && (
               <label className="interruption-review">
                 <input
@@ -1130,7 +1102,7 @@ export function App() {
                 continuing.
               </label>
             )}
-            {conversation && advanced && (
+            {conversation && advanced && showActivity && (
                 <details className="activity-details">
                   <summary>Activity details</summary>
                   <p>{connectionLost ? "Activity is unknown until Hermes reconnects." : conversation.activity.detail || stateLabels[state]}</p>
@@ -1416,28 +1388,14 @@ export function App() {
             bots={allBots}
             save={savePreferences}
           />
+          <NotificationSettings notifications={notifications} />
           <div className="actions">
-            <button onClick={() => void enablePush()}>
-              Enable notifications
-            </button>
             <button
+              disabled={notifications.busy}
               onClick={() =>
                 void (async () => {
                   try {
-                    if ("serviceWorker" in navigator) {
-                      const registration =
-                        await navigator.serviceWorker.getRegistration();
-                      const subscription =
-                        await registration?.pushManager.getSubscription();
-                      if (subscription) {
-                        await write(
-                          "/push/subscriptions",
-                          { endpoint: subscription.endpoint },
-                          "DELETE",
-                        );
-                        await subscription.unsubscribe();
-                      }
-                    }
+                    await notifications.disable();
                     await write("/auth/logout", {});
                     identityEpoch.current++;
                     bootstrapRequest.current = null;
@@ -1461,22 +1419,6 @@ export function App() {
             >
               Sign out
             </button>
-            {selected && (
-              <button
-                disabled={!boot.vapidPublicKey}
-                onClick={() =>
-                  void write("/push/test", { botId })
-                    .then(() =>
-                      setNotice(
-                        "Test notification queued. Verify it arrives with your installed phone app closed.",
-                      ),
-                    )
-                    .catch((e) => setNotice(e.message))
-                }
-              >
-                Send test notification
-              </button>
-            )}
             {installEvent && (
               <button onClick={() => void installEvent.prompt()}>
                 Install app

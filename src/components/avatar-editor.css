@@ -180,6 +180,13 @@
   text-decoration: underline;
 }
 @media (max-width: 620px) {
+  .avatar-stage-states button {
+    min-height: 44px;
+  }
+  .swatch {
+    width: 44px;
+    height: 44px;
+  }
   .choice-grid {
     grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
   }

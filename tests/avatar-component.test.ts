@@ -66,11 +66,12 @@ afterEach(() => {
 });
 
 describe("avatar animation loop", () => {
-  it("keeps animating while working and stops when unmounted", async () => {
-    await render("working");
+  it.each<ActivityState>(["thinking", "working"])("keeps the avatar visible and animated while %s, then stops when unmounted", async (state) => {
+    await render(state);
     const before = svg();
     await advance(1);
     expect(svg()).not.toBe(before);
+    expect(container.querySelector(".avatar-body")?.parentElement?.getAttribute("opacity")).toBe("1");
     expect(frames.size).toBeGreaterThan(0);
     act(() => root.unmount());
     expect(frames.size).toBe(0);

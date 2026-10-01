@@ -52,9 +52,27 @@ export interface Preferences {
   presentation: "simple" | "advanced";
   theme: "system" | "light" | "dark";
   favorites: string[];
+  modelFavorites?: ModelChoice[];
   defaultBotId?: string;
   sections: { id: string; name: string; botIds: string[] }[];
   followBots: string[];
+}
+export interface ModelChoice {
+  provider: string;
+  model: string;
+}
+export interface ModelProvider {
+  id: string;
+  name: string;
+  aliases?: string[];
+  authenticated: boolean;
+  warning?: string;
+  models: { id: string; name: string; available: boolean }[];
+}
+export interface ModelCatalog {
+  providers: ModelProvider[];
+  provider: string;
+  model: string;
 }
 export interface Capability {
   supported: boolean;
@@ -234,6 +252,7 @@ export interface RuntimeStatus {
   lastConnectedAt?: string;
 }
 export interface Runtime {
+  modelOptions?(profile?: string): Promise<ModelCatalog>;
   integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;

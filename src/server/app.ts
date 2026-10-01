@@ -75,6 +75,7 @@ const preferenceInput = z.object({
   presentation: z.enum(["simple", "advanced"]),
   theme: z.enum(["system", "light", "dark"]),
   favorites: z.array(id).max(100),
+  modelFavorites: z.array(z.object({ provider: id, model: id })).max(100).optional(),
   defaultBotId: id.optional(),
   sections: z
     .array(
@@ -216,8 +217,22 @@ export async function createApp(
   );
   app.patch("/api/preferences", async (req) => {
     const value = preferenceInput.parse(req.body) as Preferences;
+    value.modelFavorites ??= store.preferences(signedIn(req).id).modelFavorites;
     store.savePreferences(signedIn(req).id, value);
     return value;
+  });
+  app.put("/api/preferences/models", async (req) => {
+    const { modelFavorites } = z.object({
+      modelFavorites: z.array(z.object({ provider: id, model: id })).max(100),
+    }).strict().parse(req.body);
+    const userId = signedIn(req).id;
+    store.savePreferences(userId, { ...store.preferences(userId), modelFavorites });
+    return { modelFavorites };
+  });
+  app.get("/api/models", async (req) => {
+    const { botId } = z.object({ botId: id.optional() }).parse(req.query);
+    if (!runtime.modelOptions) throw failure(409, "The connected Hermes installation does not expose model options.");
+    return runtime.modelOptions(botId);
   });
   app.get("/api/bots", async () => {
     const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
@@ -560,6 +575,10 @@ export async function createApp(
     await runtime.deleteRoutine(params(req).id);
     store.routineRecipients(params(req).id, []);
     return { ok: true };
+  });
+  app.post("/api/push/subscriptions/status", async (req) => {
+    const { endpoint } = z.object({ endpoint: z.string().url().max(8192) }).strict().parse(req.body);
+    return { registered: store.hasSubscription(signedIn(req).id, endpoint) };
   });
   app.post("/api/push/subscriptions", async (req) => {
     if (!config.vapidPublicKey)
