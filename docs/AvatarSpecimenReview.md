@@ -16,3 +16,29 @@ The review requested refinements before full integration:
 Initial standalone browser checks passed: working state selection, stable reduced-motion SVG, phone/desktop overflow, dark theme, blocked and disconnected accessible labels. Screenshots were inspected at `/tmp/avatar-specimen-desktop.png` and `/tmp/avatar-specimen-phone-dark.png`; these are local evidence, not shipped reference assets. The main app needs visual and interaction checks against its final code state.
 
 Approximation remains in independent geometry and motion trajectories; there is no claim of pixel identity. Muse's full state motion remains unverified and the mascot family is original artwork. Physical phone and installed PWA acceptance are separate from browser viewport checks.
+
+## October 1 rework
+
+The rig was reworked against the same inventory after a review of the shipped
+avatars at sidebar size. The baseline showed four problems. Thinking and blocked
+symbols were faint enough that an assistant looked missing from the list.
+Working spun continuously and slid flat eyes across the face. Eyes ignored each
+silhouette's visual center. Mascots were flat.
+
+Changes:
+
+- Working now scans and spins only occasionally, which is closer to the
+  reference. Each eye is projected separately for real parallax, and trails pass
+  behind and in front of the body.
+- The dots and exclamation are larger and stronger. The body shrinks and fades
+  while the symbol grows from its center. Thinking dots brighten in sequence.
+- Expressions ease between states. Done ends in happy eyes. Failed looks worried
+  rather than squinting. Waiting eyes widen as they close.
+- Mascots have ears, muzzles, glossy eyes, cheeks and expressive mouths.
+- Portraits get a state ring. Badges are drawn SVG icons instead of text glyphs.
+- The specimen adds a state matrix of eight configurations in all nine states.
+
+Checked in Chromium at 1200 px with motion and with reduced motion, and from
+frame strips sampled every 160 to 330 ms. Reduced motion and the frozen states
+(disconnected, interrupted) return the resting pose; `tests/avatar-motion.test.ts`
+covers this and the working, done and blink timing.

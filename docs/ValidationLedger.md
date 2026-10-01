@@ -1,5 +1,38 @@
 # Validation ledger
 
+## October 1 interface and avatar pass
+
+Branch: `t3code/ui-avatar-animation-improvements`, based on
+`15feb86989dab91072974ceb70d7235ed7125033`. Source fingerprint, 270 files:
+`sha256:10d5ff5825eebf1389025b088a3faa108dc13aafd96247b5c57e1ade44ee992f`.
+This pass changes clients, fixtures and documentation only. Server, Hermes
+extension and deployment inputs are unchanged, so earlier Hermes and production
+evidence still applies.
+
+Web: 205 application tests, typecheck, production build, Python syntax and
+script syntax checks passed. New tests cover the avatar motion model, the
+animation loop lifecycle (frozen states, reduced motion, offscreen, unmount) and
+the avatar editor. Chromium checks used the fixture-only
+`.agents/tools/preview-app.mjs` at 1440, 820 and 390 px in light and dark themes.
+They covered every dialog, keyboard operation of the editor, reduced motion
+freezing all avatars, and composer growth. Avatar motion was reviewed from frame
+strips and a recording of every state.
+
+Native: on an iPhone 18 Pro simulator (iOS 27.0), 35 unit tests passed. UI tests
+had 8 passes and 0 failures; the iPad-only and screenshot-tour tests skip by
+design there. The iPad layout test passed on an iPad Pro 11-inch (M5) simulator.
+The screenshot tour, `.agents/tools/ios-screenshot-tour.sh`, captured before and
+after states, and a simulator recording confirmed native working motion.
+
+Independent GPT-6.1 Sol high reviews of the web and native diffs found 14 issues;
+all were fixed. They covered render-phase animation writes, frozen-state badge
+motion, eye contrast for light custom colors, the reconnecting label color,
+composer width changes, portrait restore, jump-to-latest after restoring a read
+position, Dynamic Type tile labels, per-frame path allocation and missing
+scheduling tests. The fixture renders, simulator runs and screenshots do not
+cover a physical phone, closed-app notifications or real Hermes activity
+timing.
+
 ## October 1 integrations deployment
 
 PR #6 merged at `8515fff1eecbf5458e5085c8b9e97bbebb12790e`. The release is live
