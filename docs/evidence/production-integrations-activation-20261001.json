@@ -1,0 +1,41 @@
+{
+  "webBuild": "974365546ec56e79",
+  "hermesRevision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "hermesVersionUnchanged": true,
+  "repairPreserved": true,
+  "profileSettingsPreserved": true,
+  "originalGoogleHttpAndFreshWebsocket": true,
+  "gatewayGuardVerified": true,
+  "bothDiscordConnected": true,
+  "actualInstallerMaintenanceRpc": true,
+  "legacyQualificationAbsenceRecorded": true,
+  "sourceCommit": "8515fff1eecbf5458e5085c8b9e97bbebb12790e",
+  "archiveSha256": "a2dc6478f866d7297bc42ec3defa5a6837a423589637144256ea39730676f1ab",
+  "integrationDigest": "a9f21dad6508db87c43ee5eede29015526eccc1ca62bb510a2965c577681d885",
+  "allReleaseInputsMatchArtifact": true,
+  "deploymentHelperSha256": "2195ce1bc49f6f63b0b6c5e664b77deb24f615dbc97d42d2dec95e3442c43227",
+  "legacyAbsenceFixReviewed": true,
+  "bothProfileInventoriesAvailable": true,
+  "privateServiceAuthentication": true,
+  "credentialsNotLogged": true,
+  "maintenanceCleared": true,
+  "backupTimerActive": true,
+  "caddyAndWireguardActive": true,
+  "defaultModelVerified": true,
+  "kimberlyModelVerified": true,
+  "terminalModelVerified": true,
+  "providerHealthChecked": true,
+  "canonicalTerminalOutputVerified": true,
+  "bothCanonicalModelResponsesVerified": true,
+  "qualification": {
+    "schemaVersion": 1,
+    "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+    "trackedPatchSha256": "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c",
+    "integrationDigest": "a9f21dad6508db87c43ee5eede29015526eccc1ca62bb510a2965c577681d885",
+    "qualifiedAt": "2026-10-01T18:28:14.047414+00:00",
+    "checks": {
+      "realIntegration": true,
+      "hostRegressions": true
+    }
+  }
+}
