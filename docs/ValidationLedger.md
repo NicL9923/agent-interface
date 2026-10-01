@@ -1,5 +1,39 @@
 # Validation ledger
 
+## October 1 updater recovery
+
+Source digest: `fb157509ca509af5276fba76b6a442dda7474a02c58912281b22141e35b74783`.
+Release archive SHA256: `4641949a65eb8865d8df4861d72d474bad7257fa3f2454bfe4a060b074b04730`.
+Integration digest: `d16a95803957b63b83d1071715d6176821868e72da40eafc45388e35dfaa26d5`.
+
+The failed install stopped at its first systemd user-service query before taking
+native maintenance or changing source. Recovery held the app worker and native
+updater locks, verified the source, repair and qualification inputs, completed
+the pending install request, and cleared application maintenance.
+
+Validation passed: 159 application tests, production build, 15 Linux hook tests,
+10 managed-fingerprint tests, 29 worker tests, five dashboard contract tests,
+three qualification contract tests and six persistent gateway tests. Application
+checks were reused after Python-only follow-up changes. The final fingerprint
+tests cover checkout metadata, PM workspace snapshots, external `.pth`
+dependencies and missing installed records.
+
+Real isolated integration passed against candidate
+`663362680b6ffa4fbffeb58f6682564239a1953b` with its retained repair. The live
+sanitized-environment check reached the user service manager, attested the
+installed runtime, acquired and released native maintenance, and confirmed a
+fresh gateway drain acknowledgement without stopping services.
+
+The guarded release procedure deployed the repair and verified original Google
+protected HTTP, fresh-ticket WebSockets, both Discord connections, unchanged
+profile settings and cleared maintenance. Hermes remains at its prior working
+revision `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`; no new Hermes version was
+installed. The web build and dependencies are unchanged.
+
+Independent GPT-6.1 Sol high review found an external-dependency attestation gap
+in the first implementation. Preserving active-distribution enumeration and
+adding `.pth` regression coverage addressed it. Final review reported no findings.
+
 ## September 30 production activation and upgrade hardening
 
 PR #3 merged at `9fd1b88335ec179ac1d4ef787a3f2376cefbdf24`. The web release

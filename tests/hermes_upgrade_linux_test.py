@@ -125,6 +125,16 @@ class PlatformTests(unittest.TestCase):
         self.assertFalse(self.platform.gate)
         self.assertFalse((self.home / ".drain_request.json").exists())
 
+    def test_detached_worker_addresses_its_own_user_service_manager(self):
+        environment = {key: value for key, value in self.environment.items()
+                       if key not in ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")}
+        platform = linux.Platform(self.config, environment)
+        self.systemctl.write_text("#!/usr/bin/env python3\nimport os\n"
+            "assert os.environ['XDG_RUNTIME_DIR'] == '/run/user/' + str(os.getuid())\n"
+            "assert os.environ['DBUS_SESSION_BUS_ADDRESS'] == 'unix:path=' + os.environ['XDG_RUNTIME_DIR'] + '/bus'\n"
+            "print('ActiveState=active\\nMainPID=100\\nFragmentPath=" + str(self.unit_file) + "')\n")
+        self.assertEqual(platform.unit("gatewayUnit")["MainPID"], "100")
+
     def test_active_or_unknown_work_refusal_releases_gate_without_stopping_services(self):
         for active in (1, "unknown"):
             self.platform.active_work = active

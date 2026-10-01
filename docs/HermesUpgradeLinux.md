@@ -11,6 +11,13 @@ extras into an isolated home. The installed native interpreter and dependency
 content must match that tested generation before services restart. The simpler
 worker mode supports only unchanged dependency inputs and refuses other targets.
 
+Detached workers address the current Unix user's systemd bus at
+`/run/user/UID/bus`; they do not require a login shell's environment. Runtime
+fingerprints include dependencies exposed by the selected PM generation's `.pth`
+files. Duplicate source-tree `egg-info` is excluded only when the generation
+attests the same editable package through installed `RECORD` metadata. PM's
+editable workspace snapshots retain both source identity and tree-byte checks.
+
 The candidate checkout has its own complete Git object store. The worker fetches
 the exact candidate SHA and the installed tag object identities from official
 Hermes upstream. It copies no object alternates or partial-clone settings from

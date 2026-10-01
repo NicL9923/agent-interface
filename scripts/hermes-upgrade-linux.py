@@ -126,6 +126,10 @@ class Platform:
         self.candidate = self.env.get("HERMES_UPGRADE_CANDIDATE", "")
         if not re.fullmatch(r"[a-f0-9]{40}", self.candidate): raise RuntimeError("The candidate must be an exact qualified commit")
         self.child_env = {"PATH": self.env.get("PATH", "/usr/bin:/bin"), "HOME": self.env["HOME"], "LANG": "C.UTF-8", "HERMES_HOME": str(self.home)}
+        # The app deliberately launches detached workers with a minimal env.
+        # Address this Unix user's systemd manager even without a login session.
+        runtime_dir = "/run/user/" + str(os.getuid())
+        self.child_env.update(XDG_RUNTIME_DIR=runtime_dir, DBUS_SESSION_BUS_ADDRESS="unix:path=" + runtime_dir + "/bus")
         self.child_env.update({k: v for k, v in self.env.items() if k.startswith("HERMES_UPGRADE_")})
         if "HERMES_UPDATE_HANDOFF_PID" in self.env:
             self.child_env["HERMES_UPDATE_HANDOFF_PID"] = self.env["HERMES_UPDATE_HANDOFF_PID"]
