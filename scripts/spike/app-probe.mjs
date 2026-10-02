@@ -43,7 +43,9 @@ const config = loadConfig({
 });
 let server = await createApp(
   config,
-  createHermesRuntime({ url: access.url, token: access.token, authMode: "service",
+  // This disposable loopback gateway uses native static-token authentication.
+  // Gated native service tickets are qualified separately by service_probe.py.
+  createHermesRuntime({ url: access.url, token: access.token, authMode: "static",
     qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
       ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
 );
@@ -225,8 +227,8 @@ try {
     await login("one");
     await login("two");
     const { data } = await call("GET", "/api/bootstrap");
-    assert(data.connection.connected);
-    assert(data.capabilities.chat.supported);
+    assert(data.connection.connected, data.connection.detail ?? "Native fixture connection must be ready");
+    assert(data.capabilities.chat.supported, data.capabilities.chat.reason ?? "Native fixture must support chat");
     assert.equal(data.household.length, 2);
     return {
       householdMembers: 2,
@@ -636,7 +638,7 @@ try {
     await server.app.close();
     server = await createApp(
       config,
-      createHermesRuntime({ url: access.url, token: access.token, authMode: "service",
+      createHermesRuntime({ url: access.url, token: access.token, authMode: "static",
         qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
           ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
     );

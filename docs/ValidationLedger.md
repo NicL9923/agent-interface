@@ -1076,6 +1076,27 @@ Existing product checks remain applicable to their unchanged logic. The new
 acceptance helper passed its syntax check and independent review at SHA256
 `a3fa36bcbdb613ff341ec8a2f6ec96912b127b276d28f725563a052b0f6f3b70`.
 
+The second full qualification completed the experience, integration, service,
+computer and maintenance probes, then stopped at the app's connection assertion.
+The app probe forced service tickets against a headless loopback gateway. Native
+Hermes deliberately accepts static tokens in that mode and enables tickets only
+when public authentication is gated. A marked-home reproduction identified the
+HTTP 403 during WebSocket upgrade. Both fixture runtime instances now explicitly
+use static authentication; production service authentication is unchanged. The
+separate gated service probe retains its finite HTTP and one-use ticket checks.
+Connection assertions now include the existing sanitized diagnosis.
+
+Independent review approved the correction at source fingerprint, 375 files,
+`sha256:9728ada43cef8a9380aff959f2a0fd8bab0f770043c35c712fa547158c1876e4`.
+All 13 app-only checks completed in the marked disposable native environment,
+including shared chat, approvals, files, scheduler delivery and both app and
+executor restart recovery. Its stable app input digest was
+`6455465b5445e3eae51c43142084914c1db19733eb8e45865ddaefe0d5b9ddc0`;
+the reviewed probe SHA256 was
+`0a62b816939ef281dcb2fca5a4d2affc481cf2e32b11ab4d39037ef408ec05ce`.
+Syntax and diff checks completed. Owned fixture processes were stopped afterwards.
+No qualification receipt or production cutover was issued for either failed run.
+
 Physical-phone microphone capture/audibility, native calendar Save, and signed
 iOS distribution remain separate acceptance work. Existing image, push and live
 external integration gaps remain tracked in issue #1. Server speech success does
