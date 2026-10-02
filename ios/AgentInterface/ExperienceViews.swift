@@ -7,9 +7,9 @@ struct TodayItem: Decodable, Identifiable {
   var files: [FileRef]; var error: String?
   var id: String { botId }
 }
-struct TodayEvent: Decodable, Identifiable { var id: String; var botId: String; var kind: String; var title: String; var body: String?; var occurredAt: String }
+struct TodayEvent: Decodable, Identifiable { var id: String; var botId: String; var kind: String; var title: String; var body: String?; var occurredAt: String; var routineId: String? }
 struct TodayOverview: Decodable {
-  var generatedAt: String; var since: String; var items: [TodayItem]; var events: [TodayEvent]; var unavailableBots: [String]; var frontier: String; var hasMore: Bool
+  var generatedAt: String; var since: String; var items: [TodayItem]; var events: [TodayEvent]; var unavailableBots: [String]; var frontier: String; var hasMore: Bool; var upcoming: [Routine]?
   func recentMessage(_ item: TodayItem) -> TodayMessage? {
     guard let message = item.latestMessage, let date = message.createdAt.flatMap(ServerDate.parse), let since = ServerDate.parse(since), date > since else { return nil }
     return message
@@ -34,7 +34,7 @@ struct TodayView: View {
       if let value, !value.events.isEmpty {
         Section("Recent events") {
           ForEach(value.events) { event in
-            Button { openBot(); Task { await store.select(event.botId) } } label: {
+            Button { openBot(); Task { await store.select(event.botId); if let routineId = event.routineId { store.routineResult = RoutineResultDestination(botId: event.botId, routineId: routineId) } } } label: {
               VStack(alignment: .leading, spacing: 4) {
                 Text(event.title).font(.headline)
                 if let body = event.body { Text(body).font(.footnote).foregroundStyle(.secondary) }
@@ -43,6 +43,10 @@ struct TodayView: View {
             }
           }
         }
+      }
+      Section("Scheduled next") {
+        ForEach(value?.upcoming ?? []) { row in Button { openBot();Task { await store.select(row.botId);store.routineResult=RoutineResultDestination(botId:row.botId,routineId:row.id) } } label: { VStack(alignment:.leading) { Text(row.name);if let date=row.nextRunAt.flatMap(ServerDate.parse) { Text(date.formatted()).font(.caption).foregroundStyle(.secondary) } } } }
+        if value?.upcoming?.isEmpty != false { Text("No upcoming run reported.").foregroundStyle(.secondary) }
       }
       ForEach(value?.items ?? []) { item in
         Section {
@@ -208,6 +212,7 @@ struct RoutinePreviewControls: View {
     }.onChange(of: routine.schedule) { _, _ in preview = nil; previewValid = false }
     if !routine.id.isEmpty {
       Section("Try once") {
+        NavigationLink("View results") { RoutineResultsView(botId: routine.botId, routineId: routine.id) }
         Text("Runs this saved routine immediately with its saved instructions and recipients. It can use the assistant's enabled tools.").font(.footnote).foregroundStyle(.secondary)
         Text("Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.footnote).foregroundStyle(.secondary)
         if let receipt {

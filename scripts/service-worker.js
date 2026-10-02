@@ -44,8 +44,11 @@ function conversationUrl(value) {
   try {
     const url = new URL(value || '/', self.location.origin);
     if (url.origin !== self.location.origin) return self.location.origin + '/';
+    if(url.pathname !== '/') return self.location.origin + '/';
+    if(url.searchParams.get('view') === 'today') return self.location.origin + '/?view=today';
     const bot = url.searchParams.get('bot');
-    return self.location.origin + '/' + (bot ? '?bot=' + encodeURIComponent(bot) : '');
+    const routine = url.searchParams.get('routine');
+    return self.location.origin + '/' + (bot ? '?bot=' + encodeURIComponent(bot) + (routine ? '&routine=' + encodeURIComponent(routine) : '') : '');
   } catch {
     return self.location.origin + '/';
   }

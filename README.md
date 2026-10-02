@@ -100,11 +100,19 @@ Hermes's durable receipts.
 
 ## Household experience
 
-Open **Today** to find pending decisions, current work, recent results and files
+The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
 send. Web **Listen to reply** uses Hermes speech; native **Read aloud** uses the
 device voice.
+
+**Search & saved items** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
+
+Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
+
+Starter actions fill an editable draft. Available tools determine which actions appear. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay all notifications; decisions and failures skip batching outside them. Digest notifications open Today.
+
+The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 
 Assistant settings > **Memory** lets you inspect, correct and forget native
 Hermes profile memory. Existing conversations keep their memory snapshot until
@@ -116,6 +124,18 @@ Your checks and itinerary notes are saved for your account.
 previews in the actual Hermes timezone, and **Try once** with durable run
 receipts. See the [household experience guide](docs/HouseholdExperience.md) for
 controls, supported reply cards, voice requirements and recovery behavior.
+
+Use **View results** beside a routine to read its saved runs, including trials.
+Routine notifications open this history directly. Results stay within the selected
+Hermes profile; a run with only a saved preview says so.
+
+**Group chats** lets 2–6 local assistants discuss a task in one room. Create a
+named group, address assistants with `@handle`, reply in a thread, approve a
+pending action or stop the discussion. Hermes owns the persistent coordinator.
+If that coordinator is unavailable, rooms remain readable and sending is disabled.
+After an uncertain send or creation, retry the saved request to check its status
+without creating a duplicate. Agent handoffs also have a distinct rendering in
+ordinary conversations, including Simple mode.
 
 Assistant settings > **Logins** manages the selected Hermes profile's encrypted
 login vault. Native login, code, vault-unlock and secret requests appear inline

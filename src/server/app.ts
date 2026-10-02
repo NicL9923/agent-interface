@@ -24,8 +24,10 @@ import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
 import { installVaultRoutes } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
+import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
+import { installCollaborationRoutes } from './collaboration.js';
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -88,6 +90,8 @@ const preferenceInput = z.object({
     )
     .max(30),
   followBots: z.array(id).max(100),
+  startPage: z.enum(["today", "assistant"]).optional(),
+  notifications: z.object({ timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat("en", {timeZone:value}); return true; } catch { return false; } }), quietStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), quietEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), batchMinutes: z.number().int().min(0).max(60) }).refine(value => !!value.quietStart === !!value.quietEnd && (!value.quietStart || value.quietStart !== value.quietEnd), "Choose different quiet start and end times.").optional(),
 });
 const fileRef = z.object({
   id: z
@@ -138,7 +142,7 @@ export async function createApp(
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
     const path = req.url.split("?")[0];
-    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/integrations"))
+    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
       return reply.code(409).send({ error: path.startsWith("/api/integrations")
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
@@ -200,6 +204,8 @@ export async function createApp(
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
   await installExperienceRoutes(app, runtime, store);
+  await installDiscoveryRoutes(app, runtime, store);
+  await installCollaborationRoutes(app, runtime, store);
   await installVaultRoutes(app, runtime);
   await registerVoiceRoutes(app, runtime);
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
@@ -227,7 +233,10 @@ export async function createApp(
   );
   app.patch("/api/preferences", async (req) => {
     const value = preferenceInput.parse(req.body) as Preferences;
-    value.modelFavorites ??= store.preferences(signedIn(req).id).modelFavorites;
+    const previous = store.preferences(signedIn(req).id);
+    value.modelFavorites ??= previous.modelFavorites;
+    value.startPage ??= previous.startPage;
+    value.notifications ??= previous.notifications;
     store.savePreferences(signedIn(req).id, value);
     return value;
   });

@@ -25,8 +25,8 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(conversation.activityMessages.compactMap { $0.toolCall?.id }, ["call-one", "call-two"])
     XCTAssertEqual(conversation.activityMessages.first?.toolCall?.result, "Saved note")
     XCTAssertEqual(conversation.activityMessages.first?.toolCall?.arguments, "{\"path\":\"note.txt\"}")
-    XCTAssertTrue(conversation.visibleMessages.isEmpty)
-    XCTAssertNil(conversation.restorableReadAnchor("assistant"))
+    XCTAssertEqual(conversation.visibleMessages.map(\.id),["assistant"])
+    XCTAssertEqual(conversation.restorableReadAnchor("assistant"),"assistant")
     var mixed = conversation
     mixed.messages[0].text = "Here is the answer."
     XCTAssertEqual(mixed.visibleMessages.map(\.id), ["assistant"])
@@ -97,6 +97,22 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(NotificationController.botId(from: "https://evil.example/?bot=a", origin: origin))
     XCTAssertNil(NotificationController.botId(from: "//evil.example/?bot=a", origin: origin))
     XCTAssertNil(NotificationController.botId(from: "/api/files/a?bot=b", origin: origin))
+  }
+  func testAgentMessagesAndHandoffsStayVisibleInSimplePresentation() {
+    let incoming = Message(id: "in", role: "user", text: "Message from 🤖 Ledger (@ledger): Check the gate battery.")
+    XCTAssertEqual(incoming.agentEnvelope?.name, "Ledger")
+    XCTAssertEqual(incoming.agentEnvelope?.body, "Check the gate battery.")
+    var human = incoming; human.sender = Sender(id: "one", name: "Nicolas")
+    XCTAssertNil(human.agentEnvelope)
+    let handoff = Message(id: "out", role: "tool", text: "Delivered", toolCall: ToolCall(id: "call", name: "message_agent", status: "completed"))
+    let conversation = Conversation(botId: "ranch", messages: [incoming, handoff], activity: Activity(state: .idle), approvals: [], files: [])
+    XCTAssertEqual(conversation.visibleMessages.map(\.id), ["in", "out"])
+  }
+  func testNativeGroupAndRoutineOutputContractsDecodeWithoutInventingAttribution() throws {
+    let page = try JSONDecoder().decode(GroupPage.self, from: Data(#"{"events":[{"event_id":"e1","seq":1,"kind":"message.user","created_at":1790935200,"actor":{"kind":"user","id":"desktop"},"payload":{"text":"Check the gates","thread_id":"thread-1"}}],"cursor":1,"has_more":false}"#.utf8))
+    XCTAssertEqual(page.events.first?.payload.thread_id, "thread-1")
+    let output = try JSONDecoder().decode(RoutineOutput.self, from: Data(#"{"messages":[{"id":"cron-output","role":"assistant","text":"Gate is ready"}],"previewOnly":false}"#.utf8))
+    XCTAssertEqual(output.messages.first?.text, "Gate is ready"); XCTAssertFalse(output.previewOnly)
   }
 }
 

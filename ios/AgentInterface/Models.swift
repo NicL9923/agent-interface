@@ -68,7 +68,10 @@ struct BotSection: Codable, Identifiable, Equatable {
   var name: String
   var botIds: [String]
 }
+struct NotificationPreferences: Codable, Equatable { var timezone: String; var quietStart: String?; var quietEnd: String?; var batchMinutes: Int }
 struct Preferences: Codable, Equatable {
+  var startPage: String?
+  var notifications: NotificationPreferences?
   var presentation = "simple"
   var theme = "system"
   var favorites: [String] = []
@@ -145,6 +148,16 @@ struct Message: Codable, Identifiable {
   var reasoning: String?
   var toolName: String?
   var toolCall: ToolCall?
+  var agentEnvelope: (name: String, body: String)? {
+    guard role == "user", sender == nil else { return nil }
+    let pattern = #"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+      let bodyRange = Range(match.range(at: 4), in: text),
+      let nameRange = Range(match.range(at: 1).location == NSNotFound ? match.range(at: 3) : match.range(at: 1), in: text)
+    else { return nil }
+    return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]))
+  }
+  var isAgentExchange: Bool { agentEnvelope != nil || toolCall?.name == "message_agent" || toolName == "message_agent" }
   var isToolActivity: Bool { role == "tool" || (toolCall != nil && text.isEmpty) }
   var displayToolName: String { toolCall?.name ?? toolName ?? "Tool" }
   var toolResult: String {
@@ -216,7 +229,7 @@ struct Conversation: Codable {
     }
   }
   var visibleMessages: [Message] {
-    messages.filter { !$0.isToolActivity || !($0.files?.isEmpty ?? true) }
+    messages.filter { !$0.isToolActivity || $0.toolCall != nil || $0.isAgentExchange || !($0.files?.isEmpty ?? true) }
   }
   func restorableReadAnchor(_ saved: String?) -> String? {
     guard let saved else { return nil }
@@ -308,6 +321,11 @@ struct Routine: Codable, Identifiable {
   var schedule: String
   var enabled: Bool
   var recipientIds: [String]?
+  var nextRunAt: String?
+  var lastRunAt: String?
+  var lastStatus: String?
+  var lastError: String?
+  var lastDeliveryError: String?
   static func empty(botId: String) -> Routine {
     Routine(
       id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [])

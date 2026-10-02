@@ -650,3 +650,32 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
   });
 });
+
+it('gates hosted groups by the native driver and sends exact duplicate-safe group payloads',async()=>{
+  let driver=false;
+  deferredMethods=new Set(['groups.capabilities','groups.list','groups.send']);
+  beforeSend=(request,socket)=>{
+    if(!request.method.startsWith('groups.'))return;
+    const result=request.method==='groups.capabilities'?{protocol_version:2,driver,methods:['groups.list','groups.state','groups.log','groups.create','groups.send','groups.stop','groups.approve']}
+      :request.method==='groups.list'?{rooms:[],next_offset:null}:{accepted:true};
+    queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result}));
+  };
+  expect(await runtime.groupRequest!({operation:'list'})).toMatchObject({supported:true,canSend:false});
+  const input={operation:'send' as const,roomId:'room',requestId:'request-one',threadId:'thread-one',text:'Discuss the gate repair'};
+  await expect(runtime.groupRequest!(input)).rejects.toMatchObject({statusCode:409});
+  expect(calls.some(call=>call.method==='groups.send')).toBe(false);
+  driver=true;
+  await runtime.groupRequest!(input);await runtime.groupRequest!(input);
+  const sends=calls.filter(call=>call.method==='groups.send');
+  expect(sends[0].params).toEqual({room_id:'room',event_id:'request-one',payload:{text:input.text,thread_id:input.threadId}});
+  expect(sends[1].params).toEqual(sends[0].params);
+});
+it('routes routine history and output through the private scoped native experience reader',async()=>{
+  const fetcher=vi.fn(async()=>Response.json([]));vi.stubGlobal('fetch',fetcher);
+  await runtime.routineResults!('shared','morning');
+  expect(fetcher).toHaveBeenCalledOnce();
+  const [url,init]=fetcher.mock.calls[0] as unknown as [URL,RequestInit];
+  expect(url.pathname).toBe('/api/agent-interface/service/agent-interface/experience');
+  expect(new Headers(init.headers).get('Authorization')).toBe('Bearer '+token);
+  expect(JSON.parse(init.body as string)).toEqual({operation:'routine_results',profile:'shared',routineId:'morning'});
+});

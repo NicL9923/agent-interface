@@ -39,11 +39,13 @@ export function BotSettings({
   bootstrap,
   onClose,
   onSaved,
+  onOpenRoutine,
 }: {
   bot: Bot | "new";
   bootstrap: Bootstrap;
   onClose: () => void;
   onSaved: () => void;
+  onOpenRoutine?: (botId: string, routineId: string) => void;
 }) {
   const existing = bot === "new" ? null : bot;
   const [tab, setTab] = useState("details");
@@ -560,6 +562,7 @@ export function BotSettings({
               <p>Create the assistant before adding routines.</p>
             ) : (
               <RoutineManager
+                onOpenRoutine={onOpenRoutine}
                 botId={existing.id}
                 routines={routines}
                 setRoutines={setRoutines}
@@ -605,12 +608,14 @@ function DeleteBot({
   );
 }
 function RoutineManager({
+  onOpenRoutine,
   botId,
   routines,
   setRoutines,
   bootstrap,
   report,
 }: {
+  onOpenRoutine?: (botId: string, routineId: string) => void;
   botId: string;
   routines: Routine[];
   setRoutines: (v: Routine[]) => void;
@@ -661,7 +666,7 @@ function RoutineManager({
           <p>{routine.schedule}</p>
           <small>{routine.enabled ? "Active" : "Paused"}</small>
           <p>{routine.prompt}</p>
-          <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} />
+          <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
           <div className="actions">
             <button
               disabled={busy}

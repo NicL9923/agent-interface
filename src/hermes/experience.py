@@ -7,6 +7,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -124,6 +125,80 @@ def preview_schedule(profile, schedule):
     return dict(botId=profile, schedule=schedule, timezone=str(zone), nextRuns=values, kind=parsed["kind"])
 
 
+def routine_results(data):
+    """Read only this profile's native run sessions and cron output documents.
+
+    The dashboard's cross-profile owner fallback is inappropriate here. Keep the
+    requested owner even after a one-time job has disappeared from jobs.json.
+    """
+    from hermes_cli.web_routers.cron import (
+        _owner_home_scope, _open_session_db_for_profile, _call_cron_for_profile,
+        _list_cron_output_runs, _reconcile_cron_runs, _cron_output_runs_dir)
+    from hermes_cli.web_routers.sessions import _project_for_display
+    from hermes_constants import get_hermes_home
+    profile, job_id = data["profile"], data.get("routineId")
+    if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", job_id):
+        raise ExperienceError("Invalid routine ID.")
+    with _owner_home_scope(profile):
+        db = _open_session_db_for_profile(profile, read_only=True)
+        try:
+            sessions = db.list_cron_job_runs(job_id, limit=100, offset=0)
+            job = _call_cron_for_profile(profile, "get_job", job_id)
+            directory = _cron_output_runs_dir(profile, job_id)
+            expected = get_hermes_home().resolve() / "cron" / "output" / job_id
+            docs = _list_cron_output_runs(job, job_id, profile, 100) if directory.resolve() == expected else []
+            # Native history previews follow symlinks. Keep those documents out
+            # of both the picker and the output reader, including their previews.
+            def safe_document(row):
+                stem = row["id"].removeprefix(f"cron_output:{job_id}:")
+                path = directory / (stem + ".md")
+                if (stem == "latest" or re.fullmatch(r"exec:\d+", stem)) and not path.exists() and not path.is_symlink():
+                    return True
+                return bool(re.fullmatch(r"[A-Za-z0-9_-]{1,200}", stem) and path.is_file() and not path.is_symlink() and path.resolve().parent == expected)
+            docs = [row for row in docs if safe_document(row)]
+            rows = _reconcile_cron_runs(sessions, docs, 100)
+            if data["operation"] == "routine_results":
+                return [dict(id=row["id"], title=row.get("title") or "Routine run",
+                    startedAt=datetime.datetime.fromtimestamp(row["started_at"], datetime.timezone.utc).isoformat() if row.get("started_at") else None,
+                    preview=row.get("preview"), previewOnly=row.get("source") == "cron_output") for row in rows]
+            result_id = data.get("resultId")
+            row = next((row for row in rows if row["id"] == result_id), None)
+            if row is None:
+                raise ExperienceError("This run is no longer in the routine history. Refresh the results.", 404)
+            if row.get("source") == "cron_output":
+                stem = result_id.removeprefix(f"cron_output:{job_id}:")
+                # A real document must be one of the native history's listed rows.
+                # Synthetic ledger/status rows have no document and remain previews.
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,200}", stem):
+                    directory = _cron_output_runs_dir(profile, job_id)
+                    path = directory / (stem + ".md")
+                    expected = get_hermes_home().resolve() / "cron" / "output" / job_id
+                    if path.is_file() and not path.is_symlink() and directory.resolve() == expected and path.resolve().parent == expected:
+                        with path.open(encoding="utf-8", errors="replace") as source:
+                            text = source.read(500001)
+                        if len(text) > 500000:
+                            text = text[:500000] + "\n\n[Output truncated after 500,000 characters.]"
+                        return dict(previewOnly=False, messages=[dict(id=result_id, role="assistant", text=text)])
+                return dict(previewOnly=True, messages=[dict(id=result_id, role="system", text=row.get("preview") or row.get("title") or "No output document was saved.")])
+            sid = db.resolve_resume_session_id(result_id)
+            messages = db.get_messages(sid, limit=500, latest=True, include_ancestors=True)
+            projected = _project_for_display(messages, inline_images=False)
+            output = []
+            for index, message in enumerate(projected):
+                if message.get("role") != "assistant" or message.get("display_kind") == "hidden":
+                    continue
+                text = message.get("content", message.get("text", ""))
+                if isinstance(text, list):
+                    text = "\n".join(part.get("text", "") for part in text if isinstance(part, dict) and part.get("type") == "text")
+                if isinstance(text, str) and text:
+                    output.append(dict(id=str(message.get("id") or message.get("row_id") or index), role="assistant", text=text))
+            if len(messages) == 500:
+                output.insert(0, dict(id="history-limit", role="system", text="Showing the latest 500 transcript rows. Earlier output remains in Hermes."))
+            return dict(previewOnly=False, messages=output)
+        finally:
+            db.close()
+
+
 class RoutineRuns:
     def __init__(self, journal):
         self.journal = journal
@@ -160,7 +235,7 @@ class RoutineRuns:
                 if execution["status"] in ("completed", "failed", "unknown"):
                     receipt.update(status={"completed": "completed", "failed": "failed", "unknown": "uncertain"}[execution["status"]],
                         finishedAt=execution.get("finished_at") or timestamp(),
-                        message="Hermes finished this trial. Open the assistant for its results." if execution["status"] == "completed" else "Review the native trial results before trying again.")
+                        message="Hermes finished this trial. Open View results to read its output." if execution["status"] == "completed" else "Review the native trial results before trying again.")
                 with self.journal.lock, self.journal.db:
                     self.journal.db.execute("UPDATE experience_runs SET receipt=? WHERE request_id=? AND json_extract(receipt,'$.status') IN ('accepted','uncertain')", (json.dumps(receipt), data["requestId"]))
         return receipt
@@ -181,7 +256,7 @@ class RoutineRuns:
             if not retirement.acquire():
                 raise ExperienceError("Hermes is being upgraded. Try this routine after maintenance.", 409)
             receipt = dict(requestId=data["requestId"], routineId=data["routineId"], botId=data["profile"], status="accepted", startedAt=timestamp(),
-                message="Hermes accepted this trial. Results will appear in the assistant's conversation.")
+                message="Hermes accepted this trial. Open View results after it finishes.")
             try:
                 with self.journal.db:
                     self.journal.db.execute("INSERT INTO experience_runs VALUES(?,?,?,?,?)", (data["requestId"], data["profile"], data["routineId"], data["senderId"], json.dumps(receipt)))
@@ -271,7 +346,136 @@ class RoutineRuns:
                 retirement.release()
 
 
-def install(web, journal):
+
+def history_receipt(journal, profile, lineage, native_row):
+    """Resolve an exact user occurrence, including its native compaction clones."""
+    if native_row is None or native_row.get("role") != "user":
+        return None
+    def read(ids):
+        with journal.lock:
+            return journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text,stored_session FROM receipts WHERE profile=? AND stored_session IN (" + ",".join("?" for _ in lineage) + ") AND row_id IN (" + ",".join("?" for _ in ids) + ") ORDER BY created DESC LIMIT 1", (profile, *lineage, *ids)).fetchone()
+    receipt = read([native_row["id"]])
+    if receipt or not native_row.get("message_uid"):
+        return receipt
+    from hermes_cli.web_server_sessions import _open_session_db_for_profile
+    db = _open_session_db_for_profile(profile, read_only=True)
+    try:
+        clones = db._read_all("SELECT id FROM messages WHERE message_uid=? AND role='user' AND (active=1 OR compacted=1) AND session_id IN (" + ",".join("?" for _ in lineage) + ")", (native_row["message_uid"], *lineage))
+    finally:
+        db.close()
+    return read([row["id"] for row in clones]) if clones else None
+
+
+def discovery(data, journal, projector):
+    """Read native profile-owned history without opening or resuming a chat."""
+    import asyncio
+    from hermes_cli.web_routers import sessions, analytics
+    from hermes_cli.web_server_sessions import _open_session_db_for_profile
+    profile = data["profile"]
+    operation = data["operation"]
+    if operation == "search":
+        query = data.get("query")
+        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 200:
+            raise ExperienceError("Enter a search of up to 200 characters.")
+        value = asyncio.run(sessions.search_sessions(q=query, limit=20, profile=profile, source=None, sources=None, exclude_sources=None))
+        hits = [{"botId": profile, "botName": profile, "sessionId": row.get("session_id") or row["id"], "title": row.get("title") or "Conversation", "snippet": row.get("snippet") or row.get("preview") or ""} for row in value["results"]]
+        # Attachment names belong to the existing admission/artifact journal;
+        # native FTS does not index image-only attachment metadata.
+        pattern = "%" + query.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with journal.lock:
+            files = journal.db.execute("SELECT r.stored_session AS sid,json_extract(f.value,'$.name') AS name FROM receipts r,json_each(r.attachments) f WHERE r.profile=? AND r.status='accepted' AND lower(json_extract(f.value,'$.name')) LIKE ? ESCAPE '\\' UNION ALL SELECT t.stored_session AS sid,json_extract(f.value,'$.name') AS name FROM tools t,json_each(t.artifacts) f WHERE t.profile=? AND lower(json_extract(f.value,'$.name')) LIKE ? ESCAPE '\\' LIMIT 40", (profile, pattern, profile, pattern)).fetchall()
+        db = _open_session_db_for_profile(profile, read_only=True)
+        try:
+            known = {hit["sessionId"] for hit in hits}
+            for row in files:
+                try:
+                    sid = sessions._timeline_session_id(db, row[0], profile)
+                except __import__("fastapi").HTTPException:
+                    continue
+                if sid not in known:
+                    known.add(sid)
+                    hits.append({"botId": profile, "botName": profile, "sessionId": sid, "title": row[1] or "Attachment", "snippet": "Matching attachment name"})
+        finally:
+            db.close()
+        return hits
+    db = _open_session_db_for_profile(profile, read_only=True)
+    try:
+        if operation == "usage":
+            days = data.get("days", 30)
+            if days not in (7, 30, 90):
+                raise ExperienceError("Choose a 7, 30 or 90 day period.")
+            import time
+            counts = db._read_one("SELECT COUNT(*) AS sessions, COUNT(actual_cost_usd) AS actual, COUNT(estimated_cost_usd) AS estimated FROM sessions WHERE started_at >= ?", (time.time() - days * 86400,))
+            totals = analytics._get_usage_analytics(days=days, profile=profile)["totals"]
+            return {"botId": profile, "days": days, "sessions": counts["sessions"], "inputTokens": (totals.get("total_input") or 0), "outputTokens": (totals.get("total_output") or 0), "actualCost": totals.get("total_actual_cost", 0) if counts["actual"] else None, "estimatedCost": totals.get("total_estimated_cost", 0) if counts["estimated"] else None, "partial": counts["actual"] < counts["sessions"], "notice": "Recorded main-session usage. Auxiliary calls and provider invoices may differ. Costs are unknown where Hermes did not record them."}
+        sid = data.get("sessionId")
+        offset = data.get("offset", 0)
+        if not isinstance(sid, str) or not 1 <= len(sid) <= 200 or not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= 100000:
+            raise ExperienceError("Invalid history page.")
+        sessions._timeline_session_id(db, sid, profile)
+    finally:
+        db.close()
+    db = _open_session_db_for_profile(profile, read_only=True)
+    try:
+        resolved = sessions._timeline_session_id(db, sid, profile)
+        lineage = db._resume_lineage_ids(resolved)
+        raw = db.get_messages(resolved, limit=100, offset=offset, include_ancestors=True, include_compacted=True)
+        for row in raw:
+            row["_row_id"] = row["id"]
+    finally:
+        db.close()
+    native_rows = projector(raw, profile_home=sessions._history_profile_home(profile), image_urls=False)
+    # Read attribution from durable admission rows only. Historical reads never
+    # adopt a canonical session, bind missing receipts, or replay native input.
+    current_run = None
+    # Recover only the nearest preceding *native* user in display order. A
+    # later desktop turn breaks app attribution, even if it reuses a tool id.
+    before = offset
+    while before > 0:
+        chunk_start = max(0, before - 100)
+        db = _open_session_db_for_profile(profile, read_only=True)
+        try:
+            previous = db.get_messages(resolved, limit=before - chunk_start, offset=chunk_start, include_ancestors=True, include_compacted=True)
+        finally:
+            db.close()
+        visible = projector([dict(row, _row_id=row["id"]) for row in previous], profile_home=sessions._history_profile_home(profile), image_urls=False)
+        prior_user = next((row for row in reversed(visible) if row.get("role") == "user"), None)
+        if prior_user is not None:
+            prior = history_receipt(journal, profile, lineage, next((row for row in previous if row["id"] == prior_user.get("row_id")), None))
+            if prior:
+                current_run = prior[2]
+            break
+        before = chunk_start
+    for message in native_rows:
+        if message.get("role") == "user":
+            current_run = None
+        row = history_receipt(journal, profile, lineage, next((row for row in raw if row["id"] == message.get("row_id")), None))
+        with journal.lock:
+            if row:
+                current_run = row[2]
+                message["app_attachments"] = json.loads(row[3] or "[]")
+                message["app_display_text"] = row[4] or ""
+                message["app_sender_id"] = row[1]
+            if message.get("role") == "tool" and current_run:
+                records = journal.db.execute("SELECT result,artifacts FROM tools WHERE profile=? AND stored_session IN (" + ",".join("?" for _ in lineage) + ") AND tool_id=? AND run_id=? ORDER BY id", (profile, *lineage, message.get("tool_call_id"), current_run)).fetchall()
+                matching = next((item for item in records if json.loads(item[0]) == message.get("app_tool_result")), None)
+                if matching:
+                    message["app_artifacts"] = json.loads(matching[1] or "[]")
+    value = {"session_id": resolved, "messages": native_rows}
+    native_ids = {row["id"]: row.get("message_uid") or str(row["id"]) for row in raw}
+    rows = []
+    for index, row in enumerate(value["messages"]):
+        if row.get("display_kind") == "hidden":
+            continue
+        text = row.get("app_display_text", row.get("text", row.get("content", "")))
+        if not isinstance(text, str):
+            text = json.dumps(text)
+        # Keep the native projector's attachment fields for the server's signed registrar.
+        rows.append({**row, "id": str(native_ids.get(row.get("row_id")) or row.get("row_id") or row.get("id") or f"{sid}-{offset + index}"), "role": row.get("role", "system"), "text": text, "toolName": row.get("name"), **({"createdAt": __import__("datetime").datetime.fromtimestamp(row["timestamp"], __import__("datetime").timezone.utc).isoformat()} if isinstance(row.get("timestamp"), (float, int)) else {})})
+    return {"botId": profile, "sessionId": value["session_id"], "messages": rows, "offset": offset, "hasMore": len(raw) == 100}
+
+
+def install(web, journal, projector=None):
     from fastapi import Request
     from starlette.responses import JSONResponse
     from hermes_cli.web_routers._common import config_scoped_to_thread
@@ -299,10 +503,14 @@ def install(web, journal):
                 raise ExperienceError("Expected a profile experience request.")
             profile = data["profile"]
             operation = data.get("operation")
-            if operation == "memory":
+            if operation in ("search", "history", "usage"):
+                result = await config_scoped_to_thread(profile, lambda: discovery(data, journal, projector))
+            elif operation == "memory":
                 result = await config_scoped_to_thread(profile, lambda: profile_memory(profile))
             elif operation == "preview":
                 result = await config_scoped_to_thread(profile, lambda: preview_schedule(profile, data.get("schedule")))
+            elif operation in ("routine_results", "routine_output"):
+                result = await config_scoped_to_thread(profile, lambda: routine_results(data))
             elif operation in ("save_memory", "delete_memory"):
                 with retirement.work() as admitted:
                     if not admitted:
@@ -319,9 +527,12 @@ def install(web, journal):
             else:
                 raise ExperienceError("Unknown experience operation.")
             return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        except __import__("fastapi").HTTPException as exc:
+            return JSONResponse({"error": "History not found." if exc.status_code == 404 else "The native read failed."}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
         except ExperienceError as exc:
             return JSONResponse({"error": str(exc)}, status_code=exc.status, headers={"Cache-Control": "no-store"})
         except Exception:
+            __import__("logging").getLogger(__name__).exception("Profile experience operation failed")
             return JSONResponse({"error": "Hermes could not complete this profile operation. Review its native configuration."}, status_code=502, headers={"Cache-Control": "no-store"})
     globals()["Request"] = Request
     web.app.add_api_route("/api/agent-interface/experience", endpoint, methods=["POST"])

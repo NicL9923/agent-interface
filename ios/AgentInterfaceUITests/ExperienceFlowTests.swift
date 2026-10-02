@@ -80,6 +80,36 @@ final class ExperienceFlowTests: XCTestCase {
     app.buttons["Stop speaking"].tap()
     XCTAssertTrue(app.buttons["Read aloud"].waitForExistence(timeout: 3))
   }
+  func testRoutineResultsAndGroupCreationMessaging() {
+    var app = launch()
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
+    app.buttons["View results"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["Fixture saved routine output: the pasture gate is closed."].waitForExistence(timeout: 5))
+    capture(app, name: "Native routine saved output")
+    app.terminate(); app = launch()
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    if !app.buttons["openGroups"].isHittable { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["openGroups"].tap()
+    let newGroup = app.buttons["New group"]
+    XCTAssertTrue(newGroup.waitForExistence(timeout: 5))
+    expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: newGroup); waitForExpectations(timeout: 5)
+    newGroup.tap()
+    XCTAssertTrue(app.textFields["Group name"].waitForExistence(timeout: 5), app.debugDescription)
+    app.textFields["Group name"].tap(); app.textFields["Group name"].typeText("Gate planning")
+    app.switches["Ranch hand"].switches.firstMatch.tap(); app.switches["Kitchen companion"].switches.firstMatch.tap()
+    XCTAssertEqual(app.switches["Ranch hand"].value as? String, "1")
+    XCTAssertEqual(app.switches["Kitchen companion"].value as? String, "1")
+    XCTAssertTrue(app.buttons["Create group"].isEnabled)
+    app.buttons["Create group"].tap()
+    let room = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Gate planning")).firstMatch
+    XCTAssertTrue(room.waitForExistence(timeout: 5), app.debugDescription); room.tap()
+    let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
+    XCTAssertTrue(composer.waitForExistence(timeout: 5)); composer.tap(); composer.typeText("Check the gate together")
+    app.buttons["Send to group"].tap()
+    XCTAssertTrue(app.staticTexts["Check the gate together"].waitForExistence(timeout: 5))
+    capture(app, name: "Native group discussion")
+  }
 
   func testTodayAcknowledgesEachReturnedPageWithoutDroppingLateImports() {
     let app = launch()

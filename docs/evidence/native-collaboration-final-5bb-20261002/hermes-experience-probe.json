@@ -1,0 +1,24 @@
+{
+  "revision": "5bba024d8ddd388f56f354c1f789be825e3d8a3c",
+  "checks": {
+    "native_memory_cas_lock": true,
+    "native_memory_limits": true,
+    "native_profile_memory_separation": true,
+    "native_memory_forget": true,
+    "native_timezone_schedule_preview": true,
+    "native_routine_history": true,
+    "native_routine_output": true,
+    "routine_output_profile_scope": true,
+    "native_hosted_group_capabilities": true,
+    "native_group_create_send": true,
+    "native_group_send_deduplication": true,
+    "native_group_log": true,
+    "native_group_member_reply": true,
+    "native_group_stop": true,
+    "native_try_once_execution": true,
+    "paused_routine_restored": true,
+    "durable_trial_deduplication": true,
+    "trial_actor_scope": true
+  },
+  "provider": "deterministic fixture; real native memory store and scheduler"
+}

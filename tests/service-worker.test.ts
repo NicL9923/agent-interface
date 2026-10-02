@@ -67,4 +67,19 @@ describe('service worker privacy and return path', () => {
     await done;
     expect(openWindow).toHaveBeenCalledWith('https://app.example/?bot=family%20helper');
   });
+  it('keeps routine results in a same-origin notification return path',async () => {
+    const {handlers,showNotification,openWindow}=worker();let done:Promise<void>|undefined;
+    const waitUntil=(value:Promise<void>)=>{done=value;};
+    handlers.push({data:{json:()=>({url:'/?bot=ranch&routine=morning%20check&ignored=private'})},waitUntil});await done;
+    const notification=showNotification.mock.calls[0][1];
+    expect(notification.data.url).toBe('https://app.example/?bot=ranch&routine=morning%20check');
+    handlers.notificationclick({notification:{...notification,close:vi.fn()},waitUntil});await done;
+    expect(openWindow).toHaveBeenCalledWith(notification.data.url);
+  });
+});
+it('opens Today for a digest without carrying unrelated URL parameters',async()=>{
+  const {handlers,showNotification,openWindow}=worker();let done:Promise<void>|undefined;const waitUntil=(value:Promise<void>)=>{done=value;};
+  handlers.push({data:{json:()=>({url:'/?view=today&ignored=private'})},waitUntil});await done;
+  const notification=showNotification.mock.calls[0][1];expect(notification.data.url).toBe('https://app.example/?view=today');
+  handlers.notificationclick({notification:{...notification,close:vi.fn()},waitUntil});await done;expect(openWindow).toHaveBeenCalledWith('https://app.example/?view=today');
 });

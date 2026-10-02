@@ -26,6 +26,12 @@ import { TodayPanel } from "./components/TodayPanel";
 import { VoiceControls } from "./components/VoiceControls";
 import type { VoiceState } from "./shared/voice";
 import { SecureRequestCard } from "./components/SecureRequestCard";
+import { AgentExchange, isAgentExchange } from "./components/AgentExchange";
+import { RoutineResults } from "./components/RoutineResults";
+import { DiscoveryPanel, StarterActions } from "./components/DiscoveryPanel";
+import { ActionReceipt } from "./components/ActionReceipt";
+import "./components/discovery.css";
+import { GroupChats } from "./components/GroupChats";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -85,13 +91,21 @@ function clearSavedDraft(user: string, submission: Pending) {
   return null;
 }
 export function App() {
+  const [discoveryOpen,setDiscoveryOpen] = useState(()=>new URLSearchParams(location.search).get("view")==="find");
+  const initialDestination = useRef(false);
   const [todayOpen, setTodayOpen] = useState(() => new URLSearchParams(location.search).get("view") === "today");
+  const [groupsOpen, setGroupsOpen] = useState(() => new URLSearchParams(location.search).get('view') === 'groups');
+  const [routineResult, setRoutineResult] = useState<{botId:string;routineId:string;resultId?:string}|null>(() => {
+    const query = new URLSearchParams(location.search);
+    return query.get('routine') && query.get('bot') ? { botId: query.get('bot')!, routineId: query.get('routine')! } : null;
+  });
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   useEffect(() => {
     const url = new URL(location.href);
-    if (todayOpen) url.searchParams.set("view", "today"); else url.searchParams.delete("view");
+    if (discoveryOpen) url.searchParams.set("view","find"); else if (todayOpen) url.searchParams.set("view", "today"); else if (groupsOpen) url.searchParams.set('view', 'groups'); else url.searchParams.delete("view");
+    if (routineResult) url.searchParams.set('routine', routineResult.routineId); else url.searchParams.delete('routine');
     history.replaceState(null, "", url);
-  }, [todayOpen]);
+  }, [discoveryOpen, todayOpen, groupsOpen, routineResult]);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const notifications = useDeviceNotifications(boot?.user.id, boot?.vapidPublicKey);
   const [auth, setAuth] = useState(false);
@@ -226,6 +240,11 @@ export function App() {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
           setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setComputerOpen(false); setError("");
+        }
+        if (!initialDestination.current) {
+          initialDestination.current = true;
+          const query = new URLSearchParams(location.search);
+          if (!query.has("bot") && !query.has("view") && !query.has("routine") && !query.has("computer")) setTodayOpen(next.preferences.startPage === "today" || next.preferences.startPage !== "assistant" && !next.preferences.defaultBotId);
         }
         setCsrf(next.csrfToken ?? "");
         setBoot((previous) => ({ ...next,
@@ -561,7 +580,9 @@ export function App() {
   };
   const selectBot = (id: string) => {
     persistPosition();
+    setDiscoveryOpen(false);
     setTodayOpen(false);
+    setGroupsOpen(false);
     setBotId(id);
     setRailOpen(false);
     setError("");
@@ -727,9 +748,9 @@ export function App() {
     const reportsActivity = !connectionLost && botState !== "idle" && botState !== "done";
     return (
       <button
-        className={`bot-item ${bot.id === botId && !todayOpen ? "selected" : ""}`}
+        className={`bot-item ${bot.id === botId && !discoveryOpen && !todayOpen && !groupsOpen ? "selected" : ""}`}
         key={bot.id}
-        aria-current={bot.id === botId && !todayOpen ? "page" : undefined}
+        aria-current={bot.id === botId && !discoveryOpen && !todayOpen && !groupsOpen ? "page" : undefined}
         onClick={() => selectBot(bot.id)}
       >
         <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={40} name={bot.name} />
@@ -779,7 +800,9 @@ export function App() {
         </div>
         <div className="rail-scroll">
           <button className="today-navigation" type="button" aria-current={todayOpen ? "page" : undefined}
-            onClick={() => { setTodayOpen(true); setRailOpen(false); }}><Icon name="today" size={20} /> Today</button>
+            onClick={() => { setTodayOpen(true); setDiscoveryOpen(false); setGroupsOpen(false); setRailOpen(false); }}><Icon name="today" size={20} /> Today</button>
+          <button className="today-navigation" type="button" aria-current={groupsOpen ? 'page' : undefined} onClick={() => { setGroupsOpen(true); setDiscoveryOpen(false); setTodayOpen(false); setRailOpen(false); }}>↔ Group chats</button>
+          <button className="today-navigation" type="button" aria-current={discoveryOpen?"page":undefined} onClick={()=>{setDiscoveryOpen(true);setTodayOpen(false);setGroupsOpen(false);setRailOpen(false);}}>⌕ Search & saved items</button>
           {prefs.sections.map((section) => (
             <section className="bot-section" key={section.id}>
               <h2>{section.name}</h2>
@@ -855,7 +878,7 @@ export function App() {
           >
             <Icon name="menu" />
           </button>
-          {todayOpen ? <div className="chat-title"><h1>Today</h1><p>Your assistants, at a glance</p></div> : selected ? (
+          {discoveryOpen ? <div className="chat-title"><h1>Find & manage</h1><p>Useful work, within reach</p></div> : groupsOpen ? <div className="chat-title"><h1>Group chats</h1><p>Your assistants, together</p></div> : todayOpen ? <div className="chat-title"><h1>Today</h1><p>Your assistants, at a glance</p></div> : selected ? (
             <>
               <Avatar
                 avatar={selected.avatar}
@@ -904,7 +927,7 @@ export function App() {
             </div>
           )}
         </header>
-        {todayOpen ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={selectBot} /> : <>
+        {discoveryOpen ? <DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setRoutineResult({botId:id,routineId,resultId})} /> : groupsOpen ? <GroupChats key={boot.user.id} bootstrap={boot} /> : todayOpen ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setRoutineResult({ botId: id, routineId }); }} /> : <>
         {workerUpdate && (
           <div className="notice">
             An app update is ready.
@@ -978,14 +1001,14 @@ export function App() {
           ) : conversation?.messages.length ? (
             <>
               {conversation.messages
-                .filter((message) => message.role !== "tool" || advanced || message.files?.length)
+                .filter((message) => message.role !== "tool" || advanced || message.files?.length || message.toolCall || isAgentExchange(message))
                 .map((message) => (
                   <article
-                    className={`message message-${message.role}`}
+                    className={`message message-${isAgentExchange(message) ? "agent" : message.role}`}
                     key={message.id}
                     data-message-id={message.id}
                   >
-                    <div className="message-attribution">
+                    {!isAgentExchange(message) && <div className="message-attribution">
                       {message.role === "user"
                         ? message.sender?.name || "Household member"
                         : message.role === "assistant" || message.role === "tool"
@@ -999,8 +1022,8 @@ export function App() {
                           })}
                         </time>
                       )}
-                    </div>
-                    {message.role === "assistant" ? (
+                    </div>}
+                    {isAgentExchange(message) ? <AgentExchange message={message} recipient={selected.name} /> : message.role === "assistant" ? (
                       <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={boot.user.id} unavailable={connectionLost} />
                     ) : message.role !== "tool" && (
                       <div className="message-text">{message.text}</div>
@@ -1011,7 +1034,8 @@ export function App() {
                         <p>{message.reasoning}</p>
                       </details>
                     )}
-                    {advanced && message.toolCall && <ToolCallDetail call={message.toolCall} disconnected={connectionLost} />}
+                    {!advanced && message.toolCall && !isAgentExchange(message) && <ActionReceipt call={message.toolCall} />}
+                    {advanced && message.toolCall && !isAgentExchange(message) && <ToolCallDetail call={message.toolCall} disconnected={connectionLost} />}
                     {advanced && message.role === "tool" && !message.toolCall && (
                       <details className="message-detail tool-call-detail">
                         <summary>{message.toolName || "Tool result"}</summary>
@@ -1128,6 +1152,7 @@ export function App() {
         </div>
         {selected && (
           <footer className="composer-area">
+            {selected && <StarterActions botId={botId} onDraft={prompt=>{setDraft(previous=>({...previous,dirty:true,text:previous.text?`${previous.text}\n\n${prompt}`:prompt}));composerInput.current?.focus();}} />}
             {state === "interrupted" && (
               <label className="interruption-review">
                 <input
@@ -1331,9 +1356,11 @@ export function App() {
           bot={settings}
           bootstrap={boot}
           onClose={() => setSettings(null)}
+          onOpenRoutine={(botId, routineId) => { setSettings(null); selectBot(botId); setRoutineResult({ botId, routineId }); }}
           onSaved={() => void refresh()}
         />
       )}
+      {routineResult && <RoutineResults key={`${boot.user.id}:${routineResult.botId}:${routineResult.routineId}`} {...routineResult} userId={boot.user.id} resultId={routineResult.resultId} onClose={() => setRoutineResult(null)} />}
       {integrationsOpen && <IntegrationsPanel key={`integrations:${boot.user.id}`} bots={allBots} accountScope={boot.user.id} onClose={() => setIntegrationsOpen(false)} />}
       <ComputerPanel key={`computer:${boot.user.id}`} open={computerOpen} onClose={() => setComputerOpen(false)} />
       <HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={upgradeOpen} onClose={() => setUpgradeOpen(false)}
@@ -1387,6 +1414,10 @@ export function App() {
               <option value="advanced">Advanced</option>
             </select>
           </label>
+          <label>Start page<select value={prefs.startPage || (prefs.defaultBotId?'assistant':'today')} onChange={e=>void savePreferences({...prefs,startPage:e.target.value as 'today'|'assistant'})}><option value="today">Today</option><option value="assistant">Assistant</option></select></label>
+          <label>Notification batching<select value={prefs.notifications?.batchMinutes||0} onChange={e=>void savePreferences({...prefs,notifications:{timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,...prefs.notifications,batchMinutes:Number(e.target.value)}})}><option value={0}>As updates arrive</option><option value={5}>Every 5 minutes</option><option value={15}>Every 15 minutes</option><option value={60}>Hourly</option></select></label>
+          <label><input type="checkbox" checked={!!prefs.notifications?.quietStart} onChange={e=>void savePreferences({...prefs,notifications:{timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,batchMinutes:prefs.notifications?.batchMinutes||0,...(e.target.checked?{quietStart:'22:00',quietEnd:'07:00'}:{})}})} /> Quiet hours</label>
+          {prefs.notifications?.quietStart && <div className="quiet-hours"><label>From<input type="time" value={prefs.notifications.quietStart} onChange={e=>void savePreferences({...prefs,notifications:{...prefs.notifications!,quietStart:e.target.value}})} /></label><label>Until<input type="time" value={prefs.notifications.quietEnd} onChange={e=>void savePreferences({...prefs,notifications:{...prefs.notifications!,quietEnd:e.target.value}})} /></label><small>{prefs.notifications.timezone}. All notifications wait; decisions and failures skip batching outside quiet hours.</small></div>}
           <label>
             Open by default
             <select

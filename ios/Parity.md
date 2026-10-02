@@ -31,6 +31,9 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 
 | Feature | Native implementation | Validation |
 | --- | --- | --- |
+| Agent messages | Incoming native envelope and outgoing `message_agent` handoff render separately and remain visible in Simple mode; attributed household messages retain their sender | Swift envelope, sender and visible-history regressions; web envelope tests |
+| Routine results | Saved run picker and output in settings and Today; routine push links open the results sheet | Native decoding and phone fixture flow; real native profile-scoped output probe and server access checks in the main ledger |
+| Group chats | Local 2–6 member room creation, thread replies, persistent send retry, polled native messages/status, approval and stop controls; coordinator availability gates sending | Native protocol decoding and phone creation/send fixture flow; real native coordinator admission, deduplication, log and stop probe in the main ledger |
 | Today overview | Recent canonical events and date-filtered replies, pending decisions, live status and files, per-assistant read failure, canonical conversation links, explicit account-level Mark caught up acknowledges the exact returned ingestion frontier, with page-by-page catch-up for queued results | Native recency tests reject old and undated summaries; phone and iPad fixture UI exercised recent event/reply and conversation navigation; affected native unit and phone UI checks verified exact snapshot acknowledgment, queued pages, and late imported events dated before the prior recap marker |
 | Hermes memory | Exact Hermes profile scope and ownership labels, entry editing and forgetting with explicit document save, revision conflicts preserved across unsaved documents | Native cross-document CAS regression; phone and iPad fixture read, forget and save flow; production writes require the qualified Hermes add-on |
 | Passwords and logins | Native Hermes profile vault metadata, masked add form, confirmed local removal, installed external source controls; inline login, code, unlock and named-secret requests bound to the current native owner; ephemeral fields clear on submit/background/dismissal, uncertain requests become read-only with explicit refresh | Ten focused unit checks; phone and iPad fixture management, secure request and background clearing flows; final uncertainty checks on both devices assert disabled fields and no replay. Real native storage and browser guards are recorded separately in the main ledger |
@@ -59,6 +62,11 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Apple Calendar and Reminders | EventKit full-access permission requested explicitly, selected calendars/lists and bounded date window, sanitized preview, refresh, explicit upload into the chosen assistant draft; user sends it from the conversation | Native upload/draft-preservation contract test and simulator permission status/selection view; physical-device permission and real account data sharing remain external acceptance |
 | Native notifications | APNs device registration/opt-out/test, task/routine/follow recipients, validated cold/warm conversation tap | Native route tests and simulated server delivery tests; signed physical-phone delivery remains external |
 | iPad | Adaptive native NavigationSplitView, readable-width transcript, native sheets | Tablet fixture UI navigation, settings and nine-state specimen exercised; portrait/landscape screenshots inspected in both themes |
+
+The [routine output and group discussion review](evidence/native-collaboration-phone-review.png)
+shows the saved-results picker and a newly created two-assistant group after
+sending a message. It uses Debug-only fixtures. Actual coordinator execution,
+including a saved assistant reply, is recorded separately in the main ledger.
 
 The household feature screenshots use explicit Debug-only transport fixtures. The
 [phone review](evidence/native-household-phone-review.png) and
@@ -103,3 +111,18 @@ These checks require an installed signed build or configured external services:
 XCTest fixture UI results, server transport tests, real Hermes probes, and
 physical APNs delivery are different evidence classes. None substitutes for the
 others.
+
+## Discovery and capture
+
+The native app has search, account-scoped saved conversation/reply/output references,
+automation next runs and failures, recipients, pause/resume, and separately labelled
+reported and estimated main-session usage. Starter prompts remain editable drafts.
+Simple-mode tool receipts use native outcomes and reported result links. Today is the
+initial screen unless preferences or a notification choose another destination.
+
+The embedded share extension and app use `group.dev.agentinterface.shared` for
+bounded, account-bound queued captures without sharing authentication tokens.
+Photos, PDF, text, and webpages are reviewed before draft import. Existing draft
+content is preserved. The simulator exercises the App Group queue and image format
+conversion. Physical installation still needs matching App Group and extension
+provisioning, followed by a real iPhone share-sheet check.

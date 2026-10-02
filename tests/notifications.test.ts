@@ -30,6 +30,7 @@ it("persists durable event discovery with participant/routine recipient semantic
     "cursor-2",
   );
   expect(store.outbox().map((x) => x.user_id)).toEqual(["one", "two"]);
+  expect(JSON.parse(store.outbox().find(x => x.user_id === 'two')!.payload).url).toBe('/?bot=shared&routine=routine');
   store.close();
 });
 it("keeps completion pending without a subscription and retries failed delivery without resending successful endpoints", async () => {

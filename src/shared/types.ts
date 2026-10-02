@@ -2,6 +2,7 @@ import type { ExperienceRequest, ExperienceResponse } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
 import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
+import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -59,6 +60,8 @@ export interface Preferences {
   defaultBotId?: string;
   sections: { id: string; name: string; botIds: string[] }[];
   followBots: string[];
+  startPage?: "today" | "assistant";
+  notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
 }
 export interface ModelChoice {
   provider: string;
@@ -207,6 +210,11 @@ export interface Routine {
   schedule: string;
   enabled: boolean;
   recipientIds?: string[];
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastStatus?: string;
+  lastError?: string;
+  lastDeliveryError?: string;
 }
 export interface Bootstrap {
   user: User;
@@ -258,6 +266,10 @@ export interface RuntimeStatus {
   lastConnectedAt?: string;
 }
 export interface Runtime {
+  setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
+  routineResults?(botId: string, routineId: string): Promise<RoutineResult[]>;
+  routineOutput?(botId: string, routineId: string, resultId: string): Promise<RoutineOutput>;
+  groupRequest?(input: GroupRequest): Promise<GroupResponse>;
   transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
   synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
   experienceRequest?(input: ExperienceRequest): Promise<ExperienceResponse>;

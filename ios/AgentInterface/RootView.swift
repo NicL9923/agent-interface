@@ -6,7 +6,12 @@ struct RootView: View {
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var preferencesOpen = false
+  @State private var discoveryOpen = false
+  @State private var sharedCapture: SharedCapture?
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var initialScope: String?
   @State private var todayOpen = false
+  @State private var groupsOpen = false
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
   var body: some View {
@@ -19,10 +24,16 @@ struct RootView: View {
         ) {
           BotListView(
             openPreferences: { preferencesOpen = true }, create: { creatingBot = true },
-            openBot: { todayOpen = false; compactColumn = .detail },
-            openToday: { todayOpen = true; compactColumn = .detail })
+            openBot: { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail },
+            openToday: { discoveryOpen = false; todayOpen = true; groupsOpen = false; compactColumn = .detail },
+            openGroups: { discoveryOpen = false; groupsOpen = true; todayOpen = false; compactColumn = .detail },
+            openDiscovery: { discoveryOpen = true; groupsOpen = false; todayOpen = false; compactColumn = .detail })
         } detail: {
-          if todayOpen {
+          if discoveryOpen {
+            DiscoveryView()
+          } else if groupsOpen {
+            GroupChatsView()
+          } else if todayOpen {
             TodayView(openBot: { todayOpen = false; compactColumn = .detail })
           } else if let bot = store.bot {
             ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
@@ -35,20 +46,44 @@ struct RootView: View {
       }
     }
     .background(Palette.surface(scheme))
+    .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture:capture).environmentObject(store) }
+    .onAppear { checkShares() }
+    .onChange(of:store.sessionExpired) { _,_ in checkShares() }
+    .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
+    .onChange(of:store.scope) { _, scope in
+      checkShares()
+      if let scope, scope != initialScope {
+        initialScope=scope
+        todayOpen=(store.bootstrap?.preferences.startPage == "today" || store.bootstrap?.preferences.startPage != "assistant" && store.bootstrap?.preferences.defaultBotId == nil) && store.routineResult == nil
+        if todayOpen { compactColumn = .detail }
+      }
+    }
     .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot).environmentObject(store) }
     .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil).environmentObject(store) }
     .sheet(isPresented: $preferencesOpen) { PreferencesView().environmentObject(store) }
     .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea() }
-    .onReceive(store.$selectedBotId) { id in if id != nil { compactColumn = .detail } }
+    .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.environmentObject(store) }
+    .onReceive(store.$todayRequest) { request in if request != nil { todayOpen=true;groupsOpen=false;discoveryOpen=false;compactColumn = .detail } }
+    .onReceive(store.$selectedBotId) { id in
+      if id != nil { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail }
+    }
     .onChange(of: store.bootstrap?.user.id) { old, new in
       if let old, old != new {
+        discoveryOpen = false
         todayOpen = false
+        groupsOpen = false
         preferencesOpen = false
         settingsBot = nil
         creatingBot = false
         store.openedFile = nil
+        store.routineResult = nil
       }
     }
+  }
+  private func checkShares() {
+    guard let scope=store.scope,!store.sessionExpired,let bootstrap=store.bootstrap else { ShareInbox.setContext(nil);sharedCapture=nil;return }
+    ShareInbox.setContext(ShareContext(scope:scope,bots:bootstrap.bots.map { ShareContext.Assistant(id:$0.id,name:$0.name) }))
+    if sharedCapture == nil { sharedCapture=ShareInbox.pending(scope:scope).first }
   }
 }
 struct ConnectionView: View {
@@ -158,9 +193,15 @@ struct BotListView: View {
   var create: () -> Void
   var openBot: () -> Void
   var openToday: () -> Void
+  var openGroups: () -> Void
+  var openDiscovery: () -> Void
   var body: some View {
     List {
-      Section { Button(action: openToday) { Label("Today", systemImage: "sun.max") }.accessibilityIdentifier("openToday") }
+      Section {
+        Button(action: openToday) { Label("Today", systemImage: "sun.max") }.accessibilityIdentifier("openToday")
+        Button(action:openDiscovery) { Label("Search & saved items",systemImage:"magnifyingglass") }.accessibilityIdentifier("openDiscovery")
+        Button(action: openGroups) { Label("Group chats", systemImage: "person.3") }.accessibilityIdentifier("openGroups")
+      }
       if let bootstrap = store.bootstrap {
         if !store.connected {
           Section {

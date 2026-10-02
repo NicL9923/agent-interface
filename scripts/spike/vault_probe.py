@@ -217,7 +217,7 @@ def canonical_task(client, headers, journal, home, profile, call, canary):
     provider_log=home/'runtime/vault-provider.jsonl'
     previous_log=os.environ.get('HERMES_SPIKE_PROVIDER_LOG')
     os.environ['HERMES_SPIKE_PROVIDER_LOG']=str(provider_log)
-    resource=home/'runtime/vault-computer'
+    resource=(home/'runtime/vault-computer').resolve()
     try:
         port_file=browser_home/'data/DevToolsActivePort'
         deadline=time.monotonic()+15

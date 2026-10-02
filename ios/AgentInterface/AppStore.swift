@@ -9,6 +9,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var bootstrap: Bootstrap?
   @Published var conversation: Conversation?
   @Published var selectedBotId: String?
+  @Published var routineResult: RoutineResultDestination?
+  @Published var todayRequest: UUID?
   @Published var draft = Draft()
   @Published var draftReady = false
   @Published var pending: PendingSubmission?

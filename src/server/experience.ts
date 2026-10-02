@@ -44,7 +44,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     // discovered during those reads belongs to the next page, even when its
     // native occurredAt precedes the person's last visit.
     const upperFrontier = store.latestEventFrontier();
-    const bots = await runtime.listBots();
+    const bots = (await runtime.listBots()).map(bot => ({...bot,...store.presentation(bot.id)})).filter(bot => bot.shared || !bot.ownerId || bot.ownerId === userId);
     const page = store.eventPage(query.since ? 0 : store.todayFrontier(userId), upperFrontier, bots.map(bot => bot.id), query.since || !store.todaySeen(userId) ? since : undefined);
     const eventFiles = new Map<string, typeof page.events[number]['files']>();
     const items: TodayItem[] = [];
@@ -72,7 +72,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
       items.push(...batch);
     }
     const ids = new Set(bots.map(bot => bot.id));
-    return { generatedAt: now.toISOString(), since, frontier: page.frontier, hasMore: page.hasMore, items,
+    let upcoming: import("../shared/types.js").Routine[] = [];
+    try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
+    return { upcoming, generatedAt: now.toISOString(), since, frontier: page.frontier, hasMore: page.hasMore, items,
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
       unavailableBots: items.filter(item => item.error).map(item => item.botId) } satisfies TodayOverview;
   });

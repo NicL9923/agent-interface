@@ -1,5 +1,80 @@
 # Validation ledger
 
+## October 2 household discovery, sharing and oversight
+
+The final implementation adds native conversation and attachment-name search,
+per-account saved conversations/replies/routine outputs, a reviewed iOS share
+inbox, Today as the default landing page, scheduler-reported upcoming work,
+quiet hours and durable notification batches, editable task starters, truthful
+tool receipts, and automation controls with recorded usage. It includes the
+agent messages, routine results and hosted group chats described below.
+
+The final source state covers 500 files:
+`sha256:f7e7dfea7fa07a297086133bfacfa92eb94166ba817523b9cae1cb7befb53356`.
+The web build is `e64054bf241db021`; 364 web tests and 106 Python tests passed,
+with one Python skip. The final Xcode 27/iOS 27 run completed 60 unit tests and
+eight phone UI flows with no failures. The native flows exercise search,
+bookmarks, automation oversight, share-to-draft review, routine recovery, and
+group creation/messaging. Physical-device signing, App Group provisioning and
+push delivery remain external acceptance.
+
+The [disposable qualification](evidence/native-household-5bb-20261002/manifest.json)
+passed against clean Hermes `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, integration
+digest `5ae031c6671d2b7ccef5dca00ef55c1d8360f0470ec0266501a9200164f20d69`.
+It exercises native search, scoped read-only history, recorded usage, routine
+outputs, persistent group replies and all existing integration probes. The
+production release requires another qualification against its approved repair.
+
+Agent browser acceptance exercised Today, search, history, bookmarks,
+pause/resume, editable starters preserving an existing draft, and tool receipt
+expansion. Desktop and phone fixtures were inspected without horizontal overflow.
+An independent GPT-6.1 Sol review verified fixes for notification navigation,
+visibility changes in digests, native image formats, stale navigation, compacted
+history and attachment attribution across native session clones. Its final pass
+reported no blockers. Successful checks were reused for unchanged inputs.
+
+## October 2 agent messages, routine results and group chats
+
+The working branch implements distinct incoming agent messages and outgoing
+handoffs in Simple mode, profile-scoped routine history/output, routine
+notification links, and local 2–6 assistant group creation and messaging on web
+and iOS. Group replies, approval and stop controls use Hermes's own persistent
+coordinator. Unsupported coordinators keep history readable and disable sending.
+Uncertain sends and room creation retain their original request for an explicit
+duplicate-safe retry. No production service or release changed.
+
+The final source state covers 471 files:
+`sha256:f08bb89844db777f472feda737153d6b6274ac83b4b73efaeb020034b16c5651`.
+The web build and 350 tests passed. The Python suite passed 101 tests with one
+skip; the subsequently changed routine reader passed all eight affected tests,
+including absent jobs, exact profile scope, symlink previews disguised as
+synthetic metadata, cross-profile fallback rejection and bounded output. Checks
+for unchanged inputs were reused.
+
+Xcode 27/iOS 27 passed 56 native unit tests and five existing household experience
+UI flows. The final focused phone flow passed saved routine output, two-assistant
+room creation and sending. It fixed a cancelled List load during compact split
+navigation by using the existing Today appearance/load-generation pattern. The
+test now taps the actual toggle switches and checks membership before creating.
+The [phone screenshots](../ios/evidence/native-collaboration-phone-review.png)
+use synthetic Debug fixtures. Web screenshots at 1280×800 and 390×844 were
+inspected in the private T3 artifacts, with no horizontal overflow. Escape closes
+the results dialog; coordinator-off fixtures keep history visible and actions
+disabled. Signed physical-device push delivery remains external acceptance.
+
+The [final disposable native qualification](evidence/native-collaboration-final-5bb-20261002/manifest.json)
+passed against clean Hermes `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, integration
+digest `ad029a3047bb61de06c5c1dcf965bce79d60fa5acce7b43651fa7d006e276a6a`.
+Its native experience probe proves profile-scoped routine output, group creation,
+send deduplication, a saved assistant reply, log reads and stopping. The full run
+also passed native durability, private service/vault, shared computer,
+maintenance and authenticated app probes. The Mac fixture paths now resolve to
+their canonical temporary directories before the owner-directory checks.
+
+An independent GPT-6.1 Sol review found and verified fixes for native non-UUID
+thread replies, stale iOS polling errors, notification navigation and synthetic
+routine-preview symlinks. Its final pass reported no additional findings.
+
 ## October 2 app release 2d26cae
 
 PR #23 merged at `2d26caea07c2a7eb44d637ff5cd3e69d2862a404`. The release is live at `https://agentui.wildflowersranch.com`,

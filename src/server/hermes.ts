@@ -34,6 +34,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const readMethods = new Set([
     'agent-interface.capabilities', 'agent-interface.receipt', 'agent-interface.discover',
     'profiles.list', 'profiles.describe', 'session.history', 'model.options',
+    'groups.capabilities', 'groups.list', 'groups.state', 'groups.log',
   ]);
   let connection: Connection | undefined;
   let connecting: Promise<void> | undefined;
@@ -358,9 +359,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     let response: Response;
     try {
       const headers = new Headers(init.headers);
-      const credential = path === '/api/agent-interface/credentials';
+      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience';
       for (const [name, value] of Object.entries(credential ? {'Authorization': `Bearer ${options.token}`} : authHeaders())) headers.set(name, value);
-      const target = credential ? '/api/agent-interface/service/agent-interface/credentials' : servicePath(path);
+      const target = credential ? '/api/agent-interface/service/' + path.slice('/api/'.length) : servicePath(path);
       response = await fetch(new URL(target, origin), {...init,
         headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
@@ -485,6 +486,43 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
   return {
+    async routineResults(botId, routineId) {
+      return await this.experienceRequest!({ operation: 'routine_results', profile: botId, routineId }) as import('../shared/collaboration.js').RoutineResult[];
+    },
+    async routineOutput(botId, routineId, resultId) {
+      return await this.experienceRequest!({ operation: 'routine_output', profile: botId, routineId, resultId }) as import('../shared/collaboration.js').RoutineOutput;
+    },
+    async groupRequest(input) {
+      if (input.operation === 'list') {
+        let capability: Wire;
+        try { capability = await rpc('groups.capabilities', {}); }
+        catch (error) {
+          if (error instanceof TransportError && error.rpcCode === -32601) return { supported: false, canSend: false, rooms: [], reason: 'This Hermes version does not expose hosted group chats.' };
+          throw error;
+        }
+        if (capability.protocol_version !== 2 || !['groups.list', 'groups.state', 'groups.log'].every(method => capability.methods?.includes(method)))
+          return { supported: false, canSend: false, rooms: [], reason: 'This Hermes group protocol is not supported by this app.' };
+        const rooms: Wire[] = [];
+        let offset = 0;
+        for (let page = 0; page < 10; page++) {
+          const value = await rpc('groups.list', { limit: 100, offset });
+          rooms.push(...value.rooms);
+          if (value.next_offset == null) break;
+          offset = value.next_offset;
+        }
+        const canSend = capability.driver === true && ['groups.create', 'groups.send', 'groups.stop', 'groups.approve'].every(method => capability.methods?.includes(method));
+        return { supported: true, canSend, rooms, ...(!canSend ? { reason: 'Hermes group history is available. Its group coordinator must be running to create rooms or send messages.' } : {}) };
+      }
+      const room_id = input.roomId;
+      if (input.operation === 'state') return rpc('groups.state', { room_id });
+      if (input.operation === 'log') return rpc('groups.log', { room_id, since_seq: input.since, limit: 200 });
+      const catalog = await rpc('groups.capabilities', {});
+      if (catalog.protocol_version !== 2 || catalog.driver !== true) throw Object.assign(new Error('The Hermes group coordinator is unavailable. Refresh before trying again.'), { statusCode: 409 });
+      if (input.operation === 'create') return rpc('groups.create', { room_id, name: input.name, members: input.members });
+      if (input.operation === 'send') return rpc('groups.send', { room_id, event_id: input.requestId, payload: { text: input.text, thread_id: input.threadId } });
+      if (input.operation === 'stop') return rpc('groups.stop', { room_id, cancel_id: input.requestId });
+      return rpc('groups.approve', { room_id, member_id: input.memberId, task_id: input.taskId, execution_generation: input.generation, choice: input.choice, request_id: input.requestId });
+    },
     async modelOptions(profile) {
       // Use Hermes's account-aware catalog, including custom provider aliases.
       // This native RPC already runs under authenticated profile scope.
@@ -634,7 +672,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if (!data.length || data.length > 8 * 1024 * 1024) throw new Error('Hermes returned oversized speech audio.');
       return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
     },
-    async experienceRequest(input) { return await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json(); },
+    async experienceRequest(input) {
+      const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
+      if (input.operation === 'history') value.messages = value.messages.map((row: Wire) => ({ ...row, text:exposedText(row.app_tool_result) ?? row.text, files: artifacts(input.profile, row), ...(row.role==='tool'?{toolCall:toolDetails({name:row.name,args:row.args,result:row.app_tool_result ?? row.text},String(row.tool_call_id ?? row.id),'completed')}:{}) }));
+      return value;
+    },
     async vaultRequest(input) {
       const response=await http('/api/agent-interface/credentials',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
       if(!response.body)throw new Error('Hermes returned no credential status.');
@@ -678,10 +720,17 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           all.push({id:job.id ?? job.job_id,botId:row.name,
             name:job.name.startsWith(prefix) ? job.name.slice(prefix.length) : job.name,
             prompt:job.prompt ?? '',schedule:job.schedule_display,
-            enabled:job.enabled !== false && job.state !== 'paused'});
+            enabled:job.enabled !== false && job.state !== 'paused',
+            nextRunAt:job.next_run_at ?? undefined,lastRunAt:job.last_run_at ?? undefined,
+            lastStatus:job.last_status ?? undefined,lastError:job.last_error ?? undefined,lastDeliveryError:job.last_delivery_error ?? undefined});
         }
       }
       return all;
+    },
+    async setRoutineEnabled(botId, id, enabled) {
+      const response = await (await http(`/api/cron/jobs/${encodeURIComponent(id)}/${enabled?'resume':'pause'}?profile=${encodeURIComponent(botId)}`,{method:'POST'})).json() as Wire;
+      const job=response.job ?? response;
+      if(job.error || (job.enabled !== false && job.state !== 'paused') !== enabled) throw new Error('Hermes did not confirm the routine state. Reload before retrying.');
     },
     saveRoutine: routineMutation,
     async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});},
