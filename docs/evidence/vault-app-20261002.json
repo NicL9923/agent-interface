@@ -1,0 +1,34 @@
+{
+  "accepted": true,
+  "checkedAt": "2026-10-02T04:31:10.215Z",
+  "webBuild": "2a6c12fa49203452",
+  "checks": {
+    "authenticatedBootstrap": true,
+    "durableTodayFrontier": true,
+    "nativeProfiles": [
+      {
+        "profileNumber": 1,
+        "memoryRead": true,
+        "vaultMetadataRead": true,
+        "schedulePreview": true,
+        "syntheticVoiceRecognized": true,
+        "conversationUnchanged": true,
+        "speechProvider": "edge",
+        "transcriptionProvider": "xai",
+        "elapsedMs": 2102
+      },
+      {
+        "profileNumber": 2,
+        "memoryRead": true,
+        "vaultMetadataRead": true,
+        "schedulePreview": true,
+        "syntheticVoiceRecognized": true,
+        "conversationUnchanged": true,
+        "speechProvider": "edge",
+        "transcriptionProvider": "xai",
+        "elapsedMs": 1200
+      }
+    ],
+    "temporarySessionRemoved": true
+  }
+}
