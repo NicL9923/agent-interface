@@ -1,4 +1,6 @@
 import type { Activity, Approval, AttentionRequest, FileRef, Message, RuntimeEvent } from './types.js';
+import type { HistoryPage, SearchHit, UsageSummary } from './discovery.js';
+import type { RoutineOutput, RoutineResult } from './collaboration.js';
 export interface TodayItem {
   botId: string;
   botName: string;
@@ -17,6 +19,7 @@ export interface TodayOverview {
   items: TodayItem[];
   events: RuntimeEvent[];
   unavailableBots: string[];
+  upcoming?: import("./types.js").Routine[];
 }
 export interface MemoryEntry { id: string; text: string }
 export interface MemoryDocument {
@@ -55,10 +58,15 @@ export interface RoutineRunReceipt {
   ownerStatus?: string;
 }
 export type ExperienceRequest =
+  | { operation: 'search'; profile: string; query: string }
+  | { operation: 'history'; profile: string; sessionId: string; offset: number }
+  | { operation: 'usage'; profile: string; days: number }
+  | { operation: 'routine_results'; profile: string; routineId: string }
+  | { operation: 'routine_output'; profile: string; routineId: string; resultId: string }
   | { operation: 'memory'; profile: string }
   | { operation: 'save_memory'; profile: string; target: 'memory' | 'user'; revision: string; entries: { id?: string; text: string }[] }
   | { operation: 'delete_memory'; profile: string; target: 'memory' | 'user'; revision: string; entryId: string }
   | { operation: 'preview'; profile: string; schedule: string }
   | { operation: 'run'; profile: string; routineId: string; requestId: string; senderId: string }
   | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string };
-export type ExperienceResponse = ProfileMemory | RoutinePreview | RoutineRunReceipt;
+export type ExperienceResponse = ProfileMemory | RoutinePreview | RoutineRunReceipt | RoutineResult[] | RoutineOutput | SearchHit[] | HistoryPage | UsageSummary;

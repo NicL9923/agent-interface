@@ -5,7 +5,7 @@ import type { Bootstrap } from "../shared/types";
 import type { TodayOverview } from "../shared/experience";
 import "./experience.css";
 
-export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string) => void }) {
+export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string, routineId?: string) => void }) {
   const [overview, setOverview] = useState<TodayOverview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -43,12 +43,13 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
         </button>)}</section>
       <section className="today-section"><h3>Since you were away</h3><p className="muted">Since {new Date(overview.since).toLocaleString()}</p>
         {!overview.events.length && <p>No new recorded results yet.</p>}
-        {overview.events.map(event => <button className="today-row" type="button" key={event.id} onClick={() => onOpen(event.botId)}>
+        {overview.events.map(event => <button className="today-row" type="button" key={event.id} onClick={() => event.routineId ? onOpen(event.botId, event.routineId) : onOpen(event.botId)}>
           <span className="today-row-copy"><strong>{event.title}</strong><small>{bootstrap.bots.find(bot => bot.id === event.botId)?.name || "Assistant"} · {new Date(event.occurredAt).toLocaleString()}</small>
             {event.body && <small>{event.body.slice(0, 240)}</small>}</span><span aria-hidden="true">›</span></button>)}
         {overview.hasMore && <p className="muted">More recorded results are waiting. Mark this page caught up to load the next page.</p>}
         <button type="button" onClick={() => void caughtUp()}>{overview.hasMore ? "Mark this page caught up" : "Mark caught up"}</button>
       </section>
+      <section className="today-section"><h3>Scheduled next</h3>{overview.upcoming?.map(row=><button className="today-row" key={row.id} onClick={()=>onOpen(row.botId,row.id)}><span className="today-row-copy"><strong>{row.name}</strong><small>{bootstrap.bots.find(bot=>bot.id===row.botId)?.name} · {new Date(row.nextRunAt!).toLocaleString()}</small></span><span>View results</span></button>)}{!overview.upcoming?.length&&<p className="muted">No upcoming run reported. View all routines in Search & saved items → Automations.</p>}</section>
       <section className="today-section"><h3>At work</h3>{!active.length && <p className="muted">No checked assistant is working.</p>}
         {active.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}><Avatar avatar={bootstrap.bots.find(bot => bot.id === item.botId)?.avatar} state={item.activity.state} name={item.botName} size={42} />
           <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.activity.detail || stateLabels[item.activity.state]}</small></span><span aria-hidden="true">›</span></button>)}</section>

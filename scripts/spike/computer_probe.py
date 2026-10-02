@@ -19,7 +19,7 @@ root = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("computer_probe_addon", root / "src/hermes/computer.py")
 addon = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(addon)
-resource = home / "runtime" / "computer-probe"
+resource = (home / "runtime" / "computer-probe").resolve()
 resource.mkdir(parents=True, mode=0o700, exist_ok=True)
 os.environ["HERMES_AGENT_INTERFACE_COMPUTER_HOME"] = str(resource)
 os.environ["HERMES_AGENT_INTERFACE_COMPUTER_CDP_URL"] = "http://127.0.0.1:9222"

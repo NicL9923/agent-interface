@@ -7,6 +7,12 @@ export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
 ) => Promise<unknown>;
+export function inQuietHours(settings: import('../shared/types.js').Preferences['notifications'], now = new Date()) {
+  if (!settings?.quietStart || !settings.quietEnd) return false;
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone:settings.timezone, hour:'2-digit',minute:'2-digit',hourCycle:'h23' }).formatToParts(now);
+  const time = `${parts.find(part=>part.type==='hour')!.value}:${parts.find(part=>part.type==='minute')!.value}`;
+  return settings.quietStart < settings.quietEnd ? time >= settings.quietStart && time < settings.quietEnd : time >= settings.quietStart || time < settings.quietEnd;
+}
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
   private running = false;
@@ -92,43 +98,57 @@ export class BackgroundWorker {
   }
   private async deliver() {
     if (!this.send && !this.sendApns) return;
-    for (const item of this.store.outbox()) {
+    for (const item of this.store.deliveryGroups()) {
       const user = this.store.getUser(item.user_id);
       if (!user || !allowedIdentity(this.config, user)) continue;
+      if (inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
+      item.items = item.items.filter(row => {
+        const payload = JSON.parse(row.payload); const bot = this.store.presentation(payload.botId);
+        const visible = bot.shared || !bot.ownerId || bot.ownerId === item.user_id;
+        if (!visible) this.store.finishDelivery(row.id);
+        return visible;
+      });
+      if (!item.items.length) continue;
+      // Rebuild the frozen membership's display after revocation, preserving its
+      // tag and each endpoint's delivery receipts without exposing removed titles.
+      const original = JSON.parse(item.payload);
+      const deliveryPayload = original.url === '/?view=today' ? JSON.stringify({...original,title:`${item.items.length} assistant update${item.items.length===1?'':'s'}`,body:item.items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · ')}) : item.payload;
       const subscriptions = this.send ? this.store.subscriptions(item.user_id) : [];
       const devices = this.sendApns && this.config.apns ? this.store.nativeDevices(item.user_id, this.config.apns.environment) : [];
       // Keep undelivered events durable until this person has a subscription.
       if (!subscriptions.length && !devices.length) continue;
       let failed = false;
       for (const subscription of subscriptions) {
-        if (this.store.delivered(item.id, subscription.endpoint)) continue;
+        if (item.items.every(row => this.store.delivered(row.id, subscription.endpoint))) continue;
         try {
-          await this.send!(subscription, item.payload);
-          this.store.markDelivered(item.id, subscription.endpoint);
+          await this.send!(subscription, deliveryPayload);
+          for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
         } catch (error) {
           const status = (error as { statusCode?: number }).statusCode;
           if (status === 404 || status === 410) {
             this.store.unsubscribe(item.user_id, subscription.endpoint);
-            this.store.markDelivered(item.id, subscription.endpoint);
+            for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
           } else failed = true;
         }
       }
       for (const device of devices) {
         const endpoint = `apns:${device.environment}:${device.token}`;
-        if (this.store.delivered(item.id, endpoint)) continue;
+        if (item.items.every(row => this.store.delivered(row.id, endpoint))) continue;
         try {
-          await this.sendApns!(device, item.payload);
-          this.store.markDelivered(item.id, endpoint);
+          await this.sendApns!(device, deliveryPayload);
+          for (const row of item.items) this.store.markDelivered(row.id, endpoint);
         } catch (error) {
           const result = error as { statusCode?: number; reason?: string };
           if (result.statusCode === 410 || (result.statusCode === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(result.reason ?? ""))) {
             this.store.removeNativeDevice(item.user_id, device.deviceId);
-            this.store.markDelivered(item.id, endpoint);
+            for (const row of item.items) this.store.markDelivered(row.id, endpoint);
           } else failed = true;
         }
       }
-      if (failed) this.store.retryDelivery(item.id, item.attempts + 1);
-      else this.store.finishDelivery(item.id);
+      for (const row of item.items) {
+        if (failed) this.store.retryDelivery(row.id, row.attempts + 1);
+        else this.store.finishDelivery(row.id);
+      }
     }
   }
 }

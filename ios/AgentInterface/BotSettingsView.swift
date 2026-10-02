@@ -421,6 +421,7 @@ struct BotSettingsView: View {
           Text(routine.prompt).font(.footnote).lineLimit(6)
           LabeledContent("Status", value: routine.enabled ? "Active" : "Paused")
           Button("Edit") { editingRoutine = routine }
+          NavigationLink("View results") { RoutineResultsView(botId: routine.botId, routineId: routine.id) }
           Button(routine.enabled ? "Pause" : "Resume") {
             action {
               guard let api = store.api else { return }

@@ -13,6 +13,8 @@ import type {
 import type { ReplyCardState } from "../shared/reply-cards.js";
 import { defaultPreferences } from "../shared/types.js";
 
+import type { SavedItem } from "../shared/discovery.js";
+
 export class Store {
   readonly db: DatabaseSync;
   constructor(path: string) {
@@ -30,6 +32,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS routine_trials(request_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),routine_id TEXT NOT NULL,bot_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'uncertain');
       CREATE TABLE IF NOT EXISTS today_seen(user_id TEXT PRIMARY KEY REFERENCES users(id),seen_at TEXT NOT NULL,event_frontier INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS card_state(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,message_id TEXT NOT NULL,card_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id,message_id,card_id));
+      CREATE TABLE IF NOT EXISTS saved_items(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),pointer_key TEXT NOT NULL,value TEXT NOT NULL,UNIQUE(user_id,pointer_key));
+      CREATE TABLE IF NOT EXISTS notification_batches(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS notification_batch_items(outbox_id TEXT PRIMARY KEY REFERENCES outbox(id),batch_id TEXT NOT NULL REFERENCES notification_batches(id));
       CREATE TABLE IF NOT EXISTS preferences(user_id TEXT PRIMARY KEY REFERENCES users(id),value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS drafts(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
       CREATE TABLE IF NOT EXISTS read_positions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
@@ -200,6 +205,18 @@ export class Store {
   saveCardState(userId: string, botId: string, messageId: string, cardId: string, value: ReplyCardState) {
     this.db.prepare("INSERT INTO card_state VALUES(?,?,?,?,?) ON CONFLICT(user_id,bot_id,message_id,card_id) DO UPDATE SET value=excluded.value").run(userId, botId, messageId, cardId, JSON.stringify(value));
   }
+  savedItems(userId: string): SavedItem[] {
+    return (this.db.prepare("SELECT value FROM saved_items WHERE user_id=? ORDER BY rowid DESC").all(userId) as {value: string}[]).map(row => JSON.parse(row.value));
+  }
+  saveItem(userId: string, pointer: Omit<SavedItem, 'id' | 'createdAt'>): SavedItem {
+    const key = JSON.stringify([pointer.kind,pointer.botId,pointer.sessionId,pointer.messageId,pointer.routineId,pointer.resultId]);
+    const previous = this.db.prepare("SELECT value FROM saved_items WHERE user_id=? AND pointer_key=?").get(userId,key) as {value: string} | undefined;
+    if (previous) return JSON.parse(previous.value);
+    const item = {...pointer,id:randomUUID(),createdAt:new Date().toISOString()};
+    this.db.prepare("INSERT INTO saved_items VALUES(?,?,?,?)").run(item.id,userId,key,JSON.stringify(item));
+    return item;
+  }
+  deleteSavedItem(userId: string,id: string) { this.db.prepare("DELETE FROM saved_items WHERE user_id=? AND id=?").run(userId,id); }
   preferences(id: string): Preferences {
     const row = this.db
       .prepare("SELECT value FROM preferences WHERE user_id=?")
@@ -420,8 +437,11 @@ export class Store {
           JSON.stringify({
             title: event.title,
             body: event.body ?? "",
-            url: `/?bot=${encodeURIComponent(event.botId)}`,
+            url: `/?bot=${encodeURIComponent(event.botId)}${event.routineId ? `&routine=${encodeURIComponent(event.routineId)}` : ''}`,
             tag: event.id,
+            kind: event.kind,
+            botId: event.botId,
+            queuedAt: Date.now(),
           }),
         );
   }
@@ -501,6 +521,41 @@ export class Store {
       payload: string;
       attempts: number;
     }[];
+  }
+  deliveryGroups(now = Date.now()) {
+    const ready = this.outbox();
+    const groups: {id: string; user_id: string; payload: string; items: typeof ready}[] = [];
+    const seen = new Set<string>();
+    for (const item of ready) {
+      if (seen.has(item.id)) continue;
+      const existing = this.db.prepare("SELECT b.* FROM notification_batches b JOIN notification_batch_items i ON i.batch_id=b.id WHERE i.outbox_id=?").get(item.id) as {id: string;user_id: string;payload: string} | undefined;
+      if (existing) {
+        const members = this.db.prepare("SELECT o.id FROM outbox o JOIN notification_batch_items i ON i.outbox_id=o.id WHERE i.batch_id=? AND o.state='pending'").all(existing.id) as {id: string}[];
+        const ids = new Set(members.map(row => row.id));
+        // A failed constituent's retry deadline applies to the entire frozen digest.
+        const items = ready.filter(row => ids.has(row.id));
+        items.forEach(row => seen.add(row.id));
+        if (items.length === ids.size) groups.push({...existing,items});
+        continue;
+      }
+      const prefs = this.preferences(item.user_id).notifications;
+      const payload = JSON.parse(item.payload);
+      const created = this.db.prepare("SELECT created_at FROM notification_events WHERE id=(SELECT event_id FROM outbox WHERE id=?)").get(item.id) as {created_at:number} | undefined;
+      const minutes = prefs?.batchMinutes ?? 0;
+      if (!minutes || !payload.kind || this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(item.id) || payload.kind === 'approval' || payload.kind === 'failed') { groups.push({...item,items:[item]}); seen.add(item.id); continue; }
+      if (now < (payload.queuedAt ?? created?.created_at ?? 0) + minutes * 60000) continue;
+      const items = ready.filter(row => row.user_id === item.user_id && !seen.has(row.id) && !this.db.prepare("SELECT 1 FROM notification_batch_items WHERE outbox_id=?").get(row.id) && !this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(row.id) && ['completed','activity','interrupted'].includes(JSON.parse(row.payload).kind));
+      const batchId = randomUUID();
+      const digest = JSON.stringify({title:`${items.length} assistant update${items.length === 1 ? '' : 's'}`,body:items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · '),url:'/?view=today',tag:batchId});
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run(batchId,item.user_id,digest);
+        for (const row of items) this.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(row.id,batchId);
+        this.db.exec('COMMIT');
+      } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+      items.forEach(row=>seen.add(row.id)); groups.push({id:batchId,user_id:item.user_id,payload:digest,items});
+    }
+    return groups;
   }
   subscriptions(userId: string) {
     return (

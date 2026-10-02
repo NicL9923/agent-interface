@@ -83,6 +83,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   weak var store: AppStore?
   var token: String?
   var pendingBotId: String?
+  var pendingRoutineId: String?
   var pendingURL: String?
   private var preferenceKey: String? { store?.scope.map { "push.enabled.\($0)" } }
   static func botId(from value: String, origin: URL) -> String? {
@@ -179,7 +180,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   }
   func openPendingConversation() async {
     if let pendingURL, let origin = store?.api?.baseURL, store?.bootstrap != nil {
+      if let url=URL(string:pendingURL,relativeTo:origin)?.absoluteURL,url.scheme==origin.scheme,url.host==origin.host,url.port==origin.port,url.path=="/",URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{$0.name=="view"})?.value=="today" {
+        guard let store,store.bootstrap != nil else { return }
+        store.todayRequest=UUID();self.pendingURL=nil;pendingBotId=nil;pendingRoutineId=nil;return
+      }
       pendingBotId = Self.botId(from: pendingURL, origin: origin)
+      pendingRoutineId = nil
+      if pendingBotId != nil, let url = URL(string: pendingURL, relativeTo: origin), let components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
+        pendingRoutineId = components.queryItems?.first { $0.name == "routine" }?.value
+      }
       self.pendingURL = nil
     }
     guard let store, let botId = pendingBotId,
@@ -187,5 +196,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     else { return }
     pendingBotId = nil
     await store.select(botId)
+    if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
+    pendingRoutineId = nil
   }
 }

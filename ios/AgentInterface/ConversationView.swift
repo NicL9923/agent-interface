@@ -113,6 +113,7 @@ struct ConversationView: View {
                 .foregroundStyle(.secondary)
             }.padding(.vertical, 36).id("welcome")
           }
+          StarterActionsView(botId:bot.id)
           ForEach(store.conversation?.visibleMessages ?? []) { message in
             MessageView(
               message: message, advanced: store.bootstrap?.preferences.presentation == "advanced"
@@ -396,6 +397,7 @@ struct ConversationView: View {
 struct MessageView: View {
   var message: Message
   var advanced: Bool
+  @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -411,12 +413,20 @@ struct MessageView: View {
           Text(value, style: .time).font(.caption2).foregroundStyle(.secondary)
         }
       }
-      if message.isToolActivity {
+      if let envelope = message.agentEnvelope {
+        Label("\(envelope.name) → \(store.bot?.name ?? "Assistant")", systemImage: "arrow.left.arrow.right").font(.caption.bold()).foregroundStyle(Palette.accent)
+        Text("Agent message").font(.caption).foregroundStyle(.secondary)
+        Text(envelope.body).textSelection(.enabled)
+      } else if message.isAgentExchange {
+        Label("Agent handoff", systemImage: "arrow.left.arrow.right").font(.caption.bold()).foregroundStyle(Palette.accent)
         ToolActivityView(message: message)
+      } else if message.isToolActivity {
+        if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
       } else {
         ReplyContentView(message: message)
         if message.role == "assistant" && !message.text.isEmpty { SpokenReplyButton(text: ReplyCards.spokenText(message.text)) }
         if advanced && message.toolCall != nil { ToolActivityView(message: message) }
+        if !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
       }
       if advanced, let reasoning = message.reasoning, !reasoning.isEmpty {
         DisclosureGroup("Reasoning") {
@@ -424,8 +434,8 @@ struct MessageView: View {
         }
       }
       ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
-    }.padding(message.role == "user" ? 14 : 0).background(
-      message.role == "user" ? Palette.user(scheme) : Color.clear,
+    }.padding(message.role == "user" || message.isAgentExchange ? 14 : 0).background(
+      message.isAgentExchange ? Palette.raised(scheme) : message.role == "user" ? Palette.user(scheme) : Color.clear,
       in: RoundedRectangle(cornerRadius: 14)
     ).accessibilityElement(children: .contain)
   }

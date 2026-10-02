@@ -32,7 +32,7 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
   </div>;
 }
 
-export function RoutineEnhancements({ routine, userId, disabled }: { routine: Routine; userId: string; disabled?: boolean }) {
+export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }: { routine: Routine; userId: string; disabled?: boolean; onOpenResults?: () => void }) {
   const key = `agent-interface:routine-trial:${userId}:${routine.id}`;
   const [requestId, setRequestId] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
   const [receipt, setReceipt] = useState<RoutineRunReceipt | null>(null);
@@ -68,6 +68,7 @@ export function RoutineEnhancements({ routine, userId, disabled }: { routine: Ro
     finally { setBusy(false); }
   }
   return <div className="routine-enhancements"><RoutineSchedulePreview botId={routine.botId} schedule={routine.schedule} />
+    {onOpenResults ? <button type="button" onClick={onOpenResults}>View results</button> : <a href={`/?bot=${encodeURIComponent(routine.botId)}&routine=${encodeURIComponent(routine.id)}`}>View results</a>}
     <small className="muted">Runs now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.</small>
     <div className="actions">{canStart ? <button type="button" disabled={busy || disabled} onClick={() => void start()}>{busy ? "Starting..." : "Try once"}</button>
       : <button type="button" disabled={busy || disabled} onClick={() => void check(requestId)}>{busy ? "Checking..." : "Check run status"}</button>}

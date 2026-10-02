@@ -39,6 +39,7 @@ const bots = [
   { id: 'fox', name: 'Trail scout with a long name for wrapping', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'done', avatar: { mode: 'mascot', family: 'fox', color: '#FF6700', eyes: 'oval', accessory: 'none' } },
   { id: 'guide', name: 'Trail guide', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'failed', avatar: { mode: 'portrait', src: portrait, origin: 'uploaded' } },
 ];
+const savedItems = [];
 const preferences = { theme: process.env.PREVIEW_THEME || 'system', presentation: process.env.PREVIEW_PRESENTATION || 'simple', favorites: ['ranch'], sections: [{ id: 'house', name: 'Around the house', botIds: ['ranch', 'kitchen', 'garden'] }], followBots: [], modelFavorites: [] };
 const modelCatalog = { provider: 'openrouter', model: 'configured-model', providers: [
   { id: 'openrouter', name: 'OpenRouter', authenticated: true, models: [{ id: 'configured-model', name: 'Configured model', available: true }, { id: 'openai/gpt-6.1-sol', name: 'GPT-6.1 Sol', available: true }, { id: 'anthropic/claude-sonnet', name: 'Claude Sonnet', available: true }] },
@@ -85,6 +86,12 @@ const fixtureCards = { version: 1, cards: [
   { id: 'gate-check', type: 'event', title: 'Check gate batteries: fixture calendar proposal', start: '2026-11-01T09:00:00-06:00', end: '2026-11-01T09:30:00-06:00', location: 'Home', description: 'Explicit preview fixture. No calendar event was created.' },
 ] };
 ranchMessages.push({ id: 'fixture-cards', role: 'assistant', createdAt: at(23), text: 'These are explicit preview fixtures for groceries, trip notes and a calendar proposal. No purchases, bookings or calendar events were created.\n\n```agent-ui\n' + JSON.stringify(fixtureCards) + '\n```' });
+ranchMessages.push({ id: 'fixture-agent-message', role: 'user', text: 'Message from 🤖 Ledger (@ledger): The gate battery purchase is accounted for. You can go ahead with the replacement.', createdAt: at(24) });
+ranchMessages.push({ id: 'fixture-agent-handoff', role: 'tool', text: 'Planner will review the weekend schedule.', toolCall: { id: 'handoff', name: 'message_agent', arguments: JSON.stringify({ target: 'planner', message: 'Check the weekend plans against the weather.' }), status: 'completed', result: 'Planner will review the weekend schedule.' }, createdAt: at(25) });
+const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'planner'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
+const groupRooms = [previewRoom];
+const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
+const groupRequests = new Set();
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const vaults = new Map();
@@ -180,6 +187,12 @@ const server = createServer(async (request, response) => {
     if (path === '/auth/config') return json(response, { localDevAuth: true, nativeAuthVersion: 1 });
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
+    if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.'}],unavailableBots:[]});
+    if (/\/history\//.test(path)) return json(response,{botId:'ranch',sessionId:'fixture-history',messages:ranchMessages,offset:0,hasMore:false});
+    if (path === '/saved') { if(request.method==='POST'){const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);}return json(response,savedItems); }
+    if(path.startsWith('/saved/')) { const index=savedItems.findIndex(item=>item.id===path.split('/').at(-1));if(index>=0)savedItems.splice(index,1);return json(response,{ok:true}); }
+    if(path.endsWith('/starters')) return json(response,[{id:'meals',title:'Plan dinners',prompt:'Help me plan five easy dinners. Ask about our preferences and budget first.'},{id:'document',title:'Explain a document',prompt:'Help me understand the document I attach. Summarize the key points.'},{id:'server',title:'Check a server',prompt:'Review my server health. Confirm the server and connection first; inspect only.'}]);
+    if(path==='/automations') return json(response,{routines:routines.map(row=>({...row,nextRunAt:new Date(Date.now()+3600000).toISOString(),lastStatus:'delivery_failed',lastDeliveryError:'Fixture: recipient destination unavailable'})),usage:bots.map(bot=>({botId:bot.id,days:30,sessions:4,inputTokens:1200,outputTokens:400,actualCost:null,estimatedCost:0.02,partial:true})),unavailableBots:[]});
     if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
     const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
@@ -188,7 +201,7 @@ const server = createServer(async (request, response) => {
     if (path === '/today') {
       const marker = todaySeen.get(fixtureUser);
       const since = marker?.seenAt || new Date(Date.now() - 86400000).toISOString();
-      return json(response, { generatedAt: new Date().toISOString(), since, frontier: String(fixtureEvents.length), hasMore: false, unavailableBots: [], events: fixtureEvents.filter((_, index) => index + 1 > (marker?.frontier || 0)),
+      return json(response, { generatedAt: new Date().toISOString(), since, frontier: String(fixtureEvents.length), hasMore: false, upcoming:routines.map(row=>({...row,nextRunAt:new Date(Date.now()+3600000).toISOString()})), unavailableBots: [], events: fixtureEvents.filter((_, index) => index + 1 > (marker?.frontier || 0)),
         items: bots.map(bot => { const conversation = conversationFor(bot.id); return { botId: bot.id, botName: bot.name, activity: conversation.activity,
           approvals: conversation.approvals || [], attention: conversation.attention || [], files: conversation.files || [], latestMessage: conversation.messages.findLast(message => message.role === 'assistant') }; }) });
     }
@@ -261,6 +274,20 @@ const server = createServer(async (request, response) => {
       if (request.method === 'POST' && !routineReceipts.has(key)) routineReceipts.set(key, { requestId, routineId: routine.id, botId: routine.botId, status: 'completed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), message: 'Explicit fixture. No routine or external action was executed.' });
       return json(response, routineReceipts.get(key) || { error: 'Fixture run receipt not found.' }, routineReceipts.has(key) ? 200 : 404);
     }
+    const resultsMatch = /^\/bots\/([^/]+)\/routines\/([^/]+)\/results(?:\/([^/]+))?$/.exec(path);
+    if (resultsMatch) return json(response, resultsMatch[3] ? { previewOnly: false, messages: [{ id: 'fixture-run-output', role: 'assistant', text: '## Morning gate check\n\nThe north gate battery needs replacing. The east gate is at **62%** and the barn gate is at **48%**.\n\nExplicit fixture output. No routine was executed.' }] } : [{ id: 'fixture-run', title: 'Morning gate check', startedAt: new Date().toISOString(), previewOnly: false }]);
+    if (path === '/groups') {
+      if (request.method === 'POST') { let room = groupRooms.find(room => room.room_id === body.requestId); if (!room) { room = { room_id: body.requestId, name: body.name, members: body.botIds.map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) }; groupRooms.push(room); } return json(response, { room }); }
+      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms, ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
+    }
+    const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve))?$/.exec(path);
+    if (groupMatch) {
+      const room = groupRooms.find(room => room.room_id === groupMatch[1]); if (!room) return json(response, { error: 'Fixture room not found.' }, 404);
+      if (groupMatch[2] === 'messages') { if (!groupRequests.has(body.requestId)) { groupRequests.add(body.requestId); groupEvents.push({ event_id: body.requestId, seq: groupEvents.length + 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: body.text, thread_id: body.threadId }, created_at: Date.now() / 1000 }); } return json(response, { accepted: true }); }
+      if (groupMatch[2] === 'log') return json(response, { events: groupEvents.filter(event => event.seq > Number(url.searchParams.get('since') || 0)), cursor: groupEvents.length, latest_seq: groupEvents.length, has_more: false });
+      if (groupMatch[2]) return json(response, { cancelled: 0, approved: true });
+      return json(response, { room, driver_status: { running: true, working: false, blocked: false, pending_actions: [] } });
+    }
     if (path === '/models') return json(response, modelCatalog);
     if (path === '/computer') return json(response, computerStatus());
     if (path === '/computer/control') { computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' }; return json(response, computerStatus()); }
@@ -288,6 +315,7 @@ const server = createServer(async (request, response) => {
     if (path === '/hermes/upgrade') return json(response, upgrade);
     if (path.endsWith('/conversation')) return json(response, conversationFor(decodeURIComponent(path.split('/')[2])));
     if (path.endsWith('/tools') || path.endsWith('/skills')) return json(response, [{ id: 'web', name: 'Web search', description: 'Search the web when current information matters.', enabled: true }, { id: 'shell', name: 'Terminal', description: "Run commands on the assistant's server.", enabled: false }]);
+    if (/^\/routines\/[^/]+\/state$/.test(path)) { const row=routines.find(row=>row.id===path.split('/')[2]);if(row)row.enabled=body.enabled;return json(response,{ok:true}); }
     if (path === '/routines') { if (request.method === 'POST') { const routine = { ...body, id: `fixture-routine-${routines.length + 1}` }; routines.push(routine); return json(response, routine); } return json(response, routines); }
     if (/^\/routines\/[^/]+$/.test(path)) { const id = path.split('/').at(-1), index = routines.findIndex(routine => routine.id === id); if (index < 0) return json(response, { error: 'Fixture routine not found.' }, 404); if (request.method === 'DELETE') { routines.splice(index, 1); return json(response, { ok: true }); } Object.assign(routines[index], body); return json(response, routines[index]); }
     if (path.endsWith('/draft')) return json(response, {text:'',attachments:[]});

@@ -25,6 +25,7 @@ struct PreferencesView: View {
             Text("Light").tag("light")
             Text("Dark").tag("dark")
           }
+          Picker("Start page",selection:Binding(get:{preferences.startPage ?? "today"},set:{preferences.startPage=$0})) { Text("Today").tag("today");Text("Assistant").tag("assistant") }
           defaultPicker
         }
         Section("Favorites") {
@@ -46,6 +47,13 @@ struct PreferencesView: View {
               || preferences.sections.count >= 30)
         }
         Section {
+          Picker("Batch updates",selection:Binding(get:{preferences.notifications?.batchMinutes ?? 0},set:{ value in var settings=preferences.notifications ?? NotificationPreferences(timezone:TimeZone.current.identifier,batchMinutes:0);settings.batchMinutes=value;preferences.notifications=settings })) { Text("As they arrive").tag(0);Text("Every 5 minutes").tag(5);Text("Every 15 minutes").tag(15);Text("Hourly").tag(60) }
+          Toggle("Quiet hours",isOn:Binding(get:{preferences.notifications?.quietStart != nil},set:{ enabled in var settings=preferences.notifications ?? NotificationPreferences(timezone:TimeZone.current.identifier,batchMinutes:0);settings.quietStart=enabled ? "22:00" : nil;settings.quietEnd=enabled ? "07:00" : nil;preferences.notifications=settings }))
+          if preferences.notifications?.quietStart != nil {
+            TextField("Quiet start (HH:mm)",text:Binding(get:{preferences.notifications?.quietStart ?? "22:00"},set:{preferences.notifications?.quietStart=$0})).keyboardType(.numbersAndPunctuation)
+            TextField("Quiet end (HH:mm)",text:Binding(get:{preferences.notifications?.quietEnd ?? "07:00"},set:{preferences.notifications?.quietEnd=$0})).keyboardType(.numbersAndPunctuation)
+            Text("\(preferences.notifications?.timezone ?? TimeZone.current.identifier). All notifications wait. Decisions and failures skip batching outside quiet hours.").font(.caption).foregroundStyle(.secondary)
+          }
           Text(store.notificationStatus).font(.footnote).foregroundStyle(.secondary)
           Button("Enable device notifications") {
             notification { await NotificationController.shared.enable() }

@@ -24,7 +24,7 @@ vi.mock("../src/components/Avatar", async (original) => ({
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
   household: [],
-  preferences: defaultPreferences,
+  preferences: {...defaultPreferences,startPage:"assistant"},
   bots: [{ id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" }],
   capabilities: Object.fromEntries([
     "chat", "steering", "approvals", "uploads", "generatedFiles", "botConfiguration",
@@ -186,7 +186,7 @@ describe("conversation state", () => {
     expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(0);
     expect(container.querySelector(".transcript")!.textContent).not.toContain("Checking the working directory.");
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
-      ? { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } }
+      ? { ...bootstrap, preferences: {...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
       : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
     await advance(8000);
     expect(container.querySelectorAll('[data-tool-call-id="call-1"]')).toHaveLength(1);
@@ -205,13 +205,13 @@ describe("conversation state", () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" },
       toolCalls: [{ id: "live-call", name: "terminal", status: "running", arguments: "pwd" }] };
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
-      ? { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } }
+      ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
       : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
     await render();
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Running");
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
       if (path === "/bots/shared/conversation") throw new Error("Disconnected");
-      return (path === "/bootstrap" ? { ...bootstrap, preferences: { ...defaultPreferences, presentation: "advanced" } } : savedDraft) as T;
+      return (path === "/bootstrap" ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } } : savedDraft) as T;
     });
     await advance(1500);
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Last seen running");

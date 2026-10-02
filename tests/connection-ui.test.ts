@@ -18,7 +18,7 @@ beforeEach(()=>{
   vi.mocked(write).mockReset().mockResolvedValue({});
   vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
   localStorage.clear();history.replaceState(null,'','/');
-  boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:structuredClone(defaultPreferences),bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}],capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
+  boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:{...structuredClone(defaultPreferences),startPage:"assistant"},bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}],capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
   conversation={botId:'shared',messages:[{id:'answer-one',role:'assistant',text:'Existing canonical answer'}],approvals:[],files:[],activity:{state:'idle'}};
   authConfig={localDevAuth:false};pendingBootstrap=undefined;hermesDown=false;
   vi.mocked(api).mockImplementation(async <T>(path:string)=>{
@@ -223,4 +223,10 @@ describe('setup and recovery interface',()=>{
     expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({text:'Written while offline',dirty:false});
     expect(container.querySelector('textarea')?.value).toBe('Written while offline');
   });
+});
+it.each(['','?bot=shared'])('uses Today only when initial navigation has no explicit conversation: %s',async(query)=>{
+  boot.preferences.startPage=undefined;const previous=vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async <T>(path:string)=>path==='/today'?{generatedAt:new Date().toISOString(),since:new Date().toISOString(),frontier:'0',hasMore:false,items:[],events:[],unavailableBots:[],upcoming:[]} as T:previous(path) as Promise<T>);
+  history.replaceState(null,'',`/${query}`);await renderApp();
+  expect(!!container.querySelector('.today-panel')).toBe(!query);expect(!!container.querySelector('.transcript')).toBe(!!query);
 });

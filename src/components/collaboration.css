@@ -1,0 +1,28 @@
+.agent-exchange { padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 12px 12px 0; }
+.agent-exchange-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: .8rem; margin-bottom: 8px; }
+.agent-exchange pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
+.message-agent { background: transparent; padding: 0; }
+.routine-results-dialog { width: min(760px, calc(100vw - 32px)); max-height: 85dvh; overflow: auto; padding: 24px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
+.routine-results-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.routine-results-dialog .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.routine-results-dialog label { margin-top: 16px; }
+.routine-output { margin-top: 20px; overflow-wrap: anywhere; }
+.group-panel { padding: 24px; overflow: auto; flex: 1; }
+.group-panel .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.group-layout { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 24px; margin-top: 20px; }
+.group-rooms { display: flex; flex-direction: column; gap: 8px; }
+.group-rooms button { text-align: left; overflow-wrap: anywhere; }
+.group-rooms button[aria-current] { background: var(--accent-soft); border-color: var(--accent); }
+.group-rooms small { display: block; color: var(--muted); margin-top: 4px; }
+.group-message { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.group-message .message-attribution { display: flex; justify-content: space-between; gap: 12px; }
+.group-composer { margin-top: 20px; }
+.group-composer textarea { width: 100%; min-height: 90px; }
+.group-create { max-width: 520px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; margin: 16px 0; }
+.group-create fieldset label { display: flex; align-items: center; gap: 10px; }
+@media (max-width: 620px) {
+  .group-panel { padding: 16px; }
+  .group-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .group-rooms { flex-direction: row; overflow: auto; padding-bottom: 8px; }
+  .group-rooms button { flex: 0 0 160px; }
+}

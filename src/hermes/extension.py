@@ -193,7 +193,8 @@ def install(path=None):
     original_dispatch = server.dispatch
     original_acquire = retirement.acquire
     maintenance_reads = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
-                         "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since"}
+                         "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
+                         "groups.capabilities", "groups.list", "groups.state", "groups.log"}
     def guarded_acquire():
         with maintenance_lock:
             if maintenance_state() and not maintenance_read.get():
@@ -700,6 +701,7 @@ def install(path=None):
 
 if __name__ == "__main__":
     import hermes_cli.web_server as web
+    from tui_gateway import server
     source_state()
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=19119)
@@ -707,7 +709,7 @@ if __name__ == "__main__":
     journal = install()
     experience_spec = importlib.util.spec_from_file_location("agent_interface_experience", Path(__file__).resolve().with_name("experience.py"))
     experience = importlib.util.module_from_spec(experience_spec); experience_spec.loader.exec_module(experience)
-    experience.install(web, journal)
+    experience.install(web, journal, server._history_to_messages)
     vault_spec = importlib.util.spec_from_file_location("agent_interface_vault", Path(__file__).resolve().with_name("vault.py"))
     vault = importlib.util.module_from_spec(vault_spec); vault_spec.loader.exec_module(vault)
     vault.install(web, journal)

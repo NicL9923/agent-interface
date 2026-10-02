@@ -21,6 +21,12 @@
       store.api = client
       store.host = client.baseURL.absoluteString
       store.authConfig = AuthConfig(googleClientId: nil, localDevAuth: true, nativeAuthVersion: 1)
+      if environment["AGENT_INTERFACE_UI_SHARE"] == "1",let root=ShareInbox.root {
+        try? FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        let scope=Data((client.baseURL.absoluteString + "|native-test").utf8).base64URLEncoded
+        let capture=SharedCapture(id:UUID().uuidString,scope:scope,botId:"ranch",text:"https://example.invalid/shared-page",files:[],createdAt:Date())
+        try? JSONEncoder().encode(capture).write(to:root.appendingPathComponent(capture.id + ".json"),options:.atomic)
+      }
       await store.refreshBootstrap()
       store.startPolling()
       return true
@@ -40,7 +46,7 @@
     static var draft: [String: Any] = ["text": "", "attachments": []]
     static var readPosition: [String: Any] = [:]
     static var preferences: [String: Any] = [
-      "presentation": "simple", "theme": "system", "favorites": [], "sections": [],
+      "startPage": "assistant", "presentation": "simple", "theme": "system", "favorites": [], "sections": [],
       "followBots": [],
     ]
     static var items: [[String: Any]] = [
@@ -56,6 +62,8 @@
     static var routines: [[String: Any]] = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" ? [["id": "trial", "botId": "ranch", "name": "Morning brief trial", "prompt": "Report today's tasks. Do not modify anything.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": []]] : []
     static var trialRequestId: String?
     static var trialCount = 0
+    static var groupRooms: [[String: Any]] = []
+    static var groupEvents: [[String: Any]] = []
     static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
     static var secureIndex = 0
@@ -124,7 +132,18 @@
       } else {
         body = [:]
       }
-      if path == "/api/bootstrap" {
+      if path == "/api/search" {
+        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list."]],"unavailableBots":[]]
+      } else if path.contains("/history/") {
+        object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":[["id":"history-reply","role":"assistant","text":"Fixture: five easy dinners."]]]
+      } else if path == "/api/saved" {
+        if method == "POST" { object = ["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"] }
+        else { object = [["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"]] }
+      } else if path.hasSuffix("/starters") {
+        object = [["id":"meals","title":"Plan dinners","prompt":"Help me plan five easy dinners. Ask about our preferences first."]]
+      } else if path == "/api/automations" {
+        object = ["routines":[["id":"routine-1","botId":"ranch","name":"Morning report","prompt":"Report","schedule":"0 7 * * *","enabled":true,"recipientIds":["fixture-user"],"nextRunAt":"2026-10-03T12:00:00Z","lastStatus":"delivery_failed","lastDeliveryError":"Fixture: notification destination unavailable"]],"usage":[["botId":"ranch","sessions":4,"inputTokens":1200,"outputTokens":400,"actualCost":NSNull(),"estimatedCost":0.02,"partial":true]],"unavailableBots":[]]
+      } else if path == "/api/bootstrap" {
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           Self.preferences["presentation"] = "advanced"
         }
@@ -204,6 +223,21 @@
         } else {
           Self.secureIndex += 1; object = ["status": "ok"]
         }
+      } else if path == "/api/groups" {
+        if method == "POST" {
+          let room: [String: Any] = ["room_id": body["requestId"] ?? "room", "name": body["name"] ?? "Group", "members": (body["botIds"] as? [String] ?? []).map { id -> [String: Any] in ["member_id": id, "profile": id, "handle": id, "display_name": Self.bots.first { $0["id"] as? String == id }?["name"] ?? id] }]
+          Self.groupRooms.append(room); object = ["room": room]
+        } else { object = ["supported": true, "canSend": true, "rooms": Self.groupRooms] }
+      } else if path.hasPrefix("/api/groups/") {
+        if path.hasSuffix("/messages") {
+          let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"]]
+          Self.groupEvents.append(event); object = ["accepted": true]
+        } else if path.hasSuffix("/log") { object = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false] }
+        else { object = ["room": Self.groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+      } else if path.contains("/routines/") && path.hasSuffix("/results") {
+        object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
+      } else if path.contains("/routines/") && path.contains("/results/") {
+        object = ["messages": [["id": "fixture-output", "role": "assistant", "text": "Fixture saved routine output: the pasture gate is closed."]], "previewOnly": false]
       } else if path == "/api/today" {
         let events: [[String: Any]] = Self.todayFrontier == "0" ? [["id": "fixture-completed", "botId": "ranch", "kind": "completed", "title": "Fixture routine completed", "occurredAt": "2026-10-01T13:00:00Z"]] : Self.todayFrontier == "1" ? [["id": "fixture-late-import", "botId": "ranch", "kind": "completed", "title": "Fixture late imported completion", "occurredAt": "2026-09-28T13:00:00Z"]] : []
         object = ["generatedAt": "2026-10-01T13:30:00Z", "since": Self.todaySince, "frontier": Self.todayFrontier == "0" ? "1" : "2", "hasMore": Self.todayFrontier == "0", "items": [["botId": "ranch", "botName": "Ranch hand", "activity": ["state": "done"], "approvals": [], "attention": [], "files": [], "latestMessage": ["id": "fixture-today", "text": "Fixture: pasture inspection finished.", "createdAt": "2026-10-01T13:00:00Z"]]], "events": events, "unavailableBots": []]

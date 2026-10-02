@@ -92,6 +92,46 @@ async def main():
                 break
             await asyncio.sleep(.25)
         assert receipt["status"] == "completed", receipt
+        status, results = call("routine_results", routineId=job_id)
+        assert status == 200 and results, results
+        status, output = call("routine_output", routineId=job_id, resultId=results[0]["id"])
+        assert status == 200 and output["messages"] and not output["previewOnly"], output
+        assert call("routine_output", routineId=job_id, resultId="unrelated-session")[0] == 404
+        assert call("routine_results", profile="default", routineId=job_id)[1] == [], "Routine history crossed profile scope"
+        status, search = call("search", query="synthetic")
+        assert status == 200 and search, search
+        session = search[0]["sessionId"]
+        status, history = call("history", sessionId=session, offset=0)
+        assert status == 200 and history["messages"], history
+        assert call("history", profile=profile, sessionId=session, offset=0)[0] == 404, "History crossed profile scope"
+        status, usage = call("usage", days=30)
+        assert status == 200 and usage["sessions"] > 0 and usage["actualCost"] is None, usage
+        assert call("search", query="")[0] == 400
+        checks.update(native_profile_search=True, native_history_read=True, history_profile_scope=True, native_usage_unknown_cost=True)
+        checks.update(native_routine_history=True, native_routine_output=True, routine_output_profile_scope=True)
+        group_caps = await c.call("groups.capabilities")
+        assert group_caps["protocol_version"] == 2
+        checks["native_hosted_group_capabilities"] = True
+        if group_caps["driver"]:
+            room_id = str(uuid.uuid4())
+            created = await c.call("groups.create", room_id=room_id, name="Synthetic household discussion", members=[dict(member_id=p, profile=p, handle=p) for p in ("default", "spike")])
+            assert created["room"]["room_id"] == room_id
+            event_id, thread_id = str(uuid.uuid4()), str(uuid.uuid4())
+            sent = await c.call("groups.send", room_id=room_id, event_id=event_id, payload=dict(text="Public synthetic group discussion", thread_id=thread_id))
+            repeat = await c.call("groups.send", room_id=room_id, event_id=event_id, payload=dict(text="Public synthetic group discussion", thread_id=thread_id))
+            assert sent["event"]["event_id"] == repeat["event"]["event_id"]
+            log = await c.call("groups.log", room_id=room_id, since_seq=0, limit=200)
+            assert len([e for e in log["events"] if e["kind"] == "message.user"]) == 1
+            for _ in range(80):
+                if any(e["kind"] == "message.member" for e in log["events"]):
+                    break
+                await asyncio.sleep(.25)
+                log = await c.call("groups.log", room_id=room_id, since_seq=0, limit=200)
+            assert any(e["kind"] == "message.member" and e["payload"].get("text") for e in log["events"]), "Native group coordinator never saved a member reply"
+            await c.call("groups.stop", room_id=room_id, cancel_id=str(uuid.uuid4()))
+            checks.update(native_group_create_send=True, native_group_send_deduplication=True, native_group_log=True, native_group_member_reply=True, native_group_stop=True)
+        else:
+            checks["native_hosted_group_driver_unavailable"] = True
         # Official RPC listings hide disabled jobs unless explicitly requested.
         # A paused trial must stay hidden there while remaining in the full list.
         active_jobs = (await c.call("cron.manage", profile="spike", action="list"))["jobs"]
