@@ -1,5 +1,39 @@
 # Validation ledger
 
+## October 2 app release 2d26cae
+
+PR #23 merged at `2d26caea07c2a7eb44d637ff5cd3e69d2862a404`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `2a6c12fa49203452`, from the archive with SHA256
+`3024cfded5ab0f059fdcdc10f2904a5f56309901ad19970371947584eb5aba7e`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-2d26caea-20261002T042938Z.json) records the result. Hermes remains
+at `5bba024d8ddd`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+The [authenticated app acceptance](evidence/vault-app-20261002.json) used a
+temporary session for an existing allowed member. Both installed profiles returned
+native vault metadata, memory and schedule previews. Today retained its durable
+frontier, synthetic Edge speech was recognized through the app's xAI route, and
+both canonical conversations stayed unchanged. The temporary session was removed.
+This did not submit a production password, edit a vault entry, execute a routine,
+or exercise a fresh Google browser sign-in.
+
+The public page loaded the final JS/CSS and Google sign-in button at 375×667 and
+1280×800 without horizontal overflow. Screenshots were inspected in the private
+T3 browser artifact directory. Native phone/iPad simulator evidence remains
+applicable to unchanged native inputs; signed physical-device distribution and
+actual microphone capture/audibility remain external acceptance work.
+
+The evidence follow-up covers 439 source files:
+`sha256:d2a7f742b7ba7f17fb6ae4bf8c26d8c48edfb823a475ffca2b1357edfd38202e`.
+It changes documentation and sanitized receipts only. Implementation, native and
+CI validation remains applicable to unchanged product inputs.
+
 ## October 2 external native update recovery
 
 The separately completed Hermes update left the current app at release `9273f8a`
@@ -28,7 +62,8 @@ It fences household settings, service configuration, update ownership, source
 and the untouched computer/terminal supervisors. Independent review added exact
 pending-ingress and maintenance-path checks, plus binding to the app's actual
 worker state and configuration. Uncertain recovery retains its phase for review
-and refuses replay. Production recovery and login activation are still pending.
+and refuses replay. Production recovery and login activation completed as recorded
+here and in the release section above.
 
 The frozen follow-up source covers 435 files:
 `sha256:29df91c3f8e804d6eaa1202f81773a2654264d92908e7db03afdfb88af66f3bd`.
@@ -62,8 +97,8 @@ The stopped-continuation follow-up covers 435 source files:
 `sha256:0c9aed122ad2f3c0d4282705f6b717780ca1882d9d74b4ded55324dc36ba1dbc`.
 All 16 recovery checks, syntax and whitespace checks completed. The helper SHA256
 is `17fefa55fc639dd9a97b71df49bbe496f5ce7c4602378c1a944ab7dfc76b4035`.
-Its production use remains pending merge and final review; the unchanged product
-qualification and prior application checks remain applicable.
+Independent review approved this freeze; the unchanged product qualification and
+prior application checks remain applicable.
 
 PR #22 merged at `e4a3cb32bcbdf799e9efd1a75a4ce3278f681248` after both Node
 CI jobs completed. The one-use stopped continuation installed the qualified
@@ -87,7 +122,17 @@ Its helper SHA256 is
 The staging tool replaces repeated manual uploads with exact merged Git bytes,
 hash verification and provenance in a fresh private audit directory. The native
 integration digest remains `4f150ba50f8fa34ce8e5e8bca87743ff555fa478fe0f5d768920db4176085f38`;
-successful product qualification remains applicable. Production finish is pending.
+successful product qualification remains applicable.
+
+PR #23 merged at `2d26caea07c2a7eb44d637ff5cd3e69d2862a404` after both Node
+CI jobs completed, including all 340 application checks. The merged staging tool
+verified exact helper hashes and provenance. The same operation's one-use guarded
+finish completed without service restarts or another receipt write. Its
+[sanitized recovery receipt](evidence/native-recovery-20261002.json) confirms the
+unchanged current app at that checkpoint, native repair, household settings and
+guards, original Google/fresh WebSockets, Discord and restored maintenance RPC.
+Admission cleared before the subsequent guarded login deployment. Both failed
+phases and consumed continuation markers remain in the private host audit.
 
 ## October 2 native passwords and logins
 
@@ -177,8 +222,9 @@ Nicolas confirmed a separate session completed the live native update to
 `5bba024d8ddd388f56f354c1f789be825e3d8a3c`. Its tracked diff hash is
 `50aaad61643d004d955a93a336bb1466578e0d95fd1b2b9a1b52bccda98d8acb`.
 A read-only exact-tree check proved it retains the approved repair. This branch
-does not change the native checkout. Deployment requires a fresh full receipt
-for the updated revision, repair and final application integration.
+does not change the native checkout. The deployed release uses the fresh full
+receipt for this revision, repair and final application integration, as recorded
+above.
 
 ## October 2 app release 9273f8a
 
