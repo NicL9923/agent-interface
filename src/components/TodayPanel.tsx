@@ -29,13 +29,14 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
     try { await write("/today/seen", { seenAt: overview.generatedAt, frontier: overview.frontier }, "PUT"); setReload(reload + 1); }
     catch (e) { setError((e as Error).message); }
   }
-  return <div className="today-panel"><div className="today-intro"><div><p className="eyebrow">Your household</p>
-    <h2>A little less to carry.</h2><p className="muted">See what needs you and pick up what your assistants finished.</p></div>
-    <button type="button" disabled={loading} onClick={() => { setLoading(true); setReload(reload + 1); }}>Refresh</button></div>
-    {loading && !overview && <p role="status">Checking your assistants...</p>}
-    {error && <p role="alert" className="form-error">{error} Loaded results may be out of date.</p>}
-    {overview && <><div className="today-counts" aria-label="Household activity"><span><strong>{attention.length}</strong> need you</span>
+  const files = items.filter(item => item.files.length);
+  return <div className="today-panel"><div className="today-intro">
+    {overview ? <div className="today-counts" aria-label="Household activity"><span><strong>{attention.length}</strong> need you</span>
       <span><strong>{active.length}</strong> at work</span><span><strong>{completed.length}</strong> {overview.hasMore ? "finished on this page" : "finished since your last visit"}</span></div>
+      : <p role="status" className="muted">{loading ? "Checking your assistants..." : "Today is unavailable right now."}</p>}
+    <button type="button" disabled={loading} onClick={() => { setLoading(true); setReload(reload + 1); }}>Refresh</button></div>
+    {error && <p role="alert" className="form-error">{error} Loaded results may be out of date.</p>}
+    {overview && <>
       <section className="today-section"><h3>Needs your attention</h3>{!attention.length && <p className="muted">No pending requests in the assistants we could check.</p>}
         {attention.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
           <Avatar avatar={bootstrap.bots.find(bot => bot.id === item.botId)?.avatar} name={item.botName} state={item.activity.state} size={42} />
@@ -49,15 +50,14 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
         {overview.hasMore && <p className="muted">More recorded results are waiting. Mark this page caught up to load the next page.</p>}
         <button type="button" onClick={() => void caughtUp()}>{overview.hasMore ? "Mark this page caught up" : "Mark caught up"}</button>
       </section>
-      <section className="today-section"><h3>Scheduled next</h3>{overview.upcoming?.map(row=><button className="today-row" key={row.id} onClick={()=>onOpen(row.botId,row.id)}><span className="today-row-copy"><strong>{row.name}</strong><small>{bootstrap.bots.find(bot=>bot.id===row.botId)?.name} · {new Date(row.nextRunAt!).toLocaleString()}</small></span><span>View results</span></button>)}{!overview.upcoming?.length&&<p className="muted">No upcoming run reported. View all routines in Search & saved items → Automations.</p>}</section>
-      <section className="today-section"><h3>At work</h3>{!active.length && <p className="muted">No checked assistant is working.</p>}
+      {!!overview.upcoming?.length && <section className="today-section"><h3>Scheduled next</h3>{overview.upcoming.map(row=><button className="today-row" key={row.id} onClick={()=>onOpen(row.botId,row.id)}><span className="today-row-copy"><strong>{row.name}</strong><small>{bootstrap.bots.find(bot=>bot.id===row.botId)?.name} · {new Date(row.nextRunAt!).toLocaleString()}</small></span><span aria-hidden="true">›</span></button>)}</section>}
+      {!!active.length && <section className="today-section"><h3>At work</h3>
         {active.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}><Avatar avatar={bootstrap.bots.find(bot => bot.id === item.botId)?.avatar} state={item.activity.state} name={item.botName} size={42} />
-          <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.activity.detail || stateLabels[item.activity.state]}</small></span><span aria-hidden="true">›</span></button>)}</section>
-      <section className="today-section"><h3>Recent files</h3>{items.filter(item => item.files.length).map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
-        <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.files.slice(-3).map(file => file.name).join(" · ")}</small></span><span>Open conversation</span></button>)}
-        {!items.some(item => item.files.length) && <p className="muted">Generated files and shared attachments will appear here.</p>}</section>
+          <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.activity.detail || stateLabels[item.activity.state]}</small></span><span aria-hidden="true">›</span></button>)}</section>}
+      {!!files.length && <section className="today-section"><h3>Recent files</h3>{files.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
+        <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.files.slice(-3).map(file => file.name).join(" · ")}</small></span><span aria-hidden="true">›</span></button>)}</section>}
       {overview.unavailableBots.length > 0 && <p role="status" className="capability-note">Couldn't check {overview.unavailableBots.length} assistant{overview.unavailableBots.length === 1 ? "" : "s"}. Their current activity is unknown.</p>}
-      <p className="muted today-timestamp">Checked {new Date(overview.generatedAt).toLocaleTimeString()}. Updates every 30 seconds while this screen is open.</p>
+      <p className="muted today-timestamp">Checked {new Date(overview.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · updates every 30 seconds</p>
     </>}
   </div>;
 }

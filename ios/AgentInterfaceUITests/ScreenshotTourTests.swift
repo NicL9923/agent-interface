@@ -22,6 +22,16 @@ final class ScreenshotTourTests: XCTestCase {
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
     try capture("01-home")
 
+    for (identifier, name, ready) in [
+      ("openToday", "17-today", "todayOverview"), ("openGroups", "18-group-chats", "New group"),
+      ("openDiscovery", "19-search", "Search answers, files, or a topic"),
+    ] {
+      app.buttons[identifier].tap()
+      XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 10))
+      try capture(name)
+      goToAssistantList(app)
+    }
+
     openPreferences(app)
     scrollUntilHittable(app, app.descendants(matching: .any)["sharedComputer"])
     try capture("06b-shared-computer")
@@ -86,15 +96,18 @@ final class ScreenshotTourTests: XCTestCase {
     back(app, from: "Avatar specimen")
 
     // Dark mode through the app's own theme preference, which drives preferredColorScheme.
-    let theme = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Theme")).firstMatch
-    for _ in 0..<8 {
-      if theme.exists && theme.isHittable { break }
-      app.swipeDown()
-    }
-    XCTAssertTrue(theme.isHittable)
+    // The picker's element type varies by iOS release; its label stays stable.
+    // Swiping down at the top of the sheet dismisses it, so reopen Preferences at the top instead.
+    app.buttons["Close"].tap()
+    openPreferences(app)
+    let theme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Theme")).firstMatch
+    XCTAssertTrue(theme.waitForExistence(timeout: 5) && theme.isHittable, app.debugDescription)
     theme.tap()
-    XCTAssertTrue(app.buttons["Dark"].waitForExistence(timeout: 5))
-    app.buttons["Dark"].tap()
+    let dark = app.descendants(matching: .any).matching(NSPredicate(
+      format: "label == %@ AND elementType IN %@", "Dark",
+      [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
+    XCTAssertTrue(dark.waitForExistence(timeout: 5), app.debugDescription)
+    dark.tap()
     app.buttons["Save"].tap()
     XCTAssertTrue(app.buttons["Save"].waitForExistence(timeout: 5))
     app.buttons["Close"].tap()

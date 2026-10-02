@@ -15,7 +15,8 @@ Web assistant settings load model options from the connected Hermes profile.
 The selected provider starts expanded. Search the catalog, refresh it after
 changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
-confirmation.
+confirmation. In Advanced presentation, the model button in the web and iOS composers switches
+the assistant's model from the same catalog without opening settings.
 
 Preferences > Notifications shows whether this account has notifications enabled
 on the current device. Turn the switch on or off there. A new browser asks once
@@ -110,7 +111,7 @@ device voice.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
-Starter actions fill an editable draft. Available tools determine which actions appear. They show in an empty conversation; afterward, open them with **Starters** beside Attach. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay all notifications; decisions and failures skip batching outside them. Digest notifications open Today.
+Starter actions fill an editable draft. Available tools determine which actions appear. They show in an empty conversation; afterward, open them with **Starters** beside Attach on the web or from the **+** menu on iOS. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay all notifications; decisions and failures skip batching outside them. Digest notifications open Today.
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 

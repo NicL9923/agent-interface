@@ -68,6 +68,11 @@ struct BotSection: Codable, Identifiable, Equatable {
   var name: String
   var botIds: [String]
 }
+struct AssistantGroup: Identifiable {
+  var id: String
+  var title: String
+  var bots: [Bot]
+}
 struct NotificationPreferences: Codable, Equatable { var timezone: String; var quietStart: String?; var quietEnd: String?; var batchMinutes: Int }
 struct Preferences: Codable, Equatable {
   var startPage: String?
@@ -395,3 +400,43 @@ enum ConnectionAddress {
     return URL(string: "\(url.scheme!)://\(normalizedHost)\(port.map { ":\($0)" } ?? "")")!
   }
 }
+
+extension Preferences {
+  /// Sidebar groups: each listed section, then every remaining assistant once.
+  /// Favorites lead each group, matching the web sidebar.
+  func assistantGroups(_ bots: [Bot]) -> [AssistantGroup] {
+    let favored = Set(favorites)
+    func ordered(_ group: [Bot]) -> [Bot] {
+      group.enumerated().sorted {
+        let (a, b) = (favored.contains($0.element.id), favored.contains($1.element.id))
+        return a != b ? a : $0.offset < $1.offset
+      }.map(\.element)
+    }
+    let sectioned = Set(sections.flatMap(\.botIds))
+    var groups = sections.map { section in
+      AssistantGroup(id: "section:" + section.id, title: section.name, bots: ordered(bots.filter { section.botIds.contains($0.id) }))
+    }
+    let remaining = bots.filter { !sectioned.contains($0.id) }
+    if !remaining.isEmpty || bots.isEmpty {
+      groups.append(AssistantGroup(id: "remaining", title: sections.isEmpty ? "Assistants" : "More assistants", bots: ordered(remaining)))
+    }
+    return groups
+  }
+}
+
+/// Hermes's model catalog for one profile, as `/api/models` reports it.
+struct ModelCatalog: Decodable { var providers: [ModelProviderInfo] }
+struct ModelProviderInfo: Decodable, Identifiable {
+  var id: String
+  var name: String
+  var aliases: [String]?
+  var models: [ModelInfo]
+  /// Saved assistants may name a provider by an alias Hermes still accepts.
+  func matches(_ provider: String?) -> Bool { provider == id || (provider.map { aliases?.contains($0) == true } ?? false) }
+}
+struct ModelInfo: Decodable, Identifiable {
+  var id: String
+  var name: String
+  var available: Bool
+}
+struct ModelChoice: Equatable { var provider: String; var model: String }

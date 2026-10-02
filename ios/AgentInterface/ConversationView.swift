@@ -17,10 +17,13 @@ struct ConversationView: View {
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
   @State private var nearBottom = true
+  @State private var starters: [Starter] = []
+  @State private var models: [ModelProviderInfo] = []
+  @State private var modelConfirmation: ModelChoice?
+  @State private var modelBusy = false
   @FocusState private var composerFocused: Bool
   var body: some View {
     VStack(spacing: 0) {
-      header
       if let error = store.error {
         ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(
           .bottom, 8)
@@ -36,10 +39,34 @@ struct ConversationView: View {
       .inline
     )
     .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
+      // Activity reads in the transcript; the bar keeps only the actions.
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        if !store.connected {
+          Button {
+            Task { await store.reconnect() }
+          } label: {
+            Image(systemName: "arrow.clockwise")
+          }.accessibilityLabel("Reconnect").disabled(store.sessionExpired)
+        }
+        if store.active && store.supports("stop") {
+          Button {
+            stopConfirm = true
+          } label: {
+            Image(systemName: "stop.circle")
+          }.accessibilityLabel("Stop task").disabled(actionBusy || !store.connected)
+        }
         Button(action: edit) { Image(systemName: "ellipsis.circle") }.accessibilityLabel(
           "Configure \(bot.name)")
       }
+    }
+    .task(id: bot.id + (store.scope ?? "")) { await loadStarters() }
+    .task(id: "\(bot.id):\(store.scope ?? ""):\(advanced)") { await loadModels() }
+    .confirmationDialog(
+      modelConfirmation.map { "Use \($0.model)? Hermes asks for confirmation before using this model." } ?? "",
+      isPresented: Binding(get: { modelConfirmation != nil }, set: { if !$0 { modelConfirmation = nil } }),
+      titleVisibility: .visible
+    ) {
+      Button("Use this model") { if let choice = modelConfirmation { chooseModel(choice, confirmed: true) } }
     }
     .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).environmentObject(store) }
     .fileImporter(
@@ -70,36 +97,6 @@ struct ConversationView: View {
       }
     }
   }
-  private var header: some View {
-    HStack(spacing: 12) {
-      AvatarView(
-        avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 58, name: bot.name)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(store.activity.label).font(.headline)
-        Text(
-          store.conversation?.activity.detail
-            ?? (bot.shared
-              ? "One shared conversation for your household"
-              : "Your persistent assistant conversation")
-        ).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-      }
-      Spacer(minLength: 0)
-      if !store.connected {
-        Button {
-          Task { await store.reconnect() }
-        } label: {
-          Image(systemName: "arrow.clockwise")
-        }.accessibilityLabel("Reconnect").disabled(store.sessionExpired)
-      }
-      if store.active && store.supports("stop") {
-        Button {
-          stopConfirm = true
-        } label: {
-          Image(systemName: "stop.circle")
-        }.accessibilityLabel("Stop task").disabled(actionBusy || !store.connected)
-      }
-    }.padding(.horizontal, 16).padding(.vertical, 10)
-  }
   private var transcript: some View {
     ScrollViewReader { proxy in
       ScrollView {
@@ -113,14 +110,16 @@ struct ConversationView: View {
                 .foregroundStyle(.secondary)
             }.padding(.vertical, 36).id("welcome")
           }
-          StarterActionsView(botId:bot.id)
+          if store.conversation?.messages.isEmpty == true {
+            StarterActionsView(starters: starters, add: addStarter)
+          }
           ForEach(store.conversation?.visibleMessages ?? []) { message in
             MessageView(
               message: message, advanced: store.bootstrap?.preferences.presentation == "advanced"
             )
             .id(message.id)
           }
-          if store.active { liveActivity }
+          if ![.idle, .done].contains(store.activity) { liveActivity }
           ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
             approval in approvalCard(approval)
           }
@@ -229,11 +228,20 @@ struct ConversationView: View {
       }
     }
   }
+  private var activitySentence: String {
+    switch store.activity {
+    case .blocked: "\(bot.name) needs your help"
+    case .failed: "\(bot.name)'s last task failed"
+    case .interrupted: "\(bot.name) was interrupted"
+    case .disconnected: "Connection lost. Your draft is kept."
+    default: "\(bot.name) is \(store.activity.label.lowercased())"
+    }
+  }
   private var liveActivity: some View {
     HStack(alignment: .center, spacing: 12) {
       AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 44, name: bot.name)
       VStack(alignment: .leading, spacing: 4) {
-        Text(store.activity == .blocked ? "\(bot.name) needs your help" : "\(bot.name) is \(store.activity.label.lowercased())").font(.subheadline.bold())
+        Text(activitySentence).font(.subheadline.bold())
         if let detail = store.conversation?.activity.detail, !detail.isEmpty {
           Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3)
         }
@@ -304,13 +312,21 @@ struct ConversationView: View {
       HStack(alignment: .bottom, spacing: 10) {
         Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 36, height: 44) }
           .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending)
-        Button {
-          importFiles = true
+        Menu {
+          Button("Attach image, PDF, or text file", systemImage: "paperclip") { importFiles = true }
+            .disabled(
+              store.uploading || !store.connected || !store.supports("uploads")
+                || store.draft.attachments.count >= 10)
+          if !starters.isEmpty {
+            Section("Starters") {
+              ForEach(starters) { item in Button(item.title) { addStarter(item) } }
+            }
+          }
         } label: {
-          Image(systemName: "paperclip").font(.title3).frame(width: 40, height: 44)
-        }.accessibilityLabel("Attach image, PDF, or text file").disabled(
-          !store.draftReady || store.uploading || !store.connected || !store.supports("uploads")
-            || store.draft.attachments.count >= 10)
+          Image(systemName: "plus").font(.title3).frame(width: 40, height: 44)
+        }.accessibilityLabel("Add to message").accessibilityIdentifier("composerAdd")
+          .disabled(!store.draftReady)
+        if advanced { modelMenu }
         TextField(
           store.active ? "Guide the current task…" : "Message \(bot.name)…",
           text: Binding(
@@ -359,6 +375,64 @@ struct ConversationView: View {
         Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
       }
     }.padding(12).background(.regularMaterial)
+  }
+  private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
+  /// Advanced mode's quick model switch; saves through the same assistant update as settings.
+  private var modelMenu: some View {
+    Menu {
+      if bot.shared { Text("Shared assistant: the model changes for your household.") }
+      ForEach(models) { provider in
+        Section(provider.name) {
+          ForEach(provider.models) { model in
+            Button { chooseModel(ModelChoice(provider: provider.id, model: model.id)) } label: {
+              if model.id == bot.model && provider.matches(bot.provider) { Label(model.name, systemImage: "checkmark") } else { Text(model.name) }
+            }.disabled(!model.available)
+          }
+        }
+      }
+      if models.isEmpty { Button("Load models from Hermes") { Task { await loadModels() } } }
+    } label: {
+      Image(systemName: "cpu").frame(width: 36, height: 44)
+    }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
+      // A model-only save resends the assistant's other fields, so it needs the real instructions.
+      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || modelBusy)
+  }
+  private func loadModels() async {
+    models = []
+    guard advanced, let api = store.api else { return }
+    let scope = store.scope
+    let catalog: ModelCatalog? = try? await api.get("/models?botId=\(APIClient.component(bot.id))")
+    if scope == store.scope && !Task.isCancelled { models = catalog?.providers ?? [] }
+  }
+  private func chooseModel(_ choice: ModelChoice, confirmed: Bool = false) {
+    guard let api = store.api, !modelBusy else { return }
+    var input = BotInput(bot: bot)
+    input.model = choice.model
+    input.provider = choice.provider
+    input.confirmModel = confirmed
+    modelBusy = true
+    Task {
+      defer { modelBusy = false }
+      do {
+        let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", input, method: "PATCH")
+        modelConfirmation = nil
+        await store.refreshBootstrap()
+      } catch let error as APIError where error.confirmRequired {
+        modelConfirmation = choice
+      } catch { store.report(error) }
+    }
+  }
+  private func addStarter(_ item: Starter) {
+    var next = store.draft
+    next.text += (next.text.isEmpty ? "" : "\n\n") + item.prompt
+    store.updateDraft(next)
+    composerFocused = true
+  }
+  private func loadStarters() async {
+    starters = []
+    let scope = store.scope
+    let rows: [Starter] = (try? await store.api?.get("/bots/\(APIClient.component(bot.id))/starters")) ?? []
+    if scope == store.scope && !Task.isCancelled { starters = rows }
   }
   private func approvalCard(_ approval: Approval) -> some View {
     VStack(alignment: .leading, spacing: 10) {

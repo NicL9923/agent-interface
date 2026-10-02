@@ -24,15 +24,10 @@ struct TodayView: View {
   @State private var loadId = UUID()
   var body: some View {
     List {
-      Section {
-        Text("Since you were away").font(.title2.bold())
-        Text("Recent results and events, pending decisions, and current work from your assistants.").foregroundStyle(.secondary)
-        if let value { Text("Checked \(ServerDate.parse(value.generatedAt)?.formatted(date: .omitted, time: .shortened) ?? value.generatedAt)").font(.caption).foregroundStyle(.secondary) }
-      }
       if let error { Section { ErrorBanner(message: error); Button("Retry overview") { Task { await load() } } } }
       if value == nil && error == nil { Section { ProgressView("Checking your assistants…") } }
       if let value, !value.events.isEmpty {
-        Section("Recent events") {
+        Section("Since you were away") {
           ForEach(value.events) { event in
             Button { openBot(); Task { await store.select(event.botId); if let routineId = event.routineId { store.routineResult = RoutineResultDestination(botId: event.botId, routineId: routineId) } } } label: {
               VStack(alignment: .leading, spacing: 4) {
@@ -44,10 +39,9 @@ struct TodayView: View {
           }
         }
       }
-      Section("Scheduled next") {
-        ForEach(value?.upcoming ?? []) { row in Button { openBot();Task { await store.select(row.botId);store.routineResult=RoutineResultDestination(botId:row.botId,routineId:row.id) } } label: { VStack(alignment:.leading) { Text(row.name);if let date=row.nextRunAt.flatMap(ServerDate.parse) { Text(date.formatted()).font(.caption).foregroundStyle(.secondary) } } } }
-        if value?.upcoming?.isEmpty != false { Text("No upcoming run reported.").foregroundStyle(.secondary) }
-      }
+      if let upcoming = value?.upcoming, !upcoming.isEmpty { Section("Scheduled next") {
+        ForEach(upcoming) { row in Button { openBot();Task { await store.select(row.botId);store.routineResult=RoutineResultDestination(botId:row.botId,routineId:row.id) } } label: { VStack(alignment:.leading) { Text(row.name);if let date=row.nextRunAt.flatMap(ServerDate.parse) { Text(date.formatted()).font(.caption).foregroundStyle(.secondary) } } } }
+      } }
       ForEach(value?.items ?? []) { item in
         Section {
           Button {
@@ -75,9 +69,9 @@ struct TodayView: View {
         Section {
           if value.hasMore { Text("More results are waiting. Mark this page caught up to see the next page.").font(.footnote).foregroundStyle(.secondary) }
           Button(value.hasMore ? "Mark page caught up" : "Mark caught up") { markCaughtUp(value) }.disabled(busy || !store.connected).accessibilityIdentifier("markTodaySeen")
-        }
+        } footer: { Text("Checked \(ServerDate.parse(value.generatedAt)?.formatted(date: .omitted, time: .shortened) ?? value.generatedAt)") }
       }
-    }.accessibilityIdentifier("todayOverview").navigationTitle("Today").refreshable { await load() }.onAppear { Task { await load() } }
+    }.householdListBackground().accessibilityIdentifier("todayOverview").navigationTitle("Today").refreshable { await load() }.onAppear { Task { await load() } }
       .onChange(of: store.scope) { _, _ in value = nil; Task { await load() } }
   }
   private func load() async {

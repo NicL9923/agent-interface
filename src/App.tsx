@@ -32,6 +32,7 @@ import { DiscoveryPanel, StarterActions, useStarters } from "./components/Discov
 import { ActionReceipt } from "./components/ActionReceipt";
 import "./components/discovery.css";
 import { GroupChats } from "./components/GroupChats";
+import { ComposerModelPicker } from "./components/ComposerModelPicker";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -1326,6 +1327,8 @@ export function App() {
                     <Icon name="sparkle" size={18} /><span className="tool-label">Starters</span>
                   </button>
                 )}
+                {advanced && <ComposerModelPicker bot={selected} bootstrap={boot}
+                  disabled={connectionLost || sending} onSaved={() => void refresh()} />}
                 <div className="composer-voice">
                   {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} /></span>}
                   <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}

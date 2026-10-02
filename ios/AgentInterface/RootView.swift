@@ -199,8 +199,8 @@ struct BotListView: View {
     List {
       Section {
         Button(action: openToday) { Label("Today", systemImage: "sun.max") }.accessibilityIdentifier("openToday")
-        Button(action:openDiscovery) { Label("Search & saved items",systemImage:"magnifyingglass") }.accessibilityIdentifier("openDiscovery")
-        Button(action: openGroups) { Label("Group chats", systemImage: "person.3") }.accessibilityIdentifier("openGroups")
+        Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.accessibilityIdentifier("openGroups")
+        Button(action: openDiscovery) { Label("Search & saved", systemImage: "magnifyingglass") }.accessibilityIdentifier("openDiscovery")
       }
       if let bootstrap = store.bootstrap {
         if !store.connected {
@@ -217,20 +217,16 @@ struct BotListView: View {
             }
           }
         }
-        if !bootstrap.preferences.favorites.isEmpty {
-          section("Favorites", ids: bootstrap.preferences.favorites)
-        }
-        ForEach(bootstrap.preferences.sections) { section in
-          self.section(section.name, ids: section.botIds)
-        }
-        Section("Assistants") {
-          ForEach(bootstrap.bots) { bot in row(bot) }
-          if bootstrap.bots.isEmpty {
-            Text("Create your first assistant.").foregroundStyle(.secondary)
+        ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
+          Section(group.title) {
+            ForEach(group.bots) { bot in row(bot) }
+            if group.id == "remaining" && bootstrap.bots.isEmpty {
+              Text("Create your first assistant.").foregroundStyle(.secondary)
+            }
           }
         }
       }
-    }.scrollContentBackground(.hidden).background(Palette.surface(scheme))
+    }.householdListBackground()
       .navigationTitle("Your assistants")
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -244,11 +240,6 @@ struct BotListView: View {
         }
       }
       .refreshable { await store.refreshBootstrap() }
-  }
-  @ViewBuilder private func section(_ title: String, ids: [String]) -> some View {
-    Section(title) {
-      ForEach(store.bootstrap?.bots.filter { ids.contains($0.id) } ?? []) { row($0) }
-    }
   }
   private func row(_ bot: Bot) -> some View {
     let state =
@@ -272,6 +263,10 @@ struct BotListView: View {
           }
         }
         Spacer(minLength: 0)
+        if store.bootstrap?.preferences.favorites.contains(bot.id) == true {
+          Image(systemName: "star.fill").font(.caption).foregroundStyle(Palette.accent)
+            .accessibilityLabel("Favorite")
+        }
         if bot.id == store.selectedBotId {
           Image(systemName: "checkmark").foregroundStyle(Palette.accent)
         }
@@ -321,5 +316,16 @@ struct ActivityLabel: View {
       }.frame(width: 6, height: 6)
       Text(state.label).fontWeight(.medium)
     }.font(.caption).foregroundStyle(color)
+  }
+}
+
+extension View {
+  /// Lists sit on the app's surface color, like the assistant list.
+  func householdListBackground() -> some View { modifier(HouseholdListBackground()) }
+}
+private struct HouseholdListBackground: ViewModifier {
+  @Environment(\.colorScheme) private var scheme
+  func body(content: Content) -> some View {
+    content.scrollContentBackground(.hidden).background(Palette.surface(scheme))
   }
 }

@@ -150,6 +150,24 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertFalse(app.buttons["installHermesUpdate"].exists)
     screenshot(app, "Fixture native Hermes verified")
   }
+  func testComposerAddMenuOffersStartersAndAdvancedModelSwitch() {
+    var app = app()
+    let composer = app.textFields["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
+    app.buttons["composerAdd"].tap()
+    let starter = app.buttons["Plan dinners"]
+    XCTAssertTrue(starter.waitForExistence(timeout: 5), app.debugDescription); starter.tap()
+    XCTAssertTrue((composer.value as? String)?.contains("five easy dinners") == true, app.debugDescription)
+    app.terminate()
+    app = self.app(liveActivity: true)
+    let model = app.buttons["composerModel"]
+    XCTAssertTrue(model.waitForExistence(timeout: 10)); model.tap()
+    let fast = app.buttons["Fixture fast model"]
+    XCTAssertTrue(fast.waitForExistence(timeout: 5), app.debugDescription); fast.tap()
+    expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["composerModel"])
+    waitForExpectations(timeout: 10)
+  }
   func testNativeLiveActivityShowsActualExposedDetails() {
     let app = app(liveActivity: true)
     XCTAssertTrue(app.staticTexts["Ranch hand is working"].waitForExistence(timeout: 10))

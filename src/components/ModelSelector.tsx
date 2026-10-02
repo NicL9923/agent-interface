@@ -8,8 +8,10 @@ const identity = (choice: ModelChoice) => JSON.stringify([choice.provider, choic
 const matchesProvider = (provider: ModelProvider, id: string) =>
   provider.id === id || provider.aliases?.includes(id);
 
-export function ModelSelector({ value, profile, favorites: initialFavorites, disabled, onChange, onFavoritesSaved }: {
+export function ModelSelector({ value, profile, favorites: initialFavorites, disabled, inline, onChange, onFavoritesSaved }: {
   value: ModelChoice;
+  /** Renders only the searchable list, for the composer's model popover. */
+  inline?: boolean;
   profile?: string;
   favorites: ModelChoice[];
   disabled: boolean;
@@ -89,11 +91,7 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
       </button>
     </div>;
   };
-  return <section className="model-selector" aria-labelledby={labelId}>
-    <span className="model-label" id={labelId}>Model</span>
-    <details className="model-picker">
-      <summary><span><strong>{value.model || "Choose a model"}</strong><small>{selectedName || "Connected providers"}</small></span><Icon name="chevron" size={18} /></summary>
-      <div className="model-picker-content">
+  const content = <div className="model-picker-content">
         <label className="model-search">Search models<input type="search" value={search} placeholder="Find a model or provider"
           onChange={(event) => setSearch(event.target.value)} /></label>
         {!error && !!catalog?.providers.length && <button className="model-refresh" type="button" disabled={loading}
@@ -111,7 +109,13 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
         </details>)}
         {!loading && !error && providers.length === 0 && <p className="muted">{query ? "No models match your search." : "No connected models were reported. Connect a provider in Hermes, then retry."}</p>}
         {!loading && !error && (catalog?.providers.length || 0) === 0 && <button type="button" onClick={() => setRetry((n) => n + 1)}>Retry loading models</button>}
-      </div>
+      </div>;
+  if (inline) return <section className="model-selector inline" aria-label="Choose a model">{content}</section>;
+  return <section className="model-selector" aria-labelledby={labelId}>
+    <span className="model-label" id={labelId}>Model</span>
+    <details className="model-picker">
+      <summary><span><strong>{value.model || "Choose a model"}</strong><small>{selectedName || "Connected providers"}</small></span><Icon name="chevron" size={18} /></summary>
+      {content}
     </details>
     {value.model && !loading && !error && !selectedProvider?.models.some((model) => model.id === value.model) &&
       <p className="muted model-saved-note">Your saved model is kept. Hermes did not include it in the current catalog.</p>}

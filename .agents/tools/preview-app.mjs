@@ -31,7 +31,7 @@ const previewPushKey = process.env.PREVIEW_PUSH_CONFIGURED === '1' ? Buffer.conc
 // PREVIEW_THEME=light|dark|system and PREVIEW_PRESENTATION=simple|advanced pick the initial preferences.
 const portrait = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#d9c7a3"/><circle cx="40" cy="31" r="15" fill="#6b4f3a"/><path d="M12 80c4-20 16-29 28-29s24 9 28 29Z" fill="#3f6b57"/></svg>');
 const bots = [
-  { id: 'ranch', name: 'Ranch hand', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'working', description: 'Everyday household help', avatar: { mode: 'geometric', shape: 'blob', color: '#1084FE', eyes: 'oval', accessory: 'none' } },
+  { id: 'ranch', name: 'Ranch hand', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'working', description: 'Everyday household help', instructions: 'Explicit fixture instructions.', avatar: { mode: 'geometric', shape: 'blob', color: '#1084FE', eyes: 'oval', accessory: 'none' } },
   { id: 'kitchen', name: 'Kitchen companion', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'idle', avatar: { mode: 'mascot', family: 'bear', color: '#FF9800', eyes: 'round', accessory: 'none' } },
   { id: 'garden', name: 'Garden planner', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'thinking', avatar: { mode: 'mascot', family: 'sprout', color: '#00BCA6', eyes: 'oval', accessory: 'hat' } },
   { id: 'homework', name: 'Homework helper', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'waiting', avatar: { mode: 'geometric', shape: 'hex', color: '#9159FE', eyes: 'oval', accessory: 'glasses' } },
@@ -287,6 +287,14 @@ const server = createServer(async (request, response) => {
       if (groupMatch[2] === 'log') return json(response, { events: groupEvents.filter(event => event.seq > Number(url.searchParams.get('since') || 0)), cursor: groupEvents.length, latest_seq: groupEvents.length, has_more: false });
       if (groupMatch[2]) return json(response, { cancelled: 0, approved: true });
       return json(response, { room, driver_status: { running: true, working: false, blocked: false, pending_actions: [] } });
+    }
+    const botMatch = /^\/bots\/([^/]+)$/.exec(path);
+    if (botMatch && request.method === 'PATCH') {
+      // Fixture-only: records the chosen model in memory without contacting Hermes.
+      const bot = bots.find(bot => bot.id === botMatch[1]);
+      if (!bot) return json(response, { error: 'Fixture assistant not found.' }, 404);
+      Object.assign(bot, { model: body.model, provider: body.provider });
+      return json(response, bot);
     }
     if (path === '/models') return json(response, modelCatalog);
     if (path === '/computer') return json(response, computerStatus());

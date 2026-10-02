@@ -26,7 +26,9 @@ next-run previews, and a confirmed **Try once** action.
 
 The conversation microphone records up to two minutes, transcribes on the app
 server, and opens an editable transcript before adding it to the draft. **Read
-aloud** uses the device's iOS voice with an explicit Stop control. Interactive
+aloud** uses the device's iOS voice with an explicit Stop control. The composer's **+** menu attaches files and lists starter actions; starters also
+appear as chips in an empty conversation. In Advanced presentation, the composer's
+model menu switches the assistant's model, with Hermes confirmation when required. Interactive
 reply instructions are opt-in in assistant settings. Checklists and itinerary
 notes save to the signed-in app account; calendar proposals open Apple's event
 editor for review and an explicit Save.
