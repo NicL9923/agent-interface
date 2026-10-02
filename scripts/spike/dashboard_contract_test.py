@@ -30,7 +30,13 @@ class DashboardContract(unittest.TestCase):
             events.append(("secret", secret))
             if failure == "secret": raise SystemExit("Invalid service key")
         service = types.SimpleNamespace(validate_secret=validate, install_service_auth=lambda web, secret: events.append(("service", web, secret)))
-        experience = types.SimpleNamespace(install=lambda web, journal: step("experience"))
+        server = types.ModuleType("tui_gateway.server")
+        server._history_to_messages = lambda rows, **kwargs: rows
+        gateway = types.ModuleType("tui_gateway"); gateway.server = server
+        def install_experience(web, journal, projector):
+            self.assertIs(projector, server._history_to_messages)
+            step("experience")
+        experience = types.SimpleNamespace(install=install_experience)
         vault = types.SimpleNamespace(install=lambda web, journal: step("vault"))
         integrations = types.SimpleNamespace(install=lambda web: step("integrations"))
         computer = types.SimpleNamespace(install_tools=lambda: step("computer"))
@@ -46,7 +52,7 @@ class DashboardContract(unittest.TestCase):
                 self.assertEqual(Path(path).parent, ROOT)
                 module = extension if name.endswith("extension") else experience if name.endswith("experience") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else computer if name.endswith("computer") else service
                 return importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))))
-            with patch.object(sys, "argv", argv), patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private", "HERMES_SERVE_HEADLESS": ""}), patch.dict(sys.modules, {"hermes_cli": package, "hermes_cli.main": cli, "hermes_cli.web_server": web}), patch.object(dashboard.importlib.util, "spec_from_file_location", sibling_spec):
+            with patch.object(sys, "argv", argv), patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private", "HERMES_SERVE_HEADLESS": ""}), patch.dict(sys.modules, {"hermes_cli": package, "hermes_cli.main": cli, "hermes_cli.web_server": web, "tui_gateway": gateway, "tui_gateway.server": server}), patch.object(dashboard.importlib.util, "spec_from_file_location", sibling_spec):
                 if failure in ("extension", "experience", "integrations", "vault"):
                     with self.assertRaises(RuntimeError): dashboard.main()
                 else: dashboard.main()
@@ -55,6 +61,13 @@ class DashboardContract(unittest.TestCase):
     def test_original_cli_receives_unchanged_dashboard_arguments_after_install(self):
         events, argv, web = self.exercise()
         self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "vault", "integrations", ("service", web, "private"), ("cli", argv)])
+
+    def test_missing_renderer_fails_before_route_installation(self):
+        experience = load("experience")
+        with self.assertRaises(TypeError):
+            experience.install(None, None)
+        with self.assertRaisesRegex(TypeError, "Native history renderer is required"):
+            experience.install(None, None, None)
 
     def test_source_or_key_failure_preserves_native_dashboard_without_installing_hooks(self):
         for failure in ["qualify", "secret"]:

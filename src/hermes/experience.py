@@ -475,7 +475,9 @@ def discovery(data, journal, projector):
     return {"botId": profile, "sessionId": value["session_id"], "messages": rows, "offset": offset, "hasMore": len(raw) == 100}
 
 
-def install(web, journal, projector=None):
+def install(web, journal, projector):
+    if not callable(projector):
+        raise TypeError("Native history renderer is required before installing experience routes.")
     from fastapi import Request
     from starlette.responses import JSONResponse
     from hermes_cli.web_routers._common import config_scoped_to_thread

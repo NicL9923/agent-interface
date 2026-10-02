@@ -36,9 +36,10 @@ def main():
     from hermes_cli import main as cli
     if qualified:
         import hermes_cli.web_server as web
+        from tui_gateway import server
         sibling("computer").install_tools()
         journal = extension.install()
-        sibling("experience").install(web, journal)
+        sibling("experience").install(web, journal, server._history_to_messages)
         sibling("vault").install(web, journal)
         sibling("integrations").install(web)
         service.install_service_auth(web, secret)
