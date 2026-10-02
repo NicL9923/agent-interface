@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-02T02:00:29.699Z",
+  "checks": {
+    "desktop_browser_and_terminal_ready": true,
+    "authenticated_native_rfb_stream": true,
+    "explicit_takeover_and_handback": true,
+    "app_terminal_real_shell_and_resize": true,
+    "app_terminal_detach_reconnect_preserves_shell": true,
+    "app_terminal_explicit_end": true
+  }
+}

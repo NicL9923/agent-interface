@@ -1,5 +1,50 @@
 # Validation ledger
 
+## October 2 app release b191747
+
+PR #15 merged at `b191747771e3eb29691549c422f88956f97dcd68`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `a5279f6bae696ddc`, from the archive with SHA256
+`3fb8789e56999012a3baf135b62501547c11ed29bde2f73bf72b87576b212631`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-b1917477-20261002T015855Z.json) records the result. Hermes remains
+at `d23cc6b06455`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+Full staged qualification used the exact merged integration inputs in a disposable
+repaired d23 checkout and independent PM generation. The nine
+[archived probe receipts](evidence/managed-shared-computer-d23-20261002T015434Z/manifest.json)
+include the mandatory native computer checks. All 18 private shared-OAuth/Google
+regressions completed. The qualification digest is
+`c2306c2a41bdea9fd15b68e26c89cdda8cf52600a87e1c2aaf480b420756277b`.
+The raw qualification directory remains private and retained for future audit;
+the public archive redacts its disposable HOME.
+
+After guarded activation, the final `hermes-computer` and
+`agent-interface-terminal` user units were enabled and started. Both are independent
+of the app unit. Actual checks confirmed all five app/Hermes/computer/terminal
+services active, Caddy and WireGuard active, a loopback-only Chrome endpoint,
+no TCP VNC listener, and the tmux foreground server's `exit-empty off` state.
+
+The [authenticated app acceptance](evidence/shared-computer-app-20261002.json)
+used a temporary session for an existing allowed household member, then deleted it.
+Through actual app routes it verified native RFB streaming, takeover/handback,
+a real resized system shell, preserved exported shell state after detach/reconnect,
+and explicit end. It refused to touch an existing human shell or control lease.
+This host acceptance did not exercise a fresh Google browser sign-in.
+
+The public production page rendered at 375×667 and 1280×800 without horizontal
+overflow, loading the final JS/CSS and its Google button. T3 screenshot capture
+recovered on the production page. No physical iOS distribution was performed.
+
+Follow-up source fingerprint, 342 files: `sha256:f62c365dd59ff3514a7399c07ec7fdaba6c73394636fafbf4cb009a4e834748e`.
+This follow-up changes documentation and evidence only, so the implementation's
+application, native and CI checks remain applicable.
+
 ## October 2 shared computer and system terminal
 
 Branch `t3code/hermes-shared-browser-console`, based on latest main
