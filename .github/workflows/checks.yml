@@ -58,5 +58,7 @@ jobs:
           python3 tests/system_terminal_test.py
       - name: Check managed dependency fingerprints
         run: python3 scripts/hermes-qualified-python-test.py
-      - name: Check release wrapper rules
-        run: python3 tests/release_app_test.py
+      - name: Check release and native recovery rules
+        run: |
+          python3 tests/release_app_test.py
+          python3 tests/recovery_app_test.py

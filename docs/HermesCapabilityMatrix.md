@@ -25,6 +25,16 @@ the UI marks activity unknown and preserves the loaded conversation and draft.
 
 The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, attribution, and event discovery through `agent-interface.capabilities/open/submit/receipt/discover`. Its private SQLite journal lives at `HERMES_HOME/runtime/agent-interface.db`. It writes no Hermes database rows. The adapter enables mutations only after the add-on reports a qualified revision. A native gateway without that contract stays unavailable with an explanation.
 
+Updating Hermes outside the app can invalidate the running app's receipt. A native
+dashboard restart then preserves the official interface while disabling the
+unqualified add-on, including its private maintenance route. Installer recovery
+first qualifies the unchanged current app against the installed native source.
+The [recovery tool](../.agents/tools/recover-app-after-native-update.py) uses native
+Google retirement and an owned gateway drain to replace that receipt and restart
+both native services under a persistent lease. Existing guards and household
+settings stay intact. A normal guarded app release follows only after recovery
+verifies the restored maintenance route.
+
 Native `prompt.submit` supplies a durable `user_row_id` but no durable client request key. The add-on writes a FULL-synchronous receipt before calling native admission, compares retries against the original input and actor, and never automatically replays an uncertain submission. Each independent task has a distinct root request ID. Steering receipts join that root and bind to the actual canonical user row once native Hermes persists it. Sender attribution does not alter the message body or forge protected Hermes author metadata.
 
 Native `message.complete` ends one turn before queued guidance or goal continuation drains. The add-on settles a task after native followups, updates only that root, and rejects a new independent admission during the small finalization interval. That rejection preserves the draft. Its keeper transport retains the native owner when every app connection closes.
