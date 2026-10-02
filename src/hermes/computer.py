@@ -15,6 +15,7 @@ import secrets
 import re
 import subprocess
 import time
+import threading
 from urllib.parse import urlsplit
 import urllib.request
 
@@ -168,6 +169,7 @@ class Computer:
         self.runtime = runtime
         self.lease = lease
         self.state = self.home / "bot-desktop"
+        self._operation = threading.local()
 
     def _private_dir(self):
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -193,7 +195,7 @@ class Computer:
                         raise ComputerError("The household computer is busy. Try again after the current action finishes.")
                     time.sleep(.025)
             try:
-                yield
+                yield fd
             finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
@@ -342,24 +344,66 @@ class Computer:
                 (self.state / "computer-human.json").unlink(missing_ok=True)
         return self.status(params)
 
+    def _check_bot_admission(self):
+        self._recovery_required()
+        self.lease.assert_agent_may_act(profile_key=str(self.home))
+        maintenance = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE", "")
+        if maintenance and Path(maintenance).exists():
+            raise ComputerError("Hermes is being upgraded. The household computer is paused.")
+
+    def _clear_activity(self, owner):
+        if self._read("computer-active.json", {}).get("operationId") == owner["operationId"]:
+            (self.state / "computer-active.json").unlink(missing_ok=True)
+
+    @contextlib.contextmanager
+    def suspend_for_prompt(self):
+        """Yield only an admitted tool's lock during a native human prompt wait."""
+        import fcntl
+        active = getattr(self._operation, "active", None)
+        if active is None:
+            yield
+            return
+        fd, owner = active
+        lease_epoch = self._lease().epoch
+        self._operation.active = None
+        self._clear_activity(owner)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        try:
+            yield
+        finally:
+            # Always reacquire before the surrounding tool can unwind or act.
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise ComputerError("The household computer is busy. Retry after its current action finishes.")
+                    time.sleep(.025)
+            self._check_bot_admission()
+            if self._lease().epoch != lease_epoch:
+                raise ComputerError("Control changed while Hermes waited for secure input. Review the page before retrying.")
+            self._write("computer-active.json", owner)
+            self._operation.active = active
+
     @contextlib.contextmanager
     def bot_operation(self, name):
-        with self.operation():
+        with self.operation() as fd:
             pending = self._read("computer-recovery.json", None)
             if pending is not None:
                 self.recover_harness(pending)
-            self._recovery_required()
-            self.lease.assert_agent_may_act(profile_key=str(self.home))
-            maintenance = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE", "")
-            if maintenance and Path(maintenance).exists():
-                raise ComputerError("Hermes is being upgraded. The household computer is paused.")
+            self._check_bot_admission()
             with resource_scope(self.home):
                 self.runtime.start()
-            self._write("computer-active.json", {"name": name})
+            owner = {"name": name, "operationId": secrets.token_hex(16)}
+            self._write("computer-active.json", owner)
+            self._operation.active = (fd, owner)
             try:
                 yield
             finally:
-                (self.state / "computer-active.json").unlink(missing_ok=True)
+                self._operation.active = None
+                self._clear_activity(owner)
 
 
 def install_tools():
@@ -520,6 +564,14 @@ def install(server):
     server.register_method("agent-interface.computer", request)
     if computer is None:
         return
+    native_ask = server._ask
+    @functools.wraps(native_ask)
+    def ask(method, sid, params, timeout=300):
+        if method not in ("vault.save_login", "vault.code", "vault.unlock_prompt", "secret"):
+            return native_ask(method, sid, params, timeout=timeout)
+        with computer.suspend_for_prompt():
+            return native_ask(method, sid, params, timeout=timeout)
+    server._ask = ask
     # Official display viewers must receive the same home in their native tickets.
     # Unwrap the qualified profile decorator only for display resource operations.
     for name, handler in list(server._methods.items()):

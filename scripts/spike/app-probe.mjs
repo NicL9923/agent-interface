@@ -60,6 +60,7 @@ const scopeFiles = [
   ...readdirSync("src/server").filter(name => name.endsWith(".ts"))
     .map(name => `src/server/${name}`),
   "src/hermes/experience.py",
+  "src/hermes/vault.py", "src/shared/vault.ts",
   "src/shared/experience.ts",
   "src/shared/reply-cards.ts",
   "src/shared/routine-presets.ts",

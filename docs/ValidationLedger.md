@@ -1,5 +1,123 @@
 # Validation ledger
 
+## October 2 native passwords and logins
+
+Branch `feature/native-vault-logins` starts from merged PR #19, `9273f8a`.
+Final full source fingerprint, 411 files:
+`sha256:120333f4f2b140773881571120cd198931dd2ee601b94eacf2d5b111bac09c5c`.
+Independent GPT-6.1 Sol high review approved this exact source with no unresolved
+findings.
+The implementation follows Hermes profile ownership and the existing household
+access model. Local login secrets stay in the native encrypted vault; named API
+secrets retain Hermes's separate environment store. The app exposes metadata and
+finite source controls without a password reveal or chat-based credential path.
+
+The complete application run covered 338 checks, with one outdated settings-tab
+count corrected for the added Logins destination. Its ten settings checks then
+completed. Independent review found a pending-submission reopening race; the
+new regression and all 19 affected vault/conversation checks completed after
+registering the volatile binding before transport dispatch. Unchanged successful
+checks are reused. Typecheck and production build completed on the final web
+inputs, web build `2a6c12fa49203452`. Web component fingerprint, six inputs:
+`sha256:41c5fe9af08cf12ac7b28430c38e79ab6e7e5d99f8558ada4b5ca356d7d88a00`.
+
+T3 browser interaction exercised inline synthetic login capture, saved metadata,
+local removal confirmation, external source lock/unlock controls, and uncertain
+settlement with cleared fields and disabled submission. Desktop 1280×1000 and
+phone 390×844 layouts had no document or dialog horizontal overflow. A new
+secure request scrolls its exact website into view before entry. The
+[desktop review](evidence/vault-web-desktop-review.png) and
+[phone review](evidence/vault-web-phone-review.png) contain explicit transport
+fixtures, not real account passwords or external-manager acceptance.
+
+The final compiled native fingerprint covers 37 inputs:
+`sha256:2921a5814c6b457f8193ec19e4ae0800146b3ec7b78ac88f80abe2a01f920a55`.
+Ten focused unit checks and the three vault/inline/background simulator flows
+completed on phone and iPad. Later changes reused unaffected results and repeated
+the affected uncertainty checks on both devices, asserting disabled fields.
+Review's cancelled-add case uses a fixture that saves before reporting transport
+cancellation; both devices verify cleared fields, disabled Save and a refreshed
+list showing the already stored login. The unchanged management regression also
+completed on both. One initial iPad test could not inspect its virtualized Save
+row until scrolling; the scoped test was corrected and the affected flow repeated.
+[Native fixture reviews](../ios/Parity.md) distinguish these controls from real
+password-manager sessions and signed physical-device distribution.
+
+All 58 Python Hermes contract checks and 65 focused Node checks completed on the
+backend's frozen inputs, fingerprinted in the
+[native input manifest](evidence/native-vault-inputs-20261002.json).
+Backend fingerprint, 59 inputs:
+`sha256:1788260309647c51bff439233442c563ed5f18cb6aefd6656f8d38315505c955`.
+The integration digest is
+`4f150ba50f8fa34ce8e5e8bca87743ff555fa478fe0f5d768920db4176085f38`.
+CI initially found the dashboard startup fixture did not stub the new vault hook.
+The corrected fixture now covers failed vault installation as well; all five
+startup checks and three qualification-boundary checks completed. Vault contract
+checks are included in CI alongside native memory ownership.
+The release wrapper completed 18 checks. The unchanged installer's approved-tree
+provenance suite completed 34 checks with one skipped test. The release qualifier
+now reuses that provenance proof so upstream changes to diff headers cannot be
+mistaken for a changed repair. It still reconstructs the exact tracked source in
+an isolated checkout and checks live source continuity before issuing a receipt.
+The installed native Chromium executable and its registry are read-only inputs,
+fingerprinted before and after qualification; only disposable browser homes and
+ports are used.
+
+During a manual native fixture setup, an early native import latched the live
+profile root before the marked test HOME was applied. The two uniquely named
+synthetic profiles were removed. Before/after household profile hashes matched
+and all five services remained active. The probe now checks native root and
+profile directory resolution before creating profiles, and fixture launch applies
+HOME before native imports. This failed setup is not acceptance evidence.
+
+The [protected d23 native Google-gated service probe](evidence/native-vault-d23-20261002.json) completed 21 checks, including
+an actual deterministic model-wire task invoking native `browser_vault_save_login`,
+a locally owned secure prompt, scoped HTTP settlement and actual CDP password
+filling on a synthetic page. A second real task took and released human control
+during the wait and could neither save nor fill credentials afterwards. Model
+requests, canonical history and event frames stayed canary-free. Native file and
+terminal tools produced an explicit redaction marker for a newly saved named
+secret, while the other profile retained separate redactor and environment state.
+The native browser also refused an actual mid-fill navigation, leaving the new
+page's password field empty. The final merged release must repeat this proof
+against its own qualified source.
+
+Nicolas confirmed a separate session completed the live native update to
+`5bba024d8ddd388f56f354c1f789be825e3d8a3c`. Its tracked diff hash is
+`50aaad61643d004d955a93a336bb1466578e0d95fd1b2b9a1b52bccda98d8acb`.
+A read-only exact-tree check proved it retains the approved repair. This branch
+does not change the native checkout. Deployment requires a fresh full receipt
+for the updated revision, repair and final application integration.
+
+## October 2 app release 9273f8a
+
+PR #19 merged at `9273f8a00a691b43892a019ebb9910b80009c275`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `fb52f56f6b997241`, from the archive with SHA256
+`e00d37d1badcfa982a85dca356d8b3811ccdff7ccaead67504da7f52a3160f30`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-9273f8a0-20261002T032132Z.json) records the result. Hermes remains
+at `d23cc6b06455`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+The full disposable qualification produced ten
+[archived native and app receipts](evidence/household-d23-20261002T032132Z/manifest.json)
+and completed all 18 private shared-OAuth/Google regressions. Its integration
+digest was `3d0359d2cae0b100917202e55606c4643f50460a1cd8a72a83714f0c938db809`.
+The public archive redacts the disposable qualification directory, including its
+separate source checkout and runtime homes.
+
+After activation, the [authenticated app acceptance](evidence/household-app-20261002.json)
+checked Today, native memory and schedule previews on both installed profiles.
+Synthetic Edge speech was recognized through the deployed app's xAI transcription
+route. Both canonical conversations stayed unchanged, and the temporary allowed
+member session was removed. This did not exercise physical microphone capture,
+device audibility, a calendar Save or a fresh Google browser sign-in.
+
 ## October 2 app release b191747
 
 PR #15 merged at `b191747771e3eb29691549c422f88956f97dcd68`. The release is live at `https://agentui.wildflowersranch.com`,

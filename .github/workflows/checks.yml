@@ -40,8 +40,10 @@ jobs:
         run: python3 scripts/spike/qualification_contract_test.py
       - name: Check integration authorization and file boundaries
         run: python3 tests/hermes_integrations_test.py
-      - name: Check native memory and manual routine ownership
-        run: python3 tests/hermes_experience_test.py
+      - name: Check native memory, vault and manual routine ownership
+        run: |
+          python3 tests/hermes_experience_test.py
+          python3 tests/hermes_vault_test.py
       - name: Check upgrade and recovery control plane
         run: python3 scripts/hermes-upgrade-worker-test.py
       - name: Check Linux upgrade hooks

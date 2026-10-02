@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 REMOTE = r'''
-import datetime, importlib.util, uuid
+import datetime, importlib.util, types, uuid
 base = Path(PAYLOAD["appBase"])
 release = Path(PAYLOAD["release"])
 ops = Path(PAYLOAD["operationDir"])
@@ -34,8 +34,20 @@ def snapshot(path):
     return revision, hashlib.sha256(diff).hexdigest()
 
 baseline = snapshot(live)
-assert baseline == (PAYLOAD["hermesRevision"], worker["requiredPatchSha256"])
-host_files = {p: sha(p) for p in {str(worker_path), str(runner), *worker["qualificationFiles"]}}
+assert baseline[0] == PAYLOAD["hermesRevision"]
+# An upstream update can change diff headers while preserving the exact approved
+# repaired tree. Reuse the installer's provenance check, then reconstruct that
+# tree in the disposable checkout and compare its actual revision/diff below.
+repair_worker = runpy.run_path(str(release / "scripts/hermes-upgrade-worker.py"))
+repair_owner = types.SimpleNamespace(config=worker, source=live, environment=dict(os.environ))
+repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
+    subprocess.check_output(["git", "-C", str(live), "diff", "HEAD", "--binary"]))
+browser_facts = home / "tools/facts.json"
+browser_template = json.loads(browser_facts.read_text())["packages"]["chromium"]["env"]["AGENT_BROWSER_EXECUTABLE_PATH"]
+browser = Path(browser_template.replace("{{store}}", str(home / "tools"))).resolve()
+assert "{{" not in str(browser) and browser.is_relative_to((home / "tools").resolve())
+assert browser.is_file() and os.access(browser, os.X_OK)
+host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
 qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
 digest = qualification["integration_digest"](release)
 operation = str(uuid.uuid4())
@@ -47,7 +59,7 @@ source = stage / "source"
 fixture_home = stage / "host-home"
 fixture_home.mkdir(mode=0o700)
 env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if k in os.environ}
-env.update(HOME=str(fixture_home), PYTHONDONTWRITEBYTECODE="1", PATH=str(Path(PAYLOAD["node"]).parent) + ":" + env.get("PATH", "/usr/bin:/bin"))
+env.update(HOME=str(fixture_home), PYTHONDONTWRITEBYTECODE="1", AGENT_BROWSER_EXECUTABLE_PATH=str(browser), PATH=str(Path(PAYLOAD["node"]).parent) + ":" + env.get("PATH", "/usr/bin:/bin"))
 
 def run(argv, name, environment=None, capture=False, cwd=release):
     with (stage / name).open("w") as output:
@@ -101,7 +113,7 @@ receipt_path = stage / "qualification.json"
 receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
 qualification["read_receipt"](receipt_path, release)
 finish(dict(qualificationComplete=True, receipt=str(receipt_path), integrationDigest=digest,
-    revision=baseline[0], trackedPatchSha256=baseline[1], productionSourceUnchanged=True))
+    revision=baseline[0], trackedPatchSha256=baseline[1], browserExecutableSha256=host_files[str(browser)], productionSourceUnchanged=True))
 '''
 
 

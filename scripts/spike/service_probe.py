@@ -21,6 +21,12 @@ home = Path(tempfile.mkdtemp(prefix="agent-interface-service-probe-"))
 (home / "config.yaml").write_text("dashboard:\n  public_url: https://fixture.example.test\n")
 os.environ["HERMES_HOME"] = str(home)
 os.environ["HERMES_SKIP_UPDATE_CHECK"] = "1"
+# Set the complete process identity before any native web/gateway imports.
+# A PM bootstrap may already have pinned its launch identity; explicitly use
+# the native embedding seam for this entirely disposable fixture process.
+from hermes_constants import pin_process_hermes_home, set_hermes_home_override
+pin_process_hermes_home(home)
+set_hermes_home_override(str(home))
 sys.path.insert(0, str(REPO / "src/hermes"))
 
 from fastapi.testclient import TestClient
@@ -50,12 +56,18 @@ class VerifiedGoogleFixture(DashboardAuthProvider):
     def revoke_session(self, *, refresh_token): pass
 
 
+from hermes_constants import get_hermes_home, get_default_hermes_root, get_process_hermes_home
+assert get_hermes_home().resolve() == home.resolve(), "Native fixture home escaped its marker"
+assert get_process_hermes_home().resolve() == home.resolve(), "Native fixture process home escaped its marker"
+assert get_default_hermes_root().resolve() == home.resolve(), "Native fixture profile root escaped its marker"
 revision, patch = source_state()
 clear_providers(); register_provider(VerifiedGoogleFixture())
 web.app.state.auth_required = True
 web.app.state.bound_host = "127.0.0.1"
 web.app.state.trusted_public_hosts = frozenset({"fixture.example.test", "127.0.0.1"})
-install()
+journal = install()
+from vault import install as install_vault
+install_vault(web, journal)
 install_service_auth(web, secret)
 client = TestClient(web.app, base_url="http://127.0.0.1", client=("127.0.0.1", 40000))
 headers = {"Authorization": "Bearer " + secret}
@@ -102,6 +114,9 @@ assert client.get(PREFIX + "audio/voice-config", headers=headers).status_code ==
 assert client.post(PREFIX + "audio/voice-config", headers=headers, json={}).status_code == 404
 assert client.post(PREFIX + "audio/transcribe/extra", headers=headers, json={}).status_code == 404
 checks["finite_native_voice_bridge_without_secret_configuration"] = True
+
+from vault_probe import exercise
+checks.update(exercise(client, headers, journal))
 
 response = client.post(TICKET_PATH, headers=headers)
 assert response.status_code == 200 and response.headers["cache-control"] == "no-store"

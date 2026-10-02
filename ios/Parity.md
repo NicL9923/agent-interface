@@ -33,6 +33,7 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | --- | --- | --- |
 | Today overview | Recent canonical events and date-filtered replies, pending decisions, live status and files, per-assistant read failure, canonical conversation links, explicit account-level Mark caught up acknowledges the exact returned ingestion frontier, with page-by-page catch-up for queued results | Native recency tests reject old and undated summaries; phone and iPad fixture UI exercised recent event/reply and conversation navigation; affected native unit and phone UI checks verified exact snapshot acknowledgment, queued pages, and late imported events dated before the prior recap marker |
 | Hermes memory | Exact Hermes profile scope and ownership labels, entry editing and forgetting with explicit document save, revision conflicts preserved across unsaved documents | Native cross-document CAS regression; phone and iPad fixture read, forget and save flow; production writes require the qualified Hermes add-on |
+| Passwords and logins | Native Hermes profile vault metadata, masked add form, confirmed local removal, installed external source controls; inline login, code, unlock and named-secret requests bound to the current native owner; ephemeral fields clear on submit/background/dismissal, uncertain requests become read-only with explicit refresh | Ten focused unit checks; phone and iPad fixture management, secure request and background clearing flows; final uncertainty checks on both devices assert disabled fields and no replay. Real native storage and browser guards are recorded separately in the main ledger |
 | Voice messages and replies | Explicit microphone permission, two-minute AAC recording, authenticated 8 MB transcription bound, editable transcript before adding to draft, draft remains unsent, recording stops on dismissal/background; Read aloud and Stop use the device's iOS voice and omit interactive JSON | Native multipart/authentication/bound tests; phone and iPad voice review sheet, phone simulated iOS speech start/Stop controls; real microphone audio and provider transcription remain external acceptance |
 | Interactive reply cards | Opt-in editable assistant instructions; strict agent-ui v1 cards; per-account saved checklist choices and itinerary notes; rejected blocks remain readable code; calendar proposals open Apple's event editor for review and explicit Save | Native invalid URL/date/schema/duplicate-ID parsing tests; phone and iPad saved checklist UI; physical calendar Save remains external acceptance |
 | Connection onboarding | Pasted/bare HTTPS address, origin normalization, compatibility check, retry, change server | Simulator address validation; native origin/PKCE contract tests |
@@ -68,6 +69,16 @@ shows page acknowledgment and a late imported result that predates the prior rec
 marker. They validate native controls, not real Hermes execution or audio
 provider output. The earlier [native activity screenshot](evidence/native-live-activity-fixture.png)
 records the conversation before these additions.
+
+The [passwords and logins phone review](evidence/native-vault-phone-review.png),
+[iPad inline request review](evidence/native-vault-ipad-inline-review.png) and
+[iPad management review](evidence/native-vault-ipad-detail-review.png) use synthetic
+Debug-only fixtures. They show masked entry, native profile ownership, source
+controls and cleared, read-only recovery after an uncertain answer. They do not
+establish an actual external password-manager unlock or physical-device behavior.
+The [cancelled login-save review](evidence/native-vault-add-cancel-phone-review.png)
+shows a fixture that saves before losing its response: the form clears and blocks
+another Save, then dismissal refreshes metadata to reveal the stored login.
 
 ## External acceptance
 

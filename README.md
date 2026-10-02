@@ -117,6 +117,12 @@ previews in the actual Hermes timezone, and **Try once** with durable run
 receipts. See the [household experience guide](docs/HouseholdExperience.md) for
 controls, supported reply cards, voice requirements and recovery behavior.
 
+Assistant settings > **Logins** manages the selected Hermes profile's encrypted
+login vault. Native login, code, vault-unlock and secret requests appear inline
+with masked fields, outside chat and drafts. Ownership and source controls follow
+Hermes. See [passwords and logins](docs/PasswordsAndLogins.md) for storage scope,
+external password managers and uncertain-request recovery.
+
 ## Hermes updates and activity
 
 Open the connection status in the web sidebar, or Hermes updates in iOS

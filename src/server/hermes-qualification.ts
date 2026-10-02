@@ -4,6 +4,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const integrationFiles = [
+  "src/hermes/vault.py", "src/server/vault.ts", "src/shared/vault.ts", "scripts/spike/vault_probe.py",
   "src/hermes/experience.py", "src/server/store.ts", "src/server/experience.ts", "src/server/voice.ts",
   "src/shared/experience.ts", "src/shared/reply-cards.ts", "src/shared/routine-presets.ts", "src/shared/voice.ts",
   "scripts/spike/experience_probe.py",

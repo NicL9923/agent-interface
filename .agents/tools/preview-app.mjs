@@ -87,6 +87,30 @@ const fixtureCards = { version: 1, cards: [
 ranchMessages.push({ id: 'fixture-cards', role: 'assistant', createdAt: at(23), text: 'These are explicit preview fixtures for groceries, trip notes and a calendar proposal. No purchases, bookings or calendar events were created.\n\n```agent-ui\n' + JSON.stringify(fixtureCards) + '\n```' });
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const vaults = new Map();
+const vaultFor = botId => {
+  if (!vaults.has(botId)) vaults.set(botId, { botId, profile: botId, scope: 'profile', owner: 'Hermes',
+    notice: 'Explicit preview fixture. Native profiles define access; this preview never stores real credentials or contacts Hermes.',
+    items: [{ id: 'fixture-login', kind: 'login', label: 'Ranch supply account', origin: 'https://supply.example.invalid', createdAt: at(1), identifier: 'ranch@example.invalid', identifierType: 'email', hasOtp: false, backend: 'local', canRemove: true }],
+    sources: [
+      { name: 'local', displayName: 'Hermes encrypted vault', enabled: true, needsUnlock: false, unlocked: true, installed: true, canToggle: false, canUnlock: false, canLock: false },
+      { name: 'onepassword', displayName: '1Password', enabled: true, needsUnlock: true, unlocked: false, installed: true, canToggle: true, canUnlock: true, canLock: false },
+      { name: 'bitwarden', displayName: 'Bitwarden', enabled: false, needsUnlock: true, unlocked: false, installed: false, canToggle: false, canUnlock: false, canLock: false },
+    ] });
+  return vaults.get(botId);
+};
+if (process.env.PREVIEW_SECURE_REQUEST) {
+  const method = { login: 'vault.save_login', code: 'vault.code', unlock: 'vault.unlock_prompt', secret: 'secret' }[process.env.PREVIEW_SECURE_REQUEST] || 'vault.save_login';
+  const metadata = method === 'vault.save_login' ? { origin: 'https://accounts.example.invalid', site: 'accounts.example.invalid' }
+    : method === 'vault.code' ? { site: 'accounts.example.invalid', hint: 'Explicit authenticator fixture' }
+    : method === 'vault.unlock_prompt' ? { backend: 'onepassword', displayName: '1Password' }
+    : { envVar: 'EXAMPLE_API_KEY', prompt: 'Enter a synthetic API key for this fixture.' };
+  conversations.ranch.activity = { state: 'blocked', detail: 'Waiting for secure native input. Explicit preview fixture.' };
+  conversations.ranch.approvals = [];
+  conversations.ranch.attention = [{ id: 'fixture-secure-request', kind: 'secure', title: method === 'vault.save_login' ? 'Save a login for accounts.example.invalid' : 'Hermes needs secure input',
+    detail: 'Explicit preview fixture. Use made-up credentials; no website login or native vault change occurs.',
+    secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method, ...metadata } }];
+}
 const memories = new Map();
 const memoryFor = botId => {
   if (!memories.has(botId)) memories.set(botId, { botId, profile: botId, scope: 'profile', owner: 'Hermes',
@@ -158,7 +182,7 @@ const server = createServer(async (request, response) => {
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
     if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
-    const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/voice\/|\/cards\/|^\/routines\//.test(path);
+    const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
     if (experiencePath && !signedIn) return json(response, { error: 'Sign in to use the preview fixture.' }, 401);
     if (path === '/today/seen') { todaySeen.set(fixtureUser, { seenAt: body.seenAt, frontier: Number(body.frontier) }); return json(response, { ok: true }); }
     if (path === '/today') {
@@ -167,6 +191,32 @@ const server = createServer(async (request, response) => {
       return json(response, { generatedAt: new Date().toISOString(), since, frontier: String(fixtureEvents.length), hasMore: false, unavailableBots: [], events: fixtureEvents.filter((_, index) => index + 1 > (marker?.frontier || 0)),
         items: bots.map(bot => { const conversation = conversationFor(bot.id); return { botId: bot.id, botName: bot.name, activity: conversation.activity,
           approvals: conversation.approvals || [], attention: conversation.attention || [], files: conversation.files || [], latestMessage: conversation.messages.findLast(message => message.role === 'assistant') }; }) });
+    }
+    const vaultMatch = /^\/bots\/([^/]+)\/vault(?:\/(logins|sources)(?:\/([^/]+)(?:\/(unlock|lock))?)?)?$/.exec(path);
+    if (vaultMatch) {
+      const [, encoded, group, itemId, operation] = vaultMatch, vault = vaultFor(decodeURIComponent(encoded));
+      if (request.method === 'GET') return json(response, vault);
+      if (group === 'logins' && request.method === 'POST') {
+        if (!body.password || !body.identifier || !body.origin) return json(response, { error: 'Enter synthetic login details.' }, 400);
+        const id = 'fixture-' + randomUUID();
+        vault.items.push({ id, kind: 'login', label: body.label, origin: body.origin, identifier: body.identifier, identifierType: body.identifierType, createdAt: new Date().toISOString(), hasOtp: false, backend: 'local', canRemove: true });
+        return json(response, { id });
+      }
+      if (group === 'logins' && request.method === 'DELETE') { vault.items = vault.items.filter(item => item.id !== itemId); return json(response, { removed: true }); }
+      const source = vault.sources.find(source => source.name === itemId);
+      if (!source || !source.installed) return json(response, { error: 'Fixture source unavailable.' }, 409);
+      if (operation) { source.unlocked = operation === 'unlock'; source.canLock = source.unlocked; source.canUnlock = !source.unlocked && source.enabled; }
+      else { source.enabled = body.enabled === true; source.canUnlock = source.enabled && !source.unlocked; }
+      return json(response, { ok: true });
+    }
+    const secureMatch = /^\/bots\/([^/]+)\/secure-requests\/([^/]+)$/.exec(path);
+    if (secureMatch) {
+      const botId = decodeURIComponent(secureMatch[1]), conversation = conversations[botId], pending = conversation?.attention?.find(item => item.id === secureMatch[2]);
+      if (!pending || body.epoch !== pending.secure.epoch || body.sessionId !== pending.secure.sessionId || body.method !== pending.secure.method) return json(response, { error: 'The fixture request expired.' }, 409);
+      if (process.env.PREVIEW_SECURE_FAILURE === '1') return json(response, { error: 'Fixture result uncertain.' }, 502);
+      if (!body.cancel && pending.secure.method === 'vault.save_login') vaultFor(botId).items.push({ id: 'fixture-' + randomUUID(), kind: 'login', label: pending.secure.site, origin: pending.secure.origin, identifier: body.identifier, identifierType: 'username', createdAt: new Date().toISOString(), hasOtp: false, backend: 'local', canRemove: true });
+      conversation.attention = []; conversation.activity = { state: 'idle' };
+      return json(response, { status: 'ok' });
     }
     const memoryMatch = /^\/bots\/([^/]+)\/memory(?:\/(memory|user))?$/.exec(path);
     if (memoryMatch) {

@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
 import ClientWebSocket from 'ws';
+import type { SecureRequest } from '../shared/vault.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
@@ -295,7 +296,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         if (params.type === 'request.cancel') state.requests = state.requests.filter(x => x.id !== payload.id);
       } else if (frame.id && frame.method) {
         if (frame.method === 'approval') {state.requests = state.requests.filter(x => x.id !== frame.id); state.requests.push(frame); state.state = 'waiting';}
-        else if (['clarify', 'sudo', 'secret', 'vault.code', 'vault.unlock_prompt', 'connection'].includes(frame.method)) {state.requests.push(frame); state.state = 'blocked';}
+        else if (['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection'].includes(frame.method)) {state.requests.push(frame); state.state = 'blocked';}
         else if (current.ws.readyState === WebSocket.OPEN) {
           try { current.ws.send(JSON.stringify({jsonrpc: '2.0', id: frame.id, error: {code: -32601, message: 'This client does not implement this official-client bridge.'}})); }
           catch { disconnect(current, unavailable()); }
@@ -357,14 +358,20 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     let response: Response;
     try {
       const headers = new Headers(init.headers);
-      for (const [name, value] of Object.entries(authHeaders())) headers.set(name, value);
-      response = await fetch(new URL(servicePath(path), origin), {...init,
+      const credential = path === '/api/agent-interface/credentials';
+      for (const [name, value] of Object.entries(credential ? {'Authorization': `Bearer ${options.token}`} : authHeaders())) headers.set(name, value);
+      const target = credential ? '/api/agent-interface/service/agent-interface/credentials' : servicePath(path);
+      response = await fetch(new URL(target, origin), {...init,
         headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
     } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
     if (!response.ok && path.startsWith('/api/audio/') && response.status === 400) {
       await response.body?.cancel();
       throw Object.assign(new Error('Voice is unavailable. Check the speech provider in the native Hermes dashboard.'), { statusCode: 409 });
+    }
+    if (!response.ok && path === '/api/agent-interface/credentials') {
+      await response.body?.cancel();
+      throw Object.assign(new Error('Hermes could not confirm this credential operation. Refresh its status before trying again.'), { statusCode: response.status });
     }
     if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience'].includes(path)) {
       const detail = await response.json().catch(() => ({})) as {error?:unknown};
@@ -587,7 +594,21 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if(text||reasoning)rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning});
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];
       const approvals=requests.filter((x:Wire)=>x.method==='approval').map((x:Wire)=>({id:String(x.id),title:'Action approval',detail:x.params?.description??x.params?.command??'Hermes requests approval.',status:'pending' as const}));
-      const attention=requests.filter((x:Wire)=>x.method!=='approval').map((x:Wire)=>({id:String(x.id),kind:x.method==='clarify'?'clarify' as const:'official' as const,title:x.method==='clarify'?'Hermes needs your answer':'Continue in the official Hermes client',detail:x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,questions:x.method==='clarify'?(x.params?.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined}));
+      const attention=requests.filter((x:Wire)=>x.method!=='approval').map((x:Wire)=>{
+        const params=x.params??{};
+        let secure:SecureRequest|undefined;
+        const owner={epoch:value.executor_epoch,sessionId:sid};
+        if(x.app_local_secure===true&&typeof owner.epoch==='string'&&typeof owner.sessionId==='string') {
+          if(x.method==='vault.save_login'&&typeof params.origin==='string'&&typeof params.site==='string')secure={...owner,method:x.method,origin:params.origin,site:params.site};
+          if(x.method==='vault.code')secure={...owner,method:x.method,site:typeof params.site==='string'?params.site:undefined,hint:typeof params.hint==='string'?params.hint:undefined};
+          if(x.method==='vault.unlock_prompt'&&['onepassword','bitwarden'].includes(params.backend)&&typeof params.display_name==='string')secure={...owner,method:x.method,backend:params.backend,displayName:params.display_name};
+          if(x.method==='secret'&&typeof params.env_var==='string'&&typeof params.prompt==='string')secure={...owner,method:x.method,envVar:params.env_var,prompt:params.prompt};
+        }
+        return {id:String(x.id),kind:secure?'secure' as const:x.method==='clarify'?'clarify' as const:'official' as const,
+          title:secure?'Hermes needs secure input':x.method==='clarify'?'Hermes needs your answer':'Continue in the official Hermes client',
+          detail:secure?'Enter this value securely. It will go directly to Hermes without becoming a chat message.':x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
+          secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
+      });
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls:state?.tools??[];
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
@@ -614,6 +635,13 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
     },
     async experienceRequest(input) { return await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json(); },
+    async vaultRequest(input) {
+      const response=await http('/api/agent-interface/credentials',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+      if(!response.body)throw new Error('Hermes returned no credential status.');
+      const chunks:Uint8Array[]=[];let size=0;
+      for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){size+=chunk.byteLength;if(size>1024*1024)throw new Error('Hermes returned an invalid credential status.');chunks.push(chunk);}
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    },
     async integrationRequest(input){return await (await http('/api/agent-interface/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).json();},
     async computerRequest(input) {
       try {

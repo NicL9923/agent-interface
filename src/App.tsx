@@ -25,6 +25,7 @@ import { NotificationSettings, NotificationOnboarding } from "./components/Devic
 import { TodayPanel } from "./components/TodayPanel";
 import { VoiceControls } from "./components/VoiceControls";
 import type { VoiceState } from "./shared/voice";
+import { SecureRequestCard } from "./components/SecureRequestCard";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -315,6 +316,7 @@ export function App() {
     let loadingDraft = false;
     let loadingConversation = false;
     let firstConversation = true;
+    let secureRequestIds = new Set<string>();
     setDraft({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
@@ -344,7 +346,19 @@ export function App() {
         if (!live) return;
         setConversation(result);
         setConversationDisconnected(false);
-        if (firstConversation) {
+        const secureRequests = (result.attention ?? []).filter(request => request.kind === "secure");
+        const newSecureRequest = secureRequests.find(request => !secureRequestIds.has(request.id));
+        secureRequestIds = new Set(secureRequests.map(request => request.id));
+        if (newSecureRequest && (firstConversation || bottom.current)) {
+          firstConversation = false;
+          requestAnimationFrame(() => {
+            if (!live || !scroll.current) return;
+            const card = [...scroll.current.querySelectorAll<HTMLElement>('.secure-request')]
+              .find(element => element.dataset.requestId === newSecureRequest.id);
+            if (card) scroll.current.scrollTop += card.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top;
+            bottom.current = false;
+          });
+        } else if (firstConversation) {
           firstConversation = false;
           requestAnimationFrame(() => {
             if (!live || !scroll.current) return;
@@ -1057,7 +1071,11 @@ export function App() {
             </div>
           )}
           {conversation?.attention?.map((request) => (
-            <AttentionCard
+            request.kind === "secure" && request.secure ? <SecureRequestCard
+              key={`${boot.user.id}:${botId}:${request.id}:${JSON.stringify(request.secure)}`}
+              request={request.secure} requestId={request.id} botId={botId} ownerId={boot.user.id}
+              title={request.title} detail={request.detail}
+            /> : <AttentionCard
               key={request.id}
               request={request}
               botId={botId}

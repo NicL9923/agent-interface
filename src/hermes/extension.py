@@ -121,6 +121,7 @@ def install(path=None):
     submission_lock = threading.RLock()
     keepers = {}
     canonical = {}
+    journal.canonical_session = lambda profile: canonical.get(profile)
     settlement = {}
     maintenance_lock = threading.RLock()
     maintenance_file = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE")
@@ -275,6 +276,14 @@ def install(path=None):
         # Receipt ownership is authoritative for app-started turns, including default.
         row = journal.db.execute("SELECT profile FROM receipts WHERE session_id=? ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
         return row[0] if row else profile_name_for_home(home or get_hermes_home())
+    journal.profile_for_session = profile_for
+    def live_profile_for(sid):
+        session = server._sessions.get(sid)
+        if session is None:
+            return None
+        home = session.get("profile_home") or session.get("hermes_home")
+        return profile_name_for_home(home or get_hermes_home()) or "default"
+    journal.live_profile_for_session = live_profile_for
 
     def artifacts(result, session):
         # Only actual native tool results can register outputs. Never scan user text.
@@ -451,6 +460,14 @@ def install(path=None):
                         value = native("session.resume", {"session_id": saved["resolved_id"], "profile": profile, "close_on_disconnect": False})
                 canonical[profile] = value["session_id"]
             value.setdefault("open_requests", [])
+            # A compute-host mirror is not locally owned. Only expose inline
+            # capture when this executor's native registry can settle the exact
+            # canonical request and register its values at its own egress guard.
+            from tui_gateway import server_requests as secure_requests
+            with secure_requests._lock:
+                for request in value["open_requests"]:
+                    local = secure_requests._open.get(request.get("id"))
+                    request["app_local_secure"] = bool(local is not None and local.sid == value["session_id"] and local.method == request.get("method"))
             sid = value["session_id"]
             session = server._sessions[sid]
             if session.get("running") and session.get("app_exposed_reasoning"):
@@ -691,6 +708,9 @@ if __name__ == "__main__":
     experience_spec = importlib.util.spec_from_file_location("agent_interface_experience", Path(__file__).resolve().with_name("experience.py"))
     experience = importlib.util.module_from_spec(experience_spec); experience_spec.loader.exec_module(experience)
     experience.install(web, journal)
+    vault_spec = importlib.util.spec_from_file_location("agent_interface_vault", Path(__file__).resolve().with_name("vault.py"))
+    vault = importlib.util.module_from_spec(vault_spec); vault_spec.loader.exec_module(vault)
+    vault.install(web, journal)
     integration_spec = importlib.util.spec_from_file_location("agent_interface_integrations", Path(__file__).resolve().with_name("integrations.py"))
     integrations = importlib.util.module_from_spec(integration_spec); integration_spec.loader.exec_module(integrations)
     integrations.install(web)

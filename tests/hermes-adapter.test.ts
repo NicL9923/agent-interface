@@ -75,6 +75,30 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(conversation.messages[1].runId).toBeUndefined();
   });
 
+  it('exposes only locally owned native secure prompts with an exact executor/session owner', async () => {
+    snapshot.executor_epoch='epoch-one';
+    snapshot.open_requests=[
+      {id:'srq-local',method:'vault.save_login',app_local_secure:true,params:{origin:'https://site.invalid',site:'site.invalid'}},
+      {id:'srq-mirror',method:'vault.code',params:{site:'Mirrored worker'}},
+      {id:'srq-sudo',method:'sudo',app_local_secure:true,params:{command:'sudo'}},
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0].secure).toEqual({epoch:'epoch-one',sessionId:'live-one',method:'vault.save_login',origin:'https://site.invalid',site:'site.invalid'});
+    expect(result.attention![0].kind).toBe('secure');
+    expect(result.attention!.slice(1).map(request=>request.kind)).toEqual(['official','official']);
+  });
+
+  it('transmits credentials privately once and never forwards native secret-bearing error text',async()=>{
+    const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
+    const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));
+    vi.stubGlobal('fetch',fetcher);
+    await expect(runtime.vaultRequest!(payload)).rejects.toMatchObject({statusCode:409,message:expect.not.stringContaining('private synthetic canary')});
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual(payload);
+    expect(new URL(fetcher.mock.calls[0][0]).pathname).toBe('/api/agent-interface/service/agent-interface/credentials');
+    expect(new Headers(fetcher.mock.calls[0][1]!.headers).get('Authorization')).toBe('Bearer '+token);
+  });
+
   it('bridges profile-scoped native speech and caps the returned audio', async () => {
     const fetcher = vi.fn(async (url: URL | string, init?: RequestInit) => {
       const path = new URL(url).pathname;
