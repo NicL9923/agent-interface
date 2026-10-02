@@ -1,5 +1,40 @@
 # Validation ledger
 
+## October 2 app release ae7528a
+
+PR #13 merged at `ae7528a41f9cb29a5f6baa3fdcf2078d3170dcdf`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `a0fb842bb2ab828e`, from the archive with SHA256
+`0ae02f34b6bff93e4a05ed3a897eb36c5d12b565fe2e255360b0dfbca82e72a1`. The host build reproduced the local web build.
+
+The avatar schema/API changes invalidated the prior receipt, so preparation
+stopped before service changes. Full qualification ran against a staged release of the same merged commit and
+integration inputs, with an independent repaired d23 checkout and disposable
+app/Hermes homes. The preparation archives have different byte hashes; the
+qualified integration digest and reproduced web build are the matching inputs.
+All eight integration probe groups and the 18 private shared-OAuth/Google
+regressions completed. Production source and repair hashes remained unchanged.
+The [managed evidence](evidence/managed-seasonal-avatars-d23-20261002T002305Z/manifest.json)
+binds the public probe files. Its disposable HOME is redacted and raw evidence
+remains private. Integration digest:
+`cfbb15bcb7ddaf74c7c56a6a4bfaa7333e16605b2fb270ec69b928035731bd9c`.
+
+Follow-up source fingerprint, 310 files:
+`sha256:32941c061d1eb05c91c6e432149722e442a8fefc69d85c6e2baf363a83e01252`.
+Application, native and CI checks from PR #13 remain applicable because this
+follow-up changes documentation and release evidence only.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-ae7528a4-20261002T002339Z.json) records the result. Hermes remains
+at `d23cc6b06455`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. Production T3 checks at 402×874 and 1280×800 found the
+sign-in page filled each viewport without horizontal overflow. The Google button
+rendered within bounds; final JS/CSS returned 200. Only the expected anonymous
+bootstrap 401 appeared. A signed-in household session was not exercised.
+
 ## October 1 seasonal avatars and model discovery
 
 Branch `t3code/seasonal-avatars`, based on `0e42a3f44c4098aa8bc0af531ce55124d23c3303`,
