@@ -1,4 +1,5 @@
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
+import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -252,6 +253,8 @@ export interface RuntimeStatus {
   lastConnectedAt?: string;
 }
 export interface Runtime {
+  computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
+  connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
   modelOptions?(profile?: string): Promise<ModelCatalog>;
   integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
   status(): Promise<RuntimeStatus>;

@@ -1,0 +1,200 @@
+"""Shared computer admission and identity checks without a desktop dependency."""
+import contextlib
+import importlib.util
+import json
+import multiprocessing
+import os
+from pathlib import Path
+import tempfile
+import threading
+import time
+import subprocess
+import types
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("computer", Path(__file__).resolve().parents[1] / "src/hermes/computer.py")
+computer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(computer)
+
+
+class TestLease:
+    HUMAN = "human"
+    class HumanHasControl(RuntimeError):
+        pass
+
+    def __init__(self):
+        self.value = types.SimpleNamespace(holder="agent", viewer_id=None)
+
+    def get(self, **kwargs):
+        return self.value
+
+    def acquire(self, viewer, **kwargs):
+        self.value = types.SimpleNamespace(holder="human", viewer_id=viewer)
+        return self.value
+
+    def release(self, viewer, **kwargs):
+        if self.value.viewer_id == viewer:
+            self.value = types.SimpleNamespace(holder="agent", viewer_id=None)
+        return self.value
+
+    def assert_agent_may_act(self, **kwargs):
+        if self.value.holder == "human":
+            raise self.HumanHasControl("A human is using the household computer")
+
+
+def try_lock(path, queue):
+    instance = computer.Computer(path, "http://127.0.0.1:9222", None, None)
+    try:
+        with instance.operation(timeout=.1):
+            queue.put("acquired")
+    except computer.ComputerError:
+        queue.put("busy")
+
+
+class ComputerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name) / "computer"
+        self.lease = TestLease()
+        self.starts = []
+        self.runtime = types.SimpleNamespace(start=lambda: self.starts.append(True),
+            status=lambda: types.SimpleNamespace(supported=True, installed=True, running=True))
+        self.instance = computer.Computer(self.home, "http://127.0.0.1:9222", self.runtime, self.lease)
+        self.scope = patch.object(computer, "resource_scope", lambda home: contextlib.nullcontext())
+        self.scope.start()
+        self.env = patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private-test-key", "HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": ""})
+        self.env.start()
+        self.instance._browser_ready = lambda: True
+        self.instance._private_dir()
+
+    def tearDown(self):
+        self.env.stop()
+        self.scope.stop()
+        self.temp.cleanup()
+
+    def member(self, actor="one", name="Member one"):
+        with self.instance.operation():
+            _, _, viewer = self.instance._viewer({"actorId": actor, "actorName": name}, create=True)
+        return {"actorId": actor, "actorName": name, "viewerId": viewer, "service_key": "private-test-key"}
+
+    def test_member_identity_survives_coordinator_restart(self):
+        first = self.member()
+        restarted = computer.Computer(self.home, self.instance.endpoint, self.runtime, self.lease)
+        with restarted.operation():
+            _, _, viewer = restarted._viewer({"actorId": "one", "actorName": "Updated name"}, create=True)
+        self.assertEqual(first["viewerId"], viewer)
+        self.assertEqual((self.home / "bot-desktop/computer-viewers.json").stat().st_mode & 0o777, 0o600)
+
+    def test_another_member_cannot_take_or_release_human_control(self):
+        owner, other = self.member(), self.member("two", "Member two")
+        self.instance.request({**owner, "action": "take"})
+        for action in ("take", "release"):
+            with self.assertRaisesRegex(computer.ComputerError, "Another person"):
+                self.instance.request({**other, "action": action})
+        self.assertEqual(self.lease.get().viewer_id, owner["viewerId"])
+        self.assertTrue(self.instance.status(owner)["control"]["mine"])
+        self.assertFalse(self.instance.status(other)["control"]["mine"])
+        self.instance.request({**owner, "action": "release"})
+        self.assertEqual(self.instance.status(owner)["control"]["kind"], "idle")
+
+    def test_reading_or_inventing_another_viewer_id_does_not_grant_control(self):
+        owner, other = self.member(), self.member("two", "Member two")
+        for viewer in (owner["viewerId"], "invented"):
+            with self.assertRaisesRegex(computer.ComputerError, "does not belong"):
+                self.instance.request({**other, "viewerId": viewer, "action": "take"})
+
+    def test_private_authentication_is_required_for_control(self):
+        member = self.member()
+        for action in ("take", "release", "observe"):
+            with self.assertRaisesRegex(computer.ComputerError, "Private application authentication"):
+                self.instance.request({**member, "action": action, "service_key": "wrong"})
+
+    def test_human_control_refuses_every_bot_capture_and_action(self):
+        member = self.member()
+        self.instance.request({**member, "action": "take"})
+        with self.assertRaises(TestLease.HumanHasControl):
+            with self.instance.bot_operation("Assistant"):
+                self.fail("The bot must never be admitted")
+        self.assertEqual(self.starts, [])
+
+    def test_hand_over_waits_for_the_complete_running_bot_call(self):
+        member = self.member()
+        started, finish, taken = threading.Event(), threading.Event(), threading.Event()
+        def bot():
+            with self.instance.bot_operation("Assistant"):
+                started.set()
+                self.assertTrue(finish.wait(2))
+        def take():
+            self.instance.request({**member, "action": "take"})
+            taken.set()
+        worker = threading.Thread(target=bot)
+        worker.start()
+        self.assertTrue(started.wait(1))
+        self.assertEqual(self.instance.status()["control"], {"kind": "bot", "name": "Assistant"})
+        taker = threading.Thread(target=take)
+        taker.start()
+        self.assertFalse(taken.wait(.1))
+        finish.set()
+        worker.join(2)
+        taker.join(2)
+        self.assertTrue(taken.is_set())
+        self.assertEqual(self.lease.get().holder, "human")
+
+    def test_operation_lock_serializes_different_executor_processes(self):
+        context = multiprocessing.get_context("spawn")
+        queue = context.Queue()
+        with self.instance.operation():
+            process = context.Process(target=try_lock, args=(str(self.home), queue))
+            process.start()
+            self.assertEqual(queue.get(timeout=5), "busy")
+            process.join(5)
+        self.assertEqual(process.exitcode, 0)
+
+    def test_crashed_bot_record_does_not_claim_an_active_owner(self):
+        self.instance._write("computer-active.json", {"name": "Crashed assistant"})
+        self.assertEqual(self.instance.status()["control"]["kind"], "idle")
+
+    def test_maintenance_lease_blocks_new_bot_actions(self):
+        maintenance = self.home / "maintenance.json"
+        maintenance.write_text("{}")
+        with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(maintenance)}):
+            with self.assertRaisesRegex(computer.ComputerError, "upgraded"):
+                with self.instance.bot_operation("Assistant"):
+                    self.fail("Maintenance must reject bot admission")
+
+    def test_failed_recovery_blocks_bots_and_humans_but_keeps_retry_available(self):
+        member = self.member()
+        self.instance._write("computer-recovery.json", {"python": "/qualified/python", "environment": {"BU_NAME": "household-fixture"}})
+        with patch.object(self.instance, "recover_harness", return_value=False):
+            with self.assertRaisesRegex(computer.ComputerError, "needs recovery"):
+                self.instance.request({**member, "action": "take"})
+            with self.assertRaisesRegex(computer.ComputerError, "needs recovery"):
+                with self.instance.bot_operation("Assistant"):
+                    self.fail("An uncertain daemon must block bot admission")
+        status = self.instance.status()
+        self.assertTrue(status["available"])
+        self.assertFalse(status["browserReady"])
+        self.assertIn("recovery", status["reason"])
+
+    def test_recovery_child_receives_only_recorded_routing_and_safe_locale(self):
+        record = {"python": "/qualified/python", "environment": {"BU_NAME": "household-fixture", "BH_RUNTIME_DIR": "/tmp/private-ipc"}}
+        self.instance._write("computer-recovery.json", record)
+        with patch.dict(os.environ, {"HOUSEHOLD_TEST_SECRET": "do-not-copy"}), patch.object(computer.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertTrue(self.instance.recover_harness(record))
+        self.assertNotIn("HOUSEHOLD_TEST_SECRET", run.call_args.kwargs["env"])
+        self.assertNotIn("HERMES_AGENT_INTERFACE_TOKEN", run.call_args.kwargs["env"])
+        self.assertEqual(run.call_args.kwargs["env"]["BU_NAME"], "household-fixture")
+        self.assertFalse((self.instance.state / "computer-recovery.json").exists())
+
+    def test_configuration_is_explicit_and_loopback_only(self):
+        with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": ""}):
+            self.assertIsNone(computer.configured())
+        for endpoint in ("http://example.com:9222", "http://user:pass@127.0.0.1:9222", "http://127.0.0.1:9222/api", "https://127.0.0.1:9222"):
+            with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": str(self.home), "HERMES_AGENT_INTERFACE_COMPUTER_CDP_URL": endpoint}):
+                with self.assertRaises(computer.ComputerError):
+                    computer.configured()
+
+
+if __name__ == "__main__":
+    unittest.main()

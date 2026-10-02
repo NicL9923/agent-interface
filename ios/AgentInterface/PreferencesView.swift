@@ -75,6 +75,19 @@ struct PreferencesView: View {
           )
         }
         .disabled(notificationBusy || store.sessionExpired)
+        if let url = try? store.api?.url("/?computer=1") {
+          Section {
+            Link(destination: url) {
+              Label("Open computer in browser", systemImage: "desktopcomputer")
+            }.accessibilityIdentifier("sharedComputer")
+          } header: {
+            Text("Computer")
+          } footer: {
+            Text(
+              "Use the shared desktop and VPS terminal in your browser. Sign in there with your household account if asked."
+            )
+          }
+        }
         Section("Connection") {
           LabeledContent("Server", value: store.host)
           if let version = store.bootstrap?.connection.version {

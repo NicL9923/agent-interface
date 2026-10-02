@@ -24,6 +24,8 @@ function gear() {
 
 const paths = {
   menu: "M4 7h16M4 12h16M4 17h16",
+  computer: "M4 4h16v12H4ZM9 20h6M12 16v4",
+  terminal: "M5 7l5 5-5 5M13 17h6",
   close: "M6 6l12 12M18 6L6 18",
   gear: gear() + "M15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0Z",
   star: polygon(5, 9, 4.1),

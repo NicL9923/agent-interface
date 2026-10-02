@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
+import ClientWebSocket from 'ws';
+import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
@@ -12,7 +14,7 @@ export interface HermesOptions { url?: string; token?: string; authMode?: 'stati
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   type DiagnosticCode = NonNullable<RuntimeStatus['code']>;
   class TransportError extends Error {
-    constructor(readonly code: DiagnosticCode, message: string, readonly rpcCode?: number) {
+    constructor(readonly code: DiagnosticCode, message: string, readonly rpcCode?: number, readonly rpcMessage?: string) {
       super(message);
     }
   }
@@ -257,7 +259,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
             const unauthorized = [401, 403].includes(code);
             const error = new TransportError(unauthorized ? 'unauthorized' : 'incompatible',
               unauthorized ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes refused the request (code ${typeof code === 'number' ? code : 'unknown'}). Review before retrying.`,
-              typeof code === 'number' ? code : undefined);
+              typeof code === 'number' ? code : undefined,
+              typeof frame.error.message === 'string' ? frame.error.message.slice(0, 500) : undefined);
             item.reject(error);
             if (unauthorized) disconnect(current, error);
           } else item.resolve(frame.result ?? {});
@@ -575,6 +578,25 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     async download(id){const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);return {data:Buffer.from(await response.arrayBuffer()),name:file.name,mime:file.mime};},
     async integrationRequest(input){return await (await http('/api/agent-interface/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).json();},
+    async computerRequest(input) {
+      try {
+        return await rpc('agent-interface.computer', {...input, ...(serviceAuth ? {service_key: options.token} : {})}) as ComputerStatus | ComputerAttachment;
+      } catch (error) {
+        // This add-on's 409 responses are deliberate, user-facing ComputerError
+        // messages. Preserve busy/control/recovery explanations at this boundary.
+        if (error instanceof TransportError && error.rpcCode === 409)
+          throw Object.assign(new Error(error.rpcMessage || error.message), {statusCode: 409});
+        throw error;
+      }
+    },
+    connectComputerDisplay(attachment) {
+      if (!origin || attachment.path !== '/api/display/ws' || !/^[A-Za-z0-9_-]{20,200}$/.test(attachment.ticket))
+        throw new Error('Hermes returned an invalid computer attachment.');
+      const url = new URL(attachment.path, origin);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.searchParams.set('display_ticket', attachment.ticket);
+      return new ClientWebSocket(url, {maxPayload: 4 * 1024 * 1024, followRedirects: false, handshakeTimeout: 10_000});
+    },
     async tools(botId):Promise<Tool[]>{const result=await rpc('profiles.describe',{name:botId});return result.toolsets.map((x:Wire)=>({id:x.name,name:x.label||x.name,description:x.description,enabled:x.enabled}));},
     async setTools(botId,ids){const state=await open(botId);const catalog=await rpc('profiles.describe',{name:botId});const known=new Set(catalog.toolsets.map((x:Wire)=>x.name));if(ids.some(x=>!known.has(x)))throw new Error('Unknown Hermes toolset selected.');const disabling=catalog.toolsets.filter((x:Wire)=>x.enabled&&!ids.includes(x.name)).map((x:Wire)=>x.name);const enabling=catalog.toolsets.filter((x:Wire)=>!x.enabled&&ids.includes(x.name)).map((x:Wire)=>x.name);for(const [action,names] of [['disable',disabling],['enable',enabling]] as const){if(names.length){const result=await rpc('tools.configure',{session_id:state.session_id,action,names});if(result.unknown?.length||result.missing_servers?.length)throw new Error('Hermes could not apply all tool selections.');}}},
     async skills(botId):Promise<Skill[]>{const result=await rpc('profiles.describe',{name:botId});return result.skills.map((x:Wire)=>({id:x.name,name:x.name,description:requiredSkills.has(x.name)?'Required by Hermes':'Hermes profile skill',enabled:x.enabled,required:requiredSkills.has(x.name)}));},

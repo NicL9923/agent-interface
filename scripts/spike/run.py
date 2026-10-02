@@ -162,6 +162,7 @@ approvals:
             subprocess.run([str(python), str(REPO / "scripts/spike/routine_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/integrations_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/service_probe.py")], cwd=REPO, env=env, check=True)
+            subprocess.run([str(python), str(REPO / "scripts/spike/computer_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/maintenance_guard_probe.py"), "--source", str(source)], cwd=REPO, env=env, check=True)
         control = root / "app-control"
         control.mkdir(exist_ok=True)

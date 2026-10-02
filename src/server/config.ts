@@ -15,6 +15,7 @@ export interface Config {
   hermesAuthMode: "static" | "service";
   hermesQualificationFile?: string;
   integrationAdmins?: string[];
+  computerTerminal?: { stateDirectory: string; cwd: string; python: string };
   hermesUpgrade?: {
     stateDirectory: string;
     workerConfig: string;
@@ -61,6 +62,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hermesQualificationFile: env.HERMES_QUALIFICATION_FILE || undefined,
   };
   const origin = parseAppOrigin(config.origin);
+  if (env.COMPUTER_TERMINAL_ENABLED && !["true", "false"].includes(env.COMPUTER_TERMINAL_ENABLED))
+    throw new Error("COMPUTER_TERMINAL_ENABLED must be true or false");
+  if (env.COMPUTER_TERMINAL_ENABLED === "true") {
+    if (![env.COMPUTER_STATE_DIR, env.COMPUTER_TERMINAL_CWD, env.COMPUTER_PYTHON].every(path => path?.startsWith("/") && !path.includes("\0")))
+      throw new Error("The computer terminal requires absolute state, workspace and Python paths");
+    config.computerTerminal = { stateDirectory: env.COMPUTER_STATE_DIR!, cwd: env.COMPUTER_TERMINAL_CWD!, python: env.COMPUTER_PYTHON! };
+  }
   if (env.HERMES_UPGRADE_ENABLED && !["true", "false"].includes(env.HERMES_UPGRADE_ENABLED))
     throw new Error("HERMES_UPGRADE_ENABLED must be true or false");
   if (env.HERMES_UPGRADE_ENABLED === "true") {

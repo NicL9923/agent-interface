@@ -11,6 +11,11 @@ scheme. Connect to the self-hosted **app server**, for example
 accepted only for localhost development. Hermes and provider credentials stay on
 the server.
 
+**Your preferences > Computer > Open computer in browser** opens the configured
+app server's shared desktop and VPS terminal in the system browser. The browser
+uses its own household sign-in; the native session token is never passed in the
+URL. This keeps the native client free of embedded browser and terminal views.
+
 The server must return `nativeAuthVersion: 1` from `/api/auth/config`. The
 [native API contract](../docs/native-api.md) describes PKCE sign-in, bearer
 sessions, revocation, and Apple push registration. Native tokens are stored in

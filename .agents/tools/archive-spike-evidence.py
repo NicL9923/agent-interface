@@ -19,7 +19,7 @@ names = ["app-probe.json", "hermes-environment.json", "hermes-extension-probe.js
 environment = json.loads((args.source / "hermes-environment.json").read_text())
 service_name = "hermes-service-probe-upgrade-route-" + environment["revision"][:3] + ".json"
 names.append(service_name)
-for optional in ("hermes-managed-python-probe.json", "qualification-probe.json"):
+for optional in ("hermes-managed-python-probe.json", "qualification-probe.json", "hermes-computer-probe.json"):
     if (args.source / optional).is_file():
         names.append(optional)
 receipts = {name: json.loads((args.source / name).read_text()) for name in names}
@@ -34,7 +34,7 @@ if (environment.get("production_access") is not False
         or not app.get("checks") or any(check.get("passed") is not True for check in app["checks"].values())
         or not guard.get("checks") or any(value is not True for value in guard["checks"].values())):
     parser.error("Receipts must describe a stable successful disposable run of the same source.")
-for name in ("hermes-integrations-probe.json", service_name):
+for name in ("hermes-integrations-probe.json", service_name, *(name for name in ("hermes-computer-probe.json",) if name in receipts)):
     checks = receipts[name].get("checks")
     if (receipts[name].get("revision") != environment.get("revision")
             or not checks or any(value is not True for value in checks.values())):

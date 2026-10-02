@@ -3,6 +3,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
+import { WebSocketServer } from 'ws';
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
@@ -79,10 +80,16 @@ const connections = [
 let upgrade = { available: true, phase: 'failed', current: { revision: 'oldrevision', version: '2026.9' }, candidate: { revision: 'newrevision', version: '2026.10' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
 const flows = new Map();
 const pushRegistrations = new Set();
+// Computer fixture streams are simulations. They never open a shell or contact a desktop.
+let computerControl = { kind: 'idle' };
+const computerStatus = () => ({ available: true, running: true, browserReady: true, label: 'Preview computer', control: computerControl,
+  terminal: { available: true, target: 'preview@fixture' } });
+let computerTicket = 0;
+const computerTickets = new Map();
 // PREVIEW_SIGNED_OUT=1 starts at the sign-in page; local sign-in then opens the fixture household.
 let signedIn = process.env.PREVIEW_SIGNED_OUT !== '1';
 const json = (response, data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(data)); };
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
   let body = {}; if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); try { body = JSON.parse(Buffer.concat(chunks)); } catch {} }
@@ -93,6 +100,14 @@ createServer(async (request, response) => {
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
     if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
     if (path === '/models') return json(response, modelCatalog);
+    if (path === '/computer') return json(response, computerStatus());
+    if (path === '/computer/control') { computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' }; return json(response, computerStatus()); }
+    if (path === '/computer/terminal/end') { for (const client of computerSockets.clients) if (client.computerKind === 'terminal') { client.send(JSON.stringify({ type: 'exit' })); client.close(); } return json(response, { ok: true }); }
+    if (path === '/computer/desktop' || path === '/computer/terminal') {
+      const kind = path.split('/').at(-1), ticket = `fixture-${++computerTicket}`;
+      computerTickets.set(ticket, kind);
+      return json(response, { path: `/api/computer/${kind}/ws?ticket=${ticket}`, viewerId: 'fixture-viewer', sessionId: 'fixture-shell', expiresAt: new Date(Date.now() + 30000).toISOString(), target: 'preview@fixture' });
+    }
     if (path === '/push/subscriptions/status') return json(response, { registered: pushRegistrations.has(body.endpoint) });
     if (path === '/push/subscriptions') { if (request.method === 'DELETE') pushRegistrations.delete(body.endpoint); else pushRegistrations.add(body.endpoint); return json(response, { ok: true }); }
     if (path.startsWith('/files/')) {
@@ -119,3 +134,84 @@ createServer(async (request, response) => {
   try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
+
+const computerSockets = new WebSocketServer({ noServer: true });
+server.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url, `http://${host}:${port}`);
+  const ticket = url.searchParams.get('ticket'), kind = computerTickets.get(ticket);
+  computerTickets.delete(ticket);
+  if (!kind || url.pathname !== `/api/computer/${kind}/ws`) return socket.destroy();
+  computerSockets.handleUpgrade(request, socket, head, client => {
+    client.computerKind = kind;
+    if (kind === 'desktop') return fixtureDesktop(client);
+    const output = data => client.send(JSON.stringify({ type: 'output', data }));
+    output('\x1b[32mAgent Interface terminal preview\x1b[0m\r\nExplicit fixture. Commands are echoed, never executed.\r\n\r\npreview@fixture:~$ ');
+    let line = '';
+    client.on('message', bytes => {
+      let message; try { message = JSON.parse(String(bytes)); } catch { return; }
+      if (message.type !== 'input' || typeof message.data !== 'string') return;
+      for (const character of message.data) {
+        if (character === '\x03') { line = ''; output('^C\r\npreview@fixture:~$ '); }
+        else if (character === '\r' || character === '\n') { output(`\r\nFixture received: ${line || '(empty line)'}\r\npreview@fixture:~$ `); line = ''; }
+        else if (character === '\x7f') { if (line) { line = line.slice(0, -1); output('\b \b'); } }
+        else { line += character; output(character); }
+      }
+    });
+  });
+});
+
+// Minimal RFB server with one static desktop frame for visual and takeover checks.
+function fixtureDesktop(client) {
+  const width = 1024, height = 640;
+  const pixels = Buffer.alloc(width * height * 4);
+  const rectangle = (left, top, w, h, [r, g, b]) => {
+    for (let y = top; y < top + h; y++) for (let x = left; x < left + w; x++) {
+      const offset = (y * width + x) * 4; pixels[offset] = b; pixels[offset + 1] = g; pixels[offset + 2] = r;
+    }
+  };
+  rectangle(0, 0, width, height, [36, 70, 55]);
+  rectangle(0, 0, width, 30, [21, 28, 24]);
+  rectangle(70, 80, 884, 470, [248, 247, 239]);
+  rectangle(70, 80, 884, 36, [220, 229, 219]);
+  rectangle(70, 116, 884, 44, [236, 238, 230]);
+  rectangle(186, 125, 656, 25, [255, 253, 247]);
+  rectangle(246, 218, 532, 22, [36, 111, 89]);
+  rectangle(294, 261, 436, 12, [159, 174, 157]);
+  rectangle(322, 286, 380, 12, [193, 203, 187]);
+  rectangle(150, 348, 724, 135, [228, 236, 224]);
+  rectangle(428, 586, 168, 40, [21, 28, 24]);
+  let phase = 'version', pending = Buffer.alloc(0), frameSent = false;
+  client.send(Buffer.from('RFB 003.008\n'));
+  client.on('message', chunk => {
+    pending = Buffer.concat([pending, Buffer.from(chunk)]);
+    while (pending.length) {
+      if (phase === 'version') {
+        if (pending.length < 12) return;
+        pending = pending.subarray(12); phase = 'security'; client.send(Buffer.from([1, 1]));
+      } else if (phase === 'security') {
+        pending = pending.subarray(1); phase = 'init'; client.send(Buffer.alloc(4));
+      } else if (phase === 'init') {
+        pending = pending.subarray(1); phase = 'ready';
+        const title = Buffer.from('Explicit preview fixture. No real computer connected.');
+        const init = Buffer.alloc(24); init.writeUInt16BE(width); init.writeUInt16BE(height, 2);
+        init[4] = 32; init[5] = 24; init[7] = 1;
+        init.writeUInt16BE(255, 8); init.writeUInt16BE(255, 10); init.writeUInt16BE(255, 12); init[14] = 16; init[15] = 8;
+        init.writeUInt32BE(title.length, 20); client.send(Buffer.concat([init, title]));
+      } else {
+        const type = pending[0];
+        let length = type === 0 ? 20 : type === 3 ? 10 : type === 4 ? 8 : type === 5 ? 6 : undefined;
+        if (type === 2) { if (pending.length < 4) return; length = 4 + pending.readUInt16BE(2) * 4; }
+        if (type === 6) { if (pending.length < 8) return; length = 8 + pending.readUInt32BE(4); }
+        if (!length) return;
+        if (pending.length < length) return;
+        const fullRefresh = type === 3 && pending[1] === 0;
+        pending = pending.subarray(length);
+        if (type === 3 && (!frameSent || fullRefresh)) {
+          frameSent = true;
+          const header = Buffer.alloc(16); header.writeUInt16BE(1, 2); header.writeUInt16BE(width, 8); header.writeUInt16BE(height, 10);
+          client.send(Buffer.concat([header, pixels]));
+        }
+      }
+    }
+  });
+}

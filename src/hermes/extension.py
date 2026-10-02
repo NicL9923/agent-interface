@@ -112,6 +112,10 @@ def install(path=None):
     from tui_gateway import server
     from tui_gateway.transport import Transport
     from hermes_constants import get_hermes_home, profile_name_for_home
+    computer_spec = importlib.util.spec_from_file_location("agent_interface_computer", Path(__file__).resolve().with_name("computer.py"))
+    computer = importlib.util.module_from_spec(computer_spec)
+    computer_spec.loader.exec_module(computer)
+    computer.install(server)
     journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
     canonical_lock = threading.RLock()
     submission_lock = threading.RLock()
@@ -198,7 +202,7 @@ def install(path=None):
 
     def guarded_call(call, request, *args, **kwargs):
         method = request.get("method", "")
-        read = method in maintenance_reads
+        read = method in maintenance_reads or method == "agent-interface.computer" and request.get("params", {}).get("action", "status") == "status"
         token = maintenance_read.set(read)
         try:
             with maintenance_lock:

@@ -22,6 +22,11 @@ final class ScreenshotTourTests: XCTestCase {
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
     try capture("01-home")
 
+    openPreferences(app)
+    scrollUntilHittable(app, app.descendants(matching: .any)["sharedComputer"])
+    try capture("06b-shared-computer")
+    app.buttons["Close"].tap()
+
     app.buttons["bot.ranch"].tap()
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 5))
     try capture("02-conversation")
