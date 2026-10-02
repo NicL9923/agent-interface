@@ -106,11 +106,11 @@ web and iOS. Voice messages are transcribed into a draft for review before you
 send. Web **Listen to reply** uses Hermes speech; native **Read aloud** uses the
 device voice.
 
-**Search & saved items** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
+**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
-Starter actions fill an editable draft. Available tools determine which actions appear. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay all notifications; decisions and failures skip batching outside them. Digest notifications open Today.
+Starter actions fill an editable draft. Available tools determine which actions appear. They show in an empty conversation; afterward, open them with **Starters** beside Attach. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay all notifications; decisions and failures skip batching outside them. Digest notifications open Today.
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 

@@ -1,8 +1,9 @@
-.voice-controls { min-width: 0; width: 100%; }
-.voice-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.voice-actions button { min-height: 40px; padding: 7px 10px; font-size: 12px; }
-.voice-actions .voice-recording { color: var(--danger); border-color: var(--danger); }
-.voice-status, .voice-error { margin: 6px 0 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.voice-controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.voice-actions { display: flex; gap: 2px; align-items: center; flex-wrap: wrap; }
+.voice-actions button { display: flex; align-items: center; gap: 6px; border: 0; padding: 8px; font-size: 12px; color: var(--muted); }
+.voice-actions button:hover:enabled { color: var(--ink); }
+.voice-actions .voice-recording { color: var(--danger); }
+.voice-status, .voice-error { margin: 0; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .voice-status { color: var(--muted); }
 .voice-error { color: var(--danger); }
-@media (max-width: 620px) { .voice-actions button { min-height: 44px; } }
+@media (max-width: 620px) { .voice-actions button { min-height: 44px; min-width: 44px; justify-content: center; } }
