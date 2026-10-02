@@ -15,7 +15,11 @@ import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
 import { ModelSelector } from "./components/ModelSelector";
-const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines"];
+import { MemoryPanel } from "./components/MemoryPanel";
+import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
+import { interactiveReplyInstructions } from "./shared/reply-cards";
+import { routinePresets } from "./shared/routine-presets";
+const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "memory"];
 function useCompactSettings() {
   const query = "(max-width: 620px)";
   const [compact, setCompact] = useState(() => typeof window.matchMedia === "function" && window.matchMedia(query).matches);
@@ -292,6 +296,10 @@ export function BotSettings({
                 placeholder="How should this assistant help?"
               />
             </label>
+            <div className="interactive-replies-setting"><button type="button" disabled={busy || form.instructions.includes(interactiveReplyInstructions)}
+              onClick={() => setForm({ ...form, instructions: `${form.instructions.trim()}\n\n${interactiveReplyInstructions}`.trim() })}>
+              {form.instructions.includes(interactiveReplyInstructions) ? "Interactive replies enabled" : "Enable interactive replies"}</button>
+              <p className="muted">Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.</p></div>
             <ModelSelector
               value={{ provider: form.provider || "", model: form.model }}
               profile={existing?.id}
@@ -542,6 +550,7 @@ export function BotSettings({
           </>
         )}
         {tab === "connections" && (existing ? <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} /> : <p>Create the assistant before connecting its services.</p>)}
+        {tab === "memory" && (existing ? <MemoryPanel key={existing.id} botId={existing.id} /> : <p>Create the assistant before viewing its Hermes memory.</p>)}
         {tab === "routines" && (
           <>
             {unavailable("routines")}
@@ -617,6 +626,7 @@ function RoutineManager({
   });
   const [busy, setBusy] = useState(false);
   const [deleteId, setDeleteId] = useState("");
+  const [previewedSchedule, setPreviewedSchedule] = useState("");
   const supported = bootstrap.capabilities.routines.supported;
   const refresh = async () =>
     setRoutines(
@@ -640,12 +650,16 @@ function RoutineManager({
         Routines keep working when you are away. Choose notification recipients
         explicitly.
       </p>
+      <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
+        onClick={() => { setEditing(null); setPreviewedSchedule(""); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id] }); }}>
+        <strong>{preset.name}</strong><small>{preset.description}</small></button>)}</div>
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
           <h3>{routine.name}</h3>
           <p>{routine.schedule}</p>
           <small>{routine.enabled ? "Active" : "Paused"}</small>
           <p>{routine.prompt}</p>
+          <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} />
           <div className="actions">
             <button
               disabled={busy}
@@ -703,6 +717,7 @@ function RoutineManager({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (previewedSchedule !== form.schedule) { report("Preview the schedule before saving this routine."); return; }
           void action(async () => {
             await write(
               editing
@@ -750,6 +765,7 @@ function RoutineManager({
             placeholder="Hermes schedule expression"
           />
         </label>
+        <RoutineSchedulePreview key={editing || "new"} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
         <label className="checkbox-label">
           <input
             type="checkbox"
@@ -785,7 +801,7 @@ function RoutineManager({
           results remain in the assistant conversation.
         </p>
         <div className="actions">
-          <button className="primary" disabled={busy || !supported}>
+          <button className="primary" disabled={busy || !supported || previewedSchedule !== form.schedule || !form.schedule.trim()}>
             {busy ? "Saving…" : editing ? "Save routine" : "Add routine"}
           </button>
           {editing && (

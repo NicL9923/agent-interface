@@ -33,6 +33,15 @@ merging, deployment and a production Hermes update are separate actions.
 
 ## Purpose
 
+The October 1 household-experience follow-up authorizes all five proposed
+additions in one implementation PR, followed by merge and deployment: Today,
+voice messages and spoken replies, inspectable native memory, interactive reply
+cards, and routine recipes with previews and a trial run. Web and native iOS
+share the application API. See [Household experience](HouseholdExperience.md)
+for the resulting controls and native-session constraints. This request
+authorizes the app release and its qualified integration add-on, without a
+Hermes version upgrade.
+
 Build an installable PWA and a native SwiftUI iOS app for two household members
 using one shared Hermes installation. Everyday questions are the primary use case. Image generation is
 a secondary use case. The interface should feel like returning to a persistent

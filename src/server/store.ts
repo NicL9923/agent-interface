@@ -10,6 +10,7 @@ import type {
   SubmissionReceipt,
   User,
 } from "../shared/types.js";
+import type { ReplyCardState } from "../shared/reply-cards.js";
 import { defaultPreferences } from "../shared/types.js";
 
 export class Store {
@@ -26,6 +27,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS native_flows(hash TEXT PRIMARY KEY,state TEXT NOT NULL,challenge TEXT NOT NULL,nonce TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS native_codes(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),state TEXT NOT NULL,challenge TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS native_devices(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL REFERENCES native_sessions(hash) ON DELETE CASCADE,token TEXT NOT NULL,environment TEXT NOT NULL,UNIQUE(token,environment));
+      CREATE TABLE IF NOT EXISTS routine_trials(request_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),routine_id TEXT NOT NULL,bot_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'uncertain');
+      CREATE TABLE IF NOT EXISTS today_seen(user_id TEXT PRIMARY KEY REFERENCES users(id),seen_at TEXT NOT NULL,event_frontier INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS card_state(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,message_id TEXT NOT NULL,card_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id,message_id,card_id));
       CREATE TABLE IF NOT EXISTS preferences(user_id TEXT PRIMARY KEY REFERENCES users(id),value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS drafts(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
       CREATE TABLE IF NOT EXISTS read_positions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
@@ -38,8 +42,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,event_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),payload TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,UNIQUE(event_id,user_id));
       CREATE TABLE IF NOT EXISTS delivered(outbox_id TEXT NOT NULL REFERENCES outbox(id),endpoint TEXT NOT NULL,PRIMARY KEY(outbox_id,endpoint));
       CREATE TABLE IF NOT EXISTS notification_events(id TEXT PRIMARY KEY,value TEXT NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS notification_ingestion(id INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL REFERENCES notification_events(id) ON DELETE CASCADE);
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     `);
+    const trialColumns = this.db.prepare("PRAGMA table_info(routine_trials)").all() as { name: string }[];
+    if (!trialColumns.some(column => column.name === "status")) this.db.exec("ALTER TABLE routine_trials ADD COLUMN status TEXT NOT NULL DEFAULT 'uncertain'");
+    const seenColumns = this.db.prepare("PRAGMA table_info(today_seen)").all() as { name: string }[];
+    if (!seenColumns.some(column => column.name === "event_frontier")) this.db.exec("ALTER TABLE today_seen ADD COLUMN event_frontier INTEGER NOT NULL DEFAULT 0");
+    this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
   }
   close() {
     this.db.close();
@@ -153,6 +163,42 @@ export class Store {
     this.pruneNativeAuth();
     return this.db.prepare("SELECT device_id AS deviceId,token,environment FROM native_devices WHERE user_id=? AND environment=?")
       .all(userId, environment) as { deviceId: string; token: string; environment: "sandbox" | "production" }[];
+  }
+  routineTrial(requestId: string): { userId: string; routineId: string; botId: string } | undefined {
+    return this.db.prepare("SELECT user_id AS userId,routine_id AS routineId,bot_id AS botId FROM routine_trials WHERE request_id=?").get(requestId) as { userId: string; routineId: string; botId: string } | undefined;
+  }
+  routineTrials(routineId: string): { requestId: string; userId: string; botId: string }[] {
+    return this.db.prepare("SELECT request_id AS requestId,user_id AS userId,bot_id AS botId FROM routine_trials WHERE routine_id=? AND status IN ('accepted','uncertain')").all(routineId) as { requestId: string; userId: string; botId: string }[];
+  }
+  rememberRoutineTrial(requestId: string, userId: string, routineId: string, botId: string) {
+    this.db.prepare("INSERT OR IGNORE INTO routine_trials(request_id,user_id,routine_id,bot_id) VALUES(?,?,?,?)").run(requestId, userId, routineId, botId);
+  }
+  recordRoutineTrialStatus(requestId: string, status: string) {
+    this.db.prepare("UPDATE routine_trials SET status=? WHERE request_id=?").run(status, requestId);
+  }
+  todaySeen(userId: string): string | undefined {
+    return (this.db.prepare("SELECT seen_at FROM today_seen WHERE user_id=?").get(userId) as { seen_at: string } | undefined)?.seen_at;
+  }
+  todayFrontier(userId: string): number {
+    return (this.db.prepare("SELECT event_frontier FROM today_seen WHERE user_id=?").get(userId) as { event_frontier: number } | undefined)?.event_frontier ?? 0;
+  }
+  latestEventFrontier(): number {
+    return (this.db.prepare("SELECT seq FROM sqlite_sequence WHERE name='notification_ingestion'").get() as { seq: number } | undefined)?.seq ?? 0;
+  }
+  markTodaySeen(userId: string, seenAt: string, frontier: number) {
+    this.db.prepare("INSERT INTO today_seen VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET seen_at=max(today_seen.seen_at,excluded.seen_at),event_frontier=max(today_seen.event_frontier,excluded.event_frontier)").run(userId, seenAt, frontier);
+  }
+  eventPage(frontier: number, upperFrontier: number, botIds: string[], initialSince?: string) {
+    const rows = botIds.length ? this.db.prepare(`SELECT i.id,e.value FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id WHERE i.id>? AND i.id<=? AND json_extract(e.value,'$.botId') IN (${botIds.map(() => '?').join(',')}) AND (? IS NULL OR e.created_at>=?) ORDER BY i.id LIMIT 101`).all(frontier, upperFrontier, ...botIds, initialSince ? Date.parse(initialSince) : null, initialSince ? Date.parse(initialSince) : null) as { id: number; value: string }[] : [];
+    const page = rows.slice(0, 100);
+    return { events: page.map(row => JSON.parse(row.value) as RuntimeEvent), frontier: String(rows.length > 100 ? page.at(-1)!.id : Math.max(frontier, upperFrontier)), hasMore: rows.length > 100 };
+  }
+  cardState(userId: string, botId: string, messageId: string, cardId: string): ReplyCardState {
+    const row = this.db.prepare("SELECT value FROM card_state WHERE user_id=? AND bot_id=? AND message_id=? AND card_id=?").get(userId, botId, messageId, cardId) as { value: string } | undefined;
+    return row ? JSON.parse(row.value) : { checkedIds: [], notes: {} };
+  }
+  saveCardState(userId: string, botId: string, messageId: string, cardId: string, value: ReplyCardState) {
+    this.db.prepare("INSERT INTO card_state VALUES(?,?,?,?,?) ON CONFLICT(user_id,bot_id,message_id,card_id) DO UPDATE SET value=excluded.value").run(userId, botId, messageId, cardId, JSON.stringify(value));
   }
   preferences(id: string): Preferences {
     const row = this.db
@@ -395,6 +441,7 @@ export class Store {
           this.db
             .prepare("INSERT OR IGNORE INTO notification_events VALUES(?,?,?)")
             .run(event.id, JSON.stringify(event), Date.now());
+          this.db.prepare("INSERT INTO notification_ingestion(event_id) SELECT ? WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion WHERE event_id=?)").run(event.id, event.id);
           this.enqueue(event);
         }
       this.db

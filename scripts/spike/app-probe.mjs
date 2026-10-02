@@ -43,7 +43,7 @@ const config = loadConfig({
 });
 let server = await createApp(
   config,
-  createHermesRuntime({ url: access.url, token: access.token,
+  createHermesRuntime({ url: access.url, token: access.token, authMode: "service",
     qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
       ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
 );
@@ -57,6 +57,11 @@ await start();
 const scopeFiles = [
   ...readdirSync("src/server").filter(name => name.endsWith(".ts"))
     .map(name => `src/server/${name}`),
+  "src/hermes/experience.py",
+  "src/shared/experience.ts",
+  "src/shared/reply-cards.ts",
+  "src/shared/routine-presets.ts",
+  "src/shared/voice.ts",
   "src/hermes/extension.py",
   "src/hermes/dashboard.py",
   "src/hermes/service_auth.py",
@@ -631,7 +636,7 @@ try {
     await server.app.close();
     server = await createApp(
       config,
-      createHermesRuntime({ url: access.url, token: access.token,
+      createHermesRuntime({ url: access.url, token: access.token, authMode: "service",
         qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
           ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
     );

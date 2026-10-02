@@ -16,6 +16,21 @@ app server's shared desktop and VPS terminal in the system browser. The browser
 uses its own household sign-in; the native session token is never passed in the
 URL. This keeps the native client free of embedded browser and terminal views.
 
+The sidebar's **Today** screen shows recent canonical events, new replies, pending decisions,
+and current work. **Mark caught up** saves the signed-in account's recap position
+on the app server. When more results are waiting, mark the displayed page caught
+up to load the next page. Late imported events stay visible until acknowledged.
+Assistant settings include **Memory** for inspecting and
+editing the actual Hermes profile documents, plus routine recipes, timezone and
+next-run previews, and a confirmed **Try once** action.
+
+The conversation microphone records up to two minutes, transcribes on the app
+server, and opens an editable transcript before adding it to the draft. **Read
+aloud** uses the device's iOS voice with an explicit Stop control. Interactive
+reply instructions are opt-in in assistant settings. Checklists and itinerary
+notes save to the signed-in app account; calendar proposals open Apple's event
+editor for review and an explicit Save.
+
 The server must return `nativeAuthVersion: 1` from `/api/auth/config`. The
 [native API contract](../docs/native-api.md) describes PKCE sign-in, bearer
 sessions, revocation, and Apple push registration. Native tokens are stored in

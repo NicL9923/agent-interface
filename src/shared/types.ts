@@ -1,3 +1,4 @@
+import type { ExperienceRequest, ExperienceResponse } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
 import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
 export type ActivityState =
@@ -133,6 +134,7 @@ export interface FileRef {
 }
 export interface Message {
   id: string;
+  runId?: string;
   role: "user" | "assistant" | "tool" | "system";
   text: string;
   createdAt?: string;
@@ -231,6 +233,7 @@ export interface SubmissionReceipt {
 }
 export interface RuntimeEvent {
   id: string;
+  files?: FileRef[];
   botId: string;
   runId?: string;
   routineId?: string;
@@ -253,6 +256,9 @@ export interface RuntimeStatus {
   lastConnectedAt?: string;
 }
 export interface Runtime {
+  transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
+  synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
+  experienceRequest?(input: ExperienceRequest): Promise<ExperienceResponse>;
   computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
   connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
   modelOptions?(profile?: string): Promise<ModelCatalog>;

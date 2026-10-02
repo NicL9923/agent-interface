@@ -91,6 +91,18 @@ remote = TestClient(web.app, base_url="http://127.0.0.1", client=("198.51.100.9"
 assert remote.post(TICKET_PATH, headers=headers).status_code == 401
 checks["credential_origin_cookie_and_direct_peer_guards"] = True
 
+# Reach the real native handlers using only early input validation. This proves
+# the finite voice bridge without invoking a speech provider or installing an
+# optional SDK. Client-direct voice config returns provider keys and must stay
+# outside the service capability.
+for path, payload in [("audio/transcribe", {"data_url": "", "mime_type": "audio/webm"}), ("audio/speak", {"text": ""})]:
+    response = client.post(PREFIX + path, headers=headers, json=payload)
+    assert response.status_code == 400, response.text
+assert client.get(PREFIX + "audio/voice-config", headers=headers).status_code == 404
+assert client.post(PREFIX + "audio/voice-config", headers=headers, json={}).status_code == 404
+assert client.post(PREFIX + "audio/transcribe/extra", headers=headers, json={}).status_code == 404
+checks["finite_native_voice_bridge_without_secret_configuration"] = True
+
 response = client.post(TICKET_PATH, headers=headers)
 assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 ticket = response.json()["ticket"]

@@ -105,10 +105,17 @@ processes. See [Integrations](Integrations.md) for setup, permission meanings an
 external-service acceptance limits. The integration probe exercises these native
 seams in the disposable home before an update can qualify.
 
+The household experience adds native memory inspection and guarded edits, schedule
+previews, and durable manual trials through the official scheduler. The new
+`hermes-experience-probe.json` exercises real profile scope, native revision
+conflicts, paused trial execution and same-request deduplication in a disposable
+home. Voice delegates to native audio routes. See
+[Household experience](HouseholdExperience.md) for client behavior and limits.
+
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with
 `.agents/tools/archive-spike-evidence.py` into a new `docs/evidence` directory;
-the tool includes the service and integrations probes and rejects replacement of
+the tool includes the service, integrations and experience probes and rejects replacement of
 earlier evidence. Existing receipts above describe their original code states.
 
 The production wrapper installs the add-on before the original `hermes dashboard` CLI starts. It preserves the dashboard UI, Google plugins, native lifecycle and owner registration. Keep the existing home, host, port and supervisor. Do not use the isolated spike launcher for a production dashboard.

@@ -3,7 +3,7 @@
 - `python3 .agents/tools/setup-shared-computer.py` stages private desktop/browser and terminal settings on the Hermes Linux service account without restarting live services; `--start` enables the shared computer after guarded release activation.
 - `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/accept-shared-computer.mjs PRIVATE_RECEIPT_PATH` checks authenticated native RFB, takeover/handback and a real terminal reconnect/end through the deployed app on its Linux host; refuses to touch an existing member shell and removes its temporary app session.
 
-- `python3 .agents/tools/source-state.py` prints the source fingerprint used by the validation ledger, excluding the ledger itself and ignored build/runtime files.
+- `python3 .agents/tools/source-state.py` prints the source fingerprint used by the validation ledger, excluding the ledger itself and ignored build/runtime files; optional path-prefix arguments restrict the fingerprint to a component.
 - `python3 .agents/tools/review-collage.py output.png 'Label=screenshot.png' ...` combines screenshots at a common height with labels and preserved aspect ratios; requires Pillow.
 - `python3 .agents/tools/archive-spike-evidence.py SOURCE_DIRECTORY DESTINATION_DIRECTORY` archives successful disposable qualification receipts with a content manifest and refuses to replace historical evidence or publish raw home paths. `--isolated-host-home ABSOLUTE_PATH` redacts the disposable staged HOME before hashing public receipts.
 - `python3 .agents/tools/deploy-app-release.py --config PRIVATE_ABSOLUTE_JSON` bootstraps upgrade guards with a built release using native retirement/drain, verifies Google and guarded gateway recovery, and retains private rollback copies.

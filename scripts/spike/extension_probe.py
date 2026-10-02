@@ -157,10 +157,13 @@ async def main(args):
     assert sum(x.get("app_request_id") == first_id for x in snapshot["messages"]) == 1
     assert snapshot["canonical_stored_session_id"] == saved
     detailed_tool = next(x for x in snapshot["messages"] if x.get("role") == "tool" and x.get("app_tool_call"))
+    assert detailed_tool["app_run_id"] == first["runId"]
+    assert next(x for x in snapshot["messages"] if x.get("app_request_id") == first_id)["app_run_id"] == first["runId"]
     assert detailed_tool["app_tool_call"]["status"] == "completed"
     assert "printf" in detailed_tool["app_tool_call"]["arguments"]
     assert "hermes-real-tool-proof" in detailed_tool["app_tool_call"]["result"]
     evidence["checks"]["canonical_tool_details"] = {"actual_arguments": True, "actual_result": True, "stable_call_identity": True, "completion_state": True}
+    evidence["checks"]["canonical_message_run_provenance"] = True
     evidence["checks"]["duplicate_admission"] = {"same_receipt": True, "canonical_user_rows": 1, "real_tool_output": any((x.get("app_tool_result") or {}).get("output") == "hermes-real-tool-proof" for x in snapshot["messages"])}
     second_id = "spike-second-" + str(time.time_ns())
     second = await send(second_id, "second task")

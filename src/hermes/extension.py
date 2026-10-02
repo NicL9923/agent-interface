@@ -506,6 +506,8 @@ def install(path=None):
                     if suffix and display_text.endswith("\n" + suffix):
                         display_text = display_text[:-len(suffix)-1]
                     message["app_display_text"] = display_text
+                if current_run:
+                    message["app_run_id"] = current_run
                 if message.get("role") == "tool":
                     recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall() if current_run else []
                     tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
@@ -685,8 +687,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=19119)
     args = parser.parse_args()
-    install()
+    journal = install()
+    experience_spec = importlib.util.spec_from_file_location("agent_interface_experience", Path(__file__).resolve().with_name("experience.py"))
+    experience = importlib.util.module_from_spec(experience_spec); experience_spec.loader.exec_module(experience)
+    experience.install(web, journal)
     integration_spec = importlib.util.spec_from_file_location("agent_interface_integrations", Path(__file__).resolve().with_name("integrations.py"))
     integrations = importlib.util.module_from_spec(integration_spec); integration_spec.loader.exec_module(integrations)
     integrations.install(web)
+    service_spec = importlib.util.spec_from_file_location("agent_interface_service_auth", Path(__file__).resolve().with_name("service_auth.py"))
+    service = importlib.util.module_from_spec(service_spec); service_spec.loader.exec_module(service)
+    service.install_service_auth(web, os.environ["HERMES_AGENT_INTERFACE_TOKEN"])
     web.start_server(host="127.0.0.1", port=args.port, open_browser=False, headless=True, isolated=True)

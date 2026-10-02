@@ -23,6 +23,7 @@ function gear() {
 }
 
 const paths = {
+  today: "M5 5h14v15H5ZM8 3v4M16 3v4M5 10h14M8 14h2M14 14h2M8 17h2",
   menu: "M4 7h16M4 12h16M4 17h16",
   computer: "M4 4h16v12H4ZM9 20h6M12 16v4",
   terminal: "M5 7l5 5-5 5M13 17h6",

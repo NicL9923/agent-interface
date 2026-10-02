@@ -362,13 +362,34 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
     } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
-    if (!response.ok && path === '/api/agent-interface/integrations') {
+    if (!response.ok && path.startsWith('/api/audio/') && response.status === 400) {
+      await response.body?.cancel();
+      throw Object.assign(new Error('Voice is unavailable. Check the speech provider in the native Hermes dashboard.'), { statusCode: 409 });
+    }
+    if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience'].includes(path)) {
       const detail = await response.json().catch(() => ({})) as {error?:unknown};
       throw Object.assign(new Error(typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.'), {statusCode:response.status});
     }
     if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
       response.status === 401 || response.status === 403 ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes HTTP ${response.status}: request failed.`);
     return response;
+  }
+  async function voiceReply(path: string, payload: Wire): Promise<Wire> {
+    const response = await http(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!response.body) throw new Error('Hermes returned no voice response.');
+    const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 12 * 1024 * 1024) { await reader.cancel(); throw new Error('Hermes returned oversized voice data.'); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Wire;
+    if (value.ok !== true) throw Object.assign(new Error('Hermes voice is unavailable. Check the speech provider in the native dashboard.'), { statusCode: 409 });
+    return value;
   }
   async function runtimeStatus(): Promise<RuntimeStatus> {
     try { await connect(); } catch { /* Expose the sanitized connection diagnosis. */ }
@@ -556,7 +577,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
             toolCall.completedAt=createdAt;
           }
         }
-        return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:row.name,toolCall,files:artifacts(botId,row)};
+        return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),runId:typeof row.app_run_id==='string'?row.app_run_id:undefined,role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:row.name,toolCall,files:artifacts(botId,row)};
       });
       const state=transient.get(sid);const inflight=value.inflight??{};
       const active=!!value.info?.running||!!value.app_run_id;
@@ -577,6 +598,22 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}});if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     async download(id){const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);return {data:Buffer.from(await response.arrayBuffer()),name:file.name,mime:file.mime};},
+    async transcribeVoice(botId, input) {
+      await open(botId);
+      const value = await voiceReply(`/api/audio/transcribe?profile=${encodeURIComponent(botId)}`, { data_url: `data:${input.mime};base64,${input.data.toString('base64')}`, mime_type: input.mime });
+      if (typeof value.transcript !== 'string' || value.transcript.length > 50000) throw new Error('Hermes returned an invalid transcript.');
+      return { text: value.transcript, ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
+    },
+    async synthesizeVoice(botId, text) {
+      await open(botId);
+      const value = await voiceReply(`/api/audio/speak?profile=${encodeURIComponent(botId)}`, { text });
+      const match = typeof value.data_url === 'string' && /^data:(audio\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(value.data_url);
+      if (!match || match[2].length > 12 * 1024 * 1024) throw new Error('Hermes returned invalid speech data.');
+      const data = Buffer.from(match[2], 'base64');
+      if (!data.length || data.length > 8 * 1024 * 1024) throw new Error('Hermes returned oversized speech audio.');
+      return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
+    },
+    async experienceRequest(input) { return await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json(); },
     async integrationRequest(input){return await (await http('/api/agent-interface/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).json();},
     async computerRequest(input) {
       try {

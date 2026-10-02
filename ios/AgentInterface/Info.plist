@@ -51,6 +51,8 @@
 	<string>Choose calendars to preview and share a snapshot with your assistant. Nothing is shared automatically.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Choose reminder lists to preview and share a snapshot with your assistant. Nothing is shared automatically.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a voice message for transcription on your app server. Review the transcript before sending.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your self-hosted Agent Interface app server.</string>
 	<key>UIApplicationSceneManifest</key>

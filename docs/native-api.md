@@ -60,6 +60,30 @@ removes all device registrations linked to it. Await the operation before
 discarding a valid credential. A failed/offline logout needs a visible retry
 because clearing only local storage cannot revoke the server session.
 
+## Household experience
+
+Web and native clients share these authenticated operations. See
+[Household experience](HouseholdExperience.md) for behavior and the card schema.
+
+| Method and route | Body or response |
+| --- | --- |
+| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore` |
+| `PUT /api/today/seen` | `{ "seenAt": "LOADED_GENERATED_AT", "frontier": "LOADED_FRONTIER" }`; advances only the returned page |
+| `GET /api/bots/:id/memory` | Native profile scope, document revisions, entries and character limits |
+| `PATCH /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entries": [{ "id": "EXISTING_ID", "text": "FACT" }] }`; target is `memory` or `user` |
+| `DELETE /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entryId": "EXISTING_ID" }` |
+| `POST /api/bots/:id/voice/transcribe` | Multipart `audio` field, maximum 8 MiB; returns a reviewable transcript |
+| `POST /api/bots/:id/voice/speak` | `{ "messageId": "COMPLETED_ASSISTANT_MESSAGE_ID" }`; returns a private, single-use audio URL |
+| `GET` or `PUT /api/bots/:id/messages/:messageId/cards/:cardId/state` | `{ "checkedIds": ["ITEM_ID"], "notes": { "ITEM_ID": "PERSONAL_NOTE" } }`, private to the caller |
+| `GET /api/routines/templates` | Routine recipes |
+| `POST /api/routines/preview` | `{ "botId": "ID", "schedule": "CRON_OR_NATIVE_SCHEDULE" }`; actual timezone and upcoming runs |
+| `POST /api/routines/:id/run` | `{ "requestId": "UUID" }`; durable native trial receipt |
+| `GET /api/routines/:id/runs/:requestId` | Exact trial result; rechecking does not execute another trial |
+
+Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
+before dispatch and reuse it after an uncertain admission. Do not replay a trial
+automatically. iOS read aloud uses the device voice; transcription uses Hermes.
+
 ## Native notifications
 
 | Method and route | Body or response |
