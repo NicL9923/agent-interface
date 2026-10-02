@@ -9,6 +9,7 @@
 .model-picker[open] > summary > .icon, .model-provider[open] > summary > .icon { transform: rotate(90deg); }
 .model-picker-content { border-top: 1px solid var(--line); padding: 12px; max-height: 440px; max-height: min(440px, 55dvh); overflow-y: auto; overscroll-behavior: contain; }
 .model-search { margin-bottom: 12px; }
+.model-refresh { min-height: 44px; margin-bottom: 12px; }
 .model-provider { border-top: 1px solid var(--line); }
 .model-provider > summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 2px; cursor: pointer; list-style: none; font-weight: 600; }
 .model-provider > summary > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }

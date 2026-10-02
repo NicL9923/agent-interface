@@ -91,6 +91,12 @@
   grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
   gap: 8px;
 }
+.choice-category {
+  margin: 18px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
 .choice {
   margin: 0;
   gap: 6px;

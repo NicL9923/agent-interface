@@ -81,6 +81,7 @@ import XCTest
         .firstMatch
       configure.tap()
       XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
+      app.buttons["settingsMore"].tap()
       app.buttons["Tools"].tap()
       // The full Hermes catalog extends beyond the viewport. Its first switch
       // proves the catalog loaded without relying on a lazily rendered footer.

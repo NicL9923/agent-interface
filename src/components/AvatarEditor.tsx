@@ -2,6 +2,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import type { Accessory, ActivityState, Avatar as AvatarConfig, Eyes } from "../shared/types";
 import { Avatar, avatarColors, defaultAvatar, stateLabels } from "./Avatar";
 import "./avatar-editor.css";
+import { seasonalAvatar, seasonalChoices } from "./seasonal-avatars";
 
 type DrawnAvatar = Exclude<AvatarConfig, { mode: "portrait" }>;
 type Shape = Extract<AvatarConfig, { mode: "geometric" }>["shape"];
@@ -128,6 +129,16 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls }: {
                   <Choice key={family} group={`${id}-family`} label={title(family)}
                     checked={drawn.family === family} onSelect={() => update({ family })}>
                     <Avatar avatar={{ ...drawn, family, accessory: "none" }} size={44} reducedMotion />
+                  </Choice>
+                ))}
+              </div>
+              <p className="choice-category">Seasonal</p>
+              <div className="choice-grid">
+                {seasonalChoices.map(({ family, label }) => (
+                  <Choice key={family} group={`${id}-family`} label={label}
+                    checked={drawn.family === family}
+                    onSelect={() => update({ ...seasonalAvatar(family), eyes: drawn.eyes, accessory: drawn.accessory })}>
+                    <Avatar avatar={seasonalAvatar(family)} size={44} reducedMotion />
                   </Choice>
                 ))}
               </div>

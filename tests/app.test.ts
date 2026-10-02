@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
-import type { Capabilities, Runtime, Submission } from "../src/shared/types.js";
+import type { Avatar, Capabilities, Runtime, Submission } from "../src/shared/types.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
 function runtimeDouble() {
@@ -136,6 +136,29 @@ async function login(
 const config = () =>
   loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
 describe("authentication and household state", () => {
+  it("saves seasonal avatars through native metadata and round-trips them through household presentation", async () => {
+    const fake = runtimeDouble();
+    let nativeAvatar: Avatar | undefined;
+    const originalList = fake.runtime.listBots;
+    fake.runtime.listBots = async () => (await originalList()).map(bot => ({ ...bot, avatar: nativeAvatar }));
+    fake.runtime.setAvatar = async (_id, value) => { nativeAvatar = value; };
+    const { app } = await createApp(config(), fake.runtime, { background: false });
+    try {
+      const headers = await login(app);
+      for (const family of ["pumpkin", "santa", "rudolph", "turkey", "bunny"] as const) {
+        const value: Avatar = { mode: "mascot", family, color: "#FF9800", eyes: "round", accessory: "none", eyeWidth: 1.1 };
+        const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/avatar", headers, payload: value });
+        expect(saved.statusCode).toBe(200);
+        expect(saved.json()).toEqual(value);
+        expect(nativeAvatar).toEqual(value);
+        expect((await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar).toEqual(value);
+        fake.capabilities.avatarMetadata.supported = false;
+        expect((await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar).toEqual(value);
+        fake.capabilities.avatarMetadata.supported = true;
+      }
+    } finally { await app.close(); }
+  });
+
   it("fails closed for production bypass and absent production identity settings", () => {
     expect(() =>
       loadConfig({ NODE_ENV: "production", LOCAL_DEV_AUTH: "true" }),

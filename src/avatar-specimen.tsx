@@ -9,6 +9,7 @@ import {
 } from "./components/Avatar";
 import type { ActivityState, Avatar as AvatarConfig } from "./shared/types";
 import "./avatar-specimen.css";
+import { seasonalAvatar, seasonalChoices } from "./components/seasonal-avatars";
 const portrait =
   "data:image/svg+xml," +
   encodeURIComponent(
@@ -23,6 +24,7 @@ const matrix: [string, AvatarConfig][] = [
   ["Fox", { mode: "mascot", family: "fox", color: "#FF6700", eyes: "oval", accessory: "none" }],
   ["Sprout", { mode: "mascot", family: "sprout", color: "#00BCA6", eyes: "oval", accessory: "hat" }],
   ["Portrait", { mode: "portrait", src: portrait, origin: "uploaded" }],
+  ...seasonalChoices.map(({ family, label }): [string, AvatarConfig] => [label, seasonalAvatar(family)]),
 ];
 function Specimen() {
   const [state, setState] = useState<ActivityState>("idle");
@@ -202,6 +204,16 @@ function Specimen() {
               <span>{family}</span>
             </button>
           ))}
+        </div>
+      </section>
+      <section>
+        <h2>Seasonal characters</h2>
+        <p>Original holiday companions with the same working, thinking and reduced-motion behavior.</p>
+        <div className="spec-shapes">
+          {seasonalChoices.map(({ family, label }) => <button key={family} onClick={() => setAvatar(seasonalAvatar(family))}>
+            <Avatar avatar={seasonalAvatar(family)} size={90} state={state} reducedMotion={reduce} />
+            <span>{label}</span>
+          </button>)}
         </div>
       </section>
       <section>

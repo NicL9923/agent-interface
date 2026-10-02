@@ -45,7 +45,7 @@ const avatar = z.discriminatedUnion("mode", [
   }),
   z.object({
     mode: z.literal("mascot"),
-    family: z.enum(["sprout", "fox", "bear"]),
+    family: z.enum(["sprout", "fox", "bear", "pumpkin", "santa", "rudolph", "turkey", "bunny"]),
     color: z.string().regex(/^#[0-9a-f]{6}$/i),
     eyes: z.enum(["round", "oval", "visor", "spark"]),
     accessory: z.enum(["none", "hat", "glasses"]),

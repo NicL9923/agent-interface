@@ -31,14 +31,29 @@ struct BotSettingsView: View {
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 8) {
-            ForEach(tabs, id: \.self) { title in
-              Button(title) { tab = title }.buttonStyle(.bordered).tint(
-                tab == title ? Palette.accent : .secondary)
+        HStack(spacing: 8) {
+          ForEach(tabs.prefix(2), id: \.self) { title in
+            Button(title) { tab = title }.buttonStyle(.bordered).tint(
+              tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
+          }
+          Spacer(minLength: 0)
+          Menu {
+            ForEach(tabs.dropFirst(2), id: \.self) { title in
+              Button {
+                tab = title
+              } label: {
+                if tab == title { Label(title, systemImage: "checkmark") }
+                else { Text(title) }
+              }
             }
-          }.padding(.horizontal).padding(.vertical, 10)
-        }
+          } label: {
+            Label(tabs.prefix(2).contains(tab) ? "More" : tab, systemImage: "chevron.down")
+              .font(.subheadline).lineLimit(1).padding(.horizontal, 10).frame(minHeight: 44)
+          }.tint(tabs.prefix(2).contains(tab) ? .secondary : Palette.accent)
+            .accessibilityLabel("More settings")
+            .accessibilityValue(tabs.prefix(2).contains(tab) ? "" : tab)
+            .accessibilityIdentifier("settingsMore")
+        }.font(.subheadline).padding(.horizontal).padding(.vertical, 6)
         if let error {
           ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
         }
@@ -236,10 +251,10 @@ struct BotSettingsView: View {
         } else {
           Section("Character") {
             AvatarTiles(
-              group: "family", options: ["bear", "fox", "sprout"].map { ($0, $0.capitalized) },
+              group: "family", options: AvatarConfig.families.map { ($0.id, $0.label) },
               selected: avatar.family ?? "sprout",
-              preview: { var a = avatar; a.family = $0; a.accessory = "none"; return a },
-              select: { avatar.family = $0 })
+              preview: { var a = avatar.selectingFamily($0); a.accessory = "none"; return a },
+              select: { avatar = avatar.selectingFamily($0) })
           }
         }
         Section("Color") { colorSwatches }

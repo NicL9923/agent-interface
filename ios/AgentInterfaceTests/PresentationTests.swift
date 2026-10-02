@@ -67,12 +67,29 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(blocks.last?.text, "let n = 1")
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
-    for shape in AvatarConfig.shapes + ["mascot"] {
+    for shape in AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted() {
       let points = AvatarGeometry.points(shape)
       XCTAssertEqual(points.values.count, 144, shape)
       XCTAssertTrue(points.values.allSatisfy(\.isFinite), shape)
       XCTAssertGreaterThan(points.magnitudeSquared, 0)
     }
+  }
+  func testSeasonalAvatarsDecodeAndKeepCustomizationWhenSelected() throws {
+    for (family, color) in AvatarConfig.seasonalColors {
+      let data = Data("{\"mode\":\"mascot\",\"family\":\"\(family)\",\"color\":\"#111111\",\"eyes\":\"spark\",\"accessory\":\"glasses\",\"eyeSpacing\":1.3}".utf8)
+      let saved = try JSONDecoder().decode(AvatarConfig.self, from: data)
+      XCTAssertEqual(saved.geometry, family)
+      XCTAssertEqual(try JSONDecoder().decode(AvatarConfig.self, from: JSONEncoder().encode(saved)), saved)
+      let selected = saved.selectingFamily(family)
+      XCTAssertEqual(selected.color, color)
+      XCTAssertEqual(selected.eyes, "spark")
+      XCTAssertEqual(selected.accessory, "glasses")
+      XCTAssertEqual(selected.eyeSpacing, 1.3)
+      XCTAssertTrue(AvatarConfig.families.contains { $0.id == family })
+      XCTAssertNotEqual(AvatarGeometry.svg(family), AvatarGeometry.mascotHead)
+    }
+    let original = AvatarConfig(mode: "mascot", color: "#111111")
+    XCTAssertEqual(original.selectingFamily("fox").color, "#111111")
   }
   @MainActor func testPushRoutesOnlyRelativeConversationURL() {
     let origin = URL(string: "https://household.example")!

@@ -38,7 +38,7 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Remember the fence inspection"].waitForExistence(timeout: 10))
     app.buttons["Configure Ranch hand"].tap()
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
-    app.buttons["Tools"].tap()
+    selectSettingsTab(app, "Tools")
     XCTAssertTrue(
       app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch
         .waitForExistence(timeout: 5))
@@ -67,10 +67,58 @@ final class NativeFlowTests: XCTestCase {
     let app = app(catalogFailure: true)
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
     app.buttons["Configure Ranch hand"].tap()
-    app.buttons["Tools"].tap()
+    selectSettingsTab(app, "Tools")
     XCTAssertTrue(app.buttons["Retry loading tools"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["Save tools"].isEnabled)
     XCTAssertFalse(app.staticTexts["No tools were reported by Hermes."].exists)
+  }
+  func testSeasonalAvatarChoicesSaveAndRemainSelected() {
+    let app = app()
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    app.buttons["Configure Ranch hand"].tap()
+    app.buttons["Avatar"].tap()
+    app.buttons["Mascot"].tap()
+    func scrollTo(_ button: XCUIElement, up: Bool) {
+      for _ in 0..<8 {
+        if button.exists && button.isHittable { return }
+        if up { app.swipeUp() } else { app.swipeDown() }
+      }
+      XCTAssertTrue(button.isHittable)
+    }
+    for family in ["pumpkin", "santa", "rudolph", "turkey", "bunny"] {
+      let choice = app.buttons["avatarTile.family.\(family)"]
+      scrollTo(choice, up: true)
+      choice.tap()
+      XCTAssertTrue(choice.isSelected)
+      scrollTo(app.buttons["previewState.idle"], up: false)
+      screenshot(app, "Seasonal native \(family)")
+      scrollTo(app.buttons["Save avatar"], up: true)
+      app.buttons["Save avatar"].tap()
+      XCTAssertTrue(app.staticTexts["Avatar saved."].waitForExistence(timeout: 5))
+      app.buttons["Close"].tap()
+      app.buttons["Configure Ranch hand"].tap()
+      app.buttons["Avatar"].tap()
+      scrollTo(app.buttons["avatarTile.family.\(family)"], up: true)
+      XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].isSelected)
+    }
+  }
+  func testSettingsOverflowSelectsEverySectionAndKeepsAvatarVisible() {
+    let app = app()
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    app.buttons["Configure Ranch hand"].tap()
+    let more = app.buttons["settingsMore"]
+    for title in ["Connections", "Tools", "Skills", "Routines"] {
+      XCTAssertTrue(app.buttons["Details"].isHittable)
+      XCTAssertTrue(app.buttons["Avatar"].isHittable)
+      selectSettingsTab(app, title)
+      XCTAssertEqual(more.value as? String, title)
+      XCTAssertGreaterThanOrEqual(more.frame.minX, 0)
+      XCTAssertLessThanOrEqual(more.frame.maxX, app.frame.maxX)
+      screenshot(app, "Native settings \(title) selected")
+      app.buttons["Avatar"].tap()
+      XCTAssertTrue(app.buttons["previewState.idle"].waitForExistence(timeout: 5))
+      XCTAssertTrue((more.value as? String ?? "").isEmpty)
+    }
   }
   func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
     let app = app(upgradeUncertain: true)
@@ -116,7 +164,7 @@ final class NativeFlowTests: XCTestCase {
     let app = app()
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
     app.buttons["Configure Ranch hand"].tap()
-    app.buttons["Connections"].tap()
+    selectSettingsTab(app, "Connections")
     XCTAssertTrue(app.staticTexts["Configured · not checked"].waitForExistence(timeout: 10))
     app.buttons.matching(identifier: "Check connection").firstMatch.tap()
     XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 10))
@@ -161,7 +209,7 @@ final class NativeFlowTests: XCTestCase {
     let app = app()
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
     app.buttons["Configure Ranch hand"].tap()
-    app.buttons["Connections"].tap()
+    selectSettingsTab(app, "Connections")
     XCTAssertTrue(app.buttons["Disconnect"].waitForExistence(timeout: 10))
     app.buttons["Disconnect"].tap()
     let confirm = app.buttons.matching(identifier: "Disconnect").allElementsBoundByIndex.last
@@ -176,5 +224,10 @@ final class NativeFlowTests: XCTestCase {
     attachment.name = name
     attachment.lifetime = .keepAlways
     add(attachment)
+  }
+  private func selectSettingsTab(_ app: XCUIApplication, _ title: String) {
+    app.buttons["settingsMore"].tap()
+    XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
+    app.buttons[title].tap()
   }
 }

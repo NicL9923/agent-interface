@@ -12,8 +12,8 @@ installation. iOS users enter its HTTPS address, then sign in to the same
 household. The mobile app connects to this server, not directly to Hermes.
 
 Web assistant settings load model options from the connected Hermes profile.
-Expand provider groups or search the catalog, then star models to keep personal
-favorites. Shared assistants keep one shared model. Existing selections remain
+The selected provider starts expanded. Search the catalog, refresh it after
+changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
 confirmation.
 
@@ -120,6 +120,12 @@ tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Advanced view adds collapsed tool inputs, outputs, errors and
 timestamps, plus reasoning Hermes exposes. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
+
+Avatar settings include Pumpkin, Santa, Rudolph, Turkey and Easter Bunny
+in both web and native iOS. The web picker groups these under Seasonal. Each keeps its character during
+working/thinking animation and supports the existing eye and accessory controls.
+Choosing a seasonal character applies its default color and preserves your other
+customization. All five use original artwork.
 
 Open Artifacts in the conversation header to browse that assistant's generated
 outputs and shared attachments. Search filenames, filter by type, and preview
