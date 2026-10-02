@@ -1,5 +1,44 @@
 # Validation ledger
 
+## October 2 app release 75a37f3
+
+PR #26 merged at `75a37f3c51482e0aa8ff93b26fdc86c1e0e832c2`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `e64054bf241db021`, from the archive with SHA256
+`38f14c5f3d974fb8b787c9e2448736e63e792159dab9422bc68ca3e5345219a5`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-75a37f3c-20261002T151724Z.json) records the result. Hermes remains
+at `5bba024d8ddd`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+[Authenticated acceptance](evidence/household-discovery-app-20261002.json) now
+passes for both native profiles: original history from search, all five routine
+history listings, saved-pointer reads, scheduler previews, enabled starters,
+automation usage, native memory/vault metadata, Today and hosted group readiness.
+Both canonical conversations stayed unchanged, and the temporary app session was
+removed. It did not create a production group, send messages, pause a routine,
+or change memory or vault entries.
+
+The [full repaired-source qualification](evidence/native-history-renderer-release-5bb-20261002/manifest.json)
+and all 18 private authentication regressions passed, binding integration digest
+`da5c11ec2514792874971c5c5338866e175bf848d3a4825467b321cbc9dd25a5`.
+An earlier disposable attempt hit a Chromium page-startup race and issued no
+receipt; a fresh complete run succeeded. Both attempts remain in owner-private
+operation records. The active qualification receipt's staging directory is
+retained on the VPS. Signed physical-device installation and push delivery remain
+external acceptance.
+
+The operations README records this active release and matching qualification;
+its prior copy remains in the private activation directory. The documentation
+follow-up covers 525 source files:
+`sha256:9109eafaa4a3dca2945340d57a8c32aa00c428a345396c113e37938a836f3717`.
+It changes only sanitized evidence and this ledger. Implementation, native and
+CI checks remain applicable to unchanged product inputs.
+
 ## October 2 production history renderer follow-up
 
 Authenticated post-release acceptance exposed an entrypoint mismatch: disposable
