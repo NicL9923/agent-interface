@@ -87,12 +87,12 @@ export async function savePrivateEnv(filename: string, original: string | undefi
 
 export async function checkSetup(
   values: NodeJS.ProcessEnv,
-  createRuntime: (options: {url?: string; token?: string; authMode?: 'static' | 'service'}) => Pick<Runtime, 'status' | 'close'> = createHermesRuntime,
+  createRuntime: (options: {url?: string; token?: string; authMode?: 'static' | 'service'; qualificationFile?: string}) => Pick<Runtime, 'status' | 'close'> = createHermesRuntime,
 ): Promise<RuntimeStatus> {
   const config = loadConfig(values);
   if (!config.localDevAuth && (!config.googleClientId || !config.householdEmails.length))
     throw new Error('Configure Google sign-in and HOUSEHOLD_EMAILS, or explicitly select local test sign-in on a loopback development installation.');
-  const runtime = createRuntime({url: config.hermesUrl, token: config.hermesToken, authMode: config.hermesAuthMode});
+  const runtime = createRuntime({url: config.hermesUrl, token: config.hermesToken, authMode: config.hermesAuthMode, qualificationFile: config.hermesQualificationFile});
   try { return await runtime.status(); } finally { await runtime.close(); }
 }
 

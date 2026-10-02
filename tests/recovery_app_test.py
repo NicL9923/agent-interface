@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import time
 import unittest
 from unittest import mock
@@ -27,6 +28,26 @@ def record(process=101, revision="d" * 40, **changes):
 
 
 class ReceiptTests(unittest.TestCase):
+    def test_qualified_doctor_imports_bound_release_passes_receipt_and_redacts_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_module = root / "config.mjs"
+            runtime_module = root / "hermes.mjs"
+            config_module.write_text("export const loadConfig = () => ({hermesUrl:'url',hermesToken:'token',hermesAuthMode:'service',hermesQualificationFile:'/qualified'});")
+            runtime_module.write_text("export const createHermesRuntime = o => {if(o.qualificationFile!=='/qualified'||o.token!=='token'||o.authMode!=='service'||o.url!=='url')throw Error('private-secret');return {status:async()=>({connected:true,code:'ready'}),close:async()=>{}};};")
+            command = ["node", "--input-type=module", "-e", recover.QUALIFIED_DOCTOR, config_module.as_uri(), runtime_module.as_uri()]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"qualifiedRuntimeReady": True})
+            runtime_module.write_text("export const createHermesRuntime = () => ({status:async()=>{throw Error('private-secret');},close:async()=>{}});")
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("private-secret", result.stdout+result.stderr)
+            self.assertEqual(result.stderr.strip(), "Qualified Hermes runtime verification failed.")
+            argv = recover.doctor_command({"node":"node","appBase":str(root)}, root)
+            self.assertEqual(argv[-2:], [(root / "src/server/config.ts").as_uri(), (root / "src/server/hermes.ts").as_uri()])
+            self.assertNotIn("scripts/setup.ts", argv)
+
     def test_receipt_binds_current_app_and_exact_new_native_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "qualification.json"
@@ -398,6 +419,83 @@ class StoppedResumeTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.resume(self.host)
         self.assertEqual(self.host.events, events)
+
+
+class GuardedFinishTests(unittest.TestCase):
+    setUp = StoppedResumeTests.setUp
+    stopped = StoppedResumeTests.stopped
+    resume = StoppedResumeTests.resume
+
+    def running(self):
+        host = self.host
+        host.fail = "doctor"
+        with self.assertRaises(RuntimeError):
+            self.resume(host)
+        (host.ops / "resume-attempt.json").chmod(0o600)
+        host.write_json(host.ops / "phase.json", {"operationId": host.operation,
+            "phase": "recovery-blocked-needs-review", "updatedAt": "now"})
+        host.fail = None
+        host.events.clear()
+        return host
+
+    def finish(self, host):
+        with mock.patch.object(recover, "qualified_input", return_value=b"new-receipt"):
+            return host.finish_guarded()
+
+    def test_finish_verifies_running_owners_and_opens_without_service_or_receipt_replay(self):
+        host = self.running()
+        self.assertTrue(self.finish(host)["maintenanceCleared"])
+        self.assertTrue((host.ops / "finish-attempt.json").exists())
+        self.assertFalse(any(e.startswith(("start:", "stop:", "retire:", "request-drain")) for e in host.events))
+        self.assertLess(host.events.index("doctor"), host.events.index("guarded-finish-consumed"))
+        self.assertLess(host.events.index("guarded-finish-consumed"), host.events.index("rpc:release"))
+        self.assertEqual(host.target.read_bytes(), b"new-receipt")
+
+    def test_wrong_gate_changed_receipt_and_uncertain_phase_refuse_before_finish_marker(self):
+        for bad in ("gate", "receipt", "phase", "pid"):
+            with self.subTest(bad=bad):
+                host = self.running()
+                if bad == "gate":
+                    host.write_json(host.lease, {"operationId": "foreign"})
+                elif bad == "receipt":
+                    host.atomic(host.target, b"changed")
+                elif bad == "phase":
+                    host.write_json(host.ops / "phase.json", {"operationId": host.operation, "phase": "admission-needs-review"})
+                else:
+                    host.pids[recover.UNITS[1]] = 0
+                with self.assertRaises(AssertionError):
+                    self.finish(host)
+                self.assertFalse((host.ops / "finish-attempt.json").exists())
+                self.assertNotIn("rpc:release", host.events)
+                # Each mismatch is a separate already-guarded fixture.
+                self.temp.cleanup()
+                self.temp = tempfile.TemporaryDirectory()
+                self.addCleanup(self.temp.cleanup)
+                self.host = self.stopped(Path(self.temp.name))
+
+    def test_pid_replacement_during_doctor_refuses_release_before_marker(self):
+        host = self.running()
+        original = host.f["run"]
+        def run(*args, **kwargs):
+            original(*args, **kwargs)
+            host.pids[recover.UNITS[1]] = 999
+        host.f["run"] = run
+        with self.assertRaises(AssertionError):
+            self.finish(host)
+        self.assertFalse((host.ops / "finish-attempt.json").exists())
+        self.assertNotIn("rpc:release", host.events)
+
+    def test_unknown_release_consumes_finish_marker_and_refuses_replay(self):
+        host = self.running()
+        host.fail = "rpc:release"
+        with self.assertRaises(RuntimeError):
+            self.finish(host)
+        self.assertTrue((host.ops / "finish-attempt.json").exists())
+        events = list(host.events)
+        with self.assertRaises(AssertionError):
+            self.finish(host)
+        self.assertEqual(host.events, events)
+        self.assertEqual(host.events[-1], "admission-needs-review")
 
 
 if __name__ == "__main__":

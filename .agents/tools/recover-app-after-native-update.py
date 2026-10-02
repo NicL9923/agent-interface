@@ -23,6 +23,27 @@ from urllib.parse import urlsplit
 
 UNITS = ("agent-interface.service", "hermes-dashboard.service", "hermes-gateway.service")
 UNTOUCHED_UNITS = ("hermes-computer.service", "agent-interface-terminal.service")
+QUALIFIED_DOCTOR = """
+let runtime, ready = false;
+try {
+  const {loadConfig} = await import(process.argv[1]);
+  const {createHermesRuntime} = await import(process.argv[2]);
+  const config = loadConfig(process.env);
+  runtime = createHermesRuntime({url: config.hermesUrl, token: config.hermesToken,
+    authMode: config.hermesAuthMode, qualificationFile: config.hermesQualificationFile});
+  const status = await runtime.status();
+  ready = status.connected === true && (!status.code || status.code === 'ready');
+} catch { ready = false; }
+finally { try { await runtime?.close(); } catch { ready = false; } }
+if (ready) console.log(JSON.stringify({qualifiedRuntimeReady: true}));
+else { console.error('Qualified Hermes runtime verification failed.'); process.exitCode = 1; }
+"""
+
+
+def doctor_command(config, release):
+    return [config["node"], "--env-file=" + str(Path(config["appBase"]) / "shared/app.env"),
+            "--import", "tsx", "--input-type=module", "-e", QUALIFIED_DOCTOR,
+            (release / "src/server/config.ts").as_uri(), (release / "src/server/hermes.ts").as_uri()]
 
 
 def fingerprint(path):
@@ -306,20 +327,75 @@ class Recovery:
                                     input=json.dumps(payload), timeout=45))
 
     def verify_guarded(self):
+        running = {unit: self.pid(unit) for unit in UNITS}
+        assert all(running.values())
+        def same_owners():
+            assert all(self.pid(unit) == process for unit, process in running.items())
+        same_owners()
         self.call("wait", lambda: self.call("ready_gateway", "draining") and idle_record(
             self.call("gateway_state"), process=self.pid(UNITS[2]), revision=self.c["hermesRevision"],
             home=self.home, maintenance=self.lease, now=time.time()))
         self.call("google")
+        same_owners()
         self.call("wait", self.f["app_ready"])
         gate = self.rpc("status")
         assert gate["active"] is True and gate["operationId"] == self.operation and gate["busy"] == []
+        same_owners()
         assert json.loads(self.lease.read_text()) == {"operationId": self.operation}
         assert fingerprint(self.target) == self.receipt_sha
         self.assert_fences()
-        self.call("run", [self.c["node"], "--env-file=" + str(self.base / "shared/app.env"),
-                  "--import", "tsx", "scripts/setup.ts", "--check"], cwd=self.release)
+        self.call("run", doctor_command(self.c, self.release), cwd=self.release, timeout=45)
+        same_owners()
+        self.guarded_owners = running
+
+    def finish_guarded(self):
+        """Consume one already restarted, still sealed operation without replay."""
+        marker = self.ops / "finish-attempt.json"
+        assert not marker.exists() and not marker.is_symlink()
+        phase = json.loads(private_file(self.ops / "phase.json").read_text())
+        assert phase["operationId"] == self.operation and phase["phase"] == "recovery-blocked-needs-review"
+        state = json.loads(private_file(self.status_path).read_text())
+        assert state["phase"] == "blocked" and state["maintenance"] is True and state["operationId"] == self.operation
+        baseline = json.loads(private_file(self.ops / "baseline.json").read_text())
+        attempt = json.loads(private_file(self.ops / "resume-attempt.json").read_text())
+        assert attempt["operationId"] == self.operation and attempt["phase"] == "stopped-resume-consumed"
+        assert attempt["baselineSha256"] == fingerprint(self.ops / "baseline.json")
+        assert attempt["previousReceiptSha256"] == fingerprint(self.ops / "previous-qualification.json")
+        assert baseline["release"] == str(self.release)
+        assert baseline["profileHashes"] == self.c["profileHashes"] and baseline["preservedFiles"] == self.c["preservedFiles"]
+        self.unit_hash, self.untouched = baseline["systemdUnitsSha256"], baseline["untouchedUnits"]
+        assert set(self.untouched) == set(UNTOUCHED_UNITS) and all(type(p) is int and p > 0 for p in self.untouched.values())
+        self.receipt_bytes = qualified_input(self.receipt_input, self.release, self.c["hermesRevision"], self.c["repairSha256"])
+        self.receipt_sha = hashlib.sha256(self.receipt_bytes).hexdigest()
+        assert self.receipt_sha == baseline["receiptSha256"] and private_file(self.target).read_bytes() == self.receipt_bytes
+        assert json.loads(private_file(self.lease).read_text()) == {"operationId": self.operation}
+        drain = json.loads(private_file(self.drain).read_text())
+        assert drain["principal"] == self.operation and drain["action"] == "drain" and drain["suppress_notification"] is True
+        self.assert_fences()
+        self.check_requests()
+        self.verify_guarded()
+        self.claim.validate()
+        with marker.open("xb") as output:
+            output.write((json.dumps({"operationId": self.operation, "phase": "guarded-finish-consumed",
+                "baselineSha256": fingerprint(self.ops / "baseline.json"), "receiptSha256": self.receipt_sha,
+                "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}) + "\n").encode())
+            output.flush()
+            os.fsync(output.fileno())
+        directory = os.open(self.ops, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        try:
+            self.phase("guarded-finish-consumed")
+            self.open_admission()
+            return self.complete()
+        except BaseException:
+            self.phase("admission-needs-review" if self.opened else "recovery-blocked-needs-review")
+            raise
 
     def open_admission(self):
+        assert all(self.pid(unit) == process for unit, process in self.guarded_owners.items())
         # Even a lost reply can mean work was admitted. Never stop/restart or
         # replay this release after setting this flag.
         self.opened = True
@@ -387,6 +463,7 @@ def main(argv=None):
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="Read-only live preflight; never change services or admission")
     modes.add_argument("--resume-stopped", action="store_true", help="Consume a proved stopped operation once, using the same config and operation")
+    modes.add_argument("--finish-guarded", action="store_true", help="Consume a proved running operation once, under its original maintenance gate")
     args = parser.parse_args(argv)
     os.umask(0o077)
     info = args.config.lstat()
@@ -426,7 +503,7 @@ def main(argv=None):
     operation = c["operationId"]
     audit_name = "native-recovery-check-" + operation + "-" + str(uuid.uuid4()) if args.check else "native-recovery-" + operation
     ops = base / "operations" / audit_name
-    if args.resume_stopped:
+    if args.resume_stopped or args.finish_guarded:
         info = ops.lstat()
         assert stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
     else:
@@ -453,7 +530,8 @@ def main(argv=None):
                 functions["native"] = native
                 recovery = Recovery(c, functions, claim, ops)
                 try:
-                    print(json.dumps(recovery.resume_stopped() if args.resume_stopped else recovery.execute(args.check)))
+                    result = recovery.finish_guarded() if args.finish_guarded else recovery.resume_stopped() if args.resume_stopped else recovery.execute(args.check)
+                    print(json.dumps(result))
                 except BaseException:
                     import traceback
                     traceback.print_exc(file=log)

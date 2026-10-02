@@ -20,7 +20,7 @@ describe('host-local connection setup', () => {
     const factory = vi.fn(() => ({status: async () => ({connected: true, code: 'ready' as const}), close: async () => {}}));
     const values = {...configured, HERMES_AUTH_MODE: 'service', HERMES_TOKEN: 's'.repeat(43)};
     await checkSetup(values, factory);
-    expect(factory).toHaveBeenCalledWith({url: values.HERMES_URL, token: values.HERMES_TOKEN, authMode: 'service'});
+    expect(factory).toHaveBeenCalledWith({url: values.HERMES_URL, token: values.HERMES_TOKEN, authMode: 'service', qualificationFile: undefined});
     await expect(checkSetup({...configured, HERMES_AUTH_MODE: 'other'}, factory)).rejects.toThrow('HERMES_AUTH_MODE');
   });
   it('preserves comments, unrelated multiline assignments and quoted values, replacing duplicate settings', () => {
@@ -98,8 +98,19 @@ describe('host-local connection setup', () => {
     const close = vi.fn(async () => {});
     const factory = vi.fn(() => ({status, close}));
     expect(await checkSetup(configured, factory)).toEqual({connected: true, code: 'ready'});
-    expect(factory).toHaveBeenCalledWith({url: configured.HERMES_URL, token: configured.HERMES_TOKEN, authMode: 'static'});
+    expect(factory).toHaveBeenCalledWith({url: configured.HERMES_URL, token: configured.HERMES_TOKEN, authMode: 'static', qualificationFile: undefined});
     expect(status).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('uses the configured native qualification receipt during connection verification', async () => {
+    const qualificationFile = '/private/qualified-hermes.json';
+    const close = vi.fn(async () => {});
+    const factory = vi.fn(options => ({
+      status: async () => ({connected: true, code: options.qualificationFile === qualificationFile ? 'ready' as const : 'incompatible' as const}),
+      close,
+    }));
+    expect(await checkSetup({...configured, HERMES_QUALIFICATION_FILE: qualificationFile}, factory)).toEqual({connected: true, code: 'ready'});
     expect(close).toHaveBeenCalledOnce();
   });
 
