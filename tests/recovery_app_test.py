@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("recover_app", ROOT / ".agents/tools/recover-app-after-native-update.py")
@@ -96,7 +97,7 @@ class FakeRecovery(recover.Recovery):
                   "source": str(root / "source"), "maintenanceFile": str(root / "home/maintenance.json"),
                   "qualificationReceipt": str(root / "receipt.json"), "newQualificationReceipt": str(root / "incoming.json"),
                   "upgradeStateDir": str(root / "state"), "operationId": "owned-operation", "webBuild": "build",
-                  "hermesRevision": "5" * 40, "repairSha256": "a" * 64, "node": "node"}
+                  "hermesRevision": "5" * 40, "repairSha256": "a" * 64, "node": "node", "profileHashes": {}, "preservedFiles": {}}
         self.events = []
         self.fail = fail
         self.pids = dict(zip(recover.UNITS, (100, 102, 101)))
@@ -136,12 +137,15 @@ class FakeRecovery(recover.Recovery):
 
     def atomic(self, path, value):
         Path(path).write_bytes(value)
+        Path(path).chmod(0o600)
 
     def check_requests(self):
         self.note("pending-requests-clear")
 
     def system(self, action, *units):
         if action == "show":
+            if "--property=ExecMainPID" in units:
+                return str(102 if units[0] == recover.UNITS[1] else 101)
             return "Result=success\nExecMainCode=1\nExecMainStatus=0"
         self.note(action + ":" + ",".join(units))
         if action == "stop":
@@ -298,6 +302,102 @@ class RecoverySequenceTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             host.verify_stopped(stopped_at)
         self.assertEqual(host.target.read_bytes(), b"old-receipt")
+
+
+class StoppedResumeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.host = self.stopped(Path(self.temp.name))
+
+    def stopped(self, root):
+        host = FakeRecovery(root)
+        host.preflight()
+        baseline = {"release": str(host.release), "receiptSha256": host.receipt_sha,
+            "oldGatewayPid": host.old_gateway, "oldGatewayCodeSha": host.old_code,
+            "oldDashboardPid": host.old_dashboard, "profileHashes": {}, "preservedFiles": {},
+            "systemdUnitsSha256": "unit-hash", "untouchedUnits": dict(zip(recover.UNTOUCHED_UNITS, (301, 302)))}
+        host.write_json(host.ops / "baseline.json", baseline)
+        host.write_json(host.ops / "previous-status.json", host.old_state)
+        host.atomic(host.ops / "previous-qualification.json", b"old-receipt")
+        host.target.chmod(0o600)
+        host.block()
+        requested = time.time()-0.1
+        host.write_json(host.drain, {"action": "drain", "principal": host.operation, "suppress_notification": True,
+            "requested_at": datetime.datetime.fromtimestamp(requested, datetime.timezone.utc).isoformat()})
+        host.system("stop", *recover.UNITS)
+        host.write_json(host.ops / "phase.json", {"operationId": host.operation, "phase": "recovery-blocked-needs-review",
+            "updatedAt": datetime.datetime.fromtimestamp(time.time()+0.1, datetime.timezone.utc).isoformat()})
+        host.events.clear()
+        return host
+
+    def resume(self, host):
+        with mock.patch.object(recover, "qualified_input", return_value=b"new-receipt"):
+            return host.resume_stopped()
+
+    def test_resume_uses_stopped_audit_and_never_repeats_retirement_drain_or_stop(self):
+        self.assertTrue(self.resume(self.host)["maintenanceCleared"])
+        self.assertTrue((self.host.ops / "resume-attempt.json").is_file())
+        self.assertFalse(any(e.startswith(("retire:", "stop:", "request-drain")) for e in self.host.events))
+        self.assertEqual(sum(e.startswith("start:") for e in self.host.events), 1)
+        self.assertEqual(self.host.old_gateway, 101)
+        self.assertEqual(self.host.old_dashboard, 102)
+
+    def test_normal_dashboard_sigterm_is_clean_but_other_owners_are_strict(self):
+        host = self.host
+        original = host.system
+        def dashboard_term(action, *units):
+            if action == "show" and units[0] == recover.UNITS[1] and "--property=ExecMainPID" not in units:
+                return "Result=success\nExecMainCode=2\nExecMainStatus=15"
+            return original(action, *units)
+        host.system = dashboard_term
+        host.verify_stopped(time.time()-1)
+        for bad_unit in (recover.UNITS[0], recover.UNITS[2]):
+            def other_term(action, *units):
+                if action == "show" and units[0] == bad_unit:
+                    return "Result=success\nExecMainCode=2\nExecMainStatus=15"
+                return original(action, *units)
+            host.system = other_term
+            with self.assertRaises(AssertionError):
+                host.verify_stopped(time.time()-1)
+
+    def test_foreign_state_changed_receipt_lease_or_stopped_owner_refuses_before_consumption(self):
+        for bad in ("state", "receipt", "lease", "drain", "record", "running", "baseline", "phase", "exec-pid"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as directory:
+                host = self.stopped(Path(directory))
+                if bad == "state":
+                    host.write_json(host.status_path, {"phase": "blocked", "maintenance": True, "operationId": "foreign"})
+                elif bad == "receipt":
+                    host.atomic(host.target, b"changed")
+                elif bad == "lease":
+                    host.write_json(host.lease, {"operationId": host.operation})
+                elif bad == "drain":
+                    value = json.loads(host.drain.read_text()); value["principal"] = "foreign"; host.write_json(host.drain, value)
+                elif bad == "record":
+                    host.native_record["code_sha"] = "5" * 40
+                elif bad == "running":
+                    host.pids[recover.UNITS[1]] = 999
+                elif bad == "baseline":
+                    value = json.loads((host.ops / "baseline.json").read_text()); value["receiptSha256"] = "wrong"; host.write_json(host.ops / "baseline.json", value)
+                elif bad == "phase":
+                    host.write_json(host.ops / "phase.json", {"operationId": host.operation, "phase": "admission-needs-review"})
+                else:
+                    original = host.system
+                    host.system = lambda action, *units: "999" if "--property=ExecMainPID" in units else original(action, *units)
+                with self.assertRaises(AssertionError):
+                    self.resume(host)
+                self.assertFalse((host.ops / "resume-attempt.json").exists())
+                self.assertFalse(any(e.startswith("start:") for e in host.events))
+
+    def test_failed_resume_consumes_attempt_and_cannot_replay(self):
+        self.host.fail = "doctor"
+        with self.assertRaises(RuntimeError):
+            self.resume(self.host)
+        self.assertTrue((self.host.ops / "resume-attempt.json").exists())
+        events = list(self.host.events)
+        with self.assertRaises(AssertionError):
+            self.resume(self.host)
+        self.assertEqual(self.host.events, events)
 
 
 if __name__ == "__main__":
