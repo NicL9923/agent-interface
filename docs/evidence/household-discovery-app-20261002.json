@@ -1,0 +1,38 @@
+{
+  "accepted": true,
+  "checkedAt": "2026-10-02T15:19:27.847Z",
+  "webBuild": "e64054bf241db021",
+  "checks": {
+    "authenticatedBootstrap": true,
+    "durableTodayFrontier": true,
+    "nativeSearch": true,
+    "savedPointersRead": true,
+    "automationOverview": true,
+    "hostedGroupsReady": true,
+    "nativeProfiles": [
+      {
+        "profileNumber": 1,
+        "memoryRead": true,
+        "vaultMetadataRead": true,
+        "schedulePreview": true,
+        "startersRead": true,
+        "historyRead": true,
+        "routineHistories": 3,
+        "conversationUnchanged": true,
+        "elapsedMs": 1369
+      },
+      {
+        "profileNumber": 2,
+        "memoryRead": true,
+        "vaultMetadataRead": true,
+        "schedulePreview": true,
+        "startersRead": true,
+        "historyRead": true,
+        "routineHistories": 2,
+        "conversationUnchanged": true,
+        "elapsedMs": 1646
+      }
+    ],
+    "temporarySessionRemoved": true
+  }
+}

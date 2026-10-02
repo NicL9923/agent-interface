@@ -1,0 +1,28 @@
+{
+  "kind": "Actual native gated HTTP and WS, verified Google-session fixture, fresh isolated home, no production mutation",
+  "revision": "5bba024d8ddd388f56f354c1f789be825e3d8a3c",
+  "tracked_patch_sha256": "50aaad61643d004d955a93a336bb1466578e0d95fd1b2b9a1b52bccda98d8acb",
+  "checks": {
+    "original_google_cookie_and_native_http_ws_unchanged": true,
+    "credential_origin_cookie_and_direct_peer_guards": true,
+    "finite_native_voice_bridge_without_secret_configuration": true,
+    "native_encrypted_store_profile_scope_metadata_only": true,
+    "native_four_prompt_scopes_once_epoch_and_model_blind_values": true,
+    "native_named_secret_scope_persistence_and_redaction": true,
+    "native_cancel_and_other_answer_race_expired_without_replay": true,
+    "native_exact_origin_mid_fill_navigation_and_vault_egress_redaction": true,
+    "synthetic_values_absent_canonical_rows_addon_journal_logs_and_http": true,
+    "native_canonical_tool_secure_prompt_and_actual_cdp_fill": true,
+    "native_take_release_during_prompt_prevents_save_and_fill": true,
+    "native_model_wire_canonical_rows_and_frames_secret_free": true,
+    "native_actual_cdp_navigation_before_fill_refused": true,
+    "native_remove_local_and_missing_manager_explicit": true,
+    "one_time_native_gateway_ticket_and_actual_revision": true,
+    "finite_native_handler_allowlist_and_encoded_path_guards": true,
+    "native_profile_mutation_and_file_policy_preserved": true,
+    "strong_private_key_requirement": true,
+    "installer_service_ticket_native_maintenance_status_acquire_release": true,
+    "installer_wrong_route_key_and_owner_cannot_release_lease": true,
+    "original_google_http_reads_preserved_under_maintenance": true
+  }
+}
