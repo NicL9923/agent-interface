@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Qualify a staged app release in disposable native homes, without cutover.
+
+Uses the installed source and approved repair, a separate PM generation and the
+installer's private shared-OAuth/Google fixtures. Prints only receipt metadata.
+Run before release-app.py prepare --qualification when integration inputs change.
+"""
+import argparse
+import importlib.util
+import json
+from pathlib import Path
+
+REMOTE = r'''
+import datetime, importlib.util, uuid
+base = Path(PAYLOAD["appBase"])
+release = Path(PAYLOAD["release"])
+ops = Path(PAYLOAD["operationDir"])
+assert release.parent == base / "releases" and ops.parent == base / "operations"
+assert release.is_dir() and not release.is_symlink()
+assert sha(ops / "release.tar.gz") == PAYLOAD["archiveSha256"]
+worker_path = base / "shared/hermes-worker.json"
+worker = json.loads(worker_path.read_text())
+live, home = Path(worker["source"]), Path(worker["managedHome"])
+python, launcher = Path(worker["qualificationPython"]), Path(worker["managedLauncher"])
+patch = Path(worker["approvedPatchFile"])
+private = base / "shared/upgrade-private"
+runner = private / "regressions.py"
+assert all(p.is_absolute() for p in [live, home, python, launcher, patch])
+assert sha(patch) == worker["requiredPatchSha256"]
+
+def snapshot(path):
+    revision = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+    diff = subprocess.check_output(["git", "-C", str(path), "diff", "HEAD", "--binary"])
+    return revision, hashlib.sha256(diff).hexdigest()
+
+baseline = snapshot(live)
+assert baseline == (PAYLOAD["hermesRevision"], worker["requiredPatchSha256"])
+host_files = {p: sha(p) for p in {str(worker_path), str(runner), *worker["qualificationFiles"]}}
+qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
+digest = qualification["integration_digest"](release)
+operation = str(uuid.uuid4())
+stage = ops / ("qualification-" + operation)
+stage.mkdir(mode=0o700)
+(stage / ".agent-interface-upgrade-stage").write_text(json.dumps(dict(schemaVersion=1, operationId=operation, state="active")))
+(stage / ".agent-interface-isolated").write_text("agent-interface-disposable-spike")
+source = stage / "source"
+fixture_home = stage / "host-home"
+fixture_home.mkdir(mode=0o700)
+env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if k in os.environ}
+env.update(HOME=str(fixture_home), PYTHONDONTWRITEBYTECODE="1", PATH=str(Path(PAYLOAD["node"]).parent) + ":" + env.get("PATH", "/usr/bin:/bin"))
+
+def run(argv, name, environment=None, capture=False, cwd=release):
+    with (stage / name).open("w") as output:
+        result = subprocess.run([str(v) for v in argv], env=environment or env, cwd=cwd,
+            stdout=subprocess.PIPE if capture else output, stderr=output, text=True,
+            timeout=worker.get("qualificationTimeoutSeconds") or 3600)
+    if result.returncode:
+        raise RuntimeError("Qualification step failed: " + name + ". Inspect its owner-private log; no receipt was issued.")
+    return result.stdout
+
+run(["git", "clone", "--no-hardlinks", "--no-checkout", live, source], "source-clone.log")
+run(["git", "-C", source, "checkout", "--detach", baseline[0]], "source-checkout.log")
+run(["git", "-C", source, "apply", "--index", patch], "source-repair.log")
+assert snapshot(source) == baseline
+prepared = json.loads(run([python, "-I", release / "scripts/hermes-qualified-python.py", "prepare",
+    "--source", source, "--stage", stage, "--launcher", launcher,
+    "--installed-source", live, "--installed-home", home], "managed-prepare.log",
+    environment={**env, "HERMES_HOME": str(home)}, capture=True))
+(stage / "prepared-runtime.json").write_text(json.dumps(prepared, indent=2))
+qualified = Path(prepared["python"])
+assert qualified.parent == stage and qualified.is_file()
+isolated_app = stage / "app"
+isolated_app.mkdir(mode=0o700)
+for directory in ("src", "scripts"):
+    shutil.copytree(release / directory, isolated_app / directory)
+(isolated_app / "docs/evidence").mkdir(parents=True)
+for name in ("package.json", "package-lock.json", "tsconfig.json"):
+    shutil.copy2(release / name, isolated_app / name)
+(isolated_app / "node_modules").symlink_to(release / "node_modules", target_is_directory=True)
+assert qualification["integration_digest"](isolated_app) == digest
+run([qualified, isolated_app / "scripts/spike/run.py", "--qualification", "--revision", baseline[0],
+    "--source", source, "--python", qualified, "--source-patch-sha256", baseline[1]], "integration.log", cwd=isolated_app)
+regression_home = stage / "regression-home"
+regression_home.mkdir(mode=0o700)
+(regression_home / "config.yaml").write_text("plugins:\n  enabled: []\n")
+regression_env = {**env, "HERMES_UPGRADE_STAGE_HOME": str(stage), "HERMES_UPGRADE_STAGE_SOURCE": str(source),
+    "HERMES_UPGRADE_OPERATION_ID": operation, "HERMES_HOME": str(regression_home)}
+run([qualified, runner, "shared-oauth", "--pytest-harness", private / "pytest-harness"],
+    "shared-oauth-regressions.log", regression_env)
+run([qualified, runner, "google-auth", "--google-bundle", private / "google-plugin"],
+    "google-regressions.log", regression_env)
+assert snapshot(live) == snapshot(source) == baseline
+assert all(sha(p) == expected for p, expected in host_files.items())
+assert qualification["integration_digest"](release) == digest
+assert qualification["integration_digest"](isolated_app) == digest
+utility = runpy.run_path(str(release / "scripts/hermes-qualified-python.py"))
+assert utility["fingerprint"](qualified) == prepared["fingerprint"]
+receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
+    qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
+receipt_path = stage / "qualification.json"
+receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+qualification["read_receipt"](receipt_path, release)
+finish(dict(qualificationComplete=True, receipt=str(receipt_path), integrationDigest=digest,
+    revision=baseline[0], trackedPatchSha256=baseline[1], productionSourceUnchanged=True))
+'''
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("name", help="staged release name from release-app.py prepare")
+    args = parser.parse_args()
+    if Path(args.name).name != args.name:
+        parser.error("Use a release name, not a path")
+    spec = importlib.util.spec_from_file_location("release_app", Path(__file__).with_name("release-app.py"))
+    release_app = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(release_app)
+    manifest = release_app.load_manifest(args.name)
+    if manifest["status"] not in ("preparing", "prepared"):
+        parser.error("Qualify an unactivated staged release only")
+    facts = release_app.remote(manifest["host"], release_app.REMOTE_FACTS, {"appBase": manifest["appBase"]})
+    payload = {**manifest, "node": facts["prior"]["node"]}
+    result = release_app.remote(manifest["host"], REMOTE, payload, timeout=7200)
+    release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

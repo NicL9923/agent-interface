@@ -33,7 +33,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Check Python syntax
-        run: python3 -m compileall -q src/hermes scripts
+        run: python3 -m compileall -q src/hermes scripts .agents/tools
       - name: Check dashboard startup boundaries
         run: python3 scripts/spike/dashboard_contract_test.py
       - name: Check qualification boundaries
