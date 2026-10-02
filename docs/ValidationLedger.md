@@ -1,5 +1,43 @@
 # Validation ledger
 
+## October 2 external native update recovery
+
+The separately completed Hermes update left the current app at release `9273f8a`
+with its earlier d23 qualification. The restarted dashboard correctly disabled
+the unqualified private hooks, while the gateway still ran its earlier generation.
+The new app's guarded preflight refused HTTP 401 from the unavailable maintenance
+route. It changed no services or active release.
+
+Full disposable qualification completed against native `5bba024d8ddd388f56f354c1f789be825e3d8a3c`
+and tracked repair `50aaad61643d004d955a93a336bb1466578e0d95fd1b2b9a1b52bccda98d8acb`
+for both the unchanged current app and merged login implementation. Each run
+completed the native/app probes and all 18 private shared-OAuth/Google checks.
+Their public archives are
+[current app recovery evidence](evidence/native-recovery-927-5bb-20261002/manifest.json)
+and [login release evidence](evidence/native-vault-5bb-20261002/manifest.json).
+The corresponding integration digests are
+`3d0359d2cae0b100917202e55606c4643f50460a1cd8a72a83714f0c938db809`
+and `4f150ba50f8fa34ce8e5e8bca87743ff555fa478fe0f5d768920db4176085f38`.
+Both runs proved live native source continuity. The read-only Chromium input
+remained at SHA256 `481fea1516a1f2b76454664272f12cd9dd1f20117b21e1f1498e08bc7f872c00`.
+
+The recovery helper keeps the current app release, qualifies its receipt, binds
+native retirement and drain to the actual running generations, and installs the
+receipt only after clean service stops and a persistent owned maintenance lease.
+It fences household settings, service configuration, update ownership, source
+and the untouched computer/terminal supervisors. Independent review added exact
+pending-ingress and maintenance-path checks, plus binding to the app's actual
+worker state and configuration. Uncertain recovery retains its phase for review
+and refuses replay. Production recovery and login activation are still pending.
+
+The frozen follow-up source covers 435 files:
+`sha256:29df91c3f8e804d6eaa1202f81773a2654264d92908e7db03afdfb88af66f3bd`.
+All 12 focused recovery checks, Python syntax and whitespace checks completed.
+The helper SHA256 is
+`3197324fb9385d2f03ce85633fda142da957e18c7135f949daff6d929f4c0076`.
+Product and integration inputs are unchanged, so their successful checks and
+fresh full qualification remain applicable.
+
 ## October 2 native passwords and logins
 
 Branch `feature/native-vault-logins` starts from merged PR #19, `9273f8a`.
@@ -54,6 +92,8 @@ CI initially found the dashboard startup fixture did not stub the new vault hook
 The corrected fixture now covers failed vault installation as well; all five
 startup checks and three qualification-boundary checks completed. Vault contract
 checks are included in CI alongside native memory ownership.
+PR #20 merged at `6b65d7864624dd9899abd59f6031ddefe458c39c` after the final
+Node 24.21.0 and 26.10.0 CI jobs completed, including all 339 application checks.
 The release wrapper completed 18 checks. The unchanged installer's approved-tree
 provenance suite completed 34 checks with one skipped test. The release qualifier
 now reuses that provenance proof so upstream changes to diff headers cannot be
@@ -79,8 +119,8 @@ requests, canonical history and event frames stayed canary-free. Native file and
 terminal tools produced an explicit redaction marker for a newly saved named
 secret, while the other profile retained separate redactor and environment state.
 The native browser also refused an actual mid-fill navigation, leaving the new
-page's password field empty. The final merged release must repeat this proof
-against its own qualified source.
+page's password field empty. Full qualification of the merged release repeated
+all 21 service checks against updated native 5bba024, as archived above.
 
 Nicolas confirmed a separate session completed the live native update to
 `5bba024d8ddd388f56f354c1f789be825e3d8a3c`. Its tracked diff hash is

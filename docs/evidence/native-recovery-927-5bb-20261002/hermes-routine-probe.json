@@ -1,0 +1,11 @@
+{
+  "revision": "5bba024d8ddd388f56f354c1f789be825e3d8a3c",
+  "provider": "deterministic fixture; real scheduler provider/AIAgent",
+  "checks": {
+    "native_scheduler_provider_execution": true,
+    "canonical_bot_delivery": true,
+    "durable_routine_discovery": true,
+    "explicit_routine_identity": true
+  },
+  "scheduler_owner": "Official in-process scheduler provider fired through authenticated dashboard trigger. Automatic timer scheduling requires a separately supervised native gateway/scheduler; application never executes jobs."
+}

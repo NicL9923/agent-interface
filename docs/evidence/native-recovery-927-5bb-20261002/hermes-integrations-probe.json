@@ -1,0 +1,22 @@
+{
+  "revision": "5bba024d8ddd388f56f354c1f789be825e3d8a3c",
+  "checks": {
+    "native_inventory_and_no_secret_previews": true,
+    "native_profile_key_rotation_and_disconnect": true,
+    "native_mcp_crud_credential_owner_and_ssrf_rejection": true,
+    "native_literal_mcp_bearer_rotation_repoints_credential_owner": true,
+    "native_external_mcp_worker_settles_before_disconnect_removal": true,
+    "native_mcp_start_fenced_during_remove_and_after_stale_read": true,
+    "hermes_credential_tree_and_special_file_reads_rejected": true,
+    "native_tool_registry_selected_roots_no_symlinks_or_traversal": true,
+    "native_dedicated_read_toolsets_toggle_without_write_tools": true,
+    "durable_live_evidence_invalidated_by_configuration_change": true,
+    "persistent_maintenance_and_native_reservation_released": true,
+    "workspace_scope_truth_and_setup_preserves_existing_grant": true,
+    "actual_google_oauth_pkce_scopes_poll_and_cancel_without_network": true,
+    "finite_service_sensitive_native_gate_preserves_original_auth": true,
+    "lost_native_flow_returns_terminal_expired_state": true
+  },
+  "googleOAuthLibrariesAvailable": true,
+  "note": "Actual native handlers, env/MCP lifecycle and registered file tool exercised. No live third-party sign-in, OAuth token exchange or external service probes."
+}
