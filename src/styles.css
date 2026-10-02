@@ -251,7 +251,7 @@ a {
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
-  padding: 28px 10px 8px;
+  padding: 20px 10px 0;
 }
 .online-dot {
   width: 6px;
@@ -259,11 +259,41 @@ a {
   border-radius: 50%;
   background: var(--accent);
 }
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 14px;
+  flex-shrink: 0;
+}
+.rail-nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  padding: 9px 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.rail-nav button:hover:enabled {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+}
+.rail-nav button[aria-current="page"] {
+  color: var(--ink);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+.rail-nav button[aria-current="page"] .icon {
+  color: var(--accent);
+}
 .rail-scroll {
   min-height: 0;
   overflow: auto;
   flex: 1;
-  padding-top: 16px;
+  padding-top: 18px;
   margin: 0 -6px;
   padding-inline: 6px;
   mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
@@ -667,14 +697,22 @@ a {
 .composer-tools {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
   justify-content: space-between;
+  margin: 4px 0 0 -8px;
+}
+.composer-tools .attach-control {
+  margin: 0;
 }
 .composer-hint {
   font-size: 10px;
   color: var(--muted);
   flex: 1;
+  min-width: 0;
   text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .attach-control {
   position: relative;
@@ -688,6 +726,19 @@ a {
   cursor: pointer;
   padding: 8px;
   border-radius: 10px;
+}
+.composer-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-tool:hover:enabled,
+.composer-tool[aria-expanded="true"] {
+  color: var(--ink);
 }
 .attach-control:hover:not(.disabled) {
   color: var(--ink);
@@ -1157,9 +1208,22 @@ a {
     min-height: 44px;
   }
   .attach-control,
+  .composer-tool,
   .send-button {
     min-width: 44px;
     min-height: 44px;
+    justify-content: center;
+  }
+  .composer-tools .tool-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .composer-tools .send-button {
+    margin-left: auto;
   }
   .approval-card {
     padding: 16px;
@@ -1188,6 +1252,7 @@ a {
     padding: 0 12px;
   }
   .rail-footer button,
+  .rail-nav button,
   .new-bot,
   .settings-dialog button,
   .preferences-panel button,

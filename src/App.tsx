@@ -28,7 +28,7 @@ import type { VoiceState } from "./shared/voice";
 import { SecureRequestCard } from "./components/SecureRequestCard";
 import { AgentExchange, isAgentExchange } from "./components/AgentExchange";
 import { RoutineResults } from "./components/RoutineResults";
-import { DiscoveryPanel, StarterActions } from "./components/DiscoveryPanel";
+import { DiscoveryPanel, StarterActions, useStarters } from "./components/DiscoveryPanel";
 import { ActionReceipt } from "./components/ActionReceipt";
 import "./components/discovery.css";
 import { GroupChats } from "./components/GroupChats";
@@ -113,11 +113,14 @@ export function App() {
   const [botId, setBotId] = useState(
     () => new URLSearchParams(location.search).get("bot") || "",
   );
+  // Only known assistants: a stale deep link must not reach Hermes.
+  const starters = useStarters(boot?.bots.some(bot => bot.id === botId) ? botId : "");
   const [conversation, setConversation] = useState<SavedConversation | null>(
     null,
   );
   const [draft, setDraft] = useState<Draft>({ text: "", attachments: [] });
   const [draftReady, setDraftReady] = useState(false);
+  const [startersOpen, setStartersOpen] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
   const [sending, setSending] = useState(false);
@@ -584,6 +587,7 @@ export function App() {
     setTodayOpen(false);
     setGroupsOpen(false);
     setBotId(id);
+    setStartersOpen(false);
     setRailOpen(false);
     setError("");
   };
@@ -798,11 +802,19 @@ export function App() {
           <span className="online-dot" />
           {boot.user.name}'s home
         </div>
+        <nav className="rail-nav" aria-label="Household">
+          {([
+            ["today", "Today", todayOpen],
+            ["groups", "Group chats", groupsOpen],
+            ["find", "Search & saved", discoveryOpen],
+          ] as const).map(([view, label, current]) => (
+            <button key={view} type="button" aria-current={current ? "page" : undefined}
+              onClick={() => { setTodayOpen(view === "today"); setGroupsOpen(view === "groups"); setDiscoveryOpen(view === "find"); setRailOpen(false); }}>
+              <Icon name={view === "find" ? "search" : view} size={18} /> {label}
+            </button>
+          ))}
+        </nav>
         <div className="rail-scroll">
-          <button className="today-navigation" type="button" aria-current={todayOpen ? "page" : undefined}
-            onClick={() => { setTodayOpen(true); setDiscoveryOpen(false); setGroupsOpen(false); setRailOpen(false); }}><Icon name="today" size={20} /> Today</button>
-          <button className="today-navigation" type="button" aria-current={groupsOpen ? 'page' : undefined} onClick={() => { setGroupsOpen(true); setDiscoveryOpen(false); setTodayOpen(false); setRailOpen(false); }}>↔ Group chats</button>
-          <button className="today-navigation" type="button" aria-current={discoveryOpen?"page":undefined} onClick={()=>{setDiscoveryOpen(true);setTodayOpen(false);setGroupsOpen(false);setRailOpen(false);}}>⌕ Search & saved items</button>
           {prefs.sections.map((section) => (
             <section className="bot-section" key={section.id}>
               <h2>{section.name}</h2>
@@ -878,7 +890,7 @@ export function App() {
           >
             <Icon name="menu" />
           </button>
-          {discoveryOpen ? <div className="chat-title"><h1>Find & manage</h1><p>Useful work, within reach</p></div> : groupsOpen ? <div className="chat-title"><h1>Group chats</h1><p>Your assistants, together</p></div> : todayOpen ? <div className="chat-title"><h1>Today</h1><p>Your assistants, at a glance</p></div> : selected ? (
+          {discoveryOpen ? <div className="chat-title"><h1>Search & saved</h1><p>Past answers, saved items and automations</p></div> : groupsOpen ? <div className="chat-title"><h1>Group chats</h1><p>Two to six assistants in one conversation</p></div> : todayOpen ? <div className="chat-title"><h1>Today</h1><p>Your assistants, at a glance</p></div> : selected ? (
             <>
               <Avatar
                 avatar={selected.avatar}
@@ -1152,7 +1164,7 @@ export function App() {
         </div>
         {selected && (
           <footer className="composer-area">
-            {selected && <StarterActions botId={botId} onDraft={prompt=>{setDraft(previous=>({...previous,dirty:true,text:previous.text?`${previous.text}\n\n${prompt}`:prompt}));composerInput.current?.focus();}} />}
+            {(startersOpen || (conversation && !conversation.messages.length)) && <StarterActions items={starters} onDraft={prompt=>{setDraft(previous=>({...previous,dirty:true,text:previous.text?`${previous.text}\n\n${prompt}`:prompt}));setStartersOpen(false);composerInput.current?.focus();}} />}
             {state === "interrupted" && (
               <label className="interruption-review">
                 <input
@@ -1284,21 +1296,13 @@ export function App() {
                 rows={2}
                 disabled={!draftReady || draft.botId !== botId}
               />
-              <div className="composer-voice">
-                {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={32} name={selected.name} /></span>}
-                <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
-                  reply={!active ? conversation?.messages.findLast(message => message.role === "assistant") : undefined}
-                  disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
-                  onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
-                    text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
-              </div>
               <div className="composer-tools">
                 <label
                   className={`attach-control ${!boot.capabilities.uploads.supported ? "disabled" : ""}`}
                   title={boot.capabilities.uploads.reason}
                 >
                   <Icon name="attach" size={18} />
-                  <span>Attach</span>
+                  <span className="tool-label">Attach</span>
                   <input
                     aria-label="Attach images, PDFs, or text"
                     type="file"
@@ -1316,6 +1320,20 @@ export function App() {
                     }}
                   />
                 </label>
+                {!!starters.length && !!conversation?.messages.length && (
+                  <button type="button" className="composer-tool" aria-expanded={startersOpen}
+                    onClick={() => setStartersOpen(open => !open)}>
+                    <Icon name="sparkle" size={18} /><span className="tool-label">Starters</span>
+                  </button>
+                )}
+                <div className="composer-voice">
+                  {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} /></span>}
+                  <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
+                    reply={!active ? conversation?.messages.findLast(message => message.role === "assistant") : undefined}
+                    disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
+                    onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
+                      text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
+                </div>
                 <span className="composer-hint">
                   {uploading
                     ? "Uploading…"

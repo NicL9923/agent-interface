@@ -14,8 +14,6 @@
 .today-row small { color: var(--muted); margin-top: 5px; }
 .today-row > span:last-child:not(:first-child) { font-size: 13px; }
 .today-timestamp { font-size: 12px; }
-.today-navigation { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; width: 100%; text-align: left; }
-.today-navigation[aria-current="page"] { background: var(--accent-soft); }
 .memory-document { border-top: 1px solid var(--line); padding: 18px 0; }
 .memory-heading { flex-wrap: wrap; }
 .memory-heading h3 { margin: 0; }
@@ -60,7 +58,7 @@
 .routine-preview, .routine-run-status { border-left: 3px solid var(--accent); padding: 10px 14px; margin: 12px 0; }
 .routine-preview ol { padding-left: 20px; }
 .voice-avatar { border-radius: 50%; position: relative; display: inline-flex; }
-.composer-voice { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.composer-voice { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .voice-avatar.voice-recording::after, .voice-avatar.voice-speaking::after { content: ""; position: absolute; inset: -4px; border: 2px solid var(--accent); border-radius: 50%; animation: voice-pulse 1.4s ease-in-out infinite; }
 @keyframes voice-pulse { 50% { opacity: .3; transform: scale(1.1); } }
 @media (prefers-reduced-motion: reduce) { .voice-avatar::after { animation: none !important; } }

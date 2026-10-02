@@ -44,6 +44,10 @@ const paths = {
   upgrade: "M12 17V7M7.5 11.5L12 7l4.5 4.5M5 20h14",
   file: "M7 3h7l5 5v13H7ZM14 3v5h5",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z",
+  search: "M16.5 10.5a6 6 0 1 1-12 0a6 6 0 1 1 12 0ZM15 15l5 5",
+  groups: "M4 5h11v8H9l-3 3v-3H4ZM15 9h5v8h-2v3l-3-3h-4v-4",
+  mic: "M9 5a3 3 0 0 1 6 0v6a3 3 0 0 1-6 0ZM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21",
+  speaker: "M4 9.5h4L13 5v14l-5-4.5H4ZM16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11",
 } as const;
 export type IconName = keyof typeof paths;
 const filledIcons: IconName[] = ["stop"];

@@ -43,3 +43,10 @@ it('disables creation and sending when native group coordinator is unavailable',
   expect(Array.from(container.querySelectorAll('button')).find(button=>button.textContent==='New group')?.disabled).toBe(true);
   expect(container.textContent).toContain('Coordinator is unavailable.');expect(write).not.toHaveBeenCalled();
 });
+it('keeps existing rooms readable while a saved group creation awaits retry',async()=>{
+  localStorage.setItem('agent-interface:group-create:one',JSON.stringify({requestId:crypto.randomUUID(),name:'Garden crew',botIds:['ranch','planner']}));
+  vi.mocked(api).mockImplementation(async(path)=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events:[{event_id:'one',seq:1,kind:'message.user',actor:{id:'one'},payload:{text:'Bring water'},created_at:1}],cursor:1,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}});
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  expect(container.textContent).toContain('Finish creating group');expect(container.textContent).toContain('Bring water');
+  expect(Array.from(container.querySelectorAll('button')).some(button=>button.textContent==='Retry saved group request')).toBe(true);
+});

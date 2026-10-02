@@ -230,3 +230,18 @@ it.each(['','?bot=shared'])('uses Today only when initial navigation has no expl
   history.replaceState(null,'',`/${query}`);await renderApp();
   expect(!!container.querySelector('.today-panel')).toBe(!query);expect(!!container.querySelector('.transcript')).toBe(!!query);
 });
+it('offers starters in an empty conversation and keeps them behind a toggle once it has history',async()=>{
+  const previous=vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async <T>(path:string)=>path==='/bots/shared/starters'?[{id:'meals',title:'Plan dinners',prompt:'Plan three dinners'}] as T:previous(path));
+  const chips=()=>[...container.querySelectorAll('.starter-actions button')].map(button=>button.textContent);
+  const toggle=()=>[...container.querySelectorAll<HTMLButtonElement>('.composer-tool')].find(button=>button.textContent==='Starters');
+  await renderApp();await advance(20);
+  expect(chips()).toEqual([]);
+  await act(async()=>toggle()!.click());
+  expect(chips()).toEqual(['Plan dinners']);expect(toggle()!.getAttribute('aria-expanded')).toBe('true');
+  await act(async()=>container.querySelector<HTMLButtonElement>('.starter-actions button')!.click());
+  expect(container.querySelector('textarea')!.value).toContain('Plan three dinners');expect(chips()).toEqual([]);
+  await act(async()=>root.unmount());root=createRoot(container);conversation.messages=[];
+  await renderApp();await advance(20);
+  expect(chips()).toEqual(['Plan dinners']);expect(toggle()).toBeUndefined();
+});
