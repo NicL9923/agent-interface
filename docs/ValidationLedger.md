@@ -1,5 +1,47 @@
 # Validation ledger
 
+## October 2 production history renderer follow-up
+
+Authenticated post-release acceptance exposed an entrypoint mismatch: disposable
+qualification supplied Hermes's renderer, while the production dashboard wrapper
+left it unset. The follow-up supplies the patched native renderer in production
+and requires a callable renderer before installing any experience route. The
+existing dashboard contract now exercises this dependency and checks early
+failure for an absent renderer.
+
+The source state covers 512 files:
+`sha256:b82c12dddace1883bd349d023ac292129b421a441d8e404097ce82b0b5d8ab2e`.
+Six production-startup contracts and twelve experience regressions passed.
+Independent GPT-6.1 Sol review confirmed the patched renderer is read after
+extension installation, both entrypoints supply it, and no blockers remain. Web,
+iOS and other successful checks apply to their unchanged inputs. Production
+activation requires another full repaired-source qualification. The complete
+68-test native result bundle is retained privately; Xcode's later simulator
+diagnostic collection timed out after the tests, and the final result remained
+successful.
+
+## October 2 app release 3b9263f
+
+PR #25 merged at `3b9263ff0dc10c11a5ddacb5395dca1021a15d71`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `e64054bf241db021`, from the archive with SHA256
+`8b2185b5f25f4eaaede3eb77b30790598a0e86bfcdeead4ca3b8f27b91535a6a`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-3b9263ff-20261002T145601Z.json) records the result. Hermes remains
+at `5bba024d8ddd`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. Authenticated acceptance then exercised Today, native
+memory/vault metadata, search, automation usage, saved-item listing and hosted
+group readiness. Opening original history failed because the production wrapper
+omitted the native renderer; the follow-up requires that renderer at startup and
+adds a production-entrypoint regression. The interim release was not accepted as
+complete. Its successful [repaired-source qualification](evidence/native-household-release-5bb-20261002/manifest.json)
+binds integration digest `d4012b7a59c727ab87f832028e25572f8382a91cd40c3e52ae1510393c549751`.
+The original receipt directory is retained on the VPS.
+
 ## October 2 household discovery, sharing and oversight
 
 The final implementation adds native conversation and attachment-name search,
@@ -19,7 +61,7 @@ group creation/messaging. Physical-device signing, App Group provisioning and
 push delivery remain external acceptance.
 
 The [disposable qualification](evidence/native-household-5bb-20261002/manifest.json)
-passed against clean Hermes `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, integration
+passed against clean Hermes `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, app probe source
 digest `5ae031c6671d2b7ccef5dca00ef55c1d8360f0470ec0266501a9200164f20d69`.
 It exercises native search, scoped read-only history, recorded usage, routine
 outputs, persistent group replies and all existing integration probes. The
@@ -63,7 +105,7 @@ the results dialog; coordinator-off fixtures keep history visible and actions
 disabled. Signed physical-device push delivery remains external acceptance.
 
 The [final disposable native qualification](evidence/native-collaboration-final-5bb-20261002/manifest.json)
-passed against clean Hermes `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, integration
+passed against clean Hermes `5bba024d8ddd388f56f354c1f789be825e3d8a3c`, app probe source
 digest `ad029a3047bb61de06c5c1dcf965bce79d60fa5acce7b43651fa7d006e276a6a`.
 Its native experience probe proves profile-scoped routine output, group creation,
 send deduplication, a saved assistant reply, log reads and stopping. The full run
