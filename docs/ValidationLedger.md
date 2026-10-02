@@ -38,6 +38,33 @@ The helper SHA256 is
 Product and integration inputs are unchanged, so their successful checks and
 fresh full qualification remain applicable.
 
+PR #21 merged at `8e96d855821117de5966f8e499cfdc378523ca32` after both
+Node 24.21.0 and 26.10.0 CI jobs completed. The merged helper's live read-only
+preflight completed. Its first execution then stopped before mutation because
+the old gateway's normal 60-second heartbeat exceeded the strict ten-second
+freshness bound. Independent inspection confirmed the receipt, worker status,
+service owners and admission were unchanged. The failed audit was preserved.
+A new operation changed only its ID and waited for a fresh idle heartbeat.
+
+That operation committed native retirement and stopped all three services, then
+halted before receipt installation. The dashboard returned systemd's successful
+SIGTERM verdict, while the helper required an ordinary zero exit. The app and
+gateway returned zero exits; the old gateway's matching stopped acknowledgment
+and clean-shutdown marker followed its owned drain. No receipt or lease changed.
+Native 5b's server explicitly re-raises SIGTERM after graceful Uvicorn shutdown,
+preserving that termination disposition; review checked the installed source.
+The follow-up accepts only that dashboard SIGTERM verdict and adds a one-use
+continuation of this exact stopped operation. It checks the original baseline,
+unchanged receipt, stopped owners, owned drain and all existing source/config
+fences before proceeding. It does not repeat native retirement or drain.
+
+The stopped-continuation follow-up covers 435 source files:
+`sha256:0c9aed122ad2f3c0d4282705f6b717780ca1882d9d74b4ded55324dc36ba1dbc`.
+All 16 recovery checks, syntax and whitespace checks completed. The helper SHA256
+is `17fefa55fc639dd9a97b71df49bbe496f5ce7c4602378c1a944ab7dfc76b4035`.
+Its production use remains pending merge and final review; the unchanged product
+qualification and prior application checks remain applicable.
+
 ## October 2 native passwords and logins
 
 Branch `feature/native-vault-logins` starts from merged PR #19, `9273f8a`.

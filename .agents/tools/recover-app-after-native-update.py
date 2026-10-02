@@ -201,7 +201,10 @@ class Recovery:
         for unit in UNITS:
             verdict = dict(line.split("=", 1) for line in self.system("show", unit,
                            "--property=Result,ExecMainCode,ExecMainStatus").splitlines())
-            assert verdict == {"Result": "success", "ExecMainCode": "1", "ExecMainStatus": "0"}
+            clean_exit = {"Result": "success", "ExecMainCode": "1", "ExecMainStatus": "0"}
+            # Native web_server gracefully closes, then re-raises SIGTERM.
+            normal_dashboard_stop = {"Result": "success", "ExecMainCode": "2", "ExecMainStatus": "15"}
+            assert verdict == clean_exit or unit == UNITS[1] and verdict == normal_dashboard_stop
         assert (self.home / ".clean_shutdown").stat().st_mtime >= stopped_at
         record = self.call("gateway_state")
         assert record["pid"] == self.old_gateway and record["code_sha"] == self.old_code
@@ -209,6 +212,76 @@ class Recovery:
         assert datetime.datetime.fromisoformat(record["updated_at"]).timestamp() >= stopped_at
         assert type(record.get("active_agents")) is int and record["active_agents"] == 0
         assert "active_work" in record and record["active_work"] in (None, [])
+
+    def continue_stopped(self):
+        self.install()
+        self.phase("matching-receipt-installed")
+        self.system("start", UNITS[1], UNITS[2], UNITS[0])
+        self.verify_guarded()
+        self.phase("guarded-verification-passed")
+        self.open_admission()
+        return self.complete()
+
+    def resume_stopped(self):
+        """Consume one narrowly proved stopped operation, without repeating retirement."""
+        marker = self.ops / "resume-attempt.json"
+        assert not marker.exists() and not marker.is_symlink()
+        phase = json.loads(private_file(self.ops / "phase.json").read_text())
+        assert phase["operationId"] == self.operation and phase["phase"] == "recovery-blocked-needs-review"
+        state = json.loads(private_file(self.status_path).read_text())
+        assert state["phase"] == "blocked" and state["maintenance"] is True and state["operationId"] == self.operation
+        baseline = json.loads(private_file(self.ops / "baseline.json").read_text())
+        assert baseline["release"] == str(self.release)
+        assert baseline["profileHashes"] == self.c["profileHashes"] and baseline["preservedFiles"] == self.c["preservedFiles"]
+        self.unit_hash, self.untouched = baseline["systemdUnitsSha256"], baseline["untouchedUnits"]
+        assert set(self.untouched) == set(UNTOUCHED_UNITS) and all(type(p) is int and p > 0 for p in self.untouched.values())
+        self.old_dashboard, self.old_gateway, self.old_code = baseline["oldDashboardPid"], baseline["oldGatewayPid"], baseline["oldGatewayCodeSha"]
+        assert type(self.old_dashboard) is int and self.old_dashboard > 0 and type(self.old_gateway) is int and self.old_gateway > 0
+        assert re.fullmatch(r"[0-9a-f]{40}", self.old_code)
+        self.old_state = json.loads(private_file(self.ops / "previous-status.json").read_text())
+        assert self.old_state["maintenance"] is False
+        self.receipt_bytes = qualified_input(self.receipt_input, self.release, self.c["hermesRevision"], self.c["repairSha256"])
+        self.receipt_sha = hashlib.sha256(self.receipt_bytes).hexdigest()
+        assert self.receipt_sha == baseline["receiptSha256"]
+        previous = private_file(self.ops / "previous-qualification.json").read_bytes()
+        assert private_file(self.target).read_bytes() == previous
+        assert not self.lease.exists() and not self.lease.is_symlink()
+        drain = json.loads(private_file(self.drain).read_text())
+        assert drain["principal"] == self.operation and drain["action"] == "drain" and drain["suppress_notification"] is True
+        requested_at = datetime.datetime.fromisoformat(drain["requested_at"]).timestamp()
+        self.assert_fences()
+        self.check_requests()
+        self.verify_stopped(requested_at)
+        for unit, process in ((UNITS[1], self.old_dashboard), (UNITS[2], self.old_gateway)):
+            assert int(self.system("show", unit, "--property=ExecMainPID", "--value").strip()) == process
+        record = self.call("gateway_state")
+        stopped_at = datetime.datetime.fromisoformat(record["updated_at"]).timestamp()
+        # A stopped owner cannot heartbeat. Validate its historical snapshot
+        # against the owned drain and failure journal, keeping running checks fresh.
+        assert idle_record(record, process=self.old_gateway, revision=self.old_code, home=self.home,
+                           maintenance=self.lease, now=stopped_at, after=requested_at, state="stopped")
+        assert stopped_at <= datetime.datetime.fromisoformat(phase["updatedAt"]).timestamp()
+        self.claim.validate()
+        # Exclusive creation consumes this resume even if the process dies before
+        # writing its body. Never replace or remove an existing attempt marker.
+        with marker.open("xb") as output:
+            output.write((json.dumps({"operationId": self.operation, "phase": "stopped-resume-consumed",
+                "previousReceiptSha256": hashlib.sha256(previous).hexdigest(),
+                "baselineSha256": fingerprint(self.ops / "baseline.json"),
+                "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}) + "\n").encode())
+            output.flush()
+            os.fsync(output.fileno())
+        directory = os.open(self.ops, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        try:
+            self.phase("stopped-resume-consumed")
+            return self.continue_stopped()
+        except BaseException:
+            self.phase("admission-needs-review" if self.opened else "recovery-blocked-needs-review")
+            raise
 
     def install(self):
         self.assert_fences()
@@ -302,13 +375,7 @@ class Recovery:
             stopped_at = time.time()
             self.system("stop", *UNITS)
             self.verify_stopped(stopped_at)
-            self.install()
-            self.phase("matching-receipt-installed")
-            self.system("start", UNITS[1], UNITS[2], UNITS[0])
-            self.verify_guarded()
-            self.phase("guarded-verification-passed")
-            self.open_admission()
-            return self.complete()
+            return self.continue_stopped()
         except BaseException:
             self.phase("admission-needs-review" if self.opened else "recovery-blocked-needs-review")
             raise
@@ -317,7 +384,9 @@ class Recovery:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--check", action="store_true", help="Read-only live preflight; never change services or admission")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--check", action="store_true", help="Read-only live preflight; never change services or admission")
+    modes.add_argument("--resume-stopped", action="store_true", help="Consume a proved stopped operation once, using the same config and operation")
     args = parser.parse_args(argv)
     os.umask(0o077)
     info = args.config.lstat()
@@ -357,7 +426,11 @@ def main(argv=None):
     operation = c["operationId"]
     audit_name = "native-recovery-check-" + operation + "-" + str(uuid.uuid4()) if args.check else "native-recovery-" + operation
     ops = base / "operations" / audit_name
-    ops.mkdir(mode=0o700)  # A repeated invocation cannot replay an uncertain recovery.
+    if args.resume_stopped:
+        info = ops.lstat()
+        assert stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
+    else:
+        ops.mkdir(mode=0o700)  # A repeated invocation cannot replay an uncertain recovery.
     with (ops / "commands.log").open("a") as log:
         lock_path = Path(c["upgradeStateDir"]) / "worker.lock"
         with os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), "w") as worker_lock:
@@ -380,7 +453,7 @@ def main(argv=None):
                 functions["native"] = native
                 recovery = Recovery(c, functions, claim, ops)
                 try:
-                    print(json.dumps(recovery.execute(args.check)))
+                    print(json.dumps(recovery.resume_stopped() if args.resume_stopped else recovery.execute(args.check)))
                 except BaseException:
                     import traceback
                     traceback.print_exc(file=log)
