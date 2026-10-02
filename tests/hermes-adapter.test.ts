@@ -68,6 +68,39 @@ afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('preserves canonical run provenance without inventing attribution for unrelated rows', async () => {
+    snapshot.messages=[{row_id:1,role:'assistant',text:'Finished',app_run_id:'known-run'},{row_id:2,role:'assistant',text:'Native unattributed reply'}];
+    const conversation=await runtime.conversation('shared');
+    expect(conversation.messages[0].runId).toBe('known-run');
+    expect(conversation.messages[1].runId).toBeUndefined();
+  });
+
+  it('bridges profile-scoped native speech and caps the returned audio', async () => {
+    const fetcher = vi.fn(async (url: URL | string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/transcribe')) return Response.json({ok:true,transcript:'Pick up milk',provider:'fixture'});
+      if (path.endsWith('/speak')) return Response.json({ok:true,data_url:'data:audio/mpeg;base64,' + Buffer.from('audio').toString('base64'),provider:'fixture'});
+      return Response.json({profiles:[]});
+    });
+    vi.stubGlobal('fetch', fetcher);
+    expect(await runtime.transcribeVoice!('shared', {mime:'audio/webm',data:Buffer.from('recording')})).toEqual({text:'Pick up milk',provider:'fixture'});
+    const transcriptCall = fetcher.mock.calls.find(call => new URL(call[0]).pathname.endsWith('/transcribe'))!;
+    expect(new URL(transcriptCall[0]).searchParams.get('profile')).toBe('shared');
+    expect(JSON.parse(transcriptCall[1]!.body as string)).toEqual({data_url:'data:audio/webm;base64,cmVjb3JkaW5n',mime_type:'audio/webm'});
+    expect(await runtime.synthesizeVoice!('shared','Hi')).toEqual({data:Buffer.from('audio'),mime:'audio/mpeg',provider:'fixture'});
+    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(0);
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({ok:true,data_url:'data:audio/mpeg;base64,'+Buffer.alloc(8*1024*1024+1).toString('base64')})));
+    await expect(runtime.synthesizeVoice!('shared','Hi')).rejects.toThrow('oversized');
+  });
+  it('reports unavailable native voice without exposing provider errors', async () => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'private-provider-secret'}, {status:400})));
+    await expect(runtime.transcribeVoice!('shared',{mime:'audio/webm',data:Buffer.from('recording')})).rejects.toMatchObject({statusCode:409,message:'Voice is unavailable. Check the speech provider in the native Hermes dashboard.'});
+  });
+  it('passes native experience conflicts through the finite adapter', async () => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'Hermes memory changed. Reload before saving.'},{status:409})));
+    await expect(runtime.experienceRequest!({operation:'memory',profile:'shared'})).rejects.toMatchObject({statusCode:409,message:'Hermes memory changed. Reload before saving.'});
+  });
+
   it('preserves deliberate shared-computer busy and recovery explanations without exposing other RPC errors', async () => {
     rpcErrors.set('agent-interface.computer', {code: 409, message: 'Another person controls the household computer. They must hand it back first.'});
     await expect(runtime.computerRequest!({action: 'take', actorId: 'one', actorName: 'One', viewerId: 'fixture-viewer'}))

@@ -53,7 +53,13 @@
         "enabled": false,
       ],
     ]
-    static var routines: [[String: Any]] = []
+    static var routines: [[String: Any]] = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" ? [["id": "trial", "botId": "ranch", "name": "Morning brief trial", "prompt": "Report today's tasks. Do not modify anything.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": []]] : []
+    static var trialRequestId: String?
+    static var trialCount = 0
+    static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
+    static var todayFrontier = "0"
+    static var todaySince = "2026-09-30T13:30:00Z"
+    static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
     static var upgradePhase = "idle"
     static var integrationChecked = false
     static var integrationDisconnected = false
@@ -151,6 +157,37 @@
             "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition,
           ]
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" {
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-cards", "role": "assistant", "text": "Fixture grocery suggestion.\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Grocery checklist\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"}]}]}\n```"]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+      } else if path == "/api/today" {
+        let events: [[String: Any]] = Self.todayFrontier == "0" ? [["id": "fixture-completed", "botId": "ranch", "kind": "completed", "title": "Fixture routine completed", "occurredAt": "2026-10-01T13:00:00Z"]] : Self.todayFrontier == "1" ? [["id": "fixture-late-import", "botId": "ranch", "kind": "completed", "title": "Fixture late imported completion", "occurredAt": "2026-09-28T13:00:00Z"]] : []
+        object = ["generatedAt": "2026-10-01T13:30:00Z", "since": Self.todaySince, "frontier": Self.todayFrontier == "0" ? "1" : "2", "hasMore": Self.todayFrontier == "0", "items": [["botId": "ranch", "botName": "Ranch hand", "activity": ["state": "done"], "approvals": [], "attention": [], "files": [], "latestMessage": ["id": "fixture-today", "text": "Fixture: pasture inspection finished.", "createdAt": "2026-10-01T13:00:00Z"]]], "events": events, "unavailableBots": []]
+      } else if path == "/api/today/seen" {
+        let expectedFrontier = Self.todayFrontier == "0" ? "1" : "2"
+        if body["frontier"] as? String != expectedFrontier || body["seenAt"] as? String != "2026-10-01T13:30:00Z" {
+          status = 400; object = ["error": "Acknowledge the exact returned snapshot frontier and time"]
+        } else { Self.todayFrontier = expectedFrontier; Self.todaySince = body["seenAt"] as? String ?? Self.todaySince }
+      } else if path.hasSuffix("/memory") || path.hasSuffix("/memory/memory") {
+        if method == "PATCH" { Self.memoryEntries = body["entries"] as? [[String: Any]] ?? [] }
+        object = ["botId": "ranch", "profile": "default", "scope": "profile", "owner": "Hermes", "documents": [["target": "memory", "label": "Memory", "revision": "fixture-revision", "enabled": true, "entries": Self.memoryEntries, "charLimit": 2200, "charCount": 42]], "notice": "Explicit simulator fixture. New sessions see edits."]
+      } else if path.contains("/cards/") && path.hasSuffix("/state") {
+        if method == "PUT" { Self.cardState = body }
+        object = Self.cardState
+      } else if path.hasSuffix("/run") && path.hasPrefix("/api/routines/") {
+        let nextId = body["requestId"] as? String ?? ""
+        if nextId == Self.trialRequestId { status = 409; object = ["error": "A completed run needs a new request ID"] }
+        else {
+          Self.trialCount += 1; Self.trialRequestId = nextId
+          if Self.trialCount == 1 { status = 503; object = ["error": "Fixture uncertain admission"] }
+          else { object = ["requestId": nextId, "routineId": "trial", "botId": "ranch", "status": "completed", "message": "Fixture second run uses a fresh request ID", "startedAt": "2026-10-01T13:00:00Z", "finishedAt": "2026-10-01T13:01:00Z"] }
+        }
+      } else if path.contains("/runs/") && path.hasPrefix("/api/routines/") {
+        object = ["requestId": Self.trialRequestId ?? "", "routineId": "trial", "botId": "ranch", "status": "completed", "message": "Fixture first run completed", "startedAt": "2026-10-01T13:00:00Z", "finishedAt": "2026-10-01T13:01:00Z"]
+      } else if path == "/api/routines/templates" {
+        object = [["id": "morning", "name": "Morning brief", "schedule": "0 7 * * *", "description": "Fixture morning brief from connected sources.", "prompt": "Read the calendar and report today's household tasks. Do not modify anything."]]
+      } else if path == "/api/routines/preview" {
+        object = ["botId": "ranch", "schedule": body["schedule"] ?? "0 7 * * *", "timezone": "America/Chicago", "nextRuns": ["2026-10-02T12:00:00Z", "2026-10-03T12:00:00Z", "2026-10-04T12:00:00Z"], "kind": "cron"]
       } else if path == "/api/integrations" {
         object = ["profile": "ranch", "canManage": true, "connections": [
           ["id": "workspace", "name": "Google Workspace", "category": "productivity", "owner": "Hermes", "profile": "ranch", "account": "test@localhost.invalid", "status": Self.integrationDisconnected ? "not_connected" : Self.integrationChecked ? "connected" : "configured", "detail": "Explicit simulator fixture. Credentials are configured; permissions are checked separately.", "permissions": [["id": "drive", "name": "Drive", "granted": NSNull()]], "actions": ["connect": true, "check": true, "disconnect": !Self.integrationDisconnected], "setup": [], "capabilities": [], "botIds": ["ranch"]],

@@ -98,6 +98,25 @@ stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
 
+## Household experience
+
+Open **Today** to find pending decisions, current work, recent results and files
+across your assistants. **Mark caught up** shares your recap position between
+web and iOS. Voice messages are transcribed into a draft for review before you
+send. Web **Listen to reply** uses Hermes speech; native **Read aloud** uses the
+device voice.
+
+Assistant settings > **Memory** lets you inspect, correct and forget native
+Hermes profile memory. Existing conversations keep their memory snapshot until
+a new Hermes session starts. In **Details**, enable interactive replies to add
+checklists, itineraries and reviewed calendar proposals to assistant answers.
+Your checks and itinerary notes are saved for your account.
+
+**Routines** includes morning brief, meal plan and VPS health recipes, schedule
+previews in the actual Hermes timezone, and **Try once** with durable run
+receipts. See the [household experience guide](docs/HouseholdExperience.md) for
+controls, supported reply cards, voice requirements and recovery behavior.
+
 ## Hermes updates and activity
 
 Open the connection status in the web sidebar, or Hermes updates in iOS

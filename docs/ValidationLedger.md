@@ -985,6 +985,68 @@ the setup author's work. Three findings were addressed:
 The reviewers verified the final fixes and reported no outstanding findings.
 Unchanged avatar and external-service acceptance records above remain applicable.
 
+## Household experience, October 1, 2026
+
+Nicolas requested all five proposed features for the next PR and authorized merge
+and deployment. GPT-6.1 Sol high agents implemented native iOS, voice and backend
+work; an independent agent reviewed the complete change.
+
+- Frozen source, 374 files: `sha256:8b954c890567749cda1cdf196978813e1773e7122993cb34f141fe6b8b94e6c6`.
+- Native compile inputs, 34 files: `sha256:f9e10e500813ffbffe027524b976fdf2f1b28f686ddcce36872e992f242d69d2`.
+  Reproduce with the source-state tool and the four iOS source/project prefixes.
+- `npm test`: 323 checks in 33 files. `npm run build`: web build
+  `d6b58b54d729dd38`. The existing large-bundle notice remains.
+- Python syntax and dashboard startup (5), qualification (3), integrations (10),
+  native memory/manual scheduler (4), upgrade worker (35), Linux hooks (19),
+  gateway guards (6), computer (12), managed Python (10), and release wrapper (18)
+  checks completed successfully. The existing system-terminal check requires
+  Linux/tmux and was skipped on this Mac; CI runs it on Linux. One existing
+  upgrade-worker environment check also skipped.
+- Archive boundary checks retained legacy compatibility, included the experience
+  receipt in the manifest, and refused wrong-revision and failed native receipts.
+
+The initial native run completed 43 unit checks and the core phone flows. The
+final affected runs covered microphone review/cancellation, read aloud/stop,
+memory revision conflicts, matching schedule previews, uncertain routine receipt
+recovery and fresh request IDs. Three focused iPad flows completed. After the
+frontier correction, eight affected units and two phone Today flows completed;
+the exact snapshot-payload unit was rechecked against the final native inputs.
+Result bundles remain in task-specific `/tmp/household-native-*.xcresult` files.
+
+Agent browser use through T3 covered Today navigation and catch-up, checklist
+save, itinerary note editing/save, memory editing/save, schedule preview,
+explicit fixture trial completion, and calendar proposal review at desktop and
+390-pixel width. The final labeled
+[desktop](evidence/household-web-desktop-review.png) and
+[phone](evidence/household-web-phone-review.png) collages were inspected. Native
+[phone](../ios/evidence/native-household-phone-review.png),
+[iPad](../ios/evidence/native-household-ipad-review.png) and
+[late-event paging](../ios/evidence/native-today-frontier-review.png) evidence
+was inspected separately. The preview uses synthetic fixtures; it executes no
+external calendar save or native routine. Its insecure LAN cannot prove browser
+microphone capture.
+
+Actual native speech was checked sequentially on both installed profiles with a
+short synthetic phrase. Edge produced audio and existing xAI transcription
+recognized the expected words. Edge's supported first-use dependency installation
+ran on the first call. No provider, profile or service configuration changed,
+and no household content was submitted by the smoke check.
+
+Independent review fixes preserve unsaved reply notes across polling, preserve
+another memory document's original revision and draft, reject stale schedule
+previews, tolerate native timezone abbreviations, fence paused manual-trial
+admission under native locks, and keep late events unread using a durable
+ingestion frontier. Every acknowledged event page is shown, including an empty
+page acknowledgment. Removed profiles cannot obstruct the event backlog. Exact
+canonical run attribution supplies late completion artifacts. Calendar Close
+remains readable at phone width. New native qualification and subsequent
+production activation receipts will be recorded after merge.
+
+Physical-phone microphone capture/audibility, native calendar Save, and signed
+iOS distribution remain separate acceptance work. Existing image, push and live
+external integration gaps remain tracked in issue #1. Server speech success does
+not establish device microphone permission or audio behavior.
+
 ## Remaining external acceptance
 
 - Google configuration and the first household sign-in/chat were confirmed on

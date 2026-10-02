@@ -27,7 +27,7 @@ struct BotSettingsView: View {
   @State private var catalogReady: Set<String> = []
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
-  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines"]
+  let tabs = ["Details", "Avatar", "Connections", "Memory", "Tools", "Skills", "Routines"]
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
@@ -61,6 +61,8 @@ struct BotSettingsView: View {
         if tab == "Connections" {
           if let bot { IntegrationsView(botId: bot.id) }
           else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
+        } else if tab == "Memory" {
+          if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before inspecting memory.").padding(); Spacer() }
         } else { Form {
           switch tab {
           case "Details": details
@@ -139,6 +141,10 @@ struct BotSettingsView: View {
     Section("Instructions") {
       TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel(
         "Assistant instructions")
+      Button("Enable interactive replies") {
+        if !form.instructions.contains("When a checklist, itinerary, or calendar proposal would help") { form.instructions += "\n\n" + NativeInteractiveReplyInstructions }
+      }
+      Text("Adds editable instructions for checklists, itineraries, and calendar proposals. Save the assistant to apply.").font(.caption).foregroundStyle(.secondary)
     }
     Section("Model and provider") {
       let choices = Array(
@@ -555,6 +561,7 @@ struct RoutineEditor: View {
   @State private var busy = false
   @State private var error: String?
   @State private var deleteConfirm = false
+  @State private var schedulePreviewValid = false
   var body: some View {
     NavigationStack {
       Form {
@@ -565,7 +572,9 @@ struct RoutineEditor: View {
           TextField("Hermes schedule expression", text: $routine.schedule)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
           Toggle("Enabled", isOn: $routine.enabled)
+          if routine.enabled && !schedulePreviewValid { Text("Preview this schedule before saving an enabled routine.").font(.caption).foregroundStyle(.secondary) }
         }
+        RoutinePreviewControls(routine: $routine, previewValid: $schedulePreviewValid)
         Section {
           ForEach(store.bootstrap?.household ?? []) { user in
             Toggle(
@@ -588,7 +597,7 @@ struct RoutineEditor: View {
         if !routine.id.isEmpty {
           Section { Button("Delete routine", role: .destructive) { deleteConfirm = true } }
         }
-      }.disabled(busy).navigationTitle(routine.id.isEmpty ? "New routine" : "Edit routine")
+      }.accessibilityIdentifier("routineEditorForm").disabled(busy).navigationTitle(routine.id.isEmpty ? "New routine" : "Edit routine")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -598,7 +607,7 @@ struct RoutineEditor: View {
                 || routine.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || routine.prompt.count > 50000)
+                || routine.prompt.count > 50000 || routine.enabled && !schedulePreviewValid)
           }
         }
         .confirmationDialog(

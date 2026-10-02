@@ -7,6 +7,7 @@ struct ConversationView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
   @State private var importFiles = false
+  @State private var voiceOpen = false
   @State private var stopConfirm = false
   @State private var retryConfirm = false
   @State private var actionBusy = false
@@ -40,6 +41,7 @@ struct ConversationView: View {
           "Configure \(bot.name)")
       }
     }
+    .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).environmentObject(store) }
     .fileImporter(
       isPresented: $importFiles, allowedContentTypes: [.png, .jpeg, .webP, .gif, .pdf, .plainText],
       allowsMultipleSelection: true
@@ -299,6 +301,8 @@ struct ConversationView: View {
         }
       }
       HStack(alignment: .bottom, spacing: 10) {
+        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 36, height: 44) }
+          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending)
         Button {
           importFiles = true
         } label: {
@@ -410,7 +414,8 @@ struct MessageView: View {
       if message.isToolActivity {
         ToolActivityView(message: message)
       } else {
-        MarkdownView(text: message.text)
+        ReplyContentView(message: message)
+        if message.role == "assistant" && !message.text.isEmpty { SpokenReplyButton(text: ReplyCards.spokenText(message.text)) }
         if advanced && message.toolCall != nil { ToolActivityView(message: message) }
       }
       if advanced, let reasoning = message.reasoning, !reasoning.isEmpty {

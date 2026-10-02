@@ -1,0 +1,62 @@
+import { useEffect, useState } from "react";
+import { api, write } from "../client-api";
+import { Avatar, stateLabels } from "./Avatar";
+import type { Bootstrap } from "../shared/types";
+import type { TodayOverview } from "../shared/experience";
+import "./experience.css";
+
+export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string) => void }) {
+  const [overview, setOverview] = useState<TodayOverview | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let current = true;
+    async function refresh() {
+      try { const result = await api<TodayOverview>("/today"); if (current) { setOverview(result); setError(""); } }
+      catch (e) { if (current) setError((e as Error).message); }
+      finally { if (current) setLoading(false); }
+    }
+    void refresh(); const timer = setInterval(() => void refresh(), 30_000);
+    return () => { current = false; clearInterval(timer); };
+  }, [bootstrap.user.id, reload]);
+  const items = overview?.items || [];
+  const attention = items.filter(item => !item.error && (item.approvals.some(approval => approval.status === "pending") || item.attention.length || ["blocked", "interrupted", "failed"].includes(item.activity.state)));
+  const active = items.filter(item => !item.error && ["thinking", "working", "waiting"].includes(item.activity.state));
+  const completed = overview?.events.filter(event => event.kind === "completed") || [];
+  async function caughtUp() {
+    if (!overview) return;
+    try { await write("/today/seen", { seenAt: overview.generatedAt, frontier: overview.frontier }, "PUT"); setReload(reload + 1); }
+    catch (e) { setError((e as Error).message); }
+  }
+  return <div className="today-panel"><div className="today-intro"><div><p className="eyebrow">Your household</p>
+    <h2>A little less to carry.</h2><p className="muted">See what needs you and pick up what your assistants finished.</p></div>
+    <button type="button" disabled={loading} onClick={() => { setLoading(true); setReload(reload + 1); }}>Refresh</button></div>
+    {loading && !overview && <p role="status">Checking your assistants...</p>}
+    {error && <p role="alert" className="form-error">{error} Loaded results may be out of date.</p>}
+    {overview && <><div className="today-counts" aria-label="Household activity"><span><strong>{attention.length}</strong> need you</span>
+      <span><strong>{active.length}</strong> at work</span><span><strong>{completed.length}</strong> {overview.hasMore ? "finished on this page" : "finished since your last visit"}</span></div>
+      <section className="today-section"><h3>Needs your attention</h3>{!attention.length && <p className="muted">No pending requests in the assistants we could check.</p>}
+        {attention.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
+          <Avatar avatar={bootstrap.bots.find(bot => bot.id === item.botId)?.avatar} name={item.botName} state={item.activity.state} size={42} />
+          <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.approvals.find(approval => approval.status === "pending")?.title || item.attention[0]?.title || item.activity.detail || stateLabels[item.activity.state]}</small></span><span aria-hidden="true">›</span>
+        </button>)}</section>
+      <section className="today-section"><h3>Since you were away</h3><p className="muted">Since {new Date(overview.since).toLocaleString()}</p>
+        {!overview.events.length && <p>No new recorded results yet.</p>}
+        {overview.events.map(event => <button className="today-row" type="button" key={event.id} onClick={() => onOpen(event.botId)}>
+          <span className="today-row-copy"><strong>{event.title}</strong><small>{bootstrap.bots.find(bot => bot.id === event.botId)?.name || "Assistant"} · {new Date(event.occurredAt).toLocaleString()}</small>
+            {event.body && <small>{event.body.slice(0, 240)}</small>}</span><span aria-hidden="true">›</span></button>)}
+        {overview.hasMore && <p className="muted">More recorded results are waiting. Mark this page caught up to load the next page.</p>}
+        <button type="button" onClick={() => void caughtUp()}>{overview.hasMore ? "Mark this page caught up" : "Mark caught up"}</button>
+      </section>
+      <section className="today-section"><h3>At work</h3>{!active.length && <p className="muted">No checked assistant is working.</p>}
+        {active.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}><Avatar avatar={bootstrap.bots.find(bot => bot.id === item.botId)?.avatar} state={item.activity.state} name={item.botName} size={42} />
+          <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.activity.detail || stateLabels[item.activity.state]}</small></span><span aria-hidden="true">›</span></button>)}</section>
+      <section className="today-section"><h3>Recent files</h3>{items.filter(item => item.files.length).map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
+        <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.files.slice(-3).map(file => file.name).join(" · ")}</small></span><span>Open conversation</span></button>)}
+        {!items.some(item => item.files.length) && <p className="muted">Generated files and shared attachments will appear here.</p>}</section>
+      {overview.unavailableBots.length > 0 && <p role="status" className="capability-note">Couldn't check {overview.unavailableBots.length} assistant{overview.unavailableBots.length === 1 ? "" : "s"}. Their current activity is unknown.</p>}
+      <p className="muted today-timestamp">Checked {new Date(overview.generatedAt).toLocaleTimeString()}. Updates every 30 seconds while this screen is open.</p>
+    </>}
+  </div>;
+}

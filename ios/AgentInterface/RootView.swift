@@ -6,6 +6,7 @@ struct RootView: View {
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var preferencesOpen = false
+  @State private var todayOpen = false
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
   var body: some View {
@@ -18,9 +19,12 @@ struct RootView: View {
         ) {
           BotListView(
             openPreferences: { preferencesOpen = true }, create: { creatingBot = true },
-            openBot: { compactColumn = .detail })
+            openBot: { todayOpen = false; compactColumn = .detail },
+            openToday: { todayOpen = true; compactColumn = .detail })
         } detail: {
-          if let bot = store.bot {
+          if todayOpen {
+            TodayView(openBot: { todayOpen = false; compactColumn = .detail })
+          } else if let bot = store.bot {
             ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
           } else {
             ContentUnavailableView(
@@ -38,6 +42,7 @@ struct RootView: View {
     .onReceive(store.$selectedBotId) { id in if id != nil { compactColumn = .detail } }
     .onChange(of: store.bootstrap?.user.id) { old, new in
       if let old, old != new {
+        todayOpen = false
         preferencesOpen = false
         settingsBot = nil
         creatingBot = false
@@ -152,8 +157,10 @@ struct BotListView: View {
   var openPreferences: () -> Void
   var create: () -> Void
   var openBot: () -> Void
+  var openToday: () -> Void
   var body: some View {
     List {
+      Section { Button(action: openToday) { Label("Today", systemImage: "sun.max") }.accessibilityIdentifier("openToday") }
       if let bootstrap = store.bootstrap {
         if !store.connected {
           Section {

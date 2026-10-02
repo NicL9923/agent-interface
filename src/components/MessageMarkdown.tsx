@@ -1,9 +1,25 @@
-import { Children, isValidElement, useState } from "react";
+import { Children, createContext, isValidElement, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { parseReplyDocument, replyCardsFromText } from "../shared/reply-cards";
+import { ReplyCards } from "./ReplyCards";
 import "./message-markdown.css";
+
+interface ReplyContextValue { actionableIds: Set<string>; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }
+const ReplyContext = createContext<ReplyContextValue | null>(null);
+function MessagePre({ children }: { children?: ReactNode }) {
+  const context = useContext(ReplyContext);
+  const child = Children.toArray(children)[0];
+  if (!isValidElement<{ children?: ReactNode; className?: string }>(child)) return <pre>{children}</pre>;
+  const code = String(child.props.children ?? "");
+  const language = child.props.className?.match(/(?:^|\s)language-(\S+)/)?.[1];
+  const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
+  return document && context && document.cards.every(card => context.actionableIds.has(card.id))
+    ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
+    : <CodeBlock key={code} code={code} language={language} />;
+}
 
 function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copyState, setCopyState] = useState<
@@ -69,14 +85,7 @@ const components: Components = {
       <span>{alt || "Image unavailable"}</span>
     );
   },
-  pre({ children }) {
-    const child = Children.toArray(children)[0];
-    if (!isValidElement<{ children?: ReactNode; className?: string }>(child))
-      return <pre>{children}</pre>;
-    const code = String(child.props.children ?? "");
-    const language = child.props.className?.match(/(?:^|\s)language-(\S+)/)?.[1];
-    return <CodeBlock key={code} code={code} language={language} />;
-  },
+  pre: MessagePre,
   table({ children, ...props }) {
     const { node: _node, ...tableProps } = props;
     return (
@@ -92,12 +101,17 @@ const components: Components = {
   },
 };
 
-export function MessageMarkdown({ text }: { text: string }) {
+export function MessageMarkdown({ text, botId, messageId, userId, unavailable }: {
+  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean;
+}) {
+  const context = useMemo(() => ({ actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, botId, messageId, userId, unavailable]);
   return (
+    <ReplyContext.Provider value={context}>
     <div className="message-markdown">
       <Markdown skipHtml remarkPlugins={[remarkGfm]} components={components}>
         {text}
       </Markdown>
     </div>
+    </ReplyContext.Provider>
   );
 }

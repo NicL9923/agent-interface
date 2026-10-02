@@ -22,6 +22,9 @@ import { ComputerPanel } from "./components/ComputerPanel";
 import { Icon } from "./components/Icon";
 import { useDeviceNotifications } from "./components/use-device-notifications";
 import { NotificationSettings, NotificationOnboarding } from "./components/DeviceNotifications";
+import { TodayPanel } from "./components/TodayPanel";
+import { VoiceControls } from "./components/VoiceControls";
+import type { VoiceState } from "./shared/voice";
 type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
@@ -81,6 +84,13 @@ function clearSavedDraft(user: string, submission: Pending) {
   return null;
 }
 export function App() {
+  const [todayOpen, setTodayOpen] = useState(() => new URLSearchParams(location.search).get("view") === "today");
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (todayOpen) url.searchParams.set("view", "today"); else url.searchParams.delete("view");
+    history.replaceState(null, "", url);
+  }, [todayOpen]);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const notifications = useDeviceNotifications(boot?.user.id, boot?.vapidPublicKey);
   const [auth, setAuth] = useState(false);
@@ -537,6 +547,7 @@ export function App() {
   };
   const selectBot = (id: string) => {
     persistPosition();
+    setTodayOpen(false);
     setBotId(id);
     setRailOpen(false);
     setError("");
@@ -702,9 +713,9 @@ export function App() {
     const reportsActivity = !connectionLost && botState !== "idle" && botState !== "done";
     return (
       <button
-        className={`bot-item ${bot.id === botId ? "selected" : ""}`}
+        className={`bot-item ${bot.id === botId && !todayOpen ? "selected" : ""}`}
         key={bot.id}
-        aria-current={bot.id === botId ? "page" : undefined}
+        aria-current={bot.id === botId && !todayOpen ? "page" : undefined}
         onClick={() => selectBot(bot.id)}
       >
         <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={40} name={bot.name} />
@@ -753,6 +764,8 @@ export function App() {
           {boot.user.name}'s home
         </div>
         <div className="rail-scroll">
+          <button className="today-navigation" type="button" aria-current={todayOpen ? "page" : undefined}
+            onClick={() => { setTodayOpen(true); setRailOpen(false); }}><Icon name="today" size={20} /> Today</button>
           {prefs.sections.map((section) => (
             <section className="bot-section" key={section.id}>
               <h2>{section.name}</h2>
@@ -828,7 +841,7 @@ export function App() {
           >
             <Icon name="menu" />
           </button>
-          {selected ? (
+          {todayOpen ? <div className="chat-title"><h1>Today</h1><p>Your assistants, at a glance</p></div> : selected ? (
             <>
               <Avatar
                 avatar={selected.avatar}
@@ -877,6 +890,7 @@ export function App() {
             </div>
           )}
         </header>
+        {todayOpen ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={selectBot} /> : <>
         {workerUpdate && (
           <div className="notice">
             An app update is ready.
@@ -973,7 +987,7 @@ export function App() {
                       )}
                     </div>
                     {message.role === "assistant" ? (
-                      <MessageMarkdown text={message.text} />
+                      <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={boot.user.id} unavailable={connectionLost} />
                     ) : message.role !== "tool" && (
                       <div className="message-text">{message.text}</div>
                     )}
@@ -1227,6 +1241,14 @@ export function App() {
                 rows={2}
                 disabled={!draftReady || draft.botId !== botId}
               />
+              <div className="composer-voice">
+                {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={32} name={selected.name} /></span>}
+                <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
+                  reply={!active ? conversation?.messages.findLast(message => message.role === "assistant") : undefined}
+                  disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
+                  onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
+                    text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
+              </div>
               <div className="composer-tools">
                 <label
                   className={`attach-control ${!boot.capabilities.uploads.supported ? "disabled" : ""}`}
@@ -1284,6 +1306,7 @@ export function App() {
             </p>
           </footer>
         )}
+        </>}
       </main>
       {settings && (
         <BotSettings

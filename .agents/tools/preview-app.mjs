@@ -4,12 +4,24 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
+import { createHash, randomUUID } from 'node:crypto';
+import { tsImport } from 'tsx/esm/api';
+const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
+const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
-// Visual-only onboarding fixture on insecure LAN previews. Push remains unsupported.
+// LAN previews need request IDs even when HTTPS-only randomUUID is unavailable.
+// Microphone and push remain subject to the browser's real secure-context rules.
 const fixtureHtml = async () => {
-  const html = await readFile(resolve(root, 'index.html'), 'utf8');
+  const html = (await readFile(resolve(root, 'index.html'), 'utf8')).replace('<head>', `<head><script>
+    if (!crypto.randomUUID) crypto.randomUUID = () => {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+      const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+      return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
+    };
+  </script>`);
   return process.env.PREVIEW_NOTIFICATION_PROMPT === '1'
     ? html.replace('<head>', '<head><script>if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});</script>')
     : html;
@@ -61,7 +73,53 @@ const conversations = {
 conversations.ranch.files = artifactFiles;
 ranchMessages[0].files = [artifactFiles[2]];
 ranchMessages.at(-1).files = [artifactFiles[0], artifactFiles[1], artifactFiles[3], artifactFiles[4]];
+const fixtureCards = { version: 1, cards: [
+  { id: 'meal-list', type: 'checklist', title: 'Three easy dinners: fixture grocery list', items: [
+    { id: 'beans', text: 'Black beans, 2 cans' }, { id: 'tortillas', text: 'Corn tortillas, 1 pack' },
+    { id: 'tomatoes', text: 'Tomatoes, 4' }, { id: 'rice', text: 'Brown rice, 1 bag' },
+  ] },
+  { id: 'hill-country', type: 'itinerary', title: 'A Hill Country Saturday: fixture proposal', items: [
+    { id: 'leave', time: 'Saturday, 9 AM', title: 'Leave after breakfast', detail: 'Bring water and a picnic. Add your own timing notes below.' },
+    { id: 'walk', time: 'Saturday, 11 AM', title: 'A short nature walk', detail: 'Check the weather and trail conditions before leaving.' },
+  ] },
+  { id: 'gate-check', type: 'event', title: 'Check gate batteries: fixture calendar proposal', start: '2026-11-01T09:00:00-06:00', end: '2026-11-01T09:30:00-06:00', location: 'Home', description: 'Explicit preview fixture. No calendar event was created.' },
+] };
+ranchMessages.push({ id: 'fixture-cards', role: 'assistant', createdAt: at(23), text: 'These are explicit preview fixtures for groceries, trip notes and a calendar proposal. No purchases, bookings or calendar events were created.\n\n```agent-ui\n' + JSON.stringify(fixtureCards) + '\n```' });
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const memories = new Map();
+const memoryFor = botId => {
+  if (!memories.has(botId)) memories.set(botId, { botId, profile: botId, scope: 'profile', owner: 'Hermes',
+    notice: 'Explicit preview fixture. Profiles separate preferences, not household access. These edits never contact Hermes.',
+    documents: [
+      { target: 'memory', label: 'Assistant memory', enabled: true, charLimit: 2200, entries: [{ id: digest('quick dinners'), text: 'We prefer quick weeknight dinners.' }] },
+      { target: 'user', label: 'About the household', enabled: true, charLimit: 1375, entries: [{ id: digest('nature'), text: 'Our family enjoys nature walks and a relaxed pace.' }] },
+    ].map(document => ({ ...document, revision: digest(document.entries), charCount: document.entries.reduce((sum, entry) => sum + entry.text.length, 0) })) });
+  return memories.get(botId);
+};
+const cardStates = new Map(), todaySeen = new Map(), routineReceipts = new Map(), fixtureAudio = new Map();
+const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] }];
+const fixtureEvents = [{ id: 'fixture-completed', botId: 'fox', kind: 'completed', title: 'Trail options are ready', body: 'Explicit fixture. Open the conversation to review the proposal.', occurredAt: new Date(Date.now() - 10 * 60000).toISOString() }];
+// Tiny WAV tone, never provider-generated speech. Used only to verify audio controls.
+const fixtureWav = (() => {
+  const rate = 8000, samples = rate, wav = Buffer.alloc(44 + samples * 2);
+  wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28);
+  wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+  for (let index = 0; index < samples; index++) wav.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * index / rate) * 2000), 44 + index * 2);
+  return wav;
+})();
+const schedulePreview = (botId, schedule) => {
+  const match = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-6])$/.exec(schedule);
+  if (!match || Number(match[1]) > 59 || Number(match[2]) > 23) return null;
+  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]) + 5, Number(match[1]), 0, 0);
+  // Stable preview uses UTC-05 fixture time. Native schedule parsing is tested separately.
+  for (let day = 0; day < 25 && runs.length < 3; day++, candidate.setUTCDate(candidate.getUTCDate() + 1)) {
+    const localDay = new Date(candidate.getTime() - 5 * 3600000).getUTCDay();
+    if (candidate > new Date() && (match[3] === '*' || localDay === Number(match[3]))) runs.push(candidate.toISOString());
+  }
+  return { botId, schedule, timezone: 'America/Chicago', nextRuns: runs, kind: 'cron' };
+};
 const connections = [
   ['workspace', 'Google Workspace', 'productivity', 'connected', 'nic@example.invalid', 'Gmail, Drive, Calendar and Sheets access checked.'],
   ['github', 'GitHub', 'development', 'expired', 'ranch-team', 'Your sign-in expired. Reconnect to access repositories.'],
@@ -99,6 +157,60 @@ const server = createServer(async (request, response) => {
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
     if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    const fixtureUser = request.headers['x-preview-user'] || 'preview';
+    const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/voice\/|\/cards\/|^\/routines\//.test(path);
+    if (experiencePath && !signedIn) return json(response, { error: 'Sign in to use the preview fixture.' }, 401);
+    if (path === '/today/seen') { todaySeen.set(fixtureUser, { seenAt: body.seenAt, frontier: Number(body.frontier) }); return json(response, { ok: true }); }
+    if (path === '/today') {
+      const marker = todaySeen.get(fixtureUser);
+      const since = marker?.seenAt || new Date(Date.now() - 86400000).toISOString();
+      return json(response, { generatedAt: new Date().toISOString(), since, frontier: String(fixtureEvents.length), hasMore: false, unavailableBots: [], events: fixtureEvents.filter((_, index) => index + 1 > (marker?.frontier || 0)),
+        items: bots.map(bot => { const conversation = conversationFor(bot.id); return { botId: bot.id, botName: bot.name, activity: conversation.activity,
+          approvals: conversation.approvals || [], attention: conversation.attention || [], files: conversation.files || [], latestMessage: conversation.messages.findLast(message => message.role === 'assistant') }; }) });
+    }
+    const memoryMatch = /^\/bots\/([^/]+)\/memory(?:\/(memory|user))?$/.exec(path);
+    if (memoryMatch) {
+      const memory = memoryFor(decodeURIComponent(memoryMatch[1]));
+      if (request.method === 'GET') return json(response, memory);
+      const document = memory.documents.find(document => document.target === memoryMatch[2]);
+      if (!document) return json(response, { error: 'Fixture memory document not found.' }, 404);
+      if (document.revision !== body.revision) return json(response, { error: 'This profile memory changed. Reload the newer memory before saving.' }, 409);
+      const entries = request.method === 'DELETE' ? document.entries.filter(entry => entry.id !== body.entryId) : body.entries;
+      if (!Array.isArray(entries) || entries.some(entry => typeof entry.text !== 'string' || !entry.text.trim())) return json(response, { error: 'Enter a memory before saving.' }, 400);
+      document.entries = entries.map(entry => ({ id: entry.id || digest(entry.text), text: entry.text.trim() }));
+      document.charCount = document.entries.reduce((sum, entry) => sum + entry.text.length, 0);
+      document.revision = digest(document.entries); return json(response, memory);
+    }
+    const cardMatch = /^\/bots\/([^/]+)\/messages\/([^/]+)\/cards\/([^/]+)\/state$/.exec(path);
+    if (cardMatch) {
+      const [, botId, messageId, cardId] = cardMatch;
+      const message = conversationFor(botId).messages.find(message => message.id === messageId && message.role === 'assistant');
+      const card = message && replyCardsFromText(message.text).find(card => card.id === cardId);
+      if (!card) return json(response, { error: 'This fixture card is no longer available.' }, 404);
+      const key = JSON.stringify([fixtureUser, botId, messageId, cardId]);
+      if (request.method === 'PUT') { if (!validReplyCardState(card, body)) return json(response, { error: 'Choices do not belong to this fixture card.' }, 400); cardStates.set(key, body); }
+      return json(response, cardStates.get(key) || { checkedIds: [], notes: {} });
+    }
+    if (path.endsWith('/voice/transcribe')) return json(response, { text: 'Explicit voice preview fixture: pick up milk and tortillas. Review this draft before sending.', provider: 'preview-fixture' });
+    if (path.endsWith('/voice/speak')) {
+      const key = randomUUID(); fixtureAudio.set(key, fixtureUser);
+      return json(response, { url: `/api/voice/audio/${key}`, mime: 'audio/wav', expiresAt: new Date(Date.now() + 300000).toISOString() });
+    }
+    if (path.startsWith('/voice/audio/')) {
+      const key = path.split('/').at(-1);
+      if (fixtureAudio.get(key) !== fixtureUser) return json(response, { error: 'Fixture audio expired.' }, 404);
+      fixtureAudio.delete(key); response.writeHead(200, { 'Content-Type': 'audio/wav', 'X-Content-Type-Options': 'nosniff' }); return response.end(fixtureWav);
+    }
+    if (path === '/routines/templates') return json(response, routinePresets);
+    if (path === '/routines/preview') { const preview = schedulePreview(body.botId, body.schedule); return json(response, preview || { error: 'Fixture preview supports daily and weekly schedules. Native parsing is verified separately.' }, preview ? 200 : 400); }
+    const runMatch = /^\/routines\/([^/]+)\/run(?:s\/([^/]+))?$/.exec(path);
+    if (runMatch) {
+      const routine = routines.find(routine => routine.id === runMatch[1]);
+      if (!routine) return json(response, { error: 'Fixture routine not found.' }, 404);
+      const requestId = runMatch[2] || body.requestId, key = JSON.stringify([fixtureUser, routine.id, requestId]);
+      if (request.method === 'POST' && !routineReceipts.has(key)) routineReceipts.set(key, { requestId, routineId: routine.id, botId: routine.botId, status: 'completed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), message: 'Explicit fixture. No routine or external action was executed.' });
+      return json(response, routineReceipts.get(key) || { error: 'Fixture run receipt not found.' }, routineReceipts.has(key) ? 200 : 404);
+    }
     if (path === '/models') return json(response, modelCatalog);
     if (path === '/computer') return json(response, computerStatus());
     if (path === '/computer/control') { computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' }; return json(response, computerStatus()); }
@@ -126,7 +238,8 @@ const server = createServer(async (request, response) => {
     if (path === '/hermes/upgrade') return json(response, upgrade);
     if (path.endsWith('/conversation')) return json(response, conversationFor(decodeURIComponent(path.split('/')[2])));
     if (path.endsWith('/tools') || path.endsWith('/skills')) return json(response, [{ id: 'web', name: 'Web search', description: 'Search the web when current information matters.', enabled: true }, { id: 'shell', name: 'Terminal', description: "Run commands on the assistant's server.", enabled: false }]);
-    if (path === '/routines') return json(response, [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] }]);
+    if (path === '/routines') { if (request.method === 'POST') { const routine = { ...body, id: `fixture-routine-${routines.length + 1}` }; routines.push(routine); return json(response, routine); } return json(response, routines); }
+    if (/^\/routines\/[^/]+$/.test(path)) { const id = path.split('/').at(-1), index = routines.findIndex(routine => routine.id === id); if (index < 0) return json(response, { error: 'Fixture routine not found.' }, 404); if (request.method === 'DELETE') { routines.splice(index, 1); return json(response, { ok: true }); } Object.assign(routines[index], body); return json(response, routines[index]); }
     if (path.endsWith('/draft')) return json(response, {text:'',attachments:[]});
     if (path === '/preferences') { Object.assign(preferences, body); return json(response, preferences); }
     return json(response, {});

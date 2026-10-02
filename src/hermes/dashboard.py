@@ -37,7 +37,8 @@ def main():
     if qualified:
         import hermes_cli.web_server as web
         sibling("computer").install_tools()
-        extension.install()
+        journal = extension.install()
+        sibling("experience").install(web, journal)
         sibling("integrations").install(web)
         service.install_service_auth(web, secret)
     cli.main()

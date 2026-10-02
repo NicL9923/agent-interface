@@ -22,6 +22,8 @@ import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
+import { registerVoiceRoutes } from "./voice.js";
+import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
@@ -196,6 +198,8 @@ export async function createApp(
     canManage: req => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase())),
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
+  await installExperienceRoutes(app, runtime, store);
+  await registerVoiceRoutes(app, runtime);
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {
     if (snapshot) return snapshot;
@@ -548,6 +552,7 @@ export async function createApp(
     routineId?: string,
   ) => {
     await requireCapability("routines");
+    if (routineId) await assertRoutineEditable(runtime, store, routineId);
     const input = z
       .object({
         botId: id,
@@ -576,6 +581,7 @@ export async function createApp(
   app.put("/api/routines/:id", async (req) => saveRoutine(req, params(req).id));
   app.delete("/api/routines/:id", async (req) => {
     await requireCapability("routines");
+    await assertRoutineEditable(runtime, store, params(req).id);
     await runtime.deleteRoutine(params(req).id);
     store.routineRecipients(params(req).id, []);
     return { ok: true };
