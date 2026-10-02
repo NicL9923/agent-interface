@@ -3,6 +3,22 @@ import XCTest
 @testable import AgentInterface
 
 final class PresentationTests: XCTestCase {
+  func testSidebarListsEachAssistantOnceWithFavoritesFirst() throws {
+    let bots = try JSONDecoder().decode([Bot].self, from: Data("""
+      [{"id":"a","name":"A","model":"m","shared":true,"activity":"idle"},
+       {"id":"b","name":"B","model":"m","shared":true,"activity":"idle"},
+       {"id":"c","name":"C","model":"m","shared":true,"activity":"idle"},
+       {"id":"d","name":"D","model":"m","shared":true,"activity":"idle"}]
+      """.utf8))
+    var preferences = Preferences()
+    preferences.favorites = ["d", "b"]
+    XCTAssertEqual(preferences.assistantGroups(bots).map(\.title), ["Assistants"])
+    XCTAssertEqual(preferences.assistantGroups(bots)[0].bots.map(\.id), ["b", "d", "a", "c"])
+    preferences.sections = [BotSection(id: "home", name: "Around the house", botIds: ["c", "b"])]
+    let groups = preferences.assistantGroups(bots)
+    XCTAssertEqual(groups.map(\.title), ["Around the house", "More assistants"])
+    XCTAssertEqual(groups.map { $0.bots.map(\.id) }, [["b", "c"], ["d", "a"]])
+  }
   func testReadAnchorSkipsCanonicalToolsWithoutVisibleRows() {
     let conversation = Conversation(
       botId: "bot",

@@ -79,12 +79,13 @@
     static var avatar: [String: Any] = [
       "mode": "geometric", "shape": "blob", "color": "#1084FE", "eyes": "oval", "accessory": "none",
     ]
+    static var ranchModel = (provider: "openrouter", model: "configured-model")
     static var bots: [[String: Any]] {
       [
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
-          "instructions": "Be clear and useful.", "model": "configured-model",
-          "provider": "openrouter", "shared": true, "activity": "idle", "avatar": avatar,
+          "instructions": "Be clear and useful.", "model": ranchModel.model,
+          "provider": ranchModel.provider, "shared": true, "activity": "idle", "avatar": avatar,
           "enabledMcpServers": ["existing-calendar"],
         ],
         [
@@ -389,7 +390,17 @@
         bot["id"] = "created"
         bot["activity"] = "idle"
         object = bot
+      } else if path == "/api/models" {
+        object = ["provider": "openrouter", "model": Self.ranchModel.model, "providers": [
+          ["id": "openrouter", "name": "OpenRouter", "authenticated": true, "models": [
+            ["id": "configured-model", "name": "Configured model", "available": true],
+            ["id": "fixture-fast", "name": "Fixture fast model", "available": true],
+          ]],
+        ]]
       } else if path.hasPrefix("/api/bots/"), method == "PATCH" {
+        if request.url!.lastPathComponent == "ranch", let model = body["model"] as? String {
+          Self.ranchModel = (body["provider"] as? String ?? Self.ranchModel.provider, model)
+        }
         var bot = body
         bot["id"] = request.url!.lastPathComponent
         bot["activity"] = "idle"

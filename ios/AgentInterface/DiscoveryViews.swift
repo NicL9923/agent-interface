@@ -40,23 +40,24 @@ struct DiscoveryView: View {
           HStack { Button("Previous") { Task { await history(page.botId,page.sessionId,max(0,page.offset-100)) } }.disabled(page.offset==0); Spacer(); Button("Next") { Task { await history(page.botId,page.sessionId,page.offset+100) } }.disabled(!page.hasMore) }
         }
       } else if tab == "search" {
-        Section("Find something useful") {
-          TextField("Search answers, files, or a topic",text:$query).onSubmit { Task { await search() } }
-          Button("Search") { Task { await search() } }.disabled(query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || busy).accessibilityIdentifier("nativeSearchSubmit")
-          Text("Search answers, attachment names, and routine previews across your assistants.").font(.footnote).foregroundStyle(.secondary)
+        Section {
+          HStack {
+            TextField("Search answers, files, or a topic",text:$query).submitLabel(.search).onSubmit { Task { await search() } }
+            Button { Task { await search() } } label: { Image(systemName:"magnifyingglass") }.accessibilityLabel("Search").buttonStyle(.borderless)
+              .disabled(query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || busy).accessibilityIdentifier("nativeSearchSubmit")
+          }
           ForEach(hits) { hit in Button { if let routine=hit.routineId { store.routineResult=RoutineResultDestination(botId:hit.botId,routineId:routine,resultId:hit.resultId) } else { Task { await history(hit.botId,hit.sessionId) } } } label: { VStack(alignment:.leading,spacing:4) { Text(hit.title).font(.headline);Text(hit.botName).font(.caption);Text(hit.snippet.replacingOccurrences(of:"<[^>]*>",with:"",options:.regularExpression)).lineLimit(4).font(.footnote) } }.accessibilityIdentifier("nativeSearchResult-" + hit.sessionId) }
-        }
+        } footer: { Text("Searches answers, attachment names and routine previews across your assistants.") }
       } else if tab == "saved" {
-        Section("Saved items") {
+        Section {
           if saved.isEmpty { Text("Save a conversation from search or an output from routine results.").foregroundStyle(.secondary) }
           ForEach(saved) { item in
             Button(item.title) { if let session = item.sessionId { Task { await history(item.botId,session,item.offset ?? 0,item.messageId) } } else if let routineId = item.routineId { store.routineResult = RoutineResultDestination(botId:item.botId,routineId:routineId,resultId:item.resultId) } }
             .swipeActions { Button("Remove",role:.destructive) { Task { await perform { api in let _: EmptyResponse = try await api.write("/saved/\(APIClient.component(item.id))",[String:String](),method:"DELETE");saved.removeAll { $0.id == item.id } } } } }
           }
-          Text("Original content may be unavailable if deleted in Hermes.").font(.footnote).foregroundStyle(.secondary)
-        }
+        } footer: { Text("Original content may be unavailable if deleted in Hermes.") }
       } else {
-        Section("Upcoming work and recent failures") {
+        Section("Routines") {
           if overview?.routines.isEmpty == true { Text("No routines yet. Create one in assistant settings.") }
           ForEach(overview?.routines ?? []) { row in
             VStack(alignment:.leading,spacing:6) {
@@ -73,15 +74,14 @@ struct DiscoveryView: View {
             }
           }
         }
-        Section("Usage over 30 days") {
-          Text("Recorded main-session usage. Auxiliary calls and provider invoices may differ.").font(.footnote).foregroundStyle(.secondary)
+        Section {
           ForEach(overview?.usage ?? [],id:\.botId) { usage in
             VStack(alignment:.leading,spacing:4) { Text(name(usage.botId)).font(.headline);Text("\(usage.sessions) sessions · \(usage.inputTokens) input / \(usage.outputTokens) output tokens");Text("Reported: \(cost(usage.actualCost))\(usage.partial && usage.actualCost != nil ? " (partial)" : "") · Estimate: \(cost(usage.estimatedCost))") }.font(.footnote)
           }
           if let overview, !overview.unavailableBots.isEmpty { Text("Usage unavailable for \(overview.unavailableBots.count) assistant(s).") }
-        }
+        } header: { Text("Usage over 30 days") } footer: { Text("Recorded main-session usage. Auxiliary calls and provider invoices may differ.") }
       }
-    }.navigationTitle("Find & manage").disabled(busy)
+    }.householdListBackground().navigationTitle("Search & saved").disabled(busy)
       .onAppear { Task { await load() } }.onChange(of:tab) { _,_ in page=nil;Task { await load() } }
       .onChange(of:store.scope) { _,_ in loadId=UUID();hits=[];saved=[];overview=nil;page=nil;error=nil;Task { await load() } }
       .refreshable { await load() }
@@ -99,11 +99,13 @@ struct DiscoveryView: View {
   private func history(_ bot:String,_ session:String,_ offset:Int=0,_ messageId:String?=nil) async { await perform { api in let result:HistoryPage=try await api.get("/bots/\(APIClient.component(bot))/history/\(APIClient.component(session))?offset=\(offset)");if let messageId,!result.messages.contains(where:{$0.id==messageId}) { throw APIError(message:"The saved reply is unavailable. Its original history changed in Hermes.",status:404) };page=result } }
 }
 struct StarterActionsView: View {
-  var botId:String
-  @EnvironmentObject private var store:AppStore
-  @State private var starters:[Starter]=[]
-  var body:some View {
-    ScrollView(.horizontal,showsIndicators:false) { HStack { ForEach(starters) { item in Button(item.title) { var next=store.draft;next.text += (next.text.isEmpty ? "" : "\n\n") + item.prompt;store.updateDraft(next) }.buttonStyle(.bordered).disabled(!store.draftReady) } } }.task(id:botId + (store.scope ?? "")) { let scope=store.scope;do { let rows:[Starter]=try await store.api?.get("/bots/\(APIClient.component(botId))/starters") ?? [];if scope==store.scope { starters=rows } } catch { starters=[] } }
+  var starters: [Starter]
+  var add: (Starter) -> Void
+  @EnvironmentObject private var store: AppStore
+  var body: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack { ForEach(starters) { item in Button(item.title) { add(item) }.buttonStyle(.bordered).disabled(!store.draftReady) } }
+    }
   }
 }
 struct ActionReceiptView:View {

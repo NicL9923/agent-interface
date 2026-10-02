@@ -100,20 +100,28 @@ struct GroupChatsView: View {
   @State private var loadId = UUID()
   var body: some View {
     List {
-      Section {
-        Text("A shared conversation with 2–6 assistants.").foregroundStyle(.secondary)
-        if let reason = catalog?.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
-        if let error { ErrorBanner(message: error); Button("Retry") { Task { await load() } } }
-        if catalog == nil && error == nil { ProgressView("Checking Hermes group chats…") }
-        Button("New group") { creating = true }.disabled(catalog?.canSend != true || !store.connected)
+      if let reason = catalog?.reason { Section { Text(reason).font(.footnote).foregroundStyle(.secondary) } }
+      if let error { Section { ErrorBanner(message: error); Button("Retry") { Task { await load() } } } }
+      if catalog == nil && error == nil { Section { ProgressView("Checking Hermes group chats…") } }
+      if let catalog, catalog.supported && catalog.rooms.isEmpty {
+        Section { Text("No group chats yet. Tap + to let two to six assistants discuss a task together.").foregroundStyle(.secondary) }
       }
-      if let catalog, catalog.supported && catalog.rooms.isEmpty { Section { Text("No hosted group chats yet.") } }
-      ForEach(catalog?.rooms ?? []) { room in
-        NavigationLink { GroupConversationView(room: room, canSend: catalog?.canSend == true) } label: {
-          VStack(alignment: .leading) { Text(room.name); Text("\(room.members.count) assistants").font(.caption).foregroundStyle(.secondary) }
+      if let rooms = catalog?.rooms, !rooms.isEmpty {
+        Section {
+          ForEach(rooms) { room in
+            NavigationLink { GroupConversationView(room: room, canSend: catalog?.canSend == true) } label: {
+              VStack(alignment: .leading, spacing: 3) { Text(room.name); Text("\(room.members.count) assistants").font(.caption).foregroundStyle(.secondary) }
+            }
+          }
+        } footer: { Text("Two to six assistants in one conversation.") }
+      }
+    }.householdListBackground().navigationTitle("Group chats").refreshable { await load() }
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button { creating = true } label: { Image(systemName: "plus") }
+            .accessibilityLabel("New group").disabled(catalog?.canSend != true || !store.connected)
         }
       }
-    }.navigationTitle("Group chats").refreshable { await load() }
       .onAppear { Task { await load() } }
       .onChange(of: store.scope) { _, _ in catalog = nil; Task { await load() } }
       .sheet(isPresented: $creating, onDismiss: { Task { await load() } }) { NavigationStack { GroupCreateView() }.environmentObject(store) }
@@ -166,6 +174,7 @@ struct GroupCreateView: View {
 struct GroupConversationView: View {
   var room: GroupRoom; var canSend: Bool
   @EnvironmentObject private var store: AppStore
+  @Environment(\.colorScheme) private var scheme
   @State private var state: GroupState?
   @State private var events: [GroupEvent] = []
   @State private var cursor = 0
@@ -176,6 +185,9 @@ struct GroupConversationView: View {
   @State private var busy = false
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
+  private var status: String {
+    state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Ready for a topic."
+  }
   var body: some View {
     List {
       Section { Text(room.members.map { "\($0.display_name ?? $0.profile) (@\($0.handle))" }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
@@ -183,35 +195,63 @@ struct GroupConversationView: View {
         if state == nil && error == nil { ProgressView("Opening group…") }
       }
       ForEach(events.filter { ["message.user", "message.member"].contains($0.kind) }) { event in
-        VStack(alignment: .leading, spacing: 8) {
-          Text(event.kind == "message.user" ? "Household member" : room.members.first { $0.member_id == event.payload.member_id }?.display_name ?? event.payload.member_id ?? "Assistant").font(.caption.bold())
+        VStack(alignment: .leading, spacing: 6) {
+          HStack(alignment: .firstTextBaseline) {
+            Text(event.kind == "message.user" ? "Household member" : room.members.first { $0.member_id == event.payload.member_id }?.display_name ?? event.payload.member_id ?? "Assistant").font(.caption.bold())
+            Spacer()
+            Text(Date(timeIntervalSince1970: event.created_at).formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
+          }
           MarkdownView(text: event.payload.text ?? "")
-          Text(Date(timeIntervalSince1970: event.created_at).formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
-          if let thread = event.payload.thread_id { Button("Reply in thread") { threadId = thread }.disabled(pending != nil || !canSend) }
+          if let thread = event.payload.thread_id {
+            Button("Reply in thread") { threadId = thread }.font(.caption).buttonStyle(.borderless).disabled(pending != nil || !canSend)
+          }
         }
       }
-      Section {
-        Text(state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Ready for a topic.").font(.footnote).foregroundStyle(.secondary)
-        if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.connected) }
-        ForEach(state?.driver_status?.pending_actions ?? []) { action in
-          if action.kind == "approval" {
-            Text(action.approval?.description ?? action.approval?.command ?? "An assistant needs approval")
-            HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.disabled(busy || !canSend || !store.connected)
-          } else { Text("Hermes cannot confirm a member's last turn. Review it in the native group client before retrying.").font(.footnote) }
+      if state?.driver_status?.working == true || !(state?.driver_status?.pending_actions.isEmpty ?? true) {
+        Section {
+          if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.connected) }
+          ForEach(state?.driver_status?.pending_actions ?? []) { action in
+            if action.kind == "approval" {
+              Text(action.approval?.description ?? action.approval?.command ?? "An assistant needs approval")
+              HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.buttonStyle(.bordered).disabled(busy || !canSend || !store.connected)
+            } else { Text("Hermes cannot confirm a member's last turn. Review it in the native group client before retrying.").font(.footnote) }
+          }
         }
       }
-      Section {
-        if !threadId.isEmpty { Button("Replying in thread. Start new topic") { threadId = "" } }
-        if let pending { Text(pending.text).textSelection(.enabled); Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption) }
-        else { TextField("Message the group", text: $draft, axis: .vertical).lineLimit(2...8).accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") } }
-        Button(pending == nil ? "Send to group" : "Retry same saved message") { Task { await send() } }.disabled(busy || !canSend || !store.connected || pending == nil && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-      }
-    }.navigationTitle(room.name).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
+    }
+    .householdListBackground()
+    .safeAreaInset(edge: .bottom) { composer }
+    .navigationTitle(room.name).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
       state = nil; events = []; cursor = 0
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       while !Task.isCancelled { await load(); do { try await Task.sleep(for: .seconds(3)) } catch { return } }
     }
+  }
+  private var composer: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if !threadId.isEmpty {
+        HStack { Text("Replying in thread").font(.caption).foregroundStyle(.secondary); Button("New topic") { threadId = "" }.font(.caption) }
+      }
+      if let pending {
+        Text(pending.text).font(.footnote).textSelection(.enabled)
+        Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption).foregroundStyle(.secondary)
+        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.borderedProminent).disabled(busy || !canSend || !store.connected)
+      } else {
+        HStack(alignment: .bottom, spacing: 10) {
+          TextField("Message the group… use @handle for one assistant", text: $draft, axis: .vertical).lineLimit(1...6)
+            .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
+            .accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
+          let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          Button { Task { await send() } } label: {
+            Image(systemName: busy ? "hourglass" : "arrow.up").font(.headline).frame(width: 44, height: 44)
+              .foregroundStyle(ready ? Palette.surface(scheme) : Palette.muted)
+              .background(ready ? Palette.accent : Palette.line, in: Circle()).contentShape(Circle())
+          }.buttonStyle(.plain).disabled(!ready).accessibilityLabel("Send to group")
+        }
+      }
+      Text(status).font(.caption).foregroundStyle(.secondary)
+    }.padding(12).background(.regularMaterial)
   }
   private func load() async {
     guard let api = store.api else { return }; let scope = store.scope

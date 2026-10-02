@@ -47,6 +47,7 @@ const paths = {
   search: "M16.5 10.5a6 6 0 1 1-12 0a6 6 0 1 1 12 0ZM15 15l5 5",
   groups: "M4 5h11v8H9l-3 3v-3H4ZM15 9h5v8h-2v3l-3-3h-4v-4",
   mic: "M9 5a3 3 0 0 1 6 0v6a3 3 0 0 1-6 0ZM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21",
+  model: "M8 8h8v8H8ZM10 4v4M14 4v4M10 16v4M14 16v4M4 10h4M4 14h4M16 10h4M16 14h4",
   speaker: "M4 9.5h4L13 5v14l-5-4.5H4ZM16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11",
 } as const;
 export type IconName = keyof typeof paths;
