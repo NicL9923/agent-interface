@@ -4,7 +4,7 @@
 
 Branch `feature/native-vault-logins` starts from merged PR #19, `9273f8a`.
 Final full source fingerprint, 411 files:
-`sha256:56b8118ff14ecfb82e2ce9ab848f110d09c976382069d1d71b9151961c0bcb69`.
+`sha256:120333f4f2b140773881571120cd198931dd2ee601b94eacf2d5b111bac09c5c`.
 Independent GPT-6.1 Sol high review approved this exact source with no unresolved
 findings.
 The implementation follows Hermes profile ownership and the existing household
@@ -50,6 +50,10 @@ Backend fingerprint, 59 inputs:
 `sha256:1788260309647c51bff439233442c563ed5f18cb6aefd6656f8d38315505c955`.
 The integration digest is
 `4f150ba50f8fa34ce8e5e8bca87743ff555fa478fe0f5d768920db4176085f38`.
+CI initially found the dashboard startup fixture did not stub the new vault hook.
+The corrected fixture now covers failed vault installation as well; all five
+startup checks and three qualification-boundary checks completed. Vault contract
+checks are included in CI alongside native memory ownership.
 The release wrapper completed 18 checks. The unchanged installer's approved-tree
 provenance suite completed 34 checks with one skipped test. The release qualifier
 now reuses that provenance proof so upstream changes to diff headers cannot be

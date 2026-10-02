@@ -23,7 +23,7 @@ class DashboardContract(unittest.TestCase):
         def step(name):
             events.append(name)
             if name == failure:
-                if name in ("extension", "experience", "integrations"): raise RuntimeError("Hook installation failed")
+                if name in ("extension", "experience", "integrations", "vault"): raise RuntimeError("Hook installation failed")
                 raise SystemExit("Integration unavailable")
         extension = types.SimpleNamespace(source_state=lambda: step("qualify"), install=lambda: step("extension"))
         def validate(secret):
@@ -31,6 +31,7 @@ class DashboardContract(unittest.TestCase):
             if failure == "secret": raise SystemExit("Invalid service key")
         service = types.SimpleNamespace(validate_secret=validate, install_service_auth=lambda web, secret: events.append(("service", web, secret)))
         experience = types.SimpleNamespace(install=lambda web, journal: step("experience"))
+        vault = types.SimpleNamespace(install=lambda web, journal: step("vault"))
         integrations = types.SimpleNamespace(install=lambda web: step("integrations"))
         computer = types.SimpleNamespace(install_tools=lambda: step("computer"))
         cli = types.ModuleType("hermes_cli.main")
@@ -43,17 +44,17 @@ class DashboardContract(unittest.TestCase):
             dashboard = load("dashboard", link)
             def sibling_spec(name, path):
                 self.assertEqual(Path(path).parent, ROOT)
-                module = extension if name.endswith("extension") else experience if name.endswith("experience") else integrations if name.endswith("integrations") else computer if name.endswith("computer") else service
+                module = extension if name.endswith("extension") else experience if name.endswith("experience") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else computer if name.endswith("computer") else service
                 return importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))))
             with patch.object(sys, "argv", argv), patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private", "HERMES_SERVE_HEADLESS": ""}), patch.dict(sys.modules, {"hermes_cli": package, "hermes_cli.main": cli, "hermes_cli.web_server": web}), patch.object(dashboard.importlib.util, "spec_from_file_location", sibling_spec):
-                if failure in ("extension", "experience", "integrations"):
+                if failure in ("extension", "experience", "integrations", "vault"):
                     with self.assertRaises(RuntimeError): dashboard.main()
                 else: dashboard.main()
         return events, argv, web
 
     def test_original_cli_receives_unchanged_dashboard_arguments_after_install(self):
         events, argv, web = self.exercise()
-        self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "integrations", ("service", web, "private"), ("cli", argv)])
+        self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "vault", "integrations", ("service", web, "private"), ("cli", argv)])
 
     def test_source_or_key_failure_preserves_native_dashboard_without_installing_hooks(self):
         for failure in ["qualify", "secret"]:
@@ -64,7 +65,7 @@ class DashboardContract(unittest.TestCase):
                 self.assertFalse(any(isinstance(event, tuple) and event[0] == "service" for event in events))
 
     def test_partial_install_failure_never_continues_native_cli(self):
-        for failure in ("extension", "experience", "integrations"):
+        for failure in ("extension", "experience", "vault", "integrations"):
             events, _, _ = self.exercise(failure)
             self.assertEqual(events[-1], failure)
             self.assertFalse(any(isinstance(event, tuple) and event[0] == "cli" for event in events))
