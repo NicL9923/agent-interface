@@ -209,6 +209,7 @@ struct RoutinePreviewControls: View {
     if !routine.id.isEmpty {
       Section("Try once") {
         Text("Runs this saved routine immediately with its saved instructions and recipients. It can use the assistant's enabled tools.").font(.footnote).foregroundStyle(.secondary)
+        Text("Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.footnote).foregroundStyle(.secondary)
         if let receipt {
           Text(receipt.message ?? "Run status: \(receipt.status)")
           if ["accepted", "uncertain"].contains(receipt.status) {

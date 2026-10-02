@@ -71,7 +71,7 @@ async def main():
         assert epochs == sorted(set(epochs)) and epochs[0] > time.time(), preview
         assert call("preview", schedule="nope")[0] == 400
         checks["native_timezone_schedule_preview"] = True
-        result = await c.call("cron.manage", profile="spike", action="add", name="[bot:spike] Experience trial proof", prompt="PROBE_SLOW Public synthetic routine result", schedule="1h", deliver="bot-chat:spike", continuity=True)
+        result = await c.call("cron.manage", profile="spike", action="add", name="[bot:spike] Experience trial proof", prompt="PROBE_SLOW Public synthetic routine result", schedule="0 7 * * *", deliver="bot-chat:spike", continuity=True)
         job = result.get("job") or result
         job_id = job.get("job_id") or job.get("id")
         if not job_id:
@@ -92,8 +92,13 @@ async def main():
                 break
             await asyncio.sleep(.25)
         assert receipt["status"] == "completed", receipt
-        jobs = (await c.call("cron.manage", profile="spike", action="list"))["jobs"]
-        job = next(row for row in jobs if (row.get("id") or row.get("job_id")) == job_id)
+        # Official RPC listings hide disabled jobs unless explicitly requested.
+        # A paused trial must stay hidden there while remaining in the full list.
+        active_jobs = (await c.call("cron.manage", profile="spike", action="list"))["jobs"]
+        assert not any((row.get("id") or row.get("job_id")) == job_id for row in active_jobs), "Trial silently enabled a paused routine"
+        jobs = (await c.call("cron.manage", profile="spike", action="list", include_disabled=True))["jobs"]
+        job = next((row for row in jobs if (row.get("id") or row.get("job_id")) == job_id), None)
+        assert job is not None, "Paused recurring routine disappeared from the native full listing"
         assert job.get("enabled") is False or job.get("state") == "paused", job
         request = urllib.request.Request(os.environ["HERMES_SPIKE_URL"] + "/api/agent-interface/service/cron/jobs?profile=spike", headers={"Authorization": "Bearer " + os.environ["HERMES_SPIKE_TOKEN"]})
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -101,8 +106,6 @@ async def main():
         before_completed = native_job["last_run_at"]
         assert call("run", **run)[1]["status"] == "completed"
         await asyncio.sleep(.3)
-        jobs = (await c.call("cron.manage", profile="spike", action="list"))["jobs"]
-        job = next(row for row in jobs if (row.get("id") or row.get("job_id")) == job_id)
         with urllib.request.urlopen(request, timeout=10) as response:
             native_job = next(row for row in json.load(response) if (row.get("id") or row.get("job_id")) == job_id)
         assert native_job["last_run_at"] == before_completed, "Same trial ID reran the native job"

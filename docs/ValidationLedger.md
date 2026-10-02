@@ -1042,6 +1042,40 @@ canonical run attribution supplies late completion artifacts. Calendar Close
 remains readable at phone width. New native qualification and subsequent
 production activation receipts will be recorded after merge.
 
+The first full staged qualification stopped in the experience probe after the
+existing lifecycle and routine probes completed. The native RPC routine listing
+defaults to active jobs; the probe incorrectly expected its paused trial in that
+listing. A marked-home reproduction confirmed the exact lookup failure. The
+follow-up requests disabled jobs explicitly and asserts the default listing still
+omits the paused job. No native execution or product scheduler change was needed,
+and no qualification receipt was issued for the failed run. Production retained
+the previous release throughout this investigation.
+
+The source check also clarified native manual-trigger behavior. Hermes applies
+its normal schedule and repeat rules, which can move an interval's next run or
+finish a one-time routine. Web and native copy now explain that behavior before
+the action; paused recurring routines remain paused. This replaces the initial
+blanket promise that the regular schedule would stay unchanged.
+
+The follow-up adds a reviewed host acceptance tool for repeated speech checks.
+It uses a short-lived allowed-member session, reads Today/native memory/schedule
+previews, transcribes synthetic speech through the deployed app, and compares
+canonical history before and after. It refuses maintenance, keeps credentials
+and household content out of its output, and removes its session before issuing
+a receipt. It does not edit memories, acknowledge a real person's Today page,
+send chat messages or execute a production routine.
+
+Follow-up frozen source, 375 files:
+`sha256:245149decb5c02827c3f8ad011a0e72dd2d5b80307fd46360c8f2ee4dfa03748`.
+The corrected real native experience probe completed in the marked disposable
+environment. The eight focused web experience checks and rebuilt web
+`fb52f56f6b997241` completed. The native copy-only follow-up compiled on the phone
+simulator, at input digest
+`sha256:809b8cfc3cb394cfa10aff09eb01106259e83810ee2f3e26212423f9abd00309`.
+Existing product checks remain applicable to their unchanged logic. The new
+acceptance helper passed its syntax check and independent review at SHA256
+`a3fa36bcbdb613ff341ec8a2f6ec96912b127b276d28f725563a052b0f6f3b70`.
+
 Physical-phone microphone capture/audibility, native calendar Save, and signed
 iOS distribution remain separate acceptance work. Existing image, push and live
 external integration gaps remain tracked in issue #1. Server speech success does

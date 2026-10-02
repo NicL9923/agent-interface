@@ -68,6 +68,7 @@ export function RoutineEnhancements({ routine, userId, disabled }: { routine: Ro
     finally { setBusy(false); }
   }
   return <div className="routine-enhancements"><RoutineSchedulePreview botId={routine.botId} schedule={routine.schedule} />
+    <small className="muted">Runs now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.</small>
     <div className="actions">{canStart ? <button type="button" disabled={busy || disabled} onClick={() => void start()}>{busy ? "Starting..." : "Try once"}</button>
       : <button type="button" disabled={busy || disabled} onClick={() => void check(requestId)}>{busy ? "Checking..." : "Check run status"}</button>}
       {missing && <button type="button" disabled={busy || disabled} onClick={() => void start(requestId)}>Retry the same request</button>}</div>
@@ -76,6 +77,5 @@ export function RoutineEnhancements({ routine, userId, disabled }: { routine: Ro
       : receipt.status === "failed" ? "Trial run failed."
       : "The run's outcome is unknown. Review its result before starting another."}{receipt.message && ` ${receipt.message}`}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-    <small className="muted">Runs the saved instructions once. Its regular schedule stays unchanged.</small>
   </div>;
 }

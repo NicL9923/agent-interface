@@ -84,8 +84,9 @@ profile timezone and its next three runs, or the one scheduled run for a one-sho
 Presets use connected sources and do not authorize purchases or server changes.
 
 Try once executes the saved instructions through Hermes's native scheduler. It
-preserves the regular schedule and records a durable request ID before native
-admission. Rechecking or retrying that same ID cannot create another trial. The
+records a durable request ID before native admission. Hermes applies its normal
+schedule and repeat rules: the next run can move and a one-time routine can finish.
+Paused recurring routines remain paused. Rechecking or retrying that same ID cannot create another trial. The
 receipt follows the native execution ledger, including detached native workers.
 An uncertain outcome requires review. The app does not silently start another
 run, and it blocks routine edits while a trial's outcome remains unconfirmed.
