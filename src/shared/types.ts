@@ -33,7 +33,7 @@ export type Avatar =
     }
   | {
       mode: "mascot";
-      family: "sprout" | "fox" | "bear";
+      family: "sprout" | "fox" | "bear" | "pumpkin" | "santa" | "rudolph" | "turkey" | "bunny";
       color: string;
       eyes: Eyes;
       accessory: Accessory;

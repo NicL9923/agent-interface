@@ -32,6 +32,26 @@ struct AvatarConfig: Codable, Equatable {
   static let shapes = [
     "blob", "pebble", "squircle", "capsule", "triangle", "hex", "cloud", "drop", "circle",
   ]
+  static let families: [(id: String, label: String)] = [
+    ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"),
+    ("pumpkin", "Pumpkin"), ("santa", "Santa"), ("rudolph", "Rudolph"),
+    ("turkey", "Turkey"), ("bunny", "Easter Bunny"),
+  ]
+  static let seasonalColors = [
+    "pumpkin": "#FF9800", "santa": "#F2B08B", "rudolph": "#97683D",
+    "turkey": "#97683D", "bunny": "#F5E9D8",
+  ]
+  var geometry: String {
+    if mode == "geometric" { return shape ?? "blob" }
+    if let family, Self.seasonalColors[family] != nil { return family }
+    return "mascot"
+  }
+  func selectingFamily(_ family: String) -> AvatarConfig {
+    var next = self
+    next.family = family
+    if let color = Self.seasonalColors[family] { next.color = color }
+    return next
+  }
   static let colors = [
     "#1084FE", "#FF6700", "#00BCA6", "#FF263C", "#FF309B", "#9159FE", "#FF9800", "#97683D",
     "#292929",

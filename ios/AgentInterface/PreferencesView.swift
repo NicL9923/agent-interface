@@ -203,7 +203,7 @@ struct PreferencesView: View {
     @State private var avatar = AvatarConfig()
     @State private var reduced = false
     @State private var matrixWidth: CGFloat = 353
-    /// The web specimen's state matrix: eight characters across every activity state.
+    /// The web specimen's state matrix across every activity state.
     private let matrix: [(String, AvatarConfig)] = [
       ("Blob", AvatarConfig()),
       ("Triangle", AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "visor")),
@@ -213,7 +213,9 @@ struct PreferencesView: View {
       ("Fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
       ("Sprout", AvatarConfig(mode: "mascot", shape: nil, family: "sprout", color: "#00BCA6", accessory: "hat")),
       ("Portrait", AvatarConfig(mode: "portrait", shape: nil, origin: "uploaded")),
-    ]
+    ] + AvatarConfig.families.filter { AvatarConfig.seasonalColors[$0.id] != nil }.map {
+      ($0.label, AvatarConfig(mode: "mascot", shape: nil, eyes: "round").selectingFamily($0.id))
+    }
     var body: some View {
       ScrollView {
         // Lazy, so offscreen specimens stop their animation timelines.

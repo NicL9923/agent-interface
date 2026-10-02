@@ -72,6 +72,36 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertFalse(app.buttons["Save tools"].isEnabled)
     XCTAssertFalse(app.staticTexts["No tools were reported by Hermes."].exists)
   }
+  func testSeasonalAvatarChoicesSaveAndRemainSelected() {
+    let app = app()
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    app.buttons["Configure Ranch hand"].tap()
+    app.buttons["Avatar"].tap()
+    app.buttons["Mascot"].tap()
+    func scrollTo(_ button: XCUIElement, up: Bool) {
+      for _ in 0..<8 {
+        if button.exists && button.isHittable { return }
+        if up { app.swipeUp() } else { app.swipeDown() }
+      }
+      XCTAssertTrue(button.isHittable)
+    }
+    for family in ["pumpkin", "santa", "rudolph", "turkey", "bunny"] {
+      let choice = app.buttons["avatarTile.family.\(family)"]
+      scrollTo(choice, up: true)
+      choice.tap()
+      XCTAssertTrue(choice.isSelected)
+      scrollTo(app.buttons["previewState.idle"], up: false)
+      screenshot(app, "Seasonal native \(family)")
+      scrollTo(app.buttons["Save avatar"], up: true)
+      app.buttons["Save avatar"].tap()
+      XCTAssertTrue(app.staticTexts["Avatar saved."].waitForExistence(timeout: 5))
+      app.buttons["Close"].tap()
+      app.buttons["Configure Ranch hand"].tap()
+      app.buttons["Avatar"].tap()
+      scrollTo(app.buttons["avatarTile.family.\(family)"], up: true)
+      XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].isSelected)
+    }
+  }
   func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
     let app = app(upgradeUncertain: true)
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))

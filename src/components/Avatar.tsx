@@ -14,6 +14,7 @@ import {
   type Expression,
 } from "./avatar-motion";
 import "./avatar.css";
+import { isSeasonal, seasonalAnchors, seasonalHeads, SeasonalBack, SeasonalFace, SeasonalFront } from "./seasonal-avatars";
 
 export const avatarStates: ActivityState[] = [
   "idle",
@@ -275,12 +276,13 @@ export function Avatar({
   const symbolic = bang;
 
   const mascot = avatar.mode === "mascot" ? avatar : null;
+  const seasonal = mascot && isSeasonal(mascot.family) ? mascot.family : null;
   const color = avatar.mode === "portrait" ? "#1084FE" : avatar.color;
   const eyes = avatar.mode === "portrait" ? "oval" : avatar.eyes;
   const accessory = avatar.mode === "portrait" ? "none" : avatar.accessory;
   const geometry = avatar.mode === "geometric" ? avatar.shape : "mascot";
-  const anchor = faces[geometry] || faces.blob;
-  const bodyPath = useShapeTransition(silhouette(geometry), reduce);
+  const anchor = seasonal ? seasonalAnchors[seasonal] : faces[geometry] || faces.blob;
+  const bodyPath = useShapeTransition(seasonal ? seasonalHeads[seasonal] : silhouette(geometry), reduce);
   const ink = faceInk(color, !!mascot);
   const eyeScale = anchor.scale;
   const eyeWidth = avatar.mode === "portrait" ? 1 : avatar.eyeWidth ?? 1;
@@ -373,6 +375,7 @@ export function Avatar({
   );
   const mascotFace = mascot && center.visible && (
     <g transform={`translate(${50 + center.x} 0) scale(${center.scale} 1) translate(-50 0)`}>
+      {seasonal ? <SeasonalFace family={seasonal} color={color} ink={ink} mouth={face.mouth} happy={face.happy} /> : <>
       {mascot.family === "bear" && <ellipse cx="50" cy="71" rx="18" ry="13" fill="#fff3db" />}
       {mascot.family === "fox" && (
         <path
@@ -409,9 +412,10 @@ export function Avatar({
           opacity={face.happy}
         />
       )}
+      </>}
     </g>
   );
-  const cheeks = mascot && [-1, 1].map((direction) => {
+  const cheeks = mascot && seasonal !== "pumpkin" && [-1, 1].map((direction) => {
     const p = project(direction * 27, pose.yaw);
     return p.visible ? (
       <ellipse key={direction} cx={50 + p.x} cy={anchor.cy + 12} rx={6 * p.scale} ry="3.8"
@@ -449,8 +453,12 @@ export function Avatar({
       <path d="M47 9.5 Q37 6 29 7 M54 6.5 Q63 2.5 72 2.5" fill="none" stroke="#a9d9b3" strokeWidth="1.2" strokeLinecap="round" />
     </g>
   );
+  // A smaller extra hat leaves the seasonal character's ears, cap and antlers visible.
+  const hatAnchor = seasonal === "santa" ? { top: -3, hat: 0.45 }
+    : seasonal === "rudolph" ? { top: 24, hat: 0.45 }
+      : seasonal === "bunny" ? { top: 31, hat: 0.4 } : anchor;
   const hat = accessory === "hat" && (
-    <g transform={`translate(50 ${anchor.top + 15 * anchor.hat}) scale(${anchor.hat})`}>
+    <g transform={`translate(50 ${hatAnchor.top + 15 * hatAnchor.hat}) scale(${hatAnchor.hat})`}>
       <path d="M-20 -2 Q-21 -20 -10 -21 Q0 -16 10 -21 Q21 -20 20 -2Z" fill="#3a2f28" />
       <path d="M-20.3 -7 Q0 -3 20.3 -7 L20 -2 Q0 2 -20 -2Z" fill="#b48156" />
       <path d="M-37 -4 Q-34 5 0 5 Q34 5 37 -4 Q38 -8 33 -6 Q0 2 -33 -6 Q-38 -8 -37 -4Z" fill="#302925" />
@@ -472,6 +480,7 @@ export function Avatar({
       className={`avatar-wrap avatar-${avatar.mode}`}
       style={{ width: size, height: size, ["--avatar-size" as string]: `${size}px` }}
       data-state={state}
+      data-family={mascot?.family}
       data-reduced-motion={reduce}
       role="img"
       aria-label={`${name}: ${stateLabels[state]}`}
@@ -499,6 +508,7 @@ export function Avatar({
             {trailLayer("back")}
             {ears}
             {sprout}
+            {seasonal && <SeasonalBack family={seasonal} color={color} yaw={pose.yaw} />}
             <path d={bodyPath} fill={color} className="avatar-body" />
             <g clipPath={`url(#face-${id})`}>
               {mascotFace}
@@ -506,6 +516,7 @@ export function Avatar({
               <g fill={ink}>{eyesLayer}</g>
               {glassesBridge}
             </g>
+            {seasonal && <SeasonalFront family={seasonal} yaw={pose.yaw} />}
             {hat}
             {trailLayer("front")}
           </g>

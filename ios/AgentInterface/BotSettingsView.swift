@@ -236,10 +236,10 @@ struct BotSettingsView: View {
         } else {
           Section("Character") {
             AvatarTiles(
-              group: "family", options: ["bear", "fox", "sprout"].map { ($0, $0.capitalized) },
+              group: "family", options: AvatarConfig.families.map { ($0.id, $0.label) },
               selected: avatar.family ?? "sprout",
-              preview: { var a = avatar; a.family = $0; a.accessory = "none"; return a },
-              select: { avatar.family = $0 })
+              preview: { var a = avatar.selectingFamily($0); a.accessory = "none"; return a },
+              select: { avatar = avatar.selectingFamily($0) })
           }
         }
         Section("Color") { colorSwatches }

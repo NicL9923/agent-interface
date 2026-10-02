@@ -3,7 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Avatar } from "../src/components/Avatar";
-import type { ActivityState } from "../src/shared/types";
+import type { ActivityState, Avatar as AvatarConfig } from "../src/shared/types";
+import { seasonalAvatar, seasonalChoices } from "../src/components/seasonal-avatars";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -13,8 +14,8 @@ let nextFrame = 0;
 let reduceMotion = false;
 let reportVisibility: (visible: boolean) => void = () => {};
 
-const render = (state: ActivityState) =>
-  act(async () => root.render(createElement(Avatar, { state, size: 64, name: "Ranch hand" })));
+const render = (state: ActivityState, avatar?: AvatarConfig) =>
+  act(async () => root.render(createElement(Avatar, { state, avatar, size: 64, name: "Ranch hand" })));
 /** Advances the controlled clock, running every frame callback that was queued. */
 const advance = async (seconds: number) => {
   for (let i = 0; i < Math.round(seconds * 60); i++) {
@@ -66,6 +67,27 @@ afterEach(() => {
 });
 
 describe("avatar animation loop", () => {
+  it.each(seasonalChoices)("animates the $label character while working", async ({ family }) => {
+    await render("working", seasonalAvatar(family));
+    expect(container.querySelector('[role="img"]')?.getAttribute("data-family")).toBe(family);
+    expect(container.querySelector("[data-seasonal-feature]")).not.toBeNull();
+    const before = svg();
+    await advance(1);
+    expect(svg()).not.toBe(before);
+    expect(frames.size).toBeGreaterThan(0);
+  });
+
+  it.each(seasonalChoices)("keeps the $label character visible and still under reduced motion", async ({ family }) => {
+    reduceMotion = true;
+    await render("thinking", seasonalAvatar(family));
+    const before = svg();
+    await advance(1);
+    expect(svg()).toBe(before);
+    expect(container.querySelector("[data-seasonal-feature]")).not.toBeNull();
+    expect(frames.size).toBe(0);
+    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Thinking");
+  });
+
   it.each<ActivityState>(["thinking", "working"])("keeps the avatar visible and animated while %s, then stops when unmounted", async (state) => {
     await render(state);
     const before = svg();

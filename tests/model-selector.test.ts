@@ -35,10 +35,31 @@ it("loads actual profile models, uses provider disclosures, preserves aliases an
   await render();
   expect(api).toHaveBeenCalledWith("/models?botId=shared", expect.objectContaining({ signal: expect.any(AbortSignal) }));
   expect(container.querySelectorAll("details.model-provider")).toHaveLength(2);
+  const groups = container.querySelectorAll<HTMLDetailsElement>("details.model-provider");
+  expect(groups[0].open).toBe(true);
+  expect(groups[1].open).toBe(false);
   expect(button("Saved model").getAttribute("aria-pressed")).toBe("true");
   expect(button("Offline modelReconnect in Hermes to use this model").disabled).toBe(true);
   await act(async () => button("New model").click());
   expect(onChange).toHaveBeenCalledExactlyOnceWith({ provider: "house", model: "new-model" });
+});
+
+it("refreshes a loaded catalog without changing the saved choice or reopening a manually collapsed provider", async () => {
+  await render();
+  const selected = container.querySelector<HTMLDetailsElement>("details.model-provider")!;
+  selected.open = false;
+  let finish!: (value: ModelCatalog) => void;
+  vi.mocked(api).mockImplementationOnce(() => new Promise<ModelCatalog>((resolve) => { finish = resolve; }));
+  await act(async () => button("Refresh models").click());
+  expect(button("Refresh models").disabled).toBe(true);
+  expect(container.textContent).toContain("Loading models from Hermes");
+  await act(async () => finish({ ...catalog, providers: catalog.providers.map((provider) => provider.id === "house"
+    ? { ...provider, models: [...provider.models, { id: "fresh-model", name: "Fresh model", available: true }] } : provider) }));
+  expect(button("Fresh model")).toBeDefined();
+  expect(selected.open).toBe(false);
+  expect(button("Refresh models").disabled).toBe(false);
+  expect(onChange).not.toHaveBeenCalled();
+  expect(button("Saved model").getAttribute("aria-pressed")).toBe("true");
 });
 
 it("persists favorites separately from household preferences and reports failed writes without changing the favorite", async () => {

@@ -498,7 +498,8 @@ enum AvatarGeometry {
   static let mascotHead =
     "M50 14 C77 14 95 32 95 56 C95 81 76 95 50 95 C24 95 5 81 5 56 C5 32 23 14 50 14Z"
   static func svg(_ shape: String) -> String {
-    switch shape {
+    if let head = SeasonalAvatarArt.heads[shape] { return head }
+    return switch shape {
     case "mascot": mascotHead
     case "drop": "M50 7 C42 16 13 42 13 64 C13 87 29 95 50 95 C71 95 87 82 87 62 C87 39 61 17 50 7Z"
     case "triangle": "M43 12 Q50 0 57 12 L95 78 Q103 94 85 94 H15 Q-3 94 5 78Z"
@@ -517,9 +518,9 @@ enum AvatarGeometry {
     }
   }
   static let paths = Dictionary(
-    uniqueKeysWithValues: (AvatarConfig.shapes + ["mascot"]).map { ($0, SVGPath.parse(svg($0))) })
+    uniqueKeysWithValues: (AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted()).map { ($0, SVGPath.parse(svg($0))) })
   static let cached = Dictionary(
-    uniqueKeysWithValues: (AvatarConfig.shapes + ["mascot"]).map { ($0, points($0)) })
+    uniqueKeysWithValues: (AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted()).map { ($0, points($0)) })
   static func path(_ shape: String) -> Path { paths[shape] ?? SVGPath.parse(svg(shape)) }
   static func sampled(_ shape: String) -> PointVector { cached[shape] ?? points(shape) }
   static func points(_ shape: String) -> PointVector {
@@ -610,6 +611,11 @@ enum AvatarGeometry {
     "drop": Anchor(cy: 63, scale: 0.9, top: 8, hat: 0.62),
     "circle": Anchor(cy: 50, scale: 1, top: 3, hat: 1),
     "mascot": Anchor(cy: 55, scale: 1, top: 15, hat: 0.82),
+    "pumpkin": Anchor(cy: 53, scale: 0.95, top: 18, hat: 0.75),
+    "santa": Anchor(cy: 51, scale: 0.9, top: 22, hat: 0.75),
+    "rudolph": Anchor(cy: 54, scale: 0.9, top: 25, hat: 0.7),
+    "turkey": Anchor(cy: 54, scale: 0.85, top: 30, hat: 0.65),
+    "bunny": Anchor(cy: 57, scale: 0.9, top: 31, hat: 0.65),
   ]
 }
 
@@ -683,7 +689,8 @@ struct AvatarArtwork {
     let color = Color(hex: colorHex)
     let eyes = avatar.eyes ?? "oval"
     let accessory = avatar.accessory ?? "none"
-    let geometry = avatar.mode == "geometric" ? avatar.shape ?? "blob" : "mascot"
+    let geometry = avatar.geometry
+    let seasonal = mascot && AvatarConfig.seasonalColors[family] != nil
     let anchor = AvatarGeometry.faces[geometry] ?? AvatarGeometry.faces["blob"]!
     let inkHex = AvatarMotion.faceInk(colorHex, mascot: mascot)
     let ink = Color(hex: inkHex)
@@ -740,7 +747,8 @@ struct AvatarArtwork {
           }
         }
         trails(front: false)
-        if mascot && family != "sprout" {
+        if seasonal { SeasonalAvatarArt.back(layer, family: family, color: colorHex, yaw: pose.yaw) }
+        if mascot && (family == "bear" || family == "fox") {
           let inner = Color(
             hex: AvatarMotion.tint(colorHex, family == "fox" ? -0.35 : 0.45))
           for direction in [-1.0, 1.0] {
@@ -776,23 +784,27 @@ struct AvatarArtwork {
           muzzle.scaleBy(x: center.scale, y: 1)
           muzzle.translateBy(x: -50, y: 0)
           let cream = Color(hex: "#fff3db")
-          if family == "bear" { muzzle.fill(AvatarArt.ellipse(50, 71, 18, 13), with: .color(cream)) }
-          if family == "fox" { muzzle.fill(AvatarArt.foxMuzzle, with: .color(cream)) }
-          if family != "sprout" { muzzle.fill(AvatarArt.nose, with: .color(dark)) }
-          var mouth = muzzle
-          mouth.opacity = 1 - face.happy
-          if family == "sprout" {
-            mouth.stroke(AvatarArt.sproutMouth(face.mouth), with: .color(ink), style: stroke(2.4))
+          if seasonal {
+            SeasonalAvatarArt.face(muzzle, family: family, color: colorHex, ink: ink, mouth: face.mouth, happy: face.happy)
           } else {
-            let curve = 73 + 4 * face.mouth
-            mouth.stroke(AvatarArt.muzzleMouth(curve), with: .color(dark), style: stroke(2))
-          }
-          if face.happy > 0.01 {
-            var smile = muzzle
-            smile.opacity = face.happy
-            smile.fill(
-              family == "sprout" ? AvatarArt.happySproutMouth : AvatarArt.happyMouth,
-              with: .color(dark))
+            if family == "bear" { muzzle.fill(AvatarArt.ellipse(50, 71, 18, 13), with: .color(cream)) }
+            if family == "fox" { muzzle.fill(AvatarArt.foxMuzzle, with: .color(cream)) }
+            if family != "sprout" { muzzle.fill(AvatarArt.nose, with: .color(dark)) }
+            var mouth = muzzle
+            mouth.opacity = 1 - face.happy
+            if family == "sprout" {
+              mouth.stroke(AvatarArt.sproutMouth(face.mouth), with: .color(ink), style: stroke(2.4))
+            } else {
+              let curve = 73 + 4 * face.mouth
+              mouth.stroke(AvatarArt.muzzleMouth(curve), with: .color(dark), style: stroke(2))
+            }
+            if face.happy > 0.01 {
+              var smile = muzzle
+              smile.opacity = face.happy
+              smile.fill(
+                family == "sprout" ? AvatarArt.happySproutMouth : AvatarArt.happyMouth,
+                with: .color(dark))
+            }
           }
         }
         if mascot {
@@ -864,10 +876,17 @@ struct AvatarArtwork {
             control: CGPoint(x: 50 + center.x, y: eyeY - 5))
           faceLayer.stroke(bridge, with: .color(ink), style: stroke(2.5))
         }
+        if seasonal { SeasonalAvatarArt.front(layer, family: family, yaw: pose.yaw) }
         if accessory == "hat" {
+          let hatAnchor: AvatarGeometry.Anchor = switch seasonal ? family : "" {
+          case "santa": .init(cy: anchor.cy, scale: anchor.scale, top: -3, hat: 0.45)
+          case "rudolph": .init(cy: anchor.cy, scale: anchor.scale, top: 24, hat: 0.45)
+          case "bunny": .init(cy: anchor.cy, scale: anchor.scale, top: 31, hat: 0.4)
+          default: anchor
+          }
           var hat = layer
-          hat.translateBy(x: 50, y: anchor.top + 15 * anchor.hat)
-          hat.scaleBy(x: anchor.hat, y: anchor.hat)
+          hat.translateBy(x: 50, y: hatAnchor.top + 15 * hatAnchor.hat)
+          hat.scaleBy(x: hatAnchor.hat, y: hatAnchor.hat)
           hat.fill(AvatarArt.hatCrown, with: .color(Color(hex: "#3a2f28")))
           hat.fill(AvatarArt.hatBand, with: .color(Color(hex: "#b48156")))
           hat.fill(AvatarArt.hatBrim, with: .color(Color(hex: "#302925")))
@@ -935,7 +954,7 @@ struct AvatarView: View {
 
   private var reduceMotion: Bool { systemReduceMotion || forceReducedMotion }
   private var portrait: Bool { avatar.mode == "portrait" }
-  private var geometry: String { avatar.mode == "geometric" ? avatar.shape ?? "blob" : "mascot" }
+  private var geometry: String { avatar.geometry }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
   private func still(_ state: ActivityState) -> Bool {

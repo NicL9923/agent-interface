@@ -96,12 +96,14 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
       <div className="model-picker-content">
         <label className="model-search">Search models<input type="search" value={search} placeholder="Find a model or provider"
           onChange={(event) => setSearch(event.target.value)} /></label>
+        {!error && !!catalog?.providers.length && <button className="model-refresh" type="button" disabled={loading}
+          onClick={() => setRetry((n) => n + 1)}>Refresh models</button>}
         {loading && <p className="muted" role="status">Loading models from Hermes…</p>}
         {error && <div className="model-load-error"><p role="alert">{error}</p><button type="button" onClick={() => setRetry((n) => n + 1)}>Retry loading models</button></div>}
         {favoriteError && <p className="form-error" role="alert">{favoriteError}</p>}
         {favoriteChoices.length > 0 && <div className="model-favorites"><h3>Favorites</h3>
           {favoriteChoices.map(({ choice, provider, model }) => row(choice, model.name, model.available, provider.name))}</div>}
-        {providers.map((provider) => <details className="model-provider" key={`${provider.id}:${!!query}`} open={query ? true : undefined}>
+        {providers.map((provider) => <details className="model-provider" key={`${provider.id}:${!!query}`} open={query || matchesProvider(provider, value.provider) ? true : undefined}>
           <summary><Icon name="chevron" size={16} /><span>{provider.name}</span><small>{provider.models.length}</small></summary>
           {provider.warning && <p className="muted model-warning">{provider.warning}</p>}
           {provider.models.map((model) => row({ provider: provider.id, model: model.id }, model.name, model.available))}
