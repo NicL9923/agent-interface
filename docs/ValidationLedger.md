@@ -65,6 +65,30 @@ is `17fefa55fc639dd9a97b71df49bbe496f5ce7c4602378c1a944ab7dfc76b4035`.
 Its production use remains pending merge and final review; the unchanged product
 qualification and prior application checks remain applicable.
 
+PR #22 merged at `e4a3cb32bcbdf799e9efd1a75a4ce3278f681248` after both Node
+CI jobs completed. The one-use stopped continuation installed the qualified
+receipt and started all three services. Native 5b gateway readiness, original
+Google HTTP/fresh WebSockets, the owned maintenance RPC and all source/settings
+fences completed. Verification halted at the old app's doctor command, which did
+not pass its configured qualification file to the runtime. That command accepted
+the earlier built-in d23 revision but falsely rejected newly qualified 5b.
+Services remained running under the same owned maintenance lease and drain.
+
+A read-only runtime check using the unchanged current app's modules and its actual
+qualification file returned `ready` at native 5b. The follow-up forwards the
+receipt in normal setup/doctor and uses that same qualified check during recovery.
+A separate one-use finish verifies the existing running, guarded operation and
+opens admission without repeating stops, starts, retirement or receipt writes.
+All 17 setup checks, 21 recovery checks, typecheck, Python syntax and whitespace
+checks completed. The frozen follow-up covers 436 source files:
+`sha256:a724c9ba095d671f7a50715269cbf8fc403b26332183019dbb513ce2ce456bd5`.
+Its helper SHA256 is
+`ba48d425da936ac368816e3e71ef6cd6aec5c8115c38096c4577ba1fce46ee7b`.
+The staging tool replaces repeated manual uploads with exact merged Git bytes,
+hash verification and provenance in a fresh private audit directory. The native
+integration digest remains `4f150ba50f8fa34ce8e5e8bca87743ff555fa478fe0f5d768920db4176085f38`;
+successful product qualification remains applicable. Production finish is pending.
+
 ## October 2 native passwords and logins
 
 Branch `feature/native-vault-logins` starts from merged PR #19, `9273f8a`.
