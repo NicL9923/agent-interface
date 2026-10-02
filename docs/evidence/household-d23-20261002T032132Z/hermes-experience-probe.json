@@ -1,0 +1,15 @@
+{
+  "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+  "checks": {
+    "native_memory_cas_lock": true,
+    "native_memory_limits": true,
+    "native_profile_memory_separation": true,
+    "native_memory_forget": true,
+    "native_timezone_schedule_preview": true,
+    "native_try_once_execution": true,
+    "paused_routine_restored": true,
+    "durable_trial_deduplication": true,
+    "trial_actor_scope": true
+  },
+  "provider": "deterministic fixture; real native memory store and scheduler"
+}

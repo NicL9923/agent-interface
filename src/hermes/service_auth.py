@@ -13,6 +13,7 @@ TICKET_PATH = "/api/agent-interface/service-ticket"
 OPERATIONS = (
     ("POST", re.compile(r"/api/agent-interface/integrations")),
     ("POST", re.compile(r"/api/agent-interface/experience")),
+    ("POST", re.compile(r"/api/agent-interface/credentials")),
     ("POST", re.compile(r"/api/audio/(?:transcribe|speak)")),
     ("GET", re.compile(r"/api/profiles")),
     ("DELETE", re.compile(r"/api/profiles/[A-Za-z0-9_-]{1,200}")),

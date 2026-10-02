@@ -1,0 +1,32 @@
+{
+  "accepted": true,
+  "checkedAt": "2026-10-02T03:24:00.082Z",
+  "webBuild": "fb52f56f6b997241",
+  "checks": {
+    "authenticatedBootstrap": true,
+    "durableTodayFrontier": true,
+    "nativeProfiles": [
+      {
+        "profileNumber": 1,
+        "memoryRead": true,
+        "schedulePreview": true,
+        "syntheticVoiceRecognized": true,
+        "conversationUnchanged": true,
+        "speechProvider": "edge",
+        "transcriptionProvider": "xai",
+        "elapsedMs": 3823
+      },
+      {
+        "profileNumber": 2,
+        "memoryRead": true,
+        "schedulePreview": true,
+        "syntheticVoiceRecognized": true,
+        "conversationUnchanged": true,
+        "speechProvider": "edge",
+        "transcriptionProvider": "xai",
+        "elapsedMs": 1053
+      }
+    ],
+    "temporarySessionRemoved": true
+  }
+}

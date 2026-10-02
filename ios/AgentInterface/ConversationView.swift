@@ -504,6 +504,9 @@ struct AttentionView: View {
             || (request.questions ?? []).contains {
               (answers[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             })
+      } else if request.kind == "secure", let secure = request.secure, secure.supported {
+        SecureAttentionView(request: request, botId: botId)
+          .id(request.id + secure.binding)
       } else {
         Text("Complete this request in the official Hermes interface.").font(.footnote)
           .foregroundStyle(.secondary)

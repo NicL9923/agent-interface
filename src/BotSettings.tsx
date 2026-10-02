@@ -16,10 +16,11 @@ import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
 import { ModelSelector } from "./components/ModelSelector";
 import { MemoryPanel } from "./components/MemoryPanel";
+import { VaultPanel } from "./components/VaultPanel";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
-const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "memory"];
+const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "memory", "logins"];
 function useCompactSettings() {
   const query = "(max-width: 620px)";
   const [compact, setCompact] = useState(() => typeof window.matchMedia === "function" && window.matchMedia(query).matches);
@@ -551,6 +552,7 @@ export function BotSettings({
         )}
         {tab === "connections" && (existing ? <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} /> : <p>Create the assistant before connecting its services.</p>)}
         {tab === "memory" && (existing ? <MemoryPanel key={existing.id} botId={existing.id} /> : <p>Create the assistant before viewing its Hermes memory.</p>)}
+        {tab === "logins" && (existing ? <VaultPanel key={existing.id} botId={existing.id} /> : <p>Create the assistant before managing its Hermes logins.</p>)}
         {tab === "routines" && (
           <>
             {unavailable("routines")}

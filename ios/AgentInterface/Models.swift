@@ -186,6 +186,7 @@ struct Attention: Codable, Identifiable {
   var title: String
   var detail: String
   var questions: [Question]?
+  var secure: SecureRequest? = nil
 }
 struct ReadPosition: Codable {
   var messageId: String?

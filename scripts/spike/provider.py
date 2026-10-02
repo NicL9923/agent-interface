@@ -33,6 +33,8 @@ class Provider(BaseHTTPRequestHandler):
                 match = re.search(r'@file:(?:"([^"\n]+)"|([^\s<>]+))', user)
                 command = "cat " + shlex.quote(match.group(1) or match.group(2)) if match else "printf missing-attachment-reference"
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-tool", "type": "function", "function": {"name": "terminal", "arguments": json.dumps({"command": command, "timeout": 10})}}]}
+        elif "PROBE_VAULT_LOGIN" in user and not after_tool and "browser_vault_save_login" in tool_names:
+            message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-vault-login", "type": "function", "function": {"name": "browser_vault_save_login", "arguments": json.dumps({"label": "Synthetic browser login"})}}]}
         elif "PROBE_CLARIFY" in user and not after_tool and "clarify" in tool_names:
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-clarify", "type": "function", "function": {"name": "clarify", "arguments": json.dumps({"questions": [{"qid": "spike-question", "question": "Which synthetic option?", "choices": ["First", "Second"]}]})}}]}
         elif "markdown formatting example" in user.lower():

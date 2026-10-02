@@ -92,6 +92,11 @@ async function accept() {
       const memory = await app(path + "/memory");
       check(memory.botId === profile && memory.profile === profile && memory.scope === "profile" && memory.owner === "Hermes");
       check(memory.documents?.length === 2 && memory.documents.every(document => ["memory", "user"].includes(document.target) && /^[a-f0-9]{64}$/.test(document.revision) && Array.isArray(document.entries)));
+      step = `profile_${index + 1}_vault_metadata`;
+      const vault = await app(path + "/vault");
+      check(vault.botId === profile && vault.profile === profile && vault.scope === "profile" && vault.owner === "Hermes");
+      check(Array.isArray(vault.items) && Array.isArray(vault.sources) && vault.sources.some(source => source.name === "local"));
+      check(vault.items.every(item => item.kind === "login" && typeof item.label === "string" && typeof item.identifier === "string" && typeof item.canRemove === "boolean" && !["password", "secret", "otpSecret", "key"].some(key => key in item)));
       step = `profile_${index + 1}_schedule_preview`;
       maintenanceClear();
       const schedule = routines.find(routine => routine.botId === profile && routine.enabled && typeof routine.schedule === "string" && routine.schedule.trim().split(/\s+/).length === 5)?.schedule ?? "0 9 * * *";
@@ -116,7 +121,7 @@ async function accept() {
       step = `profile_${index + 1}_conversation_unchanged`;
       const after = await app(path + "/conversation");
       check(Array.isArray(after.messages) && fingerprint(after) === beforeHash);
-      results.push({ profileNumber: index + 1, memoryRead: true, schedulePreview: true, syntheticVoiceRecognized: true, conversationUnchanged: true, speechProvider: providerName(speech.provider), transcriptionProvider: providerName(transcript.provider), elapsedMs: Date.now() - started });
+      results.push({ profileNumber: index + 1, memoryRead: true, vaultMetadataRead: true, schedulePreview: true, syntheticVoiceRecognized: true, conversationUnchanged: true, speechProvider: providerName(speech.provider), transcriptionProvider: providerName(transcript.provider), elapsedMs: Date.now() - started });
     }
     step = "final_maintenance_check"; maintenanceClear();
     receipt = { accepted: true, checkedAt: new Date().toISOString(), webBuild, checks: { authenticatedBootstrap: true, durableTodayFrontier: true, nativeProfiles: results } };

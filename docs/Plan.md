@@ -42,6 +42,11 @@ for the resulting controls and native-session constraints. This request
 authorizes the app release and its qualified integration add-on, without a
 Hermes version upgrade.
 
+Nicolas also requested password and login management with inline capture when
+an agent asks. He chose to follow Hermes's ownership model. This follow-up uses
+the native encrypted profile vault and secure server requests, with web and iOS
+controls described in [Passwords and logins](PasswordsAndLogins.md).
+
 Build an installable PWA and a native SwiftUI iOS app for two household members
 using one shared Hermes installation. Everyday questions are the primary use case. Image generation is
 a secondary use case. The interface should feel like returning to a persistent
@@ -69,8 +74,9 @@ release includes full everyday bot configuration, not only a chat wrapper.
   default. Provide an option to follow all activity from a bot.
 - Include bot creation and editing, instructions, models, avatars, enabled tools,
   skills, and routine management in the first release.
-- New provider and service sign-ins remain in the official Hermes interface
-  initially. The custom app configures connections already established there.
+- Provider and service connections use their native Hermes setup flows. Native
+  login, code, vault unlock and secret requests can be completed inline; unsupported
+  setup and sudo requests still use the official interface.
 - The self-hoster configures the permanent Hermes connection during server setup.
   Web users only sign in. Native iOS users enter the app server's address and sign
   in to that household. Neither client collects the Hermes gateway token.

@@ -57,6 +57,10 @@
     static var trialRequestId: String?
     static var trialCount = 0
     static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
+    static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
+    static var secureIndex = 0
+    static var vaultUnlocked = false
+    static var sourceEnabled = true
     static var todayFrontier = "0"
     static var todaySince = "2026-09-30T13:30:00Z"
     static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
@@ -159,6 +163,46 @@
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-cards", "role": "assistant", "text": "Fixture grocery suggestion.\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Grocery checklist\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"}]}]}\n```"]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT"] == "1" {
+          let requests: [[String: Any]] = [
+            ["method": "vault.save_login", "origin": "https://school.example.test", "site": "Fixture school portal"],
+            ["method": "vault.code", "site": "Fixture school portal", "hint": "Enter the fixture verification code."],
+            ["method": "vault.unlock_prompt", "backend": "bitwarden", "displayName": "Bitwarden fixture"],
+            ["method": "secret", "envVar": "FIXTURE_API_TOKEN", "prompt": "Enter an explicit fixture token."]
+          ]
+          var attention: [[String: Any]] = []
+          if Self.secureIndex < requests.count {
+            var secure = requests[Self.secureIndex]; secure["epoch"] = "fixture-epoch"; secure["sessionId"] = "fixture-session"
+            attention = [["id": "fixture-secure-\(Self.secureIndex)", "kind": "secure", "title": "Hermes needs secure input", "detail": "Explicit simulator fixture request.", "secure": secure]]
+          }
+          object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session", "messages": [["id": "vault-fixture", "role": "assistant", "text": "Fixture browser task needs a login. Enter it in the secure request below."]], "activity": ["state": attention.isEmpty ? "idle" : "blocked"], "approvals": [], "files": [], "attention": attention, "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+      } else if path.hasSuffix("/vault") {
+        object = ["botId": path.components(separatedBy: "/")[3], "profile": "default", "scope": "profile", "owner": "Hermes", "notice": "Explicit simulator fixture. Logins belong to this Hermes profile and follow its household access.", "items": Self.vaultItems, "sources": [
+          ["name": "local", "displayName": "Hermes saved logins", "enabled": true, "needsUnlock": false, "unlocked": true, "installed": true, "canToggle": false, "canUnlock": false, "canLock": false],
+          ["name": "onepassword", "displayName": "1Password", "enabled": false, "needsUnlock": true, "unlocked": false, "installed": false, "canToggle": false, "canUnlock": false, "canLock": false],
+          ["name": "bitwarden", "displayName": "Bitwarden fixture", "enabled": Self.sourceEnabled, "needsUnlock": true, "unlocked": Self.vaultUnlocked, "installed": true, "canToggle": true, "canUnlock": Self.sourceEnabled && !Self.vaultUnlocked, "canLock": Self.vaultUnlocked]
+        ]]
+      } else if path.hasSuffix("/vault/logins"), method == "POST" {
+        Self.vaultItems.append(["id": "added-login", "kind": "login", "label": body["label"] ?? "", "origin": body["origin"] ?? "", "createdAt": "2026-10-02T12:00:00Z", "identifier": body["identifier"] ?? "", "identifierType": body["identifierType"] ?? "username", "hasOtp": false, "backend": "local", "canRemove": true])
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT_ADD_CANCELLED"] == "1" {
+          client?.urlProtocol(self, didFailWithError: URLError(.cancelled)); return
+        }
+        object = ["id": "added-login"]
+      } else if path.contains("/vault/logins/"), method == "DELETE" {
+        Self.vaultItems.removeAll { $0["id"] as? String == request.url!.lastPathComponent }; object = ["removed": true]
+      } else if path.hasSuffix("/bitwarden/unlock") {
+        Self.vaultUnlocked = true
+      } else if path.hasSuffix("/bitwarden/lock") {
+        Self.vaultUnlocked = false
+      } else if path.hasSuffix("/sources/bitwarden"), method == "PUT" {
+        Self.sourceEnabled = body["enabled"] as? Bool ?? false
+      } else if path.contains("/secure-requests/") {
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_SECURE_UNCERTAIN"] == "1" {
+          status = 502; object = ["error": "Synthetic secret echo must never appear: fixture-password"]
+        } else {
+          Self.secureIndex += 1; object = ["status": "ok"]
         }
       } else if path == "/api/today" {
         let events: [[String: Any]] = Self.todayFrontier == "0" ? [["id": "fixture-completed", "botId": "ranch", "kind": "completed", "title": "Fixture routine completed", "occurredAt": "2026-10-01T13:00:00Z"]] : Self.todayFrontier == "1" ? [["id": "fixture-late-import", "botId": "ranch", "kind": "completed", "title": "Fixture late imported completion", "occurredAt": "2026-09-28T13:00:00Z"]] : []

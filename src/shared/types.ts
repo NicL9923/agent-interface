@@ -1,6 +1,7 @@
 import type { ExperienceRequest, ExperienceResponse } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
 import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
+import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -169,10 +170,11 @@ export interface Activity {
 }
 export interface AttentionRequest {
   id: string;
-  kind: "clarify" | "official";
+  kind: "clarify" | "official" | "secure";
   title: string;
   detail: string;
   questions?: { id: string; prompt: string; options?: string[] }[];
+  secure?: SecureRequest;
 }
 export interface Conversation {
   attention?: AttentionRequest[];
@@ -259,6 +261,7 @@ export interface Runtime {
   transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
   synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
   experienceRequest?(input: ExperienceRequest): Promise<ExperienceResponse>;
+  vaultRequest?(input: VaultRequest): Promise<VaultResponse>;
   computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
   connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
   modelOptions?(profile?: string): Promise<ModelCatalog>;

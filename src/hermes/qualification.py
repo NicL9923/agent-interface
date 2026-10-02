@@ -8,6 +8,7 @@ import stat
 from pathlib import Path
 
 INTEGRATION_FILES = (
+    "src/hermes/vault.py", "src/server/vault.ts", "src/shared/vault.ts", "scripts/spike/vault_probe.py",
     "src/hermes/experience.py", "src/hermes/extension.py", "src/hermes/service_auth.py",
     "src/hermes/dashboard.py", "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/integrations.py", "src/hermes/computer.py", "src/hermes/computer_host.py",
     "src/server/store.ts", "src/server/experience.ts", "src/server/voice.ts", "src/server/hermes.ts", "src/server/hermes-qualification.ts", "src/server/integrations.ts",

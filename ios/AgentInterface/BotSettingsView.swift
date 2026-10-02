@@ -27,7 +27,7 @@ struct BotSettingsView: View {
   @State private var catalogReady: Set<String> = []
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
-  let tabs = ["Details", "Avatar", "Connections", "Memory", "Tools", "Skills", "Routines"]
+  let tabs = ["Details", "Avatar", "Connections", "Passwords & logins", "Memory", "Tools", "Skills", "Routines"]
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
@@ -61,6 +61,8 @@ struct BotSettingsView: View {
         if tab == "Connections" {
           if let bot { IntegrationsView(botId: bot.id) }
           else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
+        } else if tab == "Passwords & logins" {
+          if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its logins.").padding(); Spacer() }
         } else if tab == "Memory" {
           if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before inspecting memory.").padding(); Spacer() }
         } else { Form {

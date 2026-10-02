@@ -24,18 +24,18 @@ class TestLease:
         pass
 
     def __init__(self):
-        self.value = types.SimpleNamespace(holder="agent", viewer_id=None)
+        self.value = types.SimpleNamespace(holder="agent", viewer_id=None, epoch=0)
 
     def get(self, **kwargs):
         return self.value
 
     def acquire(self, viewer, **kwargs):
-        self.value = types.SimpleNamespace(holder="human", viewer_id=viewer)
+        self.value = types.SimpleNamespace(holder="human", viewer_id=viewer, epoch=self.value.epoch + 1)
         return self.value
 
     def release(self, viewer, **kwargs):
         if self.value.viewer_id == viewer:
-            self.value = types.SimpleNamespace(holder="agent", viewer_id=None)
+            self.value = types.SimpleNamespace(holder="agent", viewer_id=None, epoch=self.value.epoch + 1)
         return self.value
 
     def assert_agent_may_act(self, **kwargs):
@@ -140,6 +140,71 @@ class ComputerTests(unittest.TestCase):
         taker.join(2)
         self.assertTrue(taken.is_set())
         self.assertEqual(self.lease.get().holder, "human")
+
+    def test_human_can_take_during_secret_wait_and_bot_never_continues(self):
+        member = self.member()
+        waiting, answered = threading.Event(), threading.Event()
+        failures, continued = [], []
+        def bot():
+            try:
+                with self.instance.bot_operation("Assistant"):
+                    with self.instance.suspend_for_prompt():
+                        waiting.set()
+                        self.assertTrue(answered.wait(2))
+                    continued.append("secret-write")
+            except TestLease.HumanHasControl as error:
+                failures.append(error)
+        worker = threading.Thread(target=bot); worker.start()
+        self.assertTrue(waiting.wait(1))
+        self.assertFalse((self.instance.state / "computer-active.json").exists())
+        self.instance.request({**member, "action": "take"})
+        answered.set(); worker.join(2)
+        self.assertFalse(worker.is_alive()); self.assertEqual(len(failures), 1)
+        self.assertEqual(continued, [])
+        self.assertEqual(self.instance.status(member)["control"]["kind"], "human")
+
+    def test_take_then_release_during_secret_wait_cannot_resume_old_page_work(self):
+        member = self.member()
+        with self.assertRaisesRegex(computer.ComputerError, "Control changed"):
+            with self.instance.bot_operation("Assistant"):
+                with self.instance.suspend_for_prompt():
+                    self.instance.request({**member, "action": "take"})
+                    self.instance.request({**member, "action": "release"})
+                self.fail("An old inspection must never save or fill after any human takeover")
+        self.assertEqual(self.lease.get().holder, "agent")
+        self.assertFalse((self.instance.state / "computer-active.json").exists())
+
+    def test_secure_wait_rechecks_maintenance_and_recovers_activity_when_unchanged(self):
+        with self.instance.bot_operation("Assistant"):
+            with self.instance.suspend_for_prompt():
+                with self.instance.operation(timeout=.1): pass
+            self.assertEqual(self.instance.status()["control"], {"kind": "bot", "name": "Assistant"})
+        maintenance = self.home / "maintenance.json"
+        with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(maintenance)}):
+            with self.assertRaisesRegex(computer.ComputerError, "upgraded"):
+                with self.instance.bot_operation("Assistant"):
+                    with self.instance.suspend_for_prompt(): maintenance.write_text("{}")
+        self.assertFalse((self.instance.state / "computer-active.json").exists())
+
+    def test_expiring_prompt_does_not_clear_another_running_bot_record(self):
+        waiting, resumed, started, finished = [threading.Event() for _ in range(4)]
+        failures = []
+        def first():
+            try:
+                with self.instance.bot_operation("First"):
+                    with self.instance.suspend_for_prompt():
+                        waiting.set(); resumed.wait(2)
+            except computer.ComputerError: failures.append(True)
+        def second():
+            with self.instance.bot_operation("Second"):
+                started.set(); finished.wait(2)
+        one = threading.Thread(target=first); one.start(); self.assertTrue(waiting.wait(1))
+        two = threading.Thread(target=second); two.start(); self.assertTrue(started.wait(1))
+        # Recovery entered while another caller owns the machine prevents resumption.
+        self.instance._write("computer-recovery.json", {})
+        resumed.set(); finished.set(); two.join(2); one.join(2)
+        self.assertFalse(one.is_alive()); self.assertFalse(two.is_alive())
+        self.assertEqual(failures, [True])
 
     def test_operation_lock_serializes_different_executor_processes(self):
         context = multiprocessing.get_context("spawn")

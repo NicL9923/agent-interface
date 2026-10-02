@@ -86,6 +86,26 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("preserves a pending secure form across polling while keeping credentials out of the chat draft", async () => {
+    const secure = { method: "vault.save_login" as const, epoch: "current", sessionId: "session", origin: "https://example.invalid", site: "Example" };
+    conversation = { ...conversation, attention: [{ id: "login-request", kind: "secure", title: "Save login", detail: "Native request", secure }] };
+    await render();
+    const password = container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(password, "synthetic-pending-secret");
+      password.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    conversation = { ...conversation, attention: [{ ...conversation.attention![0], secure: { ...secure } }] };
+    await advance(8000);
+    expect(container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!.value).toBe("synthetic-pending-secret");
+    expect(container.querySelector("textarea")!.value).toBe(savedDraft.text);
+    expect(write).not.toHaveBeenCalled();
+    expect(JSON.stringify(Object.values(localStorage))).not.toContain("synthetic-pending-secret");
+    conversation = { ...conversation, attention: [{ ...conversation.attention![0], secure: { ...secure, sessionId: "replacement" } }] };
+    await advance(1500);
+    expect(container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!.value).toBe("");
+  });
+
   it("removes this device's push registration and browser subscription before signing out", async () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });

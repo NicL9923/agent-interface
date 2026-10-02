@@ -22,6 +22,7 @@ import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
+import { installVaultRoutes } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
@@ -199,6 +200,7 @@ export async function createApp(
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
   await installExperienceRoutes(app, runtime, store);
+  await installVaultRoutes(app, runtime);
   await registerVoiceRoutes(app, runtime);
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {

@@ -1,0 +1,15 @@
+.vault-panel, .vault-form, .secure-request form { display: grid; gap: 1rem; }
+.vault-heading, .vault-entry-heading, .vault-source { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.vault-entry, .vault-source { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+.vault-entry h3, .vault-source p { margin: 0; }
+.vault-entry p { margin: .4rem 0; overflow-wrap: anywhere; }
+.vault-form { padding-top: 1rem; border-top: 1px solid var(--line); }
+.vault-source-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.vault-source-actions label { margin: 0; }
+.vault-source-actions input[type="checkbox"] { width: auto; }
+.vault-origin { font-weight: 600; overflow-wrap: anywhere; }
+.secure-request input, .vault-panel input, .vault-panel select { min-width: 0; }
+@media (max-width: 620px) {
+  .vault-heading, .vault-source, .vault-entry-heading { align-items: flex-start; flex-direction: column; }
+  .vault-heading .actions, .vault-source-actions { width: 100%; }
+}
