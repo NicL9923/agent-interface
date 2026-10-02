@@ -46,6 +46,12 @@ jobs:
         run: python3 tests/hermes_upgrade_linux_test.py
       - name: Check persistent gateway maintenance
         run: python3 tests/hermes_gateway_guard_test.py
+      - name: Check shared computer control and persistent terminal
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y tmux
+          python3 tests/hermes_computer_test.py
+          python3 tests/system_terminal_test.py
       - name: Check managed dependency fingerprints
         run: python3 scripts/hermes-qualified-python-test.py
       - name: Check release wrapper rules

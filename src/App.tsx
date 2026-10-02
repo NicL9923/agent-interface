@@ -18,6 +18,7 @@ import { ConnectionPanel } from "./components/ConnectionPanel";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { IntegrationsPanel } from "./components/IntegrationsPanel";
 import { HermesUpgradePanel } from "./components/HermesUpgradePanel";
+import { ComputerPanel } from "./components/ComputerPanel";
 import { Icon } from "./components/Icon";
 import { useDeviceNotifications } from "./components/use-device-notifications";
 import { NotificationSettings, NotificationOnboarding } from "./components/DeviceNotifications";
@@ -112,6 +113,7 @@ export function App() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
+  const [computerOpen, setComputerOpen] = useState(() => new URLSearchParams(location.search).get("computer") === "1");
   const [railOpen, setRailOpen] = useState(false);
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 620px)").matches);
   const rail = useRef<HTMLElement>(null);
@@ -212,7 +214,7 @@ export function App() {
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
-          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setError("");
+          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setComputerOpen(false); setError("");
         }
         setCsrf(next.csrfToken ?? "");
         setBoot((previous) => ({ ...next,
@@ -233,7 +235,7 @@ export function App() {
         if (e instanceof ApiError && e.status === 401) {
           identityEpoch.current++;
           setSending(false); setUploading(false); setPending(null); setReceipt(null);
-          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setError("");
+          setSettings(null); setPreferencesOpen(false); setUpgradeOpen(false); setIntegrationsOpen(false); setComputerOpen(false); setError("");
           setAuth(true); setBoot(null); setCsrf("");
         } else {
           setDisconnected(true); setAppUnavailable(true);
@@ -785,6 +787,9 @@ export function App() {
           <Icon name="plus" size={18} /> New assistant
         </button>
         <div className="rail-footer">
+          <button onClick={() => { setRailOpen(false); setComputerOpen(true); }}>
+            <Icon name="computer" size={18} /> Computer
+          </button>
           <button
             onClick={() => {
               setRailOpen(false);
@@ -1289,6 +1294,7 @@ export function App() {
         />
       )}
       {integrationsOpen && <IntegrationsPanel key={`integrations:${boot.user.id}`} bots={allBots} accountScope={boot.user.id} onClose={() => setIntegrationsOpen(false)} />}
+      <ComputerPanel key={`computer:${boot.user.id}`} open={computerOpen} onClose={() => setComputerOpen(false)} />
       <HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={upgradeOpen} onClose={() => setUpgradeOpen(false)}
         bots={allBots} currentVersion={boot.connection.version} />
       {preferencesOpen && (

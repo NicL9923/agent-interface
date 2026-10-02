@@ -20,6 +20,10 @@
     "@fastify/cookie": "11.1.2",
     "@fastify/multipart": "10.1.2",
     "@fastify/static": "10.1.5",
+    "@fastify/websocket": "11.3.1",
+    "@novnc/novnc": "1.7.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "fastify": "5.12.5",
     "google-auth-library": "11.1.0",
     "react": "19.3.0",
@@ -27,6 +31,7 @@
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
     "web-push": "3.6.7",
+    "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
@@ -34,6 +39,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@types/web-push": "3.6.4",
+    "@types/ws": "8.18.2",
     "@vitejs/plugin-react": "6.1.1",
     "jsdom": "30.1.1",
     "tsx": "4.23.15",

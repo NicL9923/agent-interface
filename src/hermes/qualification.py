@@ -9,9 +9,10 @@ from pathlib import Path
 
 INTEGRATION_FILES = (
     "src/hermes/extension.py", "src/hermes/service_auth.py",
-    "src/hermes/dashboard.py", "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/integrations.py",
+    "src/hermes/dashboard.py", "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/integrations.py", "src/hermes/computer.py", "src/hermes/computer_host.py",
     "src/server/hermes.ts", "src/server/hermes-qualification.ts", "src/server/integrations.ts",
-    "src/server/app.ts", "src/server/config.ts", "src/server/upgrades.ts", "src/shared/types.ts", "src/shared/upgrades.ts", "src/shared/integrations.ts",
+    "src/server/app.ts", "src/server/config.ts", "src/server/upgrades.ts", "src/server/computer.ts", "src/server/terminal.ts", "src/server/terminal-host.py",
+    "src/shared/types.ts", "src/shared/upgrades.ts", "src/shared/integrations.ts", "src/shared/computer.ts",
     "scripts/spike/run.py", "scripts/spike/probe.py",
     "scripts/spike/extension_probe.py", "scripts/spike/routine_probe.py",
     "scripts/spike/app-probe.mjs", "scripts/spike/requirements.lock.txt",
@@ -19,6 +20,8 @@ INTEGRATION_FILES = (
     "scripts/spike/maintenance_guard_probe.py",
     "scripts/spike/service_probe.py",
     "scripts/spike/integrations_probe.py",
+    "scripts/spike/computer_probe.py",
+    "scripts/spike/computer_acceptance.py",
     "scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py", "scripts/hermes-qualified-python.py",
     "package-lock.json",
 )

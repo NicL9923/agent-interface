@@ -1,0 +1,28 @@
+{
+  "native": {
+    "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+    "checks": {
+      "native_dispatch_preserves_two_bot_home_identities_and_one_screen": true,
+      "default_native_browser_exec_preserves_tool_availability_and_pins_per_task_tabs": true,
+      "ordinary_browser_code_errors_do_not_leave_a_recovery_fence": true,
+      "native_single_use_display_ticket_and_reconnect_viewer_identity": true,
+      "native_human_lease_fences_browser_cdp_and_computer_capture": true,
+      "native_owner_cannot_be_stolen_or_released_by_another_member": true,
+      "native_task_cleanup_cannot_close_supervised_browser": true,
+      "failed_timeout_recovery_fences_human_bot_and_background_dialog_input": true,
+      "qualified_native_harness_recovery_reopens_control_after_verified_termination": true
+    },
+    "desktopHardware": "fixture; real display and browser acceptance is separate"
+  },
+  "headedBrowser": {
+    "revision": "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6",
+    "checks": {
+      "actual_native_browser_exec_shares_browser_with_separate_persistent_bot_tabs": true,
+      "actual_native_human_lease_blocks_default_browser_exec": true,
+      "actual_ipc_timeout_closes_original_and_switched_targets_and_preserves_other_sessions": true,
+      "actual_timeout_recovery_reopens_bot_and_human_control": true
+    },
+    "desktopHardware": "real supervised native desktop and fixed-CDP Chrome"
+  },
+  "computerSourceSha256": "026e4a26b7a94b1e21a79de470d54ed80ef4c9dfb217060239b0f231ad7bad00"
+}

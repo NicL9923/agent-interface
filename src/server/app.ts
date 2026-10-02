@@ -2,6 +2,7 @@ import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
+import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
@@ -21,6 +22,7 @@ import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
+import { installComputerRoutes } from "./computer.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -124,6 +126,7 @@ export async function createApp(
       .header("Referrer-Policy", "strict-origin-when-cross-origin");
   });
   await app.register(cookie);
+  await app.register(websocket, {options: {maxPayload: 256 * 1024}});
   await app.register(multipart, {
     limits: { fileSize: 20 * 1024 * 1024, files: 1 },
   });
@@ -192,6 +195,7 @@ export async function createApp(
     origin: config.origin,
     canManage: req => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase())),
   });
+  await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {
     if (snapshot) return snapshot;

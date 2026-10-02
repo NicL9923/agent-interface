@@ -67,6 +67,9 @@ and connect or reconnect supported services. Connection changes require an
 integration administrator. See the [integration guide](docs/Integrations.md) for
 supported services, one-time hosting configuration and device limitations.
 
+The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
+browser for all assistants, with human takeover and a real VPS terminal in the UI.
+
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
 durable admission receipts and event discovery. Read its compatibility and

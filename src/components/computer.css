@@ -1,0 +1,83 @@
+.computer-panel {
+  width: min(1180px, calc(100vw - 40px));
+  height: min(840px, calc(100dvh - 40px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--raised);
+  color: var(--ink);
+  overflow: hidden;
+  box-shadow: 0 24px 90px #14201940;
+}
+.computer-panel[open] { display: flex; flex-direction: column; }
+.computer-panel::backdrop { background: #101a1480; backdrop-filter: blur(3px); }
+.computer-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 26px 18px; flex-shrink: 0; }
+.computer-panel > header > div { min-width: 0; }
+.computer-panel h2 { font-size: 23px; margin: 3px 0 7px; }
+.computer-panel .eyebrow { margin: 0; }
+.computer-subtitle { font-size: 13px; color: var(--muted); margin: 0; }
+.computer-panel .icon-button { min-height: 44px; min-width: 44px; }
+.computer-tabs { display: flex; align-items: center; border-bottom: 1px solid var(--line); padding: 0 20px; gap: 4px; flex-shrink: 0; }
+.computer-tabs button { display: flex; align-items: center; gap: 8px; border: 0; border-radius: 0; border-bottom: 2px solid transparent; min-height: 48px; padding: 12px 14px; font-size: 13px; }
+.computer-tabs [aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+.computer-host { margin-left: auto; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; text-align: right; padding-left: 14px; }
+.computer-panel > [role="tabpanel"] { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.computer-panel > [role="tabpanel"][hidden] { display: none; }
+.computer-view { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.computer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 24px; flex-shrink: 0; }
+.computer-toolbar > button, .computer-control-actions > button { flex-shrink: 0; font-size: 13px; min-height: 44px; }
+.computer-control-actions { display: flex; flex-shrink: 0; gap: 6px; }
+.computer-ownership { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 5px 9px; min-width: 0; font-size: 13px; }
+.computer-ownership strong { font-weight: 600; overflow-wrap: anywhere; }
+.computer-ownership > span:last-child { grid-column: 2; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.computer-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.computer-state-dot.ready { background: var(--accent); }
+.computer-notice { margin: 0; padding: 10px 24px; font-size: 12px; line-height: 1.5; color: var(--attention); background: var(--rail); overflow-wrap: anywhere; flex-shrink: 0; }
+.computer-screen-wrap { position: relative; display: flex; flex: 1; min-height: 100px; margin: 0 18px; background: #151c18; border-radius: 12px; overflow: hidden; }
+.computer-screen { flex: 1; min-width: 0; min-height: 0; }
+.computer-connection-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; background: #151c18; color: #a6b4a7; font-size: 14px; text-align: center; padding: 24px; }
+.computer-connection-overlay strong { font-weight: 500; }
+.computer-connection-overlay button { color: #f1efdf; border-color: #3a483d; }
+.computer-connection-overlay button:hover { background: #2a4435; }
+.computer-footnote { margin: 12px 24px 16px; color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.computer-unavailable { margin: auto; padding: 36px 24px; max-width: 480px; text-align: center; overflow-wrap: anywhere; }
+.computer-empty-icon { display: inline-grid; place-items: center; width: 70px; height: 70px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); margin-bottom: 8px; }
+.computer-unavailable h3 { font-size: 20px; font-weight: 600; margin: 18px 0 10px; }
+.computer-unavailable p { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.terminal-wrap { padding: 12px 10px 8px 14px; color-scheme: dark; }
+.computer-terminal { width: 100%; height: 100%; min-height: 0; }
+.computer-terminal .xterm { height: 100%; }
+.terminal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px 16px; flex-shrink: 0; }
+.terminal-tools button { min-height: 40px; font-size: 12px; padding: 8px 12px; }
+.terminal-tools > span { margin-left: auto; font-size: 11px; color: var(--muted); }
+.terminal-paste { margin: 0 20px 16px; flex-shrink: 0; }
+.terminal-paste > label { font-size: 12px; margin-bottom: 6px; }
+.terminal-paste .actions { margin-top: 8px; justify-content: space-between; gap: 12px; }
+.terminal-paste small { font-size: 11px; color: var(--muted); }
+.terminal-paste button { min-height: 44px; font-size: 12px; flex-shrink: 0; }
+.computer-end-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; padding: 10px 24px; background: var(--rail); flex-shrink: 0; }
+.computer-end-confirmation > span { flex: 1; min-width: 180px; }
+.computer-end-confirmation button { min-height: 44px; font-size: 12px; }
+@media (max-width: 620px) {
+  .computer-panel { width: 100%; height: 100dvh; margin: 0; inset: 0; border: 0; border-radius: 0; overflow-y: auto; }
+  .computer-panel > header { padding: max(16px, env(safe-area-inset-top)) 16px 14px; gap: 8px; }
+  .computer-panel h2 { font-size: 21px; }
+  .computer-subtitle { font-size: 12px; line-height: 1.5; }
+  .computer-tabs { padding: 0 10px; }
+  .computer-host { font-size: 10px; max-width: 38%; }
+  .computer-toolbar { padding: 12px 14px; gap: 8px; }
+  .computer-ownership { font-size: 12px; }
+  .computer-toolbar > button, .computer-control-actions > button { font-size: 12px; padding-inline: 10px; }
+  .computer-screen-wrap { margin: 0 8px; border-radius: 8px; }
+  .computer-notice { padding: 10px 14px; }
+  .computer-footnote { margin: 12px 14px max(14px, env(safe-area-inset-bottom)); line-height: 1.5; }
+  .terminal-tools { padding: 10px 12px max(12px, env(safe-area-inset-bottom)); gap: 6px; }
+  .terminal-tools button { min-height: 44px; }
+  .terminal-tools > span { margin: 2px 0 0; flex-basis: 100%; line-height: 1.5; }
+  .terminal-paste { margin: 0 12px max(12px, env(safe-area-inset-bottom)); }
+  .terminal-paste textarea { max-height: 100px; }
+  .computer-end-confirmation { padding: 12px 14px; }
+  .terminal-wrap { padding: 10px 6px 6px 8px; }
+}

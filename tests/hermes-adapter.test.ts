@@ -68,6 +68,13 @@ afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('preserves deliberate shared-computer busy and recovery explanations without exposing other RPC errors', async () => {
+    rpcErrors.set('agent-interface.computer', {code: 409, message: 'Another person controls the household computer. They must hand it back first.'});
+    await expect(runtime.computerRequest!({action: 'take', actorId: 'one', actorName: 'One', viewerId: 'fixture-viewer'}))
+      .rejects.toMatchObject({statusCode: 409, message: 'Another person controls the household computer. They must hand it back first.'});
+    rpcErrors.set('profiles.describe', {code: 409, message: 'private host details'});
+    await expect(runtime.tools('shared')).rejects.not.toMatchObject({message: 'private host details'});
+  });
   it('reads the native account catalog under profile scope and preserves custom aliases and unavailable models', async () => {
     beforeSend = (request, socket) => {
       if (request.method !== 'model.options') return;

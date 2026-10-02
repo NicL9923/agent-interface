@@ -1,5 +1,53 @@
 # Validation ledger
 
+## October 2 shared computer and system terminal
+
+Branch `t3code/hermes-shared-browser-console`, based on latest main
+`613a897c41cd53c44bf3a58f257fd4c065ffaaad`. Final source fingerprint, 330 files:
+`sha256:79c41374c1dc7a6d2f269404c9b2778cf758f9e1ac12c4af10138edb00e16045`.
+Web build `a5279f6bae696ddc`.
+
+All 285 application checks, typecheck, production build and Python syntax checks
+completed on the frozen source. The new checks cover session-bound one-use
+stream tickets, Origin/CSRF and ownership, expired/revoked sessions, maintenance,
+desktop reconnects, bounded terminal input and the phone text controls. Twelve
+Python coordinator checks cover full-call cross-process control and recovery.
+Existing integration, dashboard, qualification, gateway, worker, Linux-hook,
+managed-fingerprint and release-wrapper checks remain applicable to their final
+inputs. Dependency audit reported zero vulnerabilities.
+
+The [native computer evidence](evidence/shared-computer-native-20261002.json)
+binds nine native contract checks and four actual headed-browser checks to the
+computer module hash and the repaired Hermes d23 revision. The real native
+`browser_exec` kept separate bot tabs in one supervised Chrome, blocked bot input
+during human control, and recovered an actual caught IPC timeout by closing the
+interrupted targets while preserving sibling tabs and Chrome. Contract fixtures
+alone do not establish display hardware behavior.
+
+The real VPS PTY check used tmux 3.4 under its independent foreground supervisor.
+It covered environment scrubbing, resize, interrupt, abrupt attachment death,
+reattachment with preserved shell state, explicit end, and more than 128 KB of
+Unicode paste with a stalled reader and matching content hash. Client `-N`
+prevents an app attachment from spawning a server inside the app's systemd unit.
+The separate supervisor keeps shell processes outside app deployment shutdown.
+
+T3 browser use exercised the fixture desktop and terminal at 1440×900, 1280×800,
+390×844 and 375×667, light and dark, including takeover, handback, reconnect,
+terminal paste/end and mobile Unicode desktop typing. Documents did not overflow
+horizontally. The fixture terminal does not execute system commands; the real
+PTY check above supplies that evidence. Final T3 screenshots/recording failed
+with PreviewAutomationExecutionError; earlier successful screenshots remain
+available, and final mobile controls were checked with T3 DOM and interaction
+tools. Native iOS built for the phone simulator; the browser shortcut was readable
+and hittable on phone and iPad. The unrelated avatar tour failure was not counted
+as a successful full tour. No new physical-device distribution is claimed.
+
+Independent GPT-6.1 Sol high review approved the complete implementation and the
+separate terminal supervisor. Review corrections cover recovery fencing, stream
+lifecycle/ownership, useful native conflict messages and large-paste flow control.
+The private host setup is staged; production activation and authenticated app
+acceptance are recorded separately after the guarded release procedure.
+
 ## October 2 app release ae7528a
 
 PR #13 merged at `ae7528a41f9cb29a5f6baa3fdcf2078d3170dcdf`. The release is live at `https://agentui.wildflowersranch.com`,
