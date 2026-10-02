@@ -2,6 +2,7 @@
 
 - `python3 .agents/tools/setup-shared-computer.py` stages private desktop/browser and terminal settings on the Hermes Linux service account without restarting live services; `--start` enables the shared computer after guarded release activation.
 - `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/accept-shared-computer.mjs PRIVATE_RECEIPT_PATH` checks authenticated native RFB, takeover/handback and a real terminal reconnect/end through the deployed app on its Linux host; refuses to touch an existing member shell and removes its temporary app session.
+- `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/accept-household-experience.mjs PRIVATE_RECEIPT_PATH` runs with the deployed release as its working directory to check authenticated Today, native profile memory, schedule previews and synthetic speech through loopback services; refuses maintenance, verifies conversations stay unchanged, and removes its temporary app session. The helper may be uploaded outside the release and invoked by absolute path.
 
 - `python3 .agents/tools/source-state.py` prints the source fingerprint used by the validation ledger, excluding the ledger itself and ignored build/runtime files; optional path-prefix arguments restrict the fingerprint to a component.
 - `python3 .agents/tools/review-collage.py output.png 'Label=screenshot.png' ...` combines screenshots at a common height with labels and preserved aspect ratios; requires Pillow.
