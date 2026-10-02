@@ -1,5 +1,42 @@
 # Validation ledger
 
+## October 1 seasonal avatars and model discovery
+
+Branch `t3code/seasonal-avatars`, based on `0e42a3f44c4098aa8bc0af531ce55124d23c3303`,
+then merged latest main `dbcc06d4659b031f04d43829a52b814196350112` before PR creation.
+Final source fingerprint, 300 files:
+`sha256:8770d75e0803c6f9235b3360c6d7f1d23861f8513a7f380d07343eac4dc1ee0a`.
+Web build `a0fb842bb2ab828e`.
+
+All 262 application tests, typecheck and production build passed on the frozen
+product source. Coverage includes each seasonal family's API persistence, editor
+selection with preserved customization, shared animation/motion gates and model
+catalog refresh preserving saved aliases, selection and collapsed disclosures.
+The subsequent main merge changes only previously reviewed release tools,
+CI syntax coverage and evidence; product validation remains applicable.
+
+The native iOS client passed all 36 unit checks on its final source. One simulator
+UI flow selected, saved and reopened all five seasonal families. Its successful
+run remains applicable after the final seasonal-only hat guard/formatting change;
+the 36 unit checks were rerun after that change. Exported simulator screenshots
+show Pumpkin, Santa, Rudolph, Turkey and Easter Bunny clearly. The native app
+was not distributed to physical devices in this pass.
+
+The web specimen was inspected with all five characters at 90 and 44 pixels.
+Reduced-motion SVG output was stable over 600 milliseconds for each character.
+Final T3 phone captures show the seasonal picker and Santa preview at 402×874,
+with the existing More overflow menu and no horizontal document overflow.
+The first snapshot retained an earlier color frame; opening the explicit tab and
+recapturing produced the correct final artwork. Earlier full-interface viewport
+coverage from PR #11 remains applicable outside the changed avatar/model areas.
+Physical Safari keyboard/insets and Web Push delivery remain external acceptance.
+
+Independent GPT-6.1 Sol high review approved the seasonal implementation and
+model picker changes without blockers. Documentation review corrected a claim
+that the native picker had a separate Seasonal group; only the web picker does.
+[OpenBot design notes](OpenBotDesignNotes.md) record the pinned references and
+adopted behaviors. No external code or artwork was copied.
+
 ## October 1 app release 0e42a3f
 
 PR #11 merged at `0e42a3f44c4098aa8bc0af531ce55124d23c3303`. The release is live at `https://agentui.wildflowersranch.com`,
