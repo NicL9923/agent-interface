@@ -72,6 +72,59 @@ These copies protect against an application mistake. They are on the same host,
 so they do not establish disaster recovery from loss of that host. Existing Hermes
 backups remain separate.
 
+Set `APP_BACKUP_DIR` to the same directory the timer writes, the app base's
+`backups/` directory, so the readiness check can see them. The tool removes its
+temporary `.partial` copy and that copy's `-shm` and `-wal` files, and clears stale
+`.partial` files older than an hour that earlier runs left behind.
+
+## Logs and health
+
+The server writes JSON lines to stdout, and systemd keeps them in journald. Read
+them with `journalctl -u <app service> -f`; add `-p warning` for problems only.
+`LOG_LEVEL` defaults to `info`. Individual requests are not logged because clients
+poll every 1.5 seconds. Logged requests keep only the method and path, and
+authorization, cookie, CSRF and ticket values are redacted.
+
+Lines worth searching for:
+
+- `Request failed`: a 5xx response, logged once per route and message. Repeats
+  are counted in `Request failure repeated`, at most every 10 minutes.
+- `failed`, `is still failing`, `recovered`: the background worker, Hermes event
+  discovery and push delivery. A reminder repeats every 10 minutes while a failure lasts.
+- `Gave up delivering notifications`: a notification failed 12 attempts, about an
+  hour of backoff. Its row keeps state `failed` and `last_error`.
+- `Readiness check degraded`, `alerting administrators`, `recovered`: see below.
+
+`/api/health` is liveness only and always answers `{"ok":true}` while the process
+runs. Deploys depend on that, including during a Hermes drain.
+
+`/api/health/ready` returns 200 `{"ok":true}` or 503 `{"ok":false}`. It fails when:
+
+- database: `SELECT 1` fails.
+- hermes: Hermes has been disconnected for 5 minutes or longer. A Hermes update
+  in progress counts as healthy.
+- worker: no successful background pass for 2 minutes, after a 2-minute startup grace.
+
+It also reports two checks that warn but never fail readiness:
+
+- push: the latest delivery failure is newer than the latest success and less
+  than 24 hours old.
+- backup: the newest completed backup in `APP_BACKUP_DIR` is older than 36 hours,
+  or none exists. Unset reports `unconfigured`.
+
+Requests through Caddy see only `ok`. A direct loopback request with no forwarding
+headers also gets each check's status and detail:
+
+```sh
+curl -s http://127.0.0.1:<port>/api/health/ready
+```
+
+The app checks readiness every minute. When a check stays `warn` or `fail` for 10
+minutes, it sends one push notification to each Hermes update and integration
+administrator who has signed in, and another when the check clears. Both
+transitions are also logged. A push outage cannot report itself by push, so it
+appears only in the logs and in the loopback detail.
+
 ## Hermes upgrades and activity
 
 PR #3 is merged and deployed. Web and iOS have an administrator update flow with

@@ -68,6 +68,7 @@ export async function installAuth(
       "/api/auth/local",
       "/api/auth/config",
       "/api/health",
+      "/api/health/ready",
       "/api/auth/native/complete",
       "/api/auth/native/exchange",
     ].includes(req.url.split("?")[0]);

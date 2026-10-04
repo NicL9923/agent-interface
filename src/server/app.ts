@@ -28,6 +28,9 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
+import { loggerOptions, RepeatFilter } from "./logging.js";
+import { HealthMonitor, installHealthRoutes } from "./health.js";
+import { installEtags } from "./etag.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -117,11 +120,12 @@ export async function createApp(
     verifyGoogle?: Parameters<typeof installAuth>[3];
     sendApns?: ApnsSender;
     upgrades?: HermesUpgrades;
+    logStream?: { write(line: string): void };
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
   const app = Fastify({
-    logger: false,
+    ...loggerOptions(config.logLevel ?? "silent", options.logStream),
     bodyLimit: 1024 * 1024,
     trustProxy: false,
     routerOptions: { maxParamLength: 8192 },
@@ -132,6 +136,7 @@ export async function createApp(
       .header("X-Frame-Options", "DENY")
       .header("Referrer-Policy", "strict-origin-when-cross-origin");
   });
+  installEtags(app);
   await app.register(cookie);
   await app.register(websocket, {options: {maxPayload: 256 * 1024}});
   await app.register(multipart, {
@@ -147,6 +152,7 @@ export async function createApp(
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
   });
+  const serverErrors = new RepeatFilter();
   app.setErrorHandler((error, req, reply) => {
     if (error instanceof z.ZodError)
       return reply.code(400).send({
@@ -161,7 +167,14 @@ export async function createApp(
       code?: string;
       confirmRequired?: boolean;
     };
-    reply.code(err.statusCode ?? 502).send({
+    const status = err.statusCode ?? 502;
+    if (status >= 500) {
+      const route = `${req.method} ${req.routeOptions.url ?? "unmatched"}`;
+      const repeats = serverErrors.hit(`${route} ${status} ${err.message}`);
+      if (repeats === 0) req.log.error({ err, route, status }, "Request failed");
+      else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
+    }
+    reply.code(status).send({
       error:
         err.statusCode && err.statusCode < 500
           ? err.message
@@ -686,13 +699,19 @@ export async function createApp(
         : reply.type("text/html").sendFile("index.html"),
     );
   }
-  const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns);
-  if (options.background !== false) worker.start();
+  const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log);
+  const health = new HealthMonitor({ store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log });
+  installHealthRoutes(app, health);
+  if (options.background !== false) {
+    worker.start();
+    health.start();
+  }
   app.addHook("onClose", async () => {
+    health.stop();
     const stopped = worker.stop();
     await runtime.close();
     await stopped;
     store.close();
   });
-  return { app, store, worker };
+  return { app, store, worker, health };
 }
