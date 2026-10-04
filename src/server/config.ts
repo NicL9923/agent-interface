@@ -15,6 +15,7 @@ export interface Config {
   hermesAuthMode: "static" | "service";
   hermesQualificationFile?: string;
   integrationAdmins?: string[];
+  computerTerminalAdmins?: string[];
   computerTerminal?: { stateDirectory: string; cwd: string; python: string };
   hermesUpgrade?: {
     stateDirectory: string;
@@ -92,6 +93,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     : [...new Set(env.HERMES_INTEGRATION_ADMINS.split(",").map(email => email.trim().toLowerCase()).filter(Boolean))];
   if (config.production && config.integrationAdmins.some(email => !config.householdEmails.includes(email)))
     throw new Error("Integration administrators must belong to the household allowlist");
+  config.computerTerminalAdmins = env.COMPUTER_TERMINAL_ADMINS === undefined
+    ? [...config.integrationAdmins]
+    : [...new Set(env.COMPUTER_TERMINAL_ADMINS.split(",").map(email => email.trim().toLowerCase()).filter(Boolean))];
+  if (config.production && config.computerTerminalAdmins.some(email => !config.householdEmails.includes(email)))
+    throw new Error("Terminal administrators must belong to the household allowlist");
   if (
     config.localDevAuth &&
     (config.production || !loopback(config.host) || !loopback(origin.hostname))

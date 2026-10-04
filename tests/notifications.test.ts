@@ -159,3 +159,21 @@ it("lists explicit routine recipients without adding bot followers", () => {
   ]);
   store.close();
 });
+it("delivers security alerts at once, through quiet hours and digest batching, and coalesces repeats", async () => {
+  const store = storeWithUsers();
+  const hour = new Date().getUTCHours(), at = (offset: number) => `${String((hour + offset + 24) % 24).padStart(2, "0")}:00`;
+  store.savePreferences("one", { ...store.preferences("one"), notifications: { timezone: "UTC", quietStart: at(-1), quietEnd: at(1), batchMinutes: 10 } });
+  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.queueNotification("evt-quiet", "one", { title: "Work complete", body: "", url: "/?bot=shared", tag: "evt-quiet", kind: "completed", botId: "shared", queuedAt: Date.now() });
+  const alert = { title: "System terminal opened", body: "one opened the system terminal.", url: "/?computer=1", tag: "terminal-open:abc:1", kind: "security", queuedAt: Date.now() };
+  expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(true);
+  expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(false);
+  const sent: string[] = [];
+  const runtime = { capabilities: async () => ({ idempotency: { supported: false }, durableEvents: { supported: false } }) } as unknown as Runtime;
+  const worker = new BackgroundWorker(store, runtime, loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }),
+    async (_subscription, payload) => { sent.push(JSON.parse(payload).title); });
+  await worker.tick();
+  expect(sent).toEqual(["System terminal opened"]);
+  expect(store.outbox().map(row => JSON.parse(row.payload).kind)).toEqual(["completed"]);
+  store.close();
+});
