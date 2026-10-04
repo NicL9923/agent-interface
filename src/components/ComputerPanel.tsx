@@ -3,7 +3,9 @@ import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
+import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
 import { Icon } from "./Icon";
+import type { AuthConfig } from "./SignIn";
 import "@xterm/xterm/css/xterm.css";
 import "./computer.css";
 
@@ -24,6 +26,7 @@ function failure(cause: unknown, fallback: string) {
   return cause instanceof ApiError && cause.code === "CONNECTION_UNAVAILABLE"
     ? fallback : cause instanceof Error ? cause.message : fallback;
 }
+const reauthenticate = (cause: unknown) => cause instanceof ApiError && cause.code === "reauthentication_required";
 function retryable(cause: unknown) {
   return !(cause instanceof ApiError && [401, 403].includes(cause.status));
 }
@@ -39,6 +42,8 @@ function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
 export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("desktop");
   const [terminalOpened, setTerminalOpened] = useState(false);
+  // Chosen once, so an open shell is not replaced when its confirmation ages past two hours.
+  const [terminalStep, setTerminalStep] = useState<"confirm" | "shell" | null>(null);
   const [status, setStatus] = useState<ComputerStatus | null>(null);
   const [statusError, setStatusError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
@@ -88,6 +93,13 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
     };
   }, [open]);
 
+  const terminal = status?.terminal;
+  useEffect(() => {
+    if (terminalOpened && terminalStep === null && terminal?.available)
+      setTerminalStep(terminal.confirmationRequired ? "confirm" : "shell");
+  }, [terminalOpened, terminalStep, terminal?.available, terminal?.confirmationRequired]);
+  const confirmTerminal = useCallback(() => setTerminalStep("confirm"), []);
+
   const changeTab = (next: Tab) => {
     setTab(next);
     if (next === "terminal") setTerminalOpened(true);
@@ -122,9 +134,13 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
           detail={status?.reason || (!status ? "Checking the shared desktop on the Hermes host." : "The shared desktop needs to be started on the Hermes host.")} />}
     </section>
     <section id="computer-terminal" role="tabpanel" aria-labelledby="computer-tab-terminal" hidden={tab !== "terminal"}>
-      {open && terminalOpened && status?.terminal.available ? <TerminalView target={status.terminal.target} active={tab === "terminal"} />
-        : <Unavailable icon="terminal" title={!status ? "Checking the terminal" : "Terminal unavailable"}
-          detail={status?.terminal.reason || "The system terminal is not available on this Hermes host yet."} />}
+      {open && terminalOpened && terminal?.available && terminalStep === "confirm"
+        ? <ConfirmIdentity onConfirmed={() => setTerminalStep("shell")} />
+        : open && terminalOpened && terminal?.available && terminalStep === "shell"
+          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} />
+          : <Unavailable icon="terminal" title={!status || terminal?.available ? "Checking the terminal" : "Terminal unavailable"}
+            detail={terminal?.reason || (terminal?.available ? "Checking your access to the system terminal."
+              : "The system terminal is not available on this Hermes host yet.")} />}
     </section>
   </dialog>;
 }
@@ -133,6 +149,80 @@ function Unavailable({ icon, title, detail }: { icon: "computer" | "terminal"; t
   return <div className="computer-unavailable" role="status">
     <span className="computer-empty-icon"><Icon name={icon} size={34} /></span>
     <h3>{title}</h3><p>{detail}</p>
+  </div>;
+}
+
+function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
+  const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [member, setMember] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const button = useRef<HTMLDivElement>(null);
+  const confirmed = useRef(onConfirmed);
+  confirmed.current = onConfirmed;
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => { live.current = false; };
+  }, []);
+
+  const confirm = useCallback(async (body: { credential: string } | { member: string }) => {
+    setBusy(true); setError("");
+    try {
+      await write("/auth/confirm", body);
+      if (live.current) confirmed.current();
+    } catch (cause) {
+      if (live.current) setError(failure(cause, "Couldn't confirm it's you. Check your connection and try again."));
+    } finally { if (live.current) setBusy(false); }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api<AuthConfig>("/auth/config", { signal: controller.signal }).then(setConfig, cause => {
+      if (!controller.signal.aborted) setError(failure(cause, "Can't check sign-in options. Try again."));
+    });
+    return () => controller.abort();
+  }, [attempt]);
+
+  // Local test accounts confirm as the signed-in member; the server checks it is the same one.
+  useEffect(() => {
+    if (!config?.localDevAuth) return;
+    const controller = new AbortController();
+    api<{ user: { id: string } }>("/bootstrap", { signal: controller.signal })
+      .then(boot => setMember(/^local-(one|two)$/.exec(boot.user.id)?.[1] ?? null), () => {});
+    return () => controller.abort();
+  }, [config?.localDevAuth]);
+
+  useEffect(() => {
+    const clientId = config?.googleClientId;
+    if (!clientId) return;
+    let current = true;
+    setGoogleLoading(true);
+    loadGoogleIdentity().then(client => {
+      if (!current || !button.current) return;
+      renderGoogleButton(client, button.current, clientId, credential => { if (current) void confirm({ credential }); });
+      setGoogleLoading(false);
+    }, (cause: Error) => {
+      if (current) { setGoogleLoading(false); setError(cause.message); }
+    });
+    return () => { current = false; };
+  }, [config?.googleClientId, attempt, confirm]);
+
+  return <div className="computer-unavailable computer-confirm">
+    <span className="computer-empty-icon"><Icon name="terminal" size={34} /></span>
+    <h3>Confirm it's you</h3>
+    <p>The terminal is a real shell on the Hermes host. Sign in again to open it. This lasts 2 hours.</p>
+    <div ref={button} className="computer-google" aria-busy={googleLoading || busy} />
+    {!config && !error && <p role="status">Checking sign-in…</p>}
+    {googleLoading && <p role="status">Loading Google sign-in…</p>}
+    {busy && <p role="status">Confirming…</p>}
+    {member && <button className="primary" disabled={busy} onClick={() => void confirm({ member })}>Confirm local member {member}</button>}
+    {error && <div className="computer-confirm-error">
+      <p role="alert">{error}</p>
+      <button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</button>
+    </div>}
   </div>;
 }
 
@@ -284,7 +374,7 @@ function DesktopView({ status, onStatus, viewerId }: {
   </div>;
 }
 
-function TerminalView({ target, active }: { target: string; active: boolean }) {
+function TerminalView({ target, active, onReauthenticate }: { target: string; active: boolean; onReauthenticate: () => void }) {
   const surface = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -381,6 +471,7 @@ function TerminalView({ target, active }: { target: string; active: boolean }) {
         window.addEventListener("resize", resize);
       } catch (cause) {
         if (controller.signal.aborted) return;
+        if (reauthenticate(cause)) { onReauthenticate(); return; }
         const message = failure(cause, "Can't connect to the terminal. We'll keep trying.");
         if (retryable(cause)) retry(message);
         else { setConnection("failed"); setError(message); }
@@ -395,7 +486,7 @@ function TerminalView({ target, active }: { target: string; active: boolean }) {
       client?.close(); emulator?.dispose();
       // The server-side tmux session intentionally continues after this attachment closes.
     };
-  }, [attempt, send]);
+  }, [attempt, send, onReauthenticate]);
 
   useEffect(() => {
     if (active) fit.current?.();

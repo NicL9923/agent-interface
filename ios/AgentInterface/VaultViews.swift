@@ -79,8 +79,8 @@ struct SecureRequestAnswer: Encodable {
   }
 }
 struct SecureRequestResult: Decodable { var status: String }
-private struct AddedVaultLogin: Decodable { var id: String }
-private struct RemovedVaultLogin: Decodable { var removed: Bool }
+struct AddedVaultLogin: Decodable { var id: String }
+struct RemovedVaultLogin: Decodable { var removed: Bool }
 
 /// Errors from credential operations never expose arbitrary upstream response text.
 enum VaultSafety {

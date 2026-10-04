@@ -1,0 +1,193 @@
+{
+  "request": "GET /api/today",
+  "response": {
+    "upcoming": [
+      {
+        "id": "routine-morning",
+        "botId": "household",
+        "name": "Morning brief",
+        "prompt": "Prepare a morning brief.",
+        "schedule": "0 7 * * *",
+        "enabled": true,
+        "recipientIds": [
+          "local-one"
+        ],
+        "nextRunAt": "2026-10-02T07:00:00.000Z",
+        "lastRunAt": "2026-10-01T07:00:00.000Z",
+        "lastStatus": "ok",
+        "lastError": "The weather source timed out.",
+        "lastDeliveryError": "One device was offline."
+      }
+    ],
+    "generatedAt": "2026-10-01T12:00:00.000Z",
+    "since": "2026-09-30T12:00:00.000Z",
+    "frontier": "1",
+    "hasMore": false,
+    "items": [
+      {
+        "botId": "household",
+        "botName": "Household",
+        "activity": {
+          "state": "working",
+          "detail": "Comparing recipes",
+          "runId": "run-dinner",
+          "updatedAt": "2026-10-01T11:59:00.000Z"
+        },
+        "approvals": [
+          {
+            "id": "approval-order",
+            "title": "Place grocery order",
+            "detail": "Order 12 items from Grocer.",
+            "status": "pending",
+            "expiresAt": "2026-10-01T13:00:00.000Z"
+          }
+        ],
+        "attention": [
+          {
+            "id": "clarify-store",
+            "kind": "clarify",
+            "title": "Which store?",
+            "detail": "Choose where to shop this week.",
+            "questions": [
+              {
+                "id": "store",
+                "prompt": "Which store should I use?",
+                "options": [
+                  "Market",
+                  "Co-op"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "secure-login",
+            "kind": "secure",
+            "title": "Save the grocery login",
+            "detail": "Hermes asks to save a login.",
+            "secure": {
+              "epoch": "epoch-1",
+              "sessionId": "session-household",
+              "method": "vault.save_login",
+              "origin": "https://grocer.example.test",
+              "site": "Grocer"
+            }
+          },
+          {
+            "id": "secure-code",
+            "kind": "secure",
+            "title": "Enter the code",
+            "detail": "Hermes needs a sign-in code.",
+            "secure": {
+              "epoch": "epoch-1",
+              "sessionId": "session-household",
+              "method": "vault.code",
+              "site": "Grocer",
+              "hint": "Sent to the family phone"
+            }
+          },
+          {
+            "id": "secure-unlock",
+            "kind": "secure",
+            "title": "Unlock Bitwarden",
+            "detail": "Hermes needs the vault unlocked.",
+            "secure": {
+              "epoch": "epoch-1",
+              "sessionId": "session-household",
+              "method": "vault.unlock_prompt",
+              "backend": "bitwarden",
+              "displayName": "Bitwarden"
+            }
+          },
+          {
+            "id": "secure-secret",
+            "kind": "secure",
+            "title": "Add an API key",
+            "detail": "Hermes needs a key.",
+            "secure": {
+              "epoch": "epoch-1",
+              "sessionId": "session-household",
+              "method": "secret",
+              "envVar": "GROCER_API_KEY",
+              "prompt": "Grocer API key"
+            }
+          }
+        ],
+        "latestMessage": {
+          "id": "message-assistant",
+          "text": "Here are five dinners.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Groceries\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"},{\"id\":\"basil\",\"text\":\"Basil\"}]}]}\n```",
+          "createdAt": "2026-10-01T11:05:00.000Z",
+          "files": [
+            {
+              "id": "plan.signature",
+              "name": "dinner-plan.pdf",
+              "mime": "application/pdf",
+              "size": 18432,
+              "url": "/api/files/plan.signature"
+            }
+          ]
+        },
+        "files": [
+          {
+            "id": "pantry.signature",
+            "name": "pantry.txt",
+            "mime": "text/plain",
+            "size": 120,
+            "url": "/api/files/pantry.signature"
+          },
+          {
+            "id": "plan.signature",
+            "name": "dinner-plan.pdf",
+            "mime": "application/pdf",
+            "size": 18432,
+            "url": "/api/files/plan.signature"
+          }
+        ]
+      },
+      {
+        "botId": "garden",
+        "botName": "Garden",
+        "activity": {
+          "state": "waiting"
+        },
+        "approvals": [],
+        "attention": [],
+        "files": []
+      },
+      {
+        "botId": "archive",
+        "botName": "Archive",
+        "activity": {
+          "state": "disconnected"
+        },
+        "approvals": [],
+        "attention": [],
+        "files": [],
+        "error": "Could not read this Hermes conversation. Open it to reconnect."
+      }
+    ],
+    "events": [
+      {
+        "id": "event-dinner",
+        "botId": "household",
+        "runId": "run-dinner",
+        "routineId": "routine-morning",
+        "kind": "completed",
+        "title": "Dinner plan ready",
+        "body": "Five dinners and a grocery list.",
+        "occurredAt": "2026-10-01T11:05:00.000Z",
+        "files": [
+          {
+            "id": "plan.signature",
+            "name": "dinner-plan.pdf",
+            "mime": "application/pdf",
+            "size": 18432,
+            "url": "/api/files/plan.signature"
+          }
+        ]
+      }
+    ],
+    "unavailableBots": [
+      "archive"
+    ]
+  }
+}

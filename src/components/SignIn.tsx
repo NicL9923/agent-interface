@@ -2,13 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { api, write } from "../client-api";
 import { Avatar } from "./Avatar";
 import { SetupCommand } from "./ConnectionPanel";
+import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
 import "./sign-in.css";
 
-type AuthConfig = { localDevAuth: boolean; googleClientId?: string };
-type GoogleIdentity = { accounts: { id: {
-  initialize: (options: unknown) => void;
-  renderButton: (element: HTMLElement, options: unknown) => void;
-} } };
+export type AuthConfig = { localDevAuth: boolean; googleClientId?: string };
 
 const trio = [
   { mode: "geometric", shape: "blob", color: "#1084FE", eyes: "oval", accessory: "none" },
@@ -59,43 +56,26 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
   }, [attempt]);
   useEffect(() => {
     if (!config?.googleClientId) return;
+    const clientId = config.googleClientId;
     let live = true;
     setGoogleLoading(true);
-    const fail = () => {
-      if (live) {
-        setGoogleLoading(false);
-        setError("Google sign-in couldn't load. Check your connection and try again.");
-      }
-    };
-    const timer = setTimeout(fail, 12_000);
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.onerror = fail;
-    script.onload = () => {
-      clearTimeout(timer);
+    loadGoogleIdentity().then(client => {
       if (!live || !google.current) return;
-      const client = (window as unknown as { google?: GoogleIdentity }).google;
-      if (!client) { fail(); return; }
-      client.accounts.id.initialize({
-        client_id: config.googleClientId,
-        callback: async ({ credential }: { credential: string }) => {
-          if (!live) return;
-          setBusy(true); setError("");
-          try {
-            await write("/auth/google", { credential });
-            if (live) success.current();
-          } catch (e) {
-            if (live) setError((e as Error).message);
-          } finally { if (live) setBusy(false); }
-        },
+      renderGoogleButton(client, google.current, clientId, async credential => {
+        if (!live) return;
+        setBusy(true); setError("");
+        try {
+          await write("/auth/google", { credential });
+          if (live) success.current();
+        } catch (e) {
+          if (live) setError((e as Error).message);
+        } finally { if (live) setBusy(false); }
       });
-      google.current.replaceChildren();
-      client.accounts.id.renderButton(google.current, { theme: "outline", size: "large" });
       setGoogleLoading(false);
-    };
-    document.head.appendChild(script);
-    return () => { live = false; clearTimeout(timer); script.remove(); };
+    }, (e: Error) => {
+      if (live) { setGoogleLoading(false); setError(e.message); }
+    });
+    return () => { live = false; };
   }, [config?.googleClientId, attempt]);
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
   return <main className="welcome sign-in">

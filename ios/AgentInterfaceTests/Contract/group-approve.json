@@ -1,0 +1,6 @@
+{
+  "request": "POST /api/groups/room-dinner/approve",
+  "response": {
+    "approved": true
+  }
+}

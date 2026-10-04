@@ -2,6 +2,16 @@ import Foundation
 
 enum ActivityState: String, Codable, CaseIterable {
   case idle, thinking, working, waiting, blocked, done, disconnected, failed, interrupted
+  /// A state this app version does not know. A newer server's new state degrades to this
+  /// instead of failing the whole response that carries it.
+  case unknown
+  /// The states the server defines. Pickers and specimens never offer `unknown`.
+  static let allCases: [ActivityState] = [
+    .idle, .thinking, .working, .waiting, .blocked, .done, .disconnected, .failed, .interrupted,
+  ]
+  init(from decoder: Decoder) throws {
+    self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+  }
   var label: String {
     switch self {
     case .idle: return "Ready"
@@ -13,6 +23,7 @@ enum ActivityState: String, Codable, CaseIterable {
     case .disconnected: return "Connection lost"
     case .failed: return "Failed"
     case .interrupted: return "Interrupted"
+    case .unknown: return "Status unknown"
     }
   }
   var active: Bool { [.thinking, .working, .waiting, .blocked].contains(self) }

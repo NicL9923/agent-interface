@@ -1,0 +1,7 @@
+{
+  "request": "GET /api/native/push/config",
+  "response": {
+    "available": true,
+    "environment": "sandbox"
+  }
+}

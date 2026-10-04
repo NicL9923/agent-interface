@@ -1,0 +1,31 @@
+{
+  "request": "GET /api/routines",
+  "response": [
+    {
+      "id": "routine-morning",
+      "botId": "household",
+      "name": "Morning brief",
+      "prompt": "Prepare a morning brief.",
+      "schedule": "0 7 * * *",
+      "enabled": true,
+      "recipientIds": [
+        "local-one",
+        "local-two"
+      ],
+      "nextRunAt": "2026-10-02T07:00:00.000Z",
+      "lastRunAt": "2026-10-01T07:00:00.000Z",
+      "lastStatus": "ok",
+      "lastError": "The weather source timed out.",
+      "lastDeliveryError": "One device was offline."
+    },
+    {
+      "id": "routine-garden",
+      "botId": "garden",
+      "name": "Watering reminder",
+      "prompt": "Remind me to water.",
+      "schedule": "0 18 * * *",
+      "enabled": false,
+      "recipientIds": []
+    }
+  ]
+}

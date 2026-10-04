@@ -1,0 +1,13 @@
+{
+  "request": "POST /api/auth/native/exchange",
+  "response": {
+    "token": "normalized-token",
+    "expiresAt": "2026-10-08T12:00:00.000Z",
+    "user": {
+      "id": "local-one",
+      "email": "one@localhost.invalid",
+      "name": "Local member one",
+      "picture": null
+    }
+  }
+}

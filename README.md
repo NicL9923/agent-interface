@@ -69,7 +69,8 @@ integration administrator. See the [integration guide](docs/Integrations.md) for
 supported services, one-time hosting configuration and device limitations.
 
 The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
-browser for all assistants, with human takeover and a real VPS terminal in the UI.
+browser for all assistants, with human takeover for every household member and a
+real VPS terminal for terminal administrators.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -111,7 +112,7 @@ device voice.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
-Starter actions fill an editable draft. Available tools determine which actions appear. They show in an empty conversation; afterward, open them with **Starters** beside Attach on the web or from the **+** menu on iOS. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay all notifications; decisions and failures skip batching outside them. Digest notifications open Today.
+Starter actions fill an editable draft. Available tools determine which actions appear. They show in an empty conversation; afterward, open them with **Starters** beside Attach on the web or from the **+** menu on iOS. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComputerPanel } from "../src/components/ComputerPanel";
@@ -288,5 +288,77 @@ describe("system terminal", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith("/computer/terminal/end", { sessionId: "private-shell" });
     expect(client.readyState).toBe(3);
     expect(container.textContent).toContain("Your shell has ended");
+  });
+});
+
+describe("terminal confirmation", () => {
+  function withAuth(config: { localDevAuth: boolean; googleClientId?: string }, userId = "google-one") {
+    const fallback = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path, init) => {
+      if (path === "/auth/config") return config as never;
+      if (path === "/bootstrap") return { user: { id: userId } } as never;
+      return fallback(path, init);
+    });
+  }
+  const ticketRequests = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/terminal").length;
+
+  it("asks for a fresh Google sign-in before the first shell and opens it after confirming", async () => {
+    status.terminal = { ...status.terminal, confirmationRequired: true };
+    withAuth({ localDevAuth: false, googleClientId: "household-client" });
+    let respond!: (result: { credential: string }) => void;
+    const initialize = vi.fn((options: { callback: typeof respond }) => { respond = options.callback; });
+    const renderButton = vi.fn((element: HTMLElement) => { element.textContent = "Sign in with Google"; });
+    vi.stubGlobal("google", { accounts: { id: { initialize, renderButton } } });
+    await render(); await click("Terminal");
+    expect(container.textContent).toContain("Confirm it's you");
+    expect(ticketRequests()).toBe(0);
+    expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ client_id: "household-client" }));
+    expect(container.querySelector("dialog")!.contains(renderButton.mock.calls[0][0])).toBe(true);
+    await act(async () => respond({ credential: "fresh-token" }));
+    expect(write).toHaveBeenCalledWith("/auth/confirm", { credential: "fresh-token" });
+    expect(container.textContent).not.toContain("Confirm it's you");
+    expect(ticketRequests()).toBe(1);
+    expect(Socket.instances).toHaveLength(1);
+  });
+
+  it("keeps an open shell past the confirmation window and asks again only for a new attachment", async () => {
+    withAuth({ localDevAuth: true }, "local-one");
+    const client = await connectedTerminal();
+    status = { ...status, terminal: { ...status.terminal, confirmationRequired: true } };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(client.readyState).toBe(1);
+    expect(container.textContent).not.toContain("Confirm it's you");
+    const fallback = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path, init) => path === "/computer/terminal"
+      ? Promise.reject(new ApiError("Confirm it's you to open the terminal.", 401, "reauthentication_required")) : fallback(path, init));
+    await act(async () => client.close());
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(container.textContent).toContain("Confirm it's you");
+    vi.mocked(api).mockImplementation(fallback);
+    await click("Confirm local member one");
+    expect(write).toHaveBeenCalledWith("/auth/confirm", { member: "one" });
+    expect(Socket.instances).toHaveLength(2);
+  });
+
+  it("finishes confirming under development Strict Mode effect replays", async () => {
+    status.terminal = { ...status.terminal, confirmationRequired: true };
+    withAuth({ localDevAuth: true }, "local-one");
+    await act(async () => { root.render(createElement(StrictMode, null, createElement(ComputerPanel, { open: true, onClose, key: "same-user" }))); });
+    await click("Terminal");
+    expect(container.textContent).toContain("Confirm it's you");
+    await click("Confirm local member one");
+    expect(write).toHaveBeenCalledWith("/auth/confirm", { member: "one" });
+    expect(container.textContent).not.toContain("Confirm it's you");
+    // Strict Mode replays the terminal's attach effect, so only its outcome is stable here.
+    expect(ticketRequests()).toBeGreaterThan(0);
+  });
+
+  it("explains that the shell is limited to administrators without requesting a ticket", async () => {
+    status.terminal = { available: false, target: "", reason: "The system terminal is limited to household administrators." };
+    await render(); await click("Terminal");
+    expect(container.querySelector("#computer-terminal")!.textContent).toContain("Terminal unavailable");
+    expect(container.textContent).toContain("limited to household administrators");
+    expect(ticketRequests()).toBe(0);
+    expect(mocks.desktops).toHaveLength(1);
   });
 });

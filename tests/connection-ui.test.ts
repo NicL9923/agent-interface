@@ -4,10 +4,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
-import { api, write } from '../src/client-api';
+import { api, clearResponseCache, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn().mockResolvedValue({})}));
+vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 let root:Root,container:HTMLDivElement,boot:Bootstrap,conversation:Conversation;
 let authConfig:{localDevAuth:boolean;googleClientId?:string};
@@ -129,8 +129,10 @@ describe('setup and recovery interface',()=>{
     const admission=vi.mocked(write).mock.calls.find(([path])=>path==='/bots/shared/messages')!;
     const requestId=(admission[1] as {requestId:string}).requestId;
     expect(requestId).toBeDefined();
+    expect(clearResponseCache).not.toHaveBeenCalled();
     boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
     await act(async()=>window.dispatchEvent(new Event('focus')));
+    expect(clearResponseCache).toHaveBeenCalledTimes(1);
     expect(container.querySelector('textarea')?.value).toBe('Second member draft');
     await act(async()=>finish({requestId,status:'accepted'}));
     expect(container.querySelector('textarea')?.value).toBe('Second member draft');
@@ -244,4 +246,36 @@ it('offers starters in an empty conversation and keeps them behind a toggle once
   await act(async()=>root.unmount());root=createRoot(container);conversation.messages=[];
   await renderApp();await advance(20);
   expect(chips()).toEqual(['Plan dinners']);expect(toggle()).toBeUndefined();
+});
+it('lets the next sign-in send after signing out while a send was unanswered',async()=>{
+  for(const [name,open] of [['showModal',true],['close',false]] as const)Object.defineProperty(HTMLDialogElement.prototype,name,{configurable:true,value:function(this:HTMLDialogElement){this.open=open;}});
+  authConfig={localDevAuth:true};
+  const previous=vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path.startsWith('/submissions/')?{status:'rejected'} as T:await previous(path,init) as T);
+  vi.mocked(write).mockImplementation(async <T>(path:string)=>path==='/bots/shared/messages'?await new Promise<T>(()=>{}):{} as T);
+  const button=(label:string)=>[...container.querySelectorAll('button')].find(node=>node.textContent?.trim()===label)!;
+  await renderApp();await advance(400);
+  await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+  await act(async()=>button('Preferences').click());
+  await act(async()=>button('Sign out').click());
+  expect(container.querySelector('.sign-in')).not.toBeNull();
+  await act(async()=>button('Enter local workspace').click());
+  await advance(2500);
+  expect(container.textContent).not.toContain('Checking whether Hermes accepted your message');
+  expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(false);
+});
+it('fits a restored multi-line draft when returning to the conversation',async()=>{
+  Object.defineProperty(HTMLTextAreaElement.prototype,'scrollHeight',{configurable:true,get(this:HTMLTextAreaElement){return this.value.split('\n').length*24;}});
+  try{
+    const previous=vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path:string)=>path==='/bots/shared/draft'?{text:'Milk\nEggs\nFlour\nButter',attachments:[]} as T
+      :path==='/today'?{generatedAt:new Date().toISOString(),since:new Date().toISOString(),frontier:'0',hasMore:false,items:[],events:[],unavailableBots:[],upcoming:[]} as T:previous(path) as Promise<T>);
+    await renderApp();
+    expect(container.querySelector('textarea')!.style.height).toBe('96px');
+    await act(async()=>[...container.querySelectorAll<HTMLButtonElement>('.rail-nav button')].find(node=>node.textContent?.includes('Today'))!.click());
+    expect(container.querySelector('textarea')).toBeNull();
+    await act(async()=>container.querySelector<HTMLButtonElement>('.bot-item')!.click());
+    expect(container.querySelector('textarea')!.style.height).toBe('96px');
+  }finally{Reflect.deleteProperty(HTMLTextAreaElement.prototype,'scrollHeight');}
 });

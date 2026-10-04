@@ -1,0 +1,8 @@
+{
+  "request": "GET /api/auth/config",
+  "response": {
+    "nativeAuthVersion": 1,
+    "googleClientId": "",
+    "localDevAuth": true
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "request": "DELETE /api/bots/household/vault/logins/login-grocer",
+  "response": {
+    "removed": true
+  }
+}

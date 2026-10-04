@@ -14,7 +14,11 @@ export interface Config {
   hermesToken?: string;
   hermesAuthMode: "static" | "service";
   hermesQualificationFile?: string;
+  /** Unset in embedded and test servers, which stay silent; the entrypoint defaults to info. */
+  logLevel?: LogLevel;
+  backupDirectory?: string;
   integrationAdmins?: string[];
+  computerTerminalAdmins?: string[];
   computerTerminal?: { stateDirectory: string; cwd: string; python: string };
   hermesUpgrade?: {
     stateDirectory: string;
@@ -30,6 +34,8 @@ export interface Config {
     environment: "sandbox" | "production";
   };
 }
+const logLevels = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
+export type LogLevel = (typeof logLevels)[number];
 export const loopback = (host: string) =>
   ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
 export function parseAppOrigin(value: string): URL {
@@ -60,7 +66,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hermesToken: env.HERMES_TOKEN,
     hermesAuthMode: (env.HERMES_AUTH_MODE || "static") as "static" | "service",
     hermesQualificationFile: env.HERMES_QUALIFICATION_FILE || undefined,
+    logLevel: (env.LOG_LEVEL || undefined) as LogLevel | undefined,
+    backupDirectory: env.APP_BACKUP_DIR || undefined,
   };
+  if (config.logLevel && !logLevels.includes(config.logLevel))
+    throw new Error(`LOG_LEVEL must be one of ${logLevels.join(", ")}`);
   const origin = parseAppOrigin(config.origin);
   if (env.COMPUTER_TERMINAL_ENABLED && !["true", "false"].includes(env.COMPUTER_TERMINAL_ENABLED))
     throw new Error("COMPUTER_TERMINAL_ENABLED must be true or false");
@@ -92,6 +102,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     : [...new Set(env.HERMES_INTEGRATION_ADMINS.split(",").map(email => email.trim().toLowerCase()).filter(Boolean))];
   if (config.production && config.integrationAdmins.some(email => !config.householdEmails.includes(email)))
     throw new Error("Integration administrators must belong to the household allowlist");
+  config.computerTerminalAdmins = env.COMPUTER_TERMINAL_ADMINS === undefined
+    ? [...config.integrationAdmins]
+    : [...new Set(env.COMPUTER_TERMINAL_ADMINS.split(",").map(email => email.trim().toLowerCase()).filter(Boolean))];
+  if (config.production && config.computerTerminalAdmins.some(email => !config.householdEmails.includes(email)))
+    throw new Error("Terminal administrators must belong to the household allowlist");
   if (
     config.localDevAuth &&
     (config.production || !loopback(config.host) || !loopback(origin.hostname))

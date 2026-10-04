@@ -2,12 +2,13 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import WebSocket, { type RawData } from "ws";
-import type { Runtime } from "../shared/types.js";
+import type { Runtime, User } from "../shared/types.js";
 import type { ComputerAttachment, ComputerStatus } from "../shared/computer.js";
 import { hash, signedIn } from "./auth.js";
 import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
 import { SystemTerminal } from "./terminal.js";
+import { safeError } from "./logging.js";
 
 type Session = { kind: "web" | "native"; hash: string; userId: string };
 type Attachment = { session: Session; expires: number; type: "desktop" | "terminal"; native?: ComputerAttachment };
@@ -18,12 +19,13 @@ const empty = z.object({}).strict();
 const unavailable = (message: string, statusCode = 409) => Object.assign(new Error(message), {statusCode});
 const maxBuffered = 4 * 1024 * 1024;
 const frameSize = (data: RawData) => Array.isArray(data) ? data.reduce((size, item) => size + item.length, 0) : data.byteLength;
+const confirmationWindow = 2 * 3600000;
+type Terminals = Pick<SystemTerminal, "available" | "target" | "reason" | "sessionId" | "sessions" | "attach" | "end" | "endSession" | "close">;
 const closeCode = (code: number) => (code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code))
   || (code >= 3000 && code <= 4999) ? code : 1011;
 
 export async function installComputerRoutes(app: FastifyInstance, config: Config, store: Store,
-  runtime: Runtime, maintenance: () => boolean) {
-  const terminals = new SystemTerminal(config.computerTerminal);
+  runtime: Runtime, maintenance: () => boolean, terminals: Terminals = new SystemTerminal(config.computerTerminal)) {
   const tickets = new Map<string, Attachment>();
   const viewers = new Map<string, Set<string>>();
   const sockets = new Set<WebSocket>();
@@ -43,6 +45,39 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     return Boolean(user && user.id === session.userId && allowedIdentity(config, user));
   }
   const actor = (req: FastifyRequest) => ({actorId: signedIn(req).id, actorName: signedIn(req).name});
+  const admins = () => config.computerTerminalAdmins ?? [];
+  const terminalAdmin = (user: User) => admins().includes(user.email.toLowerCase());
+  // The desktop is for every household member; the shell is for terminal administrators in a browser.
+  function shellDenial(req: FastifyRequest) {
+    if (req.nativeSessionHash) return "Open the computer in a browser to use the system terminal.";
+    if (!admins().length) return "The system terminal is turned off for this household.";
+    if (!terminalAdmin(signedIn(req))) return "The system terminal is limited to household administrators.";
+  }
+  function confirmed(req: FastifyRequest) {
+    const at = req.cookies.session ? store.sessionConfirmedAt(hash(req.cookies.session)) : undefined;
+    return at !== undefined && Date.now() - at <= confirmationWindow;
+  }
+  function requireShell(req: FastifyRequest, fresh: boolean) {
+    const denied = shellDenial(req);
+    if (denied) throw unavailable(denied, 403);
+    if (!terminals.available) throw unavailable(terminals.reason!);
+    // Open shells continue past the window; only new attachments need a recent sign-in.
+    if (fresh && !confirmed(req))
+      throw Object.assign(unavailable("Confirm it's you to open the terminal.", 401), {code: "reauthentication_required"});
+  }
+  function audit(req: FastifyRequest, action: string, session: Session) {
+    const user = signedIn(req);
+    req.log.info({audit: "terminal", action, userId: user.id, email: user.email, session: session.hash.slice(0, 16),
+      forwardedFor: req.headers["x-forwarded-for"], userAgent: req.headers["user-agent"]}, `System terminal ${action}`);
+  }
+  function alertAdmins(user: User, session: Session) {
+    // One alert per confirmed sign-in, however often that session reconnects.
+    const eventId = `terminal-open:${session.hash.slice(0, 16)}:${store.sessionConfirmedAt(session.hash) ?? 0}`;
+    for (const admin of store.users())
+      if (terminalAdmin(admin) && allowedIdentity(config, admin))
+        store.queueNotification(eventId, admin.id, {title: "System terminal opened", body: `${user.name} opened the system terminal.`,
+          url: "/?computer=1", tag: eventId, kind: "security", queuedAt: Date.now()});
+  }
   async function status(req: FastifyRequest): Promise<ComputerStatus> {
     let native: ComputerStatus = {available: false, running: false, browserReady: false, label: "Household computer",
       reason: "The shared desktop is not available from the connected Hermes installation.", control: {kind: "idle"},
@@ -51,7 +86,11 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
       try { native = await runtime.computerRequest({action: "status", ...actor(req)}) as ComputerStatus; }
       catch { native.reason = "Hermes is disconnected. The system terminal is independent of that connection."; }
     }
-    return {...native, terminal: {available: terminals.available, target: terminals.target, reason: terminals.reason}};
+    const denied = shellDenial(req);
+    if (denied) return {...native, terminal: {available: false, target: "", reason: denied}};
+    const available = terminals.available;
+    return {...native, terminal: {available, target: terminals.target, reason: available ? undefined : terminals.reason,
+      ...(available && !confirmed(req) ? {confirmationRequired: true} : {})}};
   }
   function issue(req: FastifyRequest, type: Attachment["type"], native?: ComputerAttachment) {
     for (const [key, value] of tickets) if (value.expires <= Date.now()) tickets.delete(key);
@@ -85,14 +124,16 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     return status(req);
   });
   app.post("/api/computer/terminal", async req => {
-    empty.parse(req.body); fence();
-    if (!terminals.available) throw unavailable(terminals.reason!);
-    return issue(req, "terminal");
+    empty.parse(req.body); fence(); requireShell(req, true);
+    const ticket = issue(req, "terminal");
+    audit(req, "ticket", source(req));
+    return ticket;
   });
   app.post("/api/computer/terminal/end", async req => {
-    const input = z.object({sessionId: z.string()}).strict().parse(req.body); fence();
+    const input = z.object({sessionId: z.string()}).strict().parse(req.body); fence(); requireShell(req, false);
     if (input.sessionId !== terminals.sessionId(signedIn(req).id)) throw unavailable("This terminal belongs to another household member.", 403);
     await terminals.end(signedIn(req).id);
+    audit(req, "end", source(req));
     return {ok: true};
   });
 
@@ -169,6 +210,8 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   app.get("/api/computer/terminal/ws", {websocket: true, preValidation: guard("terminal")}, (socket, req) => {
     const ticket = req.computerAttachment!, check = monitor(socket, ticket.session);
     const child = terminals.attach(ticket.session.userId);
+    audit(req, "attach", ticket.session);
+    alertAdmins(signedIn(req), ticket.session);
     let buffer = "", inputPaused = false;
     const send = (data: Record<string, unknown>) => {
       if (!check() || socket.readyState !== WebSocket.OPEN) return;
@@ -207,9 +250,22 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     child.stdin.on("error", () => socket.close(1011, "Terminal disconnected"));
     child.on("error", () => {send({type: "error", message: "The terminal could not be opened."}); socket.close(1011);});
     child.on("exit", () => {send({type: "exit"}); socket.close(1000, "Terminal ended");});
-    socket.on("close", () => child.stdin.end());
+    socket.on("close", () => { child.stdin.end(); audit(req, "detach", ticket.session); });
     socket.on("error", () => child.stdin.end());
   });
+  // Removed members and non-administrators keep no shell across restarts. Without a known
+  // administrator (fresh database or mistyped list), pruning could end the owner's shell.
+  if (admins().length && terminals.available) {
+    const keep = new Set(store.users().filter(terminalAdmin).map(user => terminals.sessionId(user.id)));
+    if (!keep.size) app.log.warn("Skipped terminal pruning: no terminal administrator has signed in yet");
+    else for (const sessionId of terminals.sessions()) {
+      if (keep.has(sessionId)) continue;
+      try {
+        await terminals.endSession(sessionId);
+        app.log.info({audit: "terminal", action: "prune", session: sessionId}, "Ended a shell that no longer belongs to a terminal administrator");
+      } catch (error) { app.log.warn({error: safeError(error), session: sessionId}, "Could not end a non-administrator shell"); }
+    }
+  }
   app.addHook("onClose", async () => {
     closing = true;
     for (const timer of timers) clearInterval(timer);

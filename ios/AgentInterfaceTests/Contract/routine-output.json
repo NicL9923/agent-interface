@@ -1,0 +1,14 @@
+{
+  "request": "GET /api/bots/household/routines/routine-morning/results/result-1",
+  "response": {
+    "messages": [
+      {
+        "id": "result-message",
+        "role": "assistant",
+        "text": "Five dinners and a grocery list.",
+        "createdAt": "2026-10-01T07:02:00.000Z"
+      }
+    ],
+    "previewOnly": false
+  }
+}

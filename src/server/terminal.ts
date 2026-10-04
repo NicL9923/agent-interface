@@ -33,21 +33,32 @@ export class SystemTerminal {
   sessionId(userId: string) {
     return "member-" + createHash("sha256").update(userId).digest("hex").slice(0, 32);
   }
-  private arguments(userId: string) {
+  /** Member shell names on the running tmux server. */
+  sessions() {
+    if (!this.available || !this.config) return [];
+    const result = spawnSync("tmux", ["-N", "-S", join(this.config.stateDirectory, "tmux.sock"), "list-sessions", "-F", "#{session_name}"],
+      {timeout: 2000, encoding: "utf8"});
+    if (result.status !== 0) return [];
+    return result.stdout.split("\n").filter(name => /^member-[a-f0-9]{32}$/.test(name));
+  }
+  private arguments(sessionId: string) {
     if (!this.available || !this.config) throw Object.assign(new Error(this.reason), {statusCode: 409});
     return [host, "--socket", join(this.config.stateDirectory, "tmux.sock"),
-      "--session", this.sessionId(userId), "--cwd", this.config.cwd];
+      "--session", sessionId, "--cwd", this.config.cwd];
   }
   attach(userId: string) {
-    const args = this.arguments(userId);
+    const args = this.arguments(this.sessionId(userId));
     const child = spawn(this.config!.python, args, {stdio: ["pipe", "pipe", "pipe"],
       env: {PATH: process.env.PATH, LANG: process.env.LANG, PYTHONUNBUFFERED: "1"}});
     this.children.add(child);
     child.once("close", () => this.children.delete(child));
     return child;
   }
-  async end(userId: string) {
-    const args = this.arguments(userId);
+  end(userId: string) {
+    return this.endSession(this.sessionId(userId));
+  }
+  async endSession(sessionId: string) {
+    const args = this.arguments(sessionId);
     const child = spawn(this.config!.python, [...args, "--end"], {stdio: "ignore",
       env: {PATH: process.env.PATH, LANG: process.env.LANG}});
     await new Promise<void>((resolve, reject) => {

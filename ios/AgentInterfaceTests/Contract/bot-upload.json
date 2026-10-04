@@ -1,0 +1,10 @@
+{
+  "request": "POST /api/bots/household/uploads",
+  "response": {
+    "id": "upload.signature",
+    "name": "pantry.txt",
+    "mime": "text/plain",
+    "size": 18,
+    "url": "/api/files/upload.signature"
+  }
+}

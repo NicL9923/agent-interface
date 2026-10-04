@@ -1,0 +1,35 @@
+{
+  "request": "GET /api/bots/household/memory",
+  "response": {
+    "botId": "household",
+    "profile": "household",
+    "scope": "profile",
+    "owner": "Hermes",
+    "notice": "Hermes owns this memory.",
+    "documents": [
+      {
+        "target": "memory",
+        "label": "Assistant memory",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "enabled": true,
+        "entries": [
+          {
+            "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "text": "The household prefers vegetarian dinners."
+          }
+        ],
+        "charLimit": 2200,
+        "charCount": 41
+      },
+      {
+        "target": "user",
+        "label": "About you",
+        "revision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "enabled": false,
+        "entries": [],
+        "charLimit": 1375,
+        "charCount": 0
+      }
+    ]
+  }
+}

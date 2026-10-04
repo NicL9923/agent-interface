@@ -1,0 +1,13 @@
+{
+  "request": "PUT /api/bots/household/avatar",
+  "response": {
+    "mode": "geometric",
+    "shape": "pebble",
+    "color": "#00BCA6",
+    "eyes": "oval",
+    "accessory": "glasses",
+    "eyeWidth": 1.1,
+    "eyeHeight": 0.9,
+    "eyeSpacing": 1.2
+  }
+}

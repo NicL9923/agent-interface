@@ -1,0 +1,48 @@
+{
+  "request": "GET /api/bots/household/vault",
+  "response": {
+    "botId": "household",
+    "profile": "household",
+    "scope": "profile",
+    "owner": "Hermes",
+    "notice": "Hermes stores these logins for this profile.",
+    "items": [
+      {
+        "id": "login-grocer",
+        "kind": "login",
+        "label": "Grocer",
+        "origin": "https://grocer.example.test",
+        "createdAt": "2026-10-01T09:00:00.000Z",
+        "identifier": "o***@example.test",
+        "identifierType": "email",
+        "hasOtp": true,
+        "backend": "local",
+        "canRemove": true
+      }
+    ],
+    "sources": [
+      {
+        "name": "local",
+        "displayName": "This profile",
+        "enabled": true,
+        "needsUnlock": false,
+        "unlocked": true,
+        "installed": true,
+        "canToggle": false,
+        "canUnlock": false,
+        "canLock": false
+      },
+      {
+        "name": "bitwarden",
+        "displayName": "Bitwarden",
+        "enabled": true,
+        "needsUnlock": true,
+        "unlocked": false,
+        "installed": true,
+        "canToggle": true,
+        "canUnlock": true,
+        "canLock": false
+      }
+    ]
+  }
+}

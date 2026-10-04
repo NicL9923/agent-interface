@@ -1,0 +1,34 @@
+{
+  "request": "PATCH /api/bots/household",
+  "response": {
+    "id": "household",
+    "name": "Household",
+    "description": "Plans meals and errands",
+    "instructions": "Be concise.",
+    "model": "claude-sonnet",
+    "provider": "anthropic",
+    "enabledMcpServers": [
+      "calendar"
+    ],
+    "shared": true,
+    "avatar": {
+      "mode": "geometric",
+      "shape": "pebble",
+      "color": "#00BCA6",
+      "eyes": "oval",
+      "accessory": "glasses",
+      "eyeWidth": 1.1,
+      "eyeHeight": 0.9,
+      "eyeSpacing": 1.2
+    },
+    "enabledTools": [
+      "terminal",
+      "web"
+    ],
+    "enabledSkills": [
+      "meal-planning"
+    ],
+    "sessionId": "session-household",
+    "activity": "working"
+  }
+}

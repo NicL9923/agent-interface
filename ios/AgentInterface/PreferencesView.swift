@@ -52,7 +52,7 @@ struct PreferencesView: View {
           if preferences.notifications?.quietStart != nil {
             TextField("Quiet start (HH:mm)",text:Binding(get:{preferences.notifications?.quietStart ?? "22:00"},set:{preferences.notifications?.quietStart=$0})).keyboardType(.numbersAndPunctuation)
             TextField("Quiet end (HH:mm)",text:Binding(get:{preferences.notifications?.quietEnd ?? "07:00"},set:{preferences.notifications?.quietEnd=$0})).keyboardType(.numbersAndPunctuation)
-            Text("\(preferences.notifications?.timezone ?? TimeZone.current.identifier). All notifications wait. Decisions and failures skip batching outside quiet hours.").font(.caption).foregroundStyle(.secondary)
+            Text("\(preferences.notifications?.timezone ?? TimeZone.current.identifier). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.").font(.caption).foregroundStyle(.secondary)
           }
           Text(store.notificationStatus).font(.footnote).foregroundStyle(.secondary)
           Button("Enable device notifications") {

@@ -1,0 +1,25 @@
+{
+  "request": "GET /api/groups/room-dinner/log?since=0",
+  "response": {
+    "cursor": 1,
+    "latest_seq": 2,
+    "has_more": false,
+    "events": [
+      {
+        "event_id": "group-event-1",
+        "seq": 1,
+        "kind": "message",
+        "created_at": 1790852400.5,
+        "actor": {
+          "kind": "human",
+          "id": "local-one"
+        },
+        "payload": {
+          "text": "Plan dinners together",
+          "thread_id": "thread-1",
+          "member_id": "household"
+        }
+      }
+    ]
+  }
+}

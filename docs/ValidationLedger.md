@@ -1,5 +1,58 @@
 # Validation ledger
 
+## October 3 production hardening
+
+This change versions the app database, restricts the system terminal to
+confirmed administrators, adds logging, readiness and retention, sends a
+content security policy, revalidates polled reads with ETags, splits the web
+app shell, formats timestamps in one place and checks the iOS contract against
+server-generated fixtures.
+
+The source state covers 616 files:
+`sha256:2105a03753145cc72c6e8ecc6b384b1982cd251b9ae2a433c731cbb7dc167b8d`.
+All 427 application tests passed on Node 24.21 and 26.10, along with the
+production build and the CI Python contract checks. The tmux-backed computer and terminal checks run in CI only.
+Every new rule was broken on purpose at least once to confirm its test fails.
+The migration tests open a copy of the exact previous schema, check the indexes
+in query plans and check that the previous release's positional writes still
+work on a migrated database.
+
+The real server ran locally with explicit local accounts, a fake Google client
+ID and a stand-in tmux whose shell is `cat`. Headless Chromium recorded no CSP
+violations across sign-in, Today, preferences, the desktop, the confirmation
+step and an open shell, and observed real 304 responses on bootstrap and
+computer polls. Fixture previews covered conversations, artifacts, the avatar
+editor and voice with no violations. Logs showed terminal audit lines and no
+ticket values. Old and new web builds produced identical screenshots, except
+for clock-driven text, and identical URL and history behavior.
+
+On Xcode 27 with the iOS 27 simulator, all 69 native unit tests passed, including
+decoding of all 60 server-generated contract fixtures. Ten of the 11 phone flows
+passed. The seasonal avatar flow is flaky before and after this change: it passed
+2 of 5 runs here and 2 of 3 on unchanged `main`, always failing to resolve the
+Save avatar button's hit point after swiping.
+The new CI job runs the unit tests with the `macos-26` image's default Xcode 26.6.
+Its first run could not type-check the chip layout in reasonable time; splitting
+that sum into typed helpers fixed it.
+
+An independent GPT-6.1 Sol review found no blockers. Its five findings were
+fixed: error logs now keep only fields the app sets, iOS no longer caches a
+response that arrives after an identity change, the confirmation step works
+under development Strict Mode, the documented journal filter matches the JSON
+level and the quiet-hours copy mentions security alerts.
+
+The first Node 24 CI run exposed a production defect present before this change.
+`node:sqlite` on Node 24 refuses to bind `undefined`, so a queued push without an
+assistant, such as a test push, threw during its visibility lookup and aborted
+every worker pass. Production had been holding 15 real notifications behind five
+test pushes for about 33 hours. Notifications without an assistant are now
+visible, a notification that cannot be processed no longer blocks later ones, and
+pending notifications expire after a day to match the Web Push TTL.
+
+Not covered here: a real Google confirmation, Safari, live Caddy headers,
+prune against real tmux and push alerts reaching a phone. Production activation
+requires a fresh repaired-source qualification because integration inputs changed.
+
 ## October 2 app release e9003ae
 
 PR #30 merged at `e9003aeb6a741462eb13f797cf8c61a246efbf4d`. The release is live at `https://agentui.wildflowersranch.com`,

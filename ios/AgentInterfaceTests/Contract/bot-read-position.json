@@ -1,0 +1,7 @@
+{
+  "request": "PUT /api/bots/household/read-position",
+  "response": {
+    "messageId": "message-assistant",
+    "scrollTop": 240.5
+  }
+}
