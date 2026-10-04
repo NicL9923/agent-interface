@@ -31,6 +31,7 @@ import { installCollaborationRoutes } from './collaboration.js';
 import { loggerOptions, RepeatFilter } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
+import { installSecurityHeaders } from "./security-headers.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -130,12 +131,7 @@ export async function createApp(
     trustProxy: false,
     routerOptions: { maxParamLength: 8192 },
   });
-  app.addHook("onRequest", async (_req, reply) => {
-    reply
-      .header("X-Content-Type-Options", "nosniff")
-      .header("X-Frame-Options", "DENY")
-      .header("Referrer-Policy", "strict-origin-when-cross-origin");
-  });
+  installSecurityHeaders(app, config.origin);
   installEtags(app);
   await app.register(cookie);
   await app.register(websocket, {options: {maxPayload: 256 * 1024}});

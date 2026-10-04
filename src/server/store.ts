@@ -151,6 +151,13 @@ export class Store {
   deleteSession(hash: string) {
     this.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash);
   }
+  confirmSession(hash: string, confirmedAt: number) {
+    this.db.prepare("INSERT INTO session_confirmations VALUES(?,?) ON CONFLICT(session_hash) DO UPDATE SET confirmed_at=max(confirmed_at,excluded.confirmed_at)")
+      .run(hash, confirmedAt);
+  }
+  sessionConfirmedAt(hash: string): number | undefined {
+    return (this.db.prepare("SELECT confirmed_at FROM session_confirmations WHERE session_hash=?").get(hash) as { confirmed_at: number } | undefined)?.confirmed_at;
+  }
   nativeSession(hash: string, userId: string, expires: number) {
     this.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(hash, userId, expires);
   }
@@ -585,7 +592,7 @@ export class Store {
       const payload = JSON.parse(item.payload);
       const created = this.db.prepare("SELECT created_at FROM notification_events WHERE id=(SELECT event_id FROM outbox WHERE id=?)").get(item.id) as {created_at:number} | undefined;
       const minutes = prefs?.batchMinutes ?? 0;
-      if (!minutes || !payload.kind || this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(item.id) || payload.kind === 'approval' || payload.kind === 'failed') { groups.push({...item,items:[item]}); seen.add(item.id); continue; }
+      if (!minutes || !payload.kind || this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(item.id) || payload.kind === 'approval' || payload.kind === 'failed' || payload.kind === 'security') { groups.push({...item,items:[item]}); seen.add(item.id); continue; }
       if (now < (payload.queuedAt ?? created?.created_at ?? 0) + minutes * 60000) continue;
       const items = ready.filter(row => row.user_id === item.user_id && !seen.has(row.id) && !this.db.prepare("SELECT 1 FROM notification_batch_items WHERE outbox_id=?").get(row.id) && !this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(row.id) && ['completed','activity','interrupted'].includes(JSON.parse(row.payload).kind));
       const batchId = randomUUID();

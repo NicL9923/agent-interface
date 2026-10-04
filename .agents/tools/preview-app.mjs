@@ -8,24 +8,24 @@ import { createHash, randomUUID } from 'node:crypto';
 import { tsImport } from 'tsx/esm/api';
 const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
+const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
 // LAN previews need request IDs even when HTTPS-only randomUUID is unavailable.
 // Microphone and push remain subject to the browser's real secure-context rules.
-const fixtureHtml = async () => {
-  const html = (await readFile(resolve(root, 'index.html'), 'utf8')).replace('<head>', `<head><script>
-    if (!crypto.randomUUID) crypto.randomUUID = () => {
-      const bytes = crypto.getRandomValues(new Uint8Array(16));
-      bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
-      const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
-      return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
-    };
-  </script>`);
-  return process.env.PREVIEW_NOTIFICATION_PROMPT === '1'
-    ? html.replace('<head>', '<head><script>if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});</script>')
-    : html;
+// Served as a file, not inline, so the app's own Content-Security-Policy applies unchanged.
+const fixtureScript = `if (!crypto.randomUUID) crypto.randomUUID = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
 };
+${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}`;
+const fixtureHtml = async () => (await readFile(resolve(root, 'index.html'), 'utf8'))
+  .replace('<head>', '<head><script src="/preview-fixture.js"></script>');
+const documentHeaders = request => ({ 'Content-Security-Policy': contentSecurityPolicy(`http://${request.headers.host || `${host}:${port}`}`),
+  'Permissions-Policy': permissionsPolicy, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' });
 // A fixture key only, never usable for delivery.
 const previewPushKey = process.env.PREVIEW_PUSH_CONFIGURED === '1' ? Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString('base64url') : undefined;
 // PREVIEW_THEME=light|dark|system and PREVIEW_PRESENTATION=simple|advanced pick the initial preferences.
@@ -171,20 +171,31 @@ const flows = new Map();
 const pushRegistrations = new Set();
 // Computer fixture streams are simulations. They never open a shell or contact a desktop.
 let computerControl = { kind: 'idle' };
+// PREVIEW_TERMINAL=confirm asks for a fresh sign-in first; PREVIEW_TERMINAL=restricted shows a non-administrator.
+let terminalConfirmed = process.env.PREVIEW_TERMINAL !== 'confirm';
 const computerStatus = () => ({ available: true, running: true, browserReady: true, label: 'Preview computer', control: computerControl,
-  terminal: { available: true, target: 'preview@fixture' } });
+  terminal: process.env.PREVIEW_TERMINAL === 'restricted'
+    ? { available: false, target: '', reason: 'The system terminal is limited to household administrators.' }
+    : { available: true, target: 'preview@fixture', ...(terminalConfirmed ? {} : { confirmationRequired: true }) } });
 let computerTicket = 0;
 const computerTickets = new Map();
 // PREVIEW_SIGNED_OUT=1 starts at the sign-in page; local sign-in then opens the fixture household.
 let signedIn = process.env.PREVIEW_SIGNED_OUT !== '1';
-const json = (response, data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(data)); };
+const json = (response, data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Security-Policy': apiPolicy }); response.end(JSON.stringify(data)); };
 const server = createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
   let body = {}; if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); try { body = JSON.parse(Buffer.concat(chunks)); } catch {} }
+  if (url.pathname === '/preview-fixture.js') { response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/javascript' }); return response.end(fixtureScript); }
   if (url.pathname.startsWith('/api/')) {
     const path = url.pathname.slice(4);
-    if (path === '/auth/config') return json(response, { localDevAuth: true, nativeAuthVersion: 1 });
+    if (path === '/csp-report') {
+      for (const violation of cspViolations(body)) process.stderr.write(`CSP violation: ${JSON.stringify(violation)}\n`);
+      response.writeHead(204); return response.end();
+    }
+    // PREVIEW_GOOGLE_CLIENT_ID loads Google's real sign-in button; the fixture never verifies its tokens.
+    if (path === '/auth/config') return json(response, { localDevAuth: true, nativeAuthVersion: 1, googleClientId: process.env.PREVIEW_GOOGLE_CLIENT_ID || undefined });
+    if (path === '/auth/confirm') { terminalConfirmed = true; return json(response, { confirmedAt: new Date().toISOString() }); }
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
     if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.'}],unavailableBots:[]});
@@ -330,8 +341,8 @@ const server = createServer(async (request, response) => {
     if (path === '/preferences') { Object.assign(preferences, body); return json(response, preferences); }
     return json(response, {});
   }
-  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
-  catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
+  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
+  catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
 
 const computerSockets = new WebSocketServer({ noServer: true });

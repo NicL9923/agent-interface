@@ -1,3 +1,5 @@
+// First, so no schema runs before it.
+import "./zod-jitless";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";

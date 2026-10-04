@@ -5,7 +5,8 @@ export interface ComputerStatus {
   label: string;
   reason?: string;
   control: { kind: "bot" | "human" | "idle"; name?: string; mine?: boolean };
-  terminal: { available: boolean; target: string; reason?: string };
+  /** target is blank when this person may not use the shell. confirmationRequired asks for a fresh sign-in first. */
+  terminal: { available: boolean; target: string; reason?: string; confirmationRequired?: boolean };
 }
 
 export interface ComputerAttachment {

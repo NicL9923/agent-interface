@@ -121,8 +121,10 @@ export class BackgroundWorker {
     for (const item of this.store.deliveryGroups()) {
       const user = this.store.getUser(item.user_id);
       if (!user || !allowedIdentity(this.config, user)) continue;
-      if (inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
-      item.items = item.items.filter(row => {
+      // Security alerts are never batched, so the group payload carries their kind.
+      const security = JSON.parse(item.payload).kind === "security";
+      if (!security && inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
+      if (!security) item.items = item.items.filter(row => {
         const payload = JSON.parse(row.payload); const bot = this.store.presentation(payload.botId);
         const visible = bot.shared || !bot.ownerId || bot.ownerId === item.user_id;
         if (!visible) this.store.finishDelivery(row.id);

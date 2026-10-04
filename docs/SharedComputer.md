@@ -13,14 +13,31 @@ After a lost connection, the desktop reconnects in watch mode; take over explici
 to resume input. Closing the last desktop attachment normally hands control back.
 
 The **Terminal** tab opens a real shell on the Hermes VPS. Its host and starting
-folder appear above it. Each household member gets a separate persistent tmux
+folder appear above it. Each terminal administrator gets a separate persistent tmux
 session. Closing the panel or reconnecting preserves the shell and running commands;
 its separate terminal supervisor also preserves them during app restarts and deployments.
 **End shell** explicitly ends that session. This shell has the existing VPS service
 account's access. The app's service/provider environment is removed before launch.
 
+Only the shell is restricted. The shared desktop, including **Take over**, stays
+available to every household member. `COMPUTER_TERMINAL_ADMINS` lists who may open
+the shell. It defaults to the integration administrators, must be part of
+`HOUSEHOLD_EMAILS` in production, and an empty value turns the shell off for
+everyone. Other members see why the Terminal tab is unavailable.
+
+Opening or reconnecting a shell needs a browser sign-in confirmed in the last
+2 hours. Signing in counts. After that, the Terminal tab asks you to confirm it's
+you with Google again. An open shell is not cut at the 2 hour mark; only a new
+attachment asks again. Each attachment is logged with the person, address and
+browser, never the ticket, and sends one "System terminal opened" alert to every
+terminal administrator per confirmed sign-in, even during quiet hours. When the
+app starts, it ends shells that belong to anyone who is no longer a terminal
+administrator. It skips that cleanup until at least one administrator has signed
+in, so a new database or a mistyped list cannot end the owner's shell.
+
 The iOS app's Preferences offers **Open computer in browser**. It opens the same web
 workspace in the system browser, which needs its own household Google sign-in.
+The shell opens only there; the iOS app's own session cannot request one.
 
 ## Host setup
 
@@ -48,7 +65,8 @@ readiness are true in `/api/computer`, and exercise both desktop streaming and a
 terminal detach/reconnect. VNC uses a private Unix socket; CDP listens only on
 loopback. Neither needs a public firewall or Caddy port.
 
-Control and attachment requests require household authentication. Browser writes
+Control and attachment requests require household authentication. Terminal
+requests also require a terminal administrator's recent browser sign-in. Browser writes
 use the app's existing Origin and CSRF checks. Streaming uses a session-bound,
 single-use ticket expiring after 30 seconds and checks session revocation while
 connected. The permanent Hermes service key remains on the server.

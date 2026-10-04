@@ -81,3 +81,9 @@
   .computer-end-confirmation { padding: 12px 14px; }
   .terminal-wrap { padding: 10px 6px 6px 8px; }
 }
+.computer-confirm { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.computer-confirm h3, .computer-confirm p { margin: 0; }
+.computer-confirm .computer-empty-icon { margin-bottom: 0; }
+.computer-google { max-width: 100%; min-height: 0; }
+.computer-confirm-error { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.computer-confirm-error p { color: var(--attention); }
