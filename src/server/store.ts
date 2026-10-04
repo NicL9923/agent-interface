@@ -15,14 +15,14 @@ import { defaultPreferences } from "../shared/types.js";
 
 import type { SavedItem } from "../shared/discovery.js";
 
-export class Store {
-  readonly db: DatabaseSync;
-  constructor(path: string) {
-    if (path !== ":memory:")
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
-    if (path !== ":memory:") chmodSync(path, 0o600);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+// Each entry upgrades the database by one PRAGMA user_version. Keep them additive so the
+// previous release still runs if a deploy rolls back without restoring the database:
+// new tables, indexes, or defaulted columns on tables that are only written with named
+// columns. Older releases insert positionally into every other table.
+const migrations: ((db: DatabaseSync) => void)[] = [
+  // 1: the unversioned schema that existing installations already have.
+  db => {
+    db.exec(`
       CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,picture TEXT);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS native_sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
@@ -50,10 +50,54 @@ export class Store {
       CREATE TABLE IF NOT EXISTS notification_ingestion(id INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL REFERENCES notification_events(id) ON DELETE CASCADE);
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     `);
-    const trialColumns = this.db.prepare("PRAGMA table_info(routine_trials)").all() as { name: string }[];
-    if (!trialColumns.some(column => column.name === "status")) this.db.exec("ALTER TABLE routine_trials ADD COLUMN status TEXT NOT NULL DEFAULT 'uncertain'");
-    const seenColumns = this.db.prepare("PRAGMA table_info(today_seen)").all() as { name: string }[];
-    if (!seenColumns.some(column => column.name === "event_frontier")) this.db.exec("ALTER TABLE today_seen ADD COLUMN event_frontier INTEGER NOT NULL DEFAULT 0");
+    addColumn(db, "routine_trials", "status", "TEXT NOT NULL DEFAULT 'uncertain'");
+    addColumn(db, "today_seen", "event_frontier", "INTEGER NOT NULL DEFAULT 0");
+  },
+  // 2: recent sign-in confirmation, delivery diagnostics and indexes for polling paths.
+  db => {
+    db.exec(`
+      CREATE TABLE session_confirmations(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
+      ALTER TABLE outbox ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE outbox ADD COLUMN last_error TEXT;
+      CREATE INDEX submissions_message ON submissions(bot_id,json_extract(receipt,'$.messageId'));
+      CREATE INDEX submissions_status ON submissions(json_extract(receipt,'$.status'));
+      CREATE INDEX outbox_ready ON outbox(state,next_attempt);
+      CREATE INDEX notification_events_created ON notification_events(created_at);
+      CREATE INDEX notification_batch_items_batch ON notification_batch_items(batch_id);
+    `);
+  },
+];
+export const schemaVersion = migrations.length;
+function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+function migrate(db: DatabaseSync) {
+  const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  if (current > migrations.length)
+    throw new Error(`The app database uses schema version ${current}, but this release supports up to ${migrations.length}. Run a matching release or restore a backup.`);
+  for (let version = current; version < migrations.length; version++) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      migrations[version](db);
+      db.exec(`PRAGMA user_version=${version + 1}`);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+export class Store {
+  readonly db: DatabaseSync;
+  constructor(path: string) {
+    if (path !== ":memory:")
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    this.db = new DatabaseSync(path);
+    if (path !== ":memory:") chmodSync(path, 0o600);
+    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
+    migrate(this.db);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
   }
   close() {
@@ -344,13 +388,12 @@ export class Store {
     return row ? this.submission(row.request_id) : undefined;
   }
   pending() {
+    // Matches the submissions_status expression index; settled history is never scanned.
     return (
-      this.db.prepare("SELECT request_id FROM submissions").all() as {
+      this.db.prepare("SELECT request_id FROM submissions WHERE json_extract(receipt,'$.status')='uncertain' ORDER BY created_at").all() as {
         request_id: string;
       }[]
-    )
-      .map((r) => this.submission(r.request_id)!)
-      .filter((x) => x.receipt.status === "uncertain");
+    ).map((r) => this.submission(r.request_id)!);
   }
   receipt(receipt: SubmissionReceipt) {
     this.transaction(() => {
@@ -424,26 +467,22 @@ export class Store {
         ids.add(user.id);
     return [...ids];
   }
+  queueNotification(eventId: string, userId: string, payload: object) {
+    return this.db
+      .prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload,created_at) VALUES(?,?,?,?,?)")
+      .run(randomUUID(), eventId, userId, JSON.stringify(payload), Date.now()).changes > 0;
+  }
   enqueue(event: RuntimeEvent) {
     for (const userId of this.recipients(event))
-      this.db
-        .prepare(
-          "INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)",
-        )
-        .run(
-          randomUUID(),
-          event.id,
-          userId,
-          JSON.stringify({
-            title: event.title,
-            body: event.body ?? "",
-            url: `/?bot=${encodeURIComponent(event.botId)}${event.routineId ? `&routine=${encodeURIComponent(event.routineId)}` : ''}`,
-            tag: event.id,
-            kind: event.kind,
-            botId: event.botId,
-            queuedAt: Date.now(),
-          }),
-        );
+      this.queueNotification(event.id, userId, {
+        title: event.title,
+        body: event.body ?? "",
+        url: `/?bot=${encodeURIComponent(event.botId)}${event.routineId ? `&routine=${encodeURIComponent(event.routineId)}` : ''}`,
+        tag: event.id,
+        kind: event.kind,
+        botId: event.botId,
+        queuedAt: Date.now(),
+      });
   }
   cursor(): string {
     return (
