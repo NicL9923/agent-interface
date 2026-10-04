@@ -20,6 +20,19 @@ export function loggerOptions(level: LogLevel, stream?: { write(line: string): v
   };
 }
 
+/** Logs only fields this app sets. Upstream errors can carry raw Hermes text in other properties or causes. */
+export function safeError(error: unknown) {
+  if (!(error instanceof Error)) return { message: String(error).slice(0, 300) };
+  const { statusCode, code } = error as Error & { statusCode?: unknown; code?: unknown };
+  return {
+    type: error.name,
+    message: error.message.slice(0, 300),
+    ...(typeof statusCode === "number" ? { statusCode } : {}),
+    ...(typeof code === "string" || typeof code === "number" ? { code } : {}),
+    stack: error.stack?.split("\n").slice(1, 9).map(line => line.trim()).join("\n"),
+  };
+}
+
 /** Lets a repeated failure log once, then report its count at most every 10 minutes. */
 export class RepeatFilter {
   private seen = new Map<string, { loggedAt: number; repeats: number }>();

@@ -82,7 +82,9 @@ temporary `.partial` copy and that copy's `-shm` and `-wal` files, and clears st
 ## Logs and health
 
 The server writes JSON lines to stdout, and systemd keeps them in journald. Read
-them with `journalctl -u <app service> -f`; add `-p warning` for problems only.
+them with `journalctl -u <app service> -f -o cat`. Pino's `level` field is inside the JSON,
+so journald priorities can't filter it; for warnings and errors only, use
+`journalctl -u <app service> -o cat | jq -c 'select(.level >= 40)'`.
 `LOG_LEVEL` defaults to `info`. Individual requests are not logged because clients
 poll every 1.5 seconds. Logged requests keep only the method and path, and
 authorization, cookie, CSRF and ticket values are redacted.

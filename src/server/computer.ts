@@ -8,6 +8,7 @@ import { hash, signedIn } from "./auth.js";
 import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
 import { SystemTerminal } from "./terminal.js";
+import { safeError } from "./logging.js";
 
 type Session = { kind: "web" | "native"; hash: string; userId: string };
 type Attachment = { session: Session; expires: number; type: "desktop" | "terminal"; native?: ComputerAttachment };
@@ -262,7 +263,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
       try {
         await terminals.endSession(sessionId);
         app.log.info({audit: "terminal", action: "prune", session: sessionId}, "Ended a shell that no longer belongs to a terminal administrator");
-      } catch (error) { app.log.warn({err: error, session: sessionId}, "Could not end a non-administrator shell"); }
+      } catch (error) { app.log.warn({error: safeError(error), session: sessionId}, "Could not end a non-administrator shell"); }
     }
   }
   app.addHook("onClose", async () => {

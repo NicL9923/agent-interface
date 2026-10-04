@@ -407,6 +407,19 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "A new identity never reuses the previous body")
     }
 
+    func testAResponseThatArrivesAfterAnIdentityChangeIsNotCached() async throws {
+        let server = NativeMockServer(), api = client(server); defer { clean(server) }
+        server.serveETags()
+        let path = "/api/bootstrap"; server.hold(path)
+        let operation = Task { () async throws -> Bootstrap in try await api.get("/bootstrap") }
+        try await server.waitForHeld(path)
+        api.token = "another-native-session"
+        server.release(path)
+        _ = try await operation.value
+        let _: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "The previous identity's late body must not become the new identity's validator")
+    }
+
     func testNotModifiedWithoutAValidatedBodyRetriesOnceInFull() async throws {
         let server = NativeMockServer(), api = client(server); defer { clean(server) }
         server.serveETags(); server.replyNotModified(times: 1)

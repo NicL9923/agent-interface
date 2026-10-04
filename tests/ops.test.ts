@@ -206,7 +206,7 @@ describe("logging", () => {
       expect((await app.inject({ url: "/api/bots?ticket=secret-ticket", headers })).statusCode).toBe(502);
     expect((await app.inject({ url: "/api/bootstrap" })).statusCode).toBe(401);
     expect(lines.map(line => JSON.parse(line))).toEqual([
-      expect.objectContaining({ level: 50, msg: "Request failed", route: "GET /api/bots", status: 502, err: expect.objectContaining({ message: "Hermes offline" }) }),
+      expect.objectContaining({ level: 50, msg: "Request failed", route: "GET /api/bots", status: 502, error: expect.objectContaining({ type: "Error", message: "Hermes offline" }) }),
     ]);
     vi.setSystemTime(Date.now() + 10 * minute);
     await app.inject({ url: "/api/bots", headers });
@@ -214,6 +214,18 @@ describe("logging", () => {
     expect(lines).toHaveLength(2);
     const output = lines.join("");
     for (const secret of ["secret-ticket", headers.cookie.split("=")[1], headers["x-csrf-token"]]) expect(output).not.toContain(secret);
+  });
+
+  it("never logs extra properties or causes from upstream errors", async () => {
+    const lines: string[] = [];
+    const leaky = Object.assign(new Error("Hermes rejected the request", { cause: new Error("private cause text") }),
+      { rpcCode: -32000, rpcMessage: "private request text" });
+    const failing = runtime({ listBots: async () => { throw leaky; } });
+    const { app } = await setup({ LOG_LEVEL: "info" }, { runtime: failing.value, lines });
+    const headers = await login(app);
+    expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(502);
+    expect(JSON.parse(lines[0]).error).toMatchObject({ type: "Error", message: "Hermes rejected the request" });
+    for (const secret of ["private request text", "private cause text", "-32000"]) expect(lines.join("")).not.toContain(secret);
   });
 
   it("logs a failing operation when it starts, every ten minutes while it lasts, and when it recovers", () => {

@@ -163,7 +163,10 @@ function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
   const confirmed = useRef(onConfirmed);
   confirmed.current = onConfirmed;
   const live = useRef(true);
-  useEffect(() => () => { live.current = false; }, []);
+  useEffect(() => {
+    live.current = true;
+    return () => { live.current = false; };
+  }, []);
 
   const confirm = useCallback(async (body: { credential: string } | { member: string }) => {
     setBusy(true); setError("");

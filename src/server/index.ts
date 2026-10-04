@@ -5,6 +5,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createHermesRuntime } from "./hermes.js";
 import { schemaVersion } from "./store.js";
+import { safeError } from "./logging.js";
 if (existsSync(".env")) loadEnvFile(".env");
 const config = loadConfig();
 const runtime = createHermesRuntime({
@@ -22,6 +23,6 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     app.log.info({ signal }, "Agent Interface stopping");
     void app.close().then(
       () => { app.log.info("Agent Interface stopped"); process.exit(0); },
-      error => { app.log.error({ err: error }, "Agent Interface did not stop cleanly"); process.exit(1); },
+      error => { app.log.error({ error: safeError(error) }, "Agent Interface did not stop cleanly"); process.exit(1); },
     );
   });

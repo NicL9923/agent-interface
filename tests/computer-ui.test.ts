@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComputerPanel } from "../src/components/ComputerPanel";
@@ -338,6 +338,19 @@ describe("terminal confirmation", () => {
     await click("Confirm local member one");
     expect(write).toHaveBeenCalledWith("/auth/confirm", { member: "one" });
     expect(Socket.instances).toHaveLength(2);
+  });
+
+  it("finishes confirming under development Strict Mode effect replays", async () => {
+    status.terminal = { ...status.terminal, confirmationRequired: true };
+    withAuth({ localDevAuth: true }, "local-one");
+    await act(async () => { root.render(createElement(StrictMode, null, createElement(ComputerPanel, { open: true, onClose, key: "same-user" }))); });
+    await click("Terminal");
+    expect(container.textContent).toContain("Confirm it's you");
+    await click("Confirm local member one");
+    expect(write).toHaveBeenCalledWith("/auth/confirm", { member: "one" });
+    expect(container.textContent).not.toContain("Confirm it's you");
+    // Strict Mode replays the terminal's attach effect, so only its outcome is stable here.
+    expect(ticketRequests()).toBeGreaterThan(0);
   });
 
   it("explains that the shell is limited to administrators without requesting a ticket", async () => {

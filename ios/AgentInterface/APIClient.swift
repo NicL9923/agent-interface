@@ -95,6 +95,8 @@ extension Data {
   let session: URLSession
   private var validated: [String: Validated] = [:]
   private var validatedOrder: [String] = []
+  /// Bumped on every clear, so a response that was in flight for an earlier identity is not cached.
+  private var validatedGeneration = 0
   init(baseURL: URL, session: URLSession? = nil) {
     self.baseURL = baseURL
     if let session {
@@ -124,6 +126,7 @@ extension Data {
     return url
   }
   func clearConditionalCache() {
+    validatedGeneration += 1
     validated.removeAll()
     validatedOrder.removeAll()
   }
@@ -158,6 +161,7 @@ extension Data {
     // Without a local HTTP cache, a 304 reaches the app instead of being replaced by a cached body.
     request.cachePolicy = .reloadIgnoringLocalCacheData
     let sent = conditional ? validated[path] : nil
+    let generation = validatedGeneration
     if let sent { request.setValue(sent.etag, forHTTPHeaderField: "If-None-Match") }
     if authenticated, let token {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -200,7 +204,7 @@ extension Data {
         code: object?["code"] as? String,
         confirmRequired: object?["confirmRequired"] as? Bool ?? false)
     }
-    if method == "GET" {
+    if method == "GET", generation == validatedGeneration {
       // Only JSON is kept; file downloads can be large and are never polled.
       let json = response.mimeType == "application/json"
       remember(path, etag: json ? response.value(forHTTPHeaderField: "ETag") : nil, data: data)

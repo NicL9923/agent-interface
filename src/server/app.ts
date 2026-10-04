@@ -28,7 +28,7 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
-import { loggerOptions, RepeatFilter } from "./logging.js";
+import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
@@ -167,7 +167,7 @@ export async function createApp(
     if (status >= 500) {
       const route = `${req.method} ${req.routeOptions.url ?? "unmatched"}`;
       const repeats = serverErrors.hit(`${route} ${status} ${err.message}`);
-      if (repeats === 0) req.log.error({ err, route, status }, "Request failed");
+      if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");
       else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
     }
     reply.code(status).send({
