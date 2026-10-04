@@ -4,10 +4,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
-import { api, write } from '../src/client-api';
+import { api, clearResponseCache, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn().mockResolvedValue({})}));
+vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 let root:Root,container:HTMLDivElement,boot:Bootstrap,conversation:Conversation;
 let authConfig:{localDevAuth:boolean;googleClientId?:string};
@@ -129,8 +129,10 @@ describe('setup and recovery interface',()=>{
     const admission=vi.mocked(write).mock.calls.find(([path])=>path==='/bots/shared/messages')!;
     const requestId=(admission[1] as {requestId:string}).requestId;
     expect(requestId).toBeDefined();
+    expect(clearResponseCache).not.toHaveBeenCalled();
     boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
     await act(async()=>window.dispatchEvent(new Event('focus')));
+    expect(clearResponseCache).toHaveBeenCalledTimes(1);
     expect(container.querySelector('textarea')?.value).toBe('Second member draft');
     await act(async()=>finish({requestId,status:'accepted'}));
     expect(container.querySelector('textarea')?.value).toBe('Second member draft');

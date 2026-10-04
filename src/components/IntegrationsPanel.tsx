@@ -4,6 +4,7 @@ import type { Bot } from "../shared/types";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../shared/integrations";
 import "./integrations.css";
 import { Icon } from "./Icon";
+import { When } from "./When";
 
 const statusLabels: Record<IntegrationConnection["status"], string> = {
   connected: "Connected", configured: "Configured · not checked", not_connected: "Not connected",
@@ -133,7 +134,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
     {categories.map(category => <section className="integration-group" key={category}><h3>{categoryLabels[category] || category}</h3><div className="integration-cards">{catalog!.connections.filter(item => item.category === category).map(item => <article className="integration-card" key={item.id} data-status={item.status}>
       <div className="integration-card-heading"><h4>{item.name}</h4><span className="integration-status">{statusLabels[item.status]}</span></div>
       {item.account && <p className="integration-account">{item.account}</p>}<p>{item.detail}</p>
-      <dl><div><dt>Managed by</dt><dd>{item.owner}</dd></div><div><dt>Assistants</dt><dd>{item.botIds.length ? item.botIds.map(id => bots.find(bot => bot.id === id)?.name || id).join(", ") : "This assistant"}</dd></div><div><dt>Last checked</dt><dd>{item.checkedAt ? new Date(item.checkedAt).toLocaleString() : "Not checked yet"}</dd></div></dl>
+      <dl><div><dt>Managed by</dt><dd>{item.owner}</dd></div><div><dt>Assistants</dt><dd>{item.botIds.length ? item.botIds.map(id => bots.find(bot => bot.id === id)?.name || id).join(", ") : "This assistant"}</dd></div><div><dt>Last checked</dt><dd>{item.checkedAt ? <When value={item.checkedAt} /> : "Not checked yet"}</dd></div></dl>
       {item.permissions.length > 0 && <details><summary>Access & permissions</summary><ul>{item.permissions.map(permission => <li key={permission.id}>{permission.name}<span>{permission.granted === true ? "Granted" : permission.granted === false ? "Missing" : "Not checked"}</span></li>)}</ul></details>}
       {disconnect === item.id ? <div className="integration-confirmation"><p>Disconnect {item.name}? Assistants using it will lose access.</p><div className="actions"><button className="danger" disabled={!!busy} onClick={() => void action(item.id, "disconnect")}>Disconnect</button><button disabled={!!busy} onClick={() => setDisconnect("")}>Keep connected</button></div></div> : <div className="actions">
         {item.actions.connect && <button className={item.status !== "connected" ? "primary" : ""} disabled={!!busy || !catalog!.canManage || flow?.status === "pending"} onClick={() => { if (item.setup.length) { setEditing(item); setFields(Object.fromEntries(item.setup.filter(field => field.defaultValue !== undefined).map(field => [field.key, field.defaultValue!]))); } else void action(item.id, "connect"); }}>{busy === item.id ? "Working…" : item.status === "not_connected" || item.status === "unsupported" ? "Connect" : "Reconnect"}</button>}

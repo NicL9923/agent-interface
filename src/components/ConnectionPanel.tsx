@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RuntimeStatus } from "../shared/types";
 import { Avatar } from "./Avatar";
+import { When } from "./When";
 
 const explanations: Record<string, { title: string; detail: string; setup?: boolean }> = {
   not_configured: { title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true },
@@ -63,7 +64,7 @@ export function ConnectionPanel({ connection, offline = false, appUnavailable = 
         <summary>{copy.setup ? "Set up this installation" : "Connection details"}</summary>
         {connection.address && <p>Hermes address: <code>{connection.address}</code></p>}
         {connection.detail && <p>{connection.detail}</p>}
-        {connection.lastConnectedAt && <p>Last connected {new Date(connection.lastConnectedAt).toLocaleString()}.</p>}
+        {connection.lastConnectedAt && <p>Last connected <When value={connection.lastConnectedAt} inline />.</p>}
         {copy.setup && <>
           <p>On the computer running Agent Interface, open its project folder and run:</p>
           <SetupCommand />
