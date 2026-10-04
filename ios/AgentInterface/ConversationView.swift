@@ -234,6 +234,7 @@ struct ConversationView: View {
     case .failed: "\(bot.name)'s last task failed"
     case .interrupted: "\(bot.name) was interrupted"
     case .disconnected: "Connection lost. Your draft is kept."
+    case .unknown: "\(bot.name)'s status is unknown"
     default: "\(bot.name) is \(store.activity.label.lowercased())"
     }
   }

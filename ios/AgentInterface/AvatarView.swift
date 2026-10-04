@@ -49,8 +49,9 @@ enum AvatarMotion {
   static let expressionTime = 0.09
   static let morphTime = 0.13
   static let shapeDuration = 0.28
-  /// States whose meaning is "nothing is happening right now" never move.
-  static let frozenStates: Set<ActivityState> = [.disconnected, .interrupted]
+  /// States whose meaning is "nothing is happening right now" never move. An unrecognized
+  /// state also stays still, because motion would claim activity the app cannot confirm.
+  static let frozenStates: Set<ActivityState> = [.disconnected, .interrupted, .unknown]
 
   static func clamp(_ value: Double, _ low: Double = 0, _ high: Double = 1) -> Double {
     min(max(value, low), high)
@@ -191,7 +192,7 @@ enum AvatarMotion {
       pose.lift = 1.5 * smoothstep(t / 0.3)
       pose.scaleY *= 1 - 0.03 * smoothstep(t / 0.3)
       pose.blink = 1
-    case .disconnected, .interrupted: break
+    case .disconnected, .interrupted, .unknown: break
     }
     return pose
   }
@@ -218,6 +219,7 @@ enum AvatarMotion {
     case .failed: Expression(open: 0.62, tilt: 14, happy: 0, mouth: -1)
     case .disconnected: Expression(open: 0.7, tilt: 0, happy: 0, mouth: 0)
     case .interrupted: Expression(open: 0.5, tilt: 0, happy: 0, mouth: 0)
+    case .unknown: Expression(open: 1, tilt: 0, happy: 0, mouth: 0)
     case .idle, .thinking: Expression(open: 1, tilt: 0, happy: 0, mouth: 0.6)
     }
   }
@@ -963,7 +965,7 @@ struct AvatarView: View {
   private var showsBadge: Bool {
     portrait
       ? ![.idle, .thinking, .working].contains(state)
-      : [.done, .failed, .disconnected, .interrupted].contains(state)
+      : [.done, .failed, .disconnected, .interrupted, .unknown].contains(state)
   }
 
   var body: some View {
@@ -1096,7 +1098,7 @@ struct AvatarView: View {
     case .blocked: Circle().strokeBorder(Palette.attention, lineWidth: width)
     case .done: Circle().strokeBorder(Palette.accent, lineWidth: width)
     case .failed: Circle().strokeBorder(Palette.danger, lineWidth: width)
-    case .idle, .disconnected, .interrupted: EmptyView()
+    case .idle, .disconnected, .interrupted, .unknown: EmptyView()
     }
   }
 
@@ -1115,7 +1117,7 @@ struct AvatarView: View {
   private var badgeSymbol: String {
     switch state {
     case .done: "checkmark"
-    case .disconnected: "questionmark"
+    case .disconnected, .unknown: "questionmark"
     case .interrupted, .waiting: "pause.fill"
     default: "exclamationmark"
     }

@@ -365,6 +365,15 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertTrue(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: true))
     }
 
+    func testUnreadableResponseKeepsTheFriendlyMessageAndAddsTheCodingPath() async throws {
+        let server = NativeMockServer(), api = client(server); defer { clean(server) }
+        do { let _: Bootstrap = try await api.get("/auth/config"); XCTFail("Expected a decoding failure") }
+        catch let error as APIError {
+            XCTAssertEqual(error.code, "INVALID_RESPONSE"); XCTAssertEqual(error.status, 502)
+            XCTAssertTrue(error.message.contains("unreadable response")); XCTAssertEqual(error.detail, "user is missing")
+        }
+    }
+
     func testDelayedUpgradeStatusCannotLeakAcrossAnIdentityChange() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let path = "/api/hermes/upgrade"; server.hold(path)

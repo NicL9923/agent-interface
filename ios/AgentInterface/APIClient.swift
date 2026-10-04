@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import Security
 
 struct APIError: Error, LocalizedError {
@@ -7,6 +8,8 @@ struct APIError: Error, LocalizedError {
   var status: Int
   var code: String? = nil
   var confirmRequired = false
+  /// Short technical context, such as the JSON coding path an unreadable response failed at.
+  var detail: String? = nil
   var errorDescription: String? { message }
 }
 struct SecureToken {
@@ -77,6 +80,7 @@ extension Data {
 }
 
 @MainActor final class APIClient {
+  private static let log = Logger(subsystem: "dev.agentinterface.ios", category: "api")
   var baseURL: URL
   var token: String?
   var csrf: String?
@@ -151,34 +155,59 @@ extension Data {
     return data
   }
   func get<T: Decodable>(_ path: String) async throws -> T {
-    try decode(await data(path: "/api" + path))
+    try Self.decode(await data(path: "/api" + path), from: "/api" + path)
   }
   func publicGet<T: Decodable>(_ path: String) async throws -> T {
-    try decode(await data(path: "/api" + path, authenticated: false))
+    try Self.decode(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
   }
   func publicWrite<T: Decodable, V: Encodable>(_ path: String, _ value: V) async throws -> T {
-    try decode(
+    try Self.decode(
       await data(
         path: "/api" + path, method: "POST", body: JSONEncoder().encode(value),
-        contentType: "application/json", authenticated: false))
+        contentType: "application/json", authenticated: false), from: "/api" + path)
   }
   func write<T: Decodable, V: Encodable>(_ path: String, _ value: V, method: String = "POST")
     async throws -> T
   {
-    try decode(
+    try Self.decode(
       await data(
         path: "/api" + path, method: method, body: JSONEncoder().encode(value),
-        contentType: "application/json"))
+        contentType: "application/json"), from: "/api" + path)
   }
   func delete(_ path: String) async throws {
     _ = try await data(path: "/api" + path, method: "DELETE")
   }
-  private func decode<T: Decodable>(_ data: Data) throws -> T {
+  /// Decodes a server response. The person sees a friendly message; the log and `detail`
+  /// keep the coding path that failed, so a contract break is diagnosable.
+  static func decode<T: Decodable>(_ data: Data, from path: String) throws -> T {
     do { return try JSONDecoder().decode(T.self, from: data) } catch {
+      let detail = decodingDetail(error)
+      let route = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
+      log.error(
+        "Could not decode \(String(describing: T.self), privacy: .public) from \(route, privacy: .public): \(detail, privacy: .public). \(String(describing: error), privacy: .private)"
+      )
       throw APIError(
         message:
           "The app server returned an unreadable response. Check that its version supports this client.",
-        status: 502, code: "INVALID_RESPONSE")
+        status: 502, code: "INVALID_RESPONSE", detail: detail)
+    }
+  }
+  /// The failing JSON location and reason, without any response values.
+  static func decodingDetail(_ error: Error) -> String {
+    func path(_ keys: [CodingKey]) -> String {
+      let joined = keys.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }.joined()
+      let trimmed = joined.hasPrefix(".") ? String(joined.dropFirst()) : joined
+      return trimmed.isEmpty ? "response" : trimmed
+    }
+    switch error as? DecodingError {
+    case .keyNotFound(let key, let context): return "\(path(context.codingPath + [key])) is missing"
+    case .valueNotFound(_, let context): return "\(path(context.codingPath)) is null"
+    case .typeMismatch(let type, let context):
+      return "\(path(context.codingPath)) is not \(String(describing: type))"
+    case .dataCorrupted(let context):
+      return context.codingPath.isEmpty ? "response is not valid JSON" : "\(path(context.codingPath)) is invalid"
+    case .none: return String(describing: type(of: error))
+    @unknown default: return "response could not be decoded"
     }
   }
   func upload(botId: String, name: String, mime: String, data: Data) async throws -> FileRef {
@@ -198,10 +227,11 @@ extension Data {
         .utf8)
     body.append(data)
     body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-    return try decode(
+    let path = "/api/bots/\(Self.component(botId))/uploads"
+    return try Self.decode(
       await self.data(
-        path: "/api/bots/\(Self.component(botId))/uploads", method: "POST", body: body,
-        contentType: "multipart/form-data; boundary=\(boundary)"))
+        path: path, method: "POST", body: body,
+        contentType: "multipart/form-data; boundary=\(boundary)"), from: path)
   }
 }
 
