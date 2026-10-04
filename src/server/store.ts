@@ -59,6 +59,7 @@ const migrations: ((db: DatabaseSync) => void)[] = [
       CREATE TABLE session_confirmations(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
       ALTER TABLE outbox ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE outbox ADD COLUMN last_error TEXT;
+      UPDATE outbox SET created_at=COALESCE(CAST(json_extract(payload,'$.queuedAt') AS INTEGER),CAST(strftime('%s','now') AS INTEGER)*1000);
       CREATE INDEX submissions_message ON submissions(bot_id,json_extract(receipt,'$.messageId'));
       CREATE INDEX submissions_status ON submissions(json_extract(receipt,'$.status'));
       CREATE INDEX outbox_ready ON outbox(state,next_attempt);

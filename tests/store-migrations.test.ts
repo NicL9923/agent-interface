@@ -29,7 +29,8 @@ function legacyDatabase() {
       .run(id, "ranch", "one", JSON.stringify({ requestId: id, botId: "ranch", senderId: "one", text: id }), JSON.stringify({ requestId: id, ...receipt }), 1);
   submission("accepted-request", { status: "accepted", messageId: "message-1" });
   submission("uncertain-request", { status: "uncertain" });
-  db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-1", "event-1", "one", "{}");
+  db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-1", "event-1", "one", JSON.stringify({ queuedAt: 1234 }));
+  db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-untimed", "event-untimed", "one", "{}");
   db.close();
   return path;
 }
@@ -52,6 +53,10 @@ describe("store migrations", () => {
     expect(store.pending().map(row => row.input.requestId)).toEqual(["uncertain-request"]);
     expect(columns(store.db, "outbox")).toEqual(expect.arrayContaining(["created_at", "last_error"]));
     expect(columns(store.db, "session_confirmations")).toEqual(["session_hash", "confirmed_at"]);
+    // Existing rows keep their queue time; untimed rows count from the upgrade, never from 1970.
+    const created = Object.fromEntries((store.db.prepare("SELECT id,created_at FROM outbox").all() as { id: string; created_at: number }[]).map(row => [row.id, row.created_at]));
+    expect(created["outbox-1"]).toBe(1234);
+    expect(created["outbox-untimed"]).toBeGreaterThan(Date.now() - 60_000);
   });
 
   it("serves polling lookups from indexes", () => {
