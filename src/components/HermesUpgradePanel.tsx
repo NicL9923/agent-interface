@@ -4,6 +4,7 @@ import type { Bot } from "../shared/types";
 import type { UpgradePhase, UpgradeRevision, UpgradeStatus, UpgradeControlAction } from "../shared/upgrades";
 import "./hermes-upgrade.css";
 import { Icon } from "./Icon";
+import { When } from "./When";
 
 const runningPhases: UpgradePhase[] = ["checking", "qualifying", "installing", "verifying", "recovering"];
 const titles: Record<UpgradePhase, string> = {
@@ -207,6 +208,6 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
       </li>)}</ol>
       {status.error && <p className="upgrade-checked-at">Update reference: <code>{status.error}</code></p>}
     </details>}
-    {status?.checkedAt && <p className="upgrade-checked-at">Last checked <time dateTime={status.checkedAt}>{new Date(status.checkedAt).toLocaleString()}</time></p>}
+    {status?.checkedAt && <p className="upgrade-checked-at">Last checked <When value={status.checkedAt} inline /></p>}
   </dialog>;
 }

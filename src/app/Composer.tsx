@@ -8,6 +8,7 @@ import { VoiceControls } from "../components/VoiceControls";
 import { StarterActions } from "../components/DiscoveryPanel";
 import type { useStarters } from "../components/DiscoveryPanel";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
+import { When } from "../components/When";
 import type { Draft, Pending, SavedConversation } from "./storage";
 // Lives with the app shell: the fit runs when the draft text or assistant changes, not when the composer remounts.
 export function useComposerInput(text: string, botId: string) {
@@ -85,7 +86,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
           <details className="activity-details">
             <summary>Activity details</summary>
             <p>{connectionLost ? "Activity is unknown until Hermes reconnects." : conversation.activity.detail || stateLabels[state]}</p>
-            {conversation.activity.updatedAt && <p>Last reported <time dateTime={conversation.activity.updatedAt}>{new Date(conversation.activity.updatedAt).toLocaleString()}</time></p>}
+            {conversation.activity.updatedAt && <p>Last reported <When value={conversation.activity.updatedAt} inline /></p>}
             {conversation.activity.runId && <p>Run <code>{conversation.activity.runId}</code></p>}
           </details>
         )}

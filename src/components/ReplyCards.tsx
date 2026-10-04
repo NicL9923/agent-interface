@@ -3,6 +3,7 @@ import { api, write } from "../client-api";
 import { eventCalendarFile, eventGoogleCalendarUrl } from "../shared/reply-cards";
 import type { EventCard, ReplyCard, ReplyCardState, ReplyDocument } from "../shared/reply-cards";
 import "./experience.css";
+import { When } from "./When";
 
 const emptyState = (): ReplyCardState => ({ checkedIds: [], notes: {} });
 function CalendarProposal({ card }: { card: EventCard }) {
@@ -16,13 +17,13 @@ function CalendarProposal({ card }: { card: EventCard }) {
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <>
-    <p>{new Date(card.start).toLocaleString()}{card.end && ` to ${new Date(card.end).toLocaleString()}`}</p>
+    <p><When value={card.start} relative={false} />{card.end && <> to <When value={card.end} relative={false} from={card.start} /></>}</p>
     {card.location && <p>{card.location}</p>}
     <button type="button" onClick={() => setOpen(true)}>Review calendar event</button>
     <dialog ref={dialog} className="event-proposal-dialog" aria-labelledby={titleId} onCancel={() => setOpen(false)} onClose={() => setOpen(false)}>
       <header><h2 id={titleId}>{card.title}</h2><button type="button" onClick={() => setOpen(false)}>Close</button></header>
-      <dl><dt>Starts</dt><dd>{new Date(card.start).toLocaleString()}</dd>
-        {card.end && <><dt>Ends</dt><dd>{new Date(card.end).toLocaleString()}</dd></>}
+      <dl><dt>Starts</dt><dd><When value={card.start} relative={false} /></dd>
+        {card.end && <><dt>Ends</dt><dd><When value={card.end} relative={false} /></dd></>}
         {card.location && <><dt>Location</dt><dd>{card.location}</dd></>}
       </dl>
       {card.description && <p className="preserve-lines">{card.description}</p>}

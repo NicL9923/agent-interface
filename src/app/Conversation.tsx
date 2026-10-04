@@ -11,6 +11,7 @@ import type { useDeviceNotifications } from "../components/use-device-notificati
 import { SecureRequestCard } from "../components/SecureRequestCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
+import { When } from "../components/When";
 import type { SavedConversation } from "./storage";
 export function Conversation({ boot, selected, botId, conversation, state, active, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, onScroll, onCreate }: {
   boot: Bootstrap;
@@ -126,14 +127,7 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
                       : message.role === "assistant" || message.role === "tool"
                         ? selected.name
                         : message.toolName || message.role}
-                    {message.createdAt && (
-                      <time dateTime={message.createdAt}>
-                        {new Date(message.createdAt).toLocaleTimeString([], {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </time>
-                    )}
+                    {message.createdAt && <When value={message.createdAt} />}
                   </div>}
                   {isAgentExchange(message) ? <AgentExchange message={message} recipient={selected.name} /> : message.role === "assistant" ? (
                     <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={boot.user.id} unavailable={connectionLost} />
@@ -227,7 +221,7 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
               <p>{approval.detail}</p>
               {approval.expiresAt && (
                 <small>
-                  Expires {new Date(approval.expiresAt).toLocaleString()}
+                  Expires <When value={approval.expiresAt} inline />
                 </small>
               )}
               <div className="actions">
@@ -270,8 +264,8 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
     <summary><span>{call.name}</span><span className={`tool-call-status tool-call-${call.status}`}>{call.status === "running" ? disconnected ? "Last seen running" : "Running" : call.status === "failed" ? "Failed" : "Completed"}</span></summary>
     <dl>
       <div><dt>Call</dt><dd><code>{call.id}</code></dd></div>
-      {call.startedAt && <div><dt>Started</dt><dd><time dateTime={call.startedAt}>{new Date(call.startedAt).toLocaleString()}</time></dd></div>}
-      {call.completedAt && <div><dt>Finished</dt><dd><time dateTime={call.completedAt}>{new Date(call.completedAt).toLocaleString()}</time></dd></div>}
+      {call.startedAt && <div><dt>Started</dt><dd><When value={call.startedAt} /></dd></div>}
+      {call.completedAt && <div><dt>Finished</dt><dd><When value={call.completedAt} /></dd></div>}
     </dl>
     {call.arguments !== undefined && <><h3>Arguments</h3><pre>{call.arguments}</pre></>}
     {call.result !== undefined && <><h3>Result</h3><pre>{call.result}</pre></>}
