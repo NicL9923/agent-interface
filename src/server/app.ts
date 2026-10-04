@@ -30,6 +30,7 @@ import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
 import { loggerOptions, RepeatFilter } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
+import { installEtags } from "./etag.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -135,6 +136,7 @@ export async function createApp(
       .header("X-Frame-Options", "DENY")
       .header("Referrer-Policy", "strict-origin-when-cross-origin");
   });
+  installEtags(app);
   await app.register(cookie);
   await app.register(websocket, {options: {maxPayload: 256 * 1024}});
   await app.register(multipart, {

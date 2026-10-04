@@ -235,3 +235,33 @@ describe("logging", () => {
     expect(() => loadConfig({ LOG_LEVEL: "verbose" })).toThrow("LOG_LEVEL");
   });
 });
+
+describe("ETags", () => {
+  it("revalidates JSON reads with 304 and keeps them out of HTTP caches", async () => {
+    const { app } = await setup();
+    const headers = await login(app);
+    const first = await app.inject({ url: "/api/bots/shared/draft", headers });
+    const etag = first.headers.etag as string;
+    expect(etag).toMatch(/^W\/"[A-Za-z0-9_-]{22}"$/);
+    const unchanged = await app.inject({ url: "/api/bots/shared/draft", headers: { ...headers, "if-none-match": etag } });
+    expect(unchanged.statusCode).toBe(304);
+    expect(unchanged.body).toBe("");
+    expect(unchanged.headers).toMatchObject({ etag, "cache-control": "no-store" });
+    const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "New draft", attachments: [] } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.headers.etag).toBeUndefined();
+    const changed = await app.inject({ url: "/api/bots/shared/draft", headers: { ...headers, "if-none-match": etag } });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json().text).toBe("New draft");
+    expect(changed.headers.etag).not.toBe(etag);
+  });
+
+  it("skips files, errors and unauthenticated responses", async () => {
+    const { app } = await setup();
+    const headers = await login(app);
+    const file = await app.inject({ url: "/api/files/note.txt", headers });
+    expect(file.statusCode).toBe(200);
+    expect(file.headers.etag).toBeUndefined();
+    expect((await app.inject("/api/bootstrap")).headers.etag).toBeUndefined();
+  });
+});
