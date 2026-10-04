@@ -51,6 +51,150 @@ async function login(app: Awaited<ReturnType<typeof createApp>>["app"]) {
   return { cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken, origin };
 }
 
+describe("health", () => {
+  it("keeps the liveness response unchanged", async () => {
+    const { app } = await setup({}, { runtime: runtime({ status: async () => ({ connected: false }) }).value });
+    const response = await app.inject("/api/health");
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe('{"ok":true}');
+  });
+
+  it("reports detail only to direct loopback callers", async () => {
+    const { app } = await setup();
+    const direct = await app.inject("/api/health/ready");
+    expect(direct.statusCode).toBe(200);
+    expect(direct.json()).toEqual({ ok: true, checks: {
+      database: { status: "ok", detail: "Responding" },
+      hermes: { status: "ok", detail: "Connected" },
+      worker: { status: "ok", detail: "Starting" },
+      push: { status: "unconfigured", detail: expect.any(String) },
+      backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
+    } });
+    for (const headers of [{ "x-forwarded-for": "203.0.113.9" }, { forwarded: "for=203.0.113.9" }, { "x-real-ip": "203.0.113.9" }])
+      expect((await app.inject({ url: "/api/health/ready", headers })).body).toBe('{"ok":true}');
+    expect((await app.inject({ url: "/api/health/ready", remoteAddress: "203.0.113.9" })).body).toBe('{"ok":true}');
+  });
+
+  it("fails readiness when the worker stalls or the database stops responding", async () => {
+    const { app, worker, store } = await setup();
+    worker.loop.success(Date.now() - 3 * minute);
+    worker.loop.failure(new Error("database is locked"));
+    let response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.worker).toEqual({ status: "fail", detail: "No successful pass for 3 min: database is locked" });
+    expect((await app.inject({ url: "/api/health/ready", headers: { "x-forwarded-for": "203.0.113.9" } })).body).toBe('{"ok":false}');
+    worker.loop.success();
+    vi.spyOn(store.db, "prepare").mockImplementationOnce(() => { throw new Error("disk I/O error"); });
+    response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.database).toEqual({ status: "fail", detail: "disk I/O error" });
+  });
+
+  it("tolerates a short Hermes disconnect and any maintenance window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const hermes = runtime();
+    hermes.status = { connected: false, detail: "Hermes gateway is restarting." };
+    const { app, worker } = await setup({}, { runtime: hermes.value });
+    let response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.hermes).toEqual({ status: "warn", detail: "Disconnected for 0 s: Hermes gateway is restarting." });
+    vi.setSystemTime(Date.now() + 4 * minute);
+    worker.loop.success();
+    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
+    vi.setSystemTime(Date.now() + 2 * minute);
+    worker.loop.success();
+    response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.hermes.detail).toMatch(/^Disconnected for 6 min/);
+    hermes.status = { connected: true };
+    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
+
+    const draining = runtime();
+    draining.status = { connected: false };
+    const { app: maintained } = await setup({}, { runtime: draining.value, maintenance: true });
+    response = await maintained.inject("/api/health/ready");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.hermes).toEqual({ status: "ok", detail: "A Hermes update is in progress" });
+  });
+
+  it("warns about push failures without failing readiness", async () => {
+    const keys = webpush.generateVAPIDKeys();
+    const { app, worker } = await setup({ VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: "mailto:one@example.test" });
+    expect((await app.inject("/api/health/ready")).json().checks.push).toEqual({ status: "ok", detail: "No deliveries since start" });
+    worker.push.success(Date.now() - 2 * minute);
+    worker.push.failure("Web Push 503: unavailable");
+    const response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.push).toEqual({ status: "warn", detail: "Last delivery failed 0 s ago: Web Push 503: unavailable" });
+    worker.push.success();
+    expect((await app.inject("/api/health/ready")).json().checks.push.status).toBe("ok");
+  });
+
+  it("checks only completed backups written by the backup tool", async () => {
+    const directory = temporary(), backups = join(directory, "backups");
+    const source = join(directory, "app.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec("PRAGMA journal_mode=WAL; CREATE TABLE t(a); INSERT INTO t VALUES(1);");
+    db.close();
+    const { app } = await setup({ APP_BACKUP_DIR: backups });
+    const backup = async () => (await app.inject("/api/health/ready")).json().checks.backup;
+    expect((await backup()).status).toBe("warn");
+    const leftover = "agent-interface-2026-01-01T00-00-00.000Z-12345678-1234-1234-1234-123456789abc.sqlite.partial";
+    execFileSync(process.execPath, [".agents/tools/backup-app.mjs", source, backups]);
+    expect(await backup()).toEqual({ status: "ok", detail: "Newest backup is 0 s old" });
+    const [completed] = readdirSync(backups);
+    expect(readdirSync(backups)).toEqual([completed]);
+    // A stale partial from an older run never counts and is cleaned up by the next run.
+    const stale = new Date(Date.now() - 2 * hour);
+    for (const suffix of ["", "-shm", "-wal"]) {
+      writeFileSync(join(backups, leftover + suffix), "");
+      utimesSync(join(backups, leftover + suffix), stale, stale);
+    }
+    const old = new Date(Date.now() - 37 * hour);
+    utimesSync(join(backups, completed), old, old);
+    expect(await backup()).toEqual({ status: "warn", detail: "Newest backup is 37 h old" });
+    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
+    execFileSync(process.execPath, [".agents/tools/backup-app.mjs", source, backups]);
+    expect(readdirSync(backups).filter(file => file.includes(".partial"))).toEqual([]);
+    expect((await backup()).status).toBe("ok");
+  });
+
+  it("alerts administrators once after ten minutes and again on recovery", async () => {
+    const hermes = runtime();
+    hermes.status = { connected: false, detail: "Hermes is unreachable." };
+    const lines: string[] = [];
+    const { store, worker, health } = await setup({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test", HERMES_INTEGRATION_ADMINS: "one@example.test", LOG_LEVEL: "info" }, { runtime: hermes.value, lines });
+    for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
+    const alerts = () => store.db.prepare("SELECT event_id,user_id,payload FROM outbox WHERE event_id LIKE 'health:%' ORDER BY rowid").all() as { event_id: string; user_id: string; payload: string }[];
+    const start = Date.now();
+    const at = async (offset: number) => { worker.loop.success(start + offset); await health.evaluate(start + offset); };
+    await at(0);
+    await at(9 * minute);
+    expect(alerts()).toEqual([]);
+    await at(10 * minute);
+    await at(11 * minute);
+    expect(alerts().map(row => [row.event_id, row.user_id])).toEqual([[`health:hermes:${start}`, "one"]]);
+    expect(JSON.parse(alerts()[0].payload)).toMatchObject({
+      title: "Agent Interface needs attention", url: "/", kind: "failed",
+      body: expect.stringMatching(/^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./),
+    });
+    hermes.status = { connected: true };
+    await at(12 * minute);
+    await at(13 * minute);
+    expect(alerts().map(row => row.event_id)).toEqual([`health:hermes:${start}`, `health:hermes:${start}:recovered`]);
+    expect(JSON.parse(alerts()[1].payload)).toMatchObject({ title: "Agent Interface recovered", body: "The Hermes connection is working again.", kind: "failed" });
+    const messages = lines.map(line => JSON.parse(line).msg);
+    expect(messages.filter(message => message.startsWith("Readiness check"))).toEqual([
+      "Readiness check degraded", "Readiness check degraded for 10 minutes; alerting administrators", "Readiness check recovered",
+    ]);
+    // A later outage is a new incident with its own alert.
+    hermes.status = { connected: false };
+    await at(20 * minute);
+    await at(30 * minute);
+    expect(alerts().map(row => row.event_id).at(-1)).toBe(`health:hermes:${start + 20 * minute}`);
+  });
+});
+
 describe("logging", () => {
   it("logs a repeated server error once, then a count every ten minutes, without secrets or 4xx noise", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

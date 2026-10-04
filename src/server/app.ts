@@ -29,6 +29,7 @@ import { assertRoutineEditable, installExperienceRoutes } from "./experience.js"
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
 import { loggerOptions, RepeatFilter } from "./logging.js";
+import { HealthMonitor, installHealthRoutes } from "./health.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -697,12 +698,18 @@ export async function createApp(
     );
   }
   const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log);
-  if (options.background !== false) worker.start();
+  const health = new HealthMonitor({ store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log });
+  installHealthRoutes(app, health);
+  if (options.background !== false) {
+    worker.start();
+    health.start();
+  }
   app.addHook("onClose", async () => {
+    health.stop();
     const stopped = worker.stop();
     await runtime.close();
     await stopped;
     store.close();
   });
-  return { app, store, worker };
+  return { app, store, worker, health };
 }
