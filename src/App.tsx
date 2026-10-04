@@ -50,7 +50,7 @@ export function App() {
   const { draft, setDraft, draftReady, uploading, setUploading, upload } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, persistPosition } = useConversation(botId, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
-  const { pending, setPending, receipt, setReceipt, sending, send, retry, reset } = useSubmission({
+  const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
@@ -75,9 +75,9 @@ export function App() {
       session.signedOut();
       setConversation(null);
       setDraft({ text: "", attachments: [] });
-      setPending(null);
+      // The signed-out account's in-flight work can never clear these once the identity changes.
+      reset(); setUploading(false);
       setRailOpen(false);
-      setReceipt(null);
       closePanels("settings", "preferences", "upgrade", "integrations");
     } catch (e) {
       setNotice((e as Error).message);

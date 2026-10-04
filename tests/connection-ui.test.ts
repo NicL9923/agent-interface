@@ -247,3 +247,21 @@ it('offers starters in an empty conversation and keeps them behind a toggle once
   await renderApp();await advance(20);
   expect(chips()).toEqual(['Plan dinners']);expect(toggle()).toBeUndefined();
 });
+it('lets the next sign-in send after signing out while a send was unanswered',async()=>{
+  for(const [name,open] of [['showModal',true],['close',false]] as const)Object.defineProperty(HTMLDialogElement.prototype,name,{configurable:true,value:function(this:HTMLDialogElement){this.open=open;}});
+  authConfig={localDevAuth:true};
+  const previous=vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path.startsWith('/submissions/')?{status:'rejected'} as T:await previous(path,init) as T);
+  vi.mocked(write).mockImplementation(async <T>(path:string)=>path==='/bots/shared/messages'?await new Promise<T>(()=>{}):{} as T);
+  const button=(label:string)=>[...container.querySelectorAll('button')].find(node=>node.textContent?.trim()===label)!;
+  await renderApp();await advance(400);
+  await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+  await act(async()=>button('Preferences').click());
+  await act(async()=>button('Sign out').click());
+  expect(container.querySelector('.sign-in')).not.toBeNull();
+  await act(async()=>button('Enter local workspace').click());
+  await advance(2500);
+  expect(container.textContent).not.toContain('Checking whether Hermes accepted your message');
+  expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(false);
+});
