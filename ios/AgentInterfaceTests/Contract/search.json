@@ -1,0 +1,27 @@
+{
+  "request": "GET /api/search?q=dinner",
+  "response": {
+    "hits": [
+      {
+        "botId": "household",
+        "botName": "Household",
+        "sessionId": "session-household",
+        "title": "Dinner planning",
+        "snippet": "Five easy dinners",
+        "updatedAt": "2026-10-01T11:05:00.000Z"
+      },
+      {
+        "botId": "household",
+        "botName": "Household",
+        "sessionId": "routine:routine-morning:result-1",
+        "title": "Dinner ideas for the week",
+        "snippet": "Five dinners and a grocery list.",
+        "routineId": "routine-morning",
+        "resultId": "result-1"
+      }
+    ],
+    "unavailableBots": [
+      "archive"
+    ]
+  }
+}

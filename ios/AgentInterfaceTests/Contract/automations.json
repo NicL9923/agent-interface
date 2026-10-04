@@ -1,0 +1,60 @@
+{
+  "request": "GET /api/automations",
+  "response": {
+    "routines": [
+      {
+        "id": "routine-morning",
+        "botId": "household",
+        "name": "Morning brief",
+        "prompt": "Prepare a morning brief.",
+        "schedule": "0 7 * * *",
+        "enabled": true,
+        "recipientIds": [
+          "local-one",
+          "local-two"
+        ],
+        "nextRunAt": "2026-10-02T07:00:00.000Z",
+        "lastRunAt": "2026-10-01T07:00:00.000Z",
+        "lastStatus": "ok",
+        "lastError": "The weather source timed out.",
+        "lastDeliveryError": "One device was offline."
+      },
+      {
+        "id": "routine-garden",
+        "botId": "garden",
+        "name": "Watering reminder",
+        "prompt": "Remind me to water.",
+        "schedule": "0 18 * * *",
+        "enabled": false,
+        "recipientIds": []
+      }
+    ],
+    "usage": [
+      {
+        "botId": "household",
+        "days": 30,
+        "sessions": 12,
+        "inputTokens": 48000,
+        "outputTokens": 9100,
+        "actualCost": 1.25,
+        "estimatedCost": 1.4,
+        "partial": false,
+        "notice": "Costs come from provider billing."
+      },
+      {
+        "botId": "garden",
+        "days": 30,
+        "sessions": 0,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "actualCost": null,
+        "estimatedCost": null,
+        "partial": true,
+        "notice": "Costs come from provider billing."
+      }
+    ],
+    "unavailableBots": [
+      "archive"
+    ]
+  }
+}

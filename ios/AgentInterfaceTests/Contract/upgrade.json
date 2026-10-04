@@ -1,0 +1,40 @@
+{
+  "request": "GET /api/hermes/upgrade",
+  "response": {
+    "available": true,
+    "phase": "ready",
+    "message": "Hermes 0.9.5 passed qualification.",
+    "canCheck": true,
+    "canInstall": true,
+    "canRetry": false,
+    "canCancel": true,
+    "canRestartService": false,
+    "current": {
+      "revision": "1111111111111111111111111111111111111111",
+      "version": "0.9.4",
+      "notesUrl": "https://hermes.example.test/releases/0.9.4"
+    },
+    "candidate": {
+      "revision": "2222222222222222222222222222222222222222",
+      "version": "0.9.5",
+      "notesUrl": "https://hermes.example.test/releases/0.9.5"
+    },
+    "checks": [
+      {
+        "id": "integration",
+        "label": "Real integration",
+        "status": "passed",
+        "detail": "All add-on checks passed."
+      }
+    ],
+    "controlRequestId": "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f",
+    "controlAction": "cancel",
+    "operationId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+    "error": "previous_attempt_failed",
+    "checkedAt": "2026-10-01T11:45:00.000Z",
+    "updatedAt": "2026-10-01T11:46:00.000Z",
+    "busyBots": [
+      "Household"
+    ]
+  }
+}

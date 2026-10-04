@@ -1,0 +1,192 @@
+{
+  "request": "GET /api/bots/household/conversation",
+  "response": {
+    "attention": [
+      {
+        "id": "clarify-store",
+        "kind": "clarify",
+        "title": "Which store?",
+        "detail": "Choose where to shop this week.",
+        "questions": [
+          {
+            "id": "store",
+            "prompt": "Which store should I use?",
+            "options": [
+              "Market",
+              "Co-op"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "secure-login",
+        "kind": "secure",
+        "title": "Save the grocery login",
+        "detail": "Hermes asks to save a login.",
+        "secure": {
+          "epoch": "epoch-1",
+          "sessionId": "session-household",
+          "method": "vault.save_login",
+          "origin": "https://grocer.example.test",
+          "site": "Grocer"
+        }
+      },
+      {
+        "id": "secure-code",
+        "kind": "secure",
+        "title": "Enter the code",
+        "detail": "Hermes needs a sign-in code.",
+        "secure": {
+          "epoch": "epoch-1",
+          "sessionId": "session-household",
+          "method": "vault.code",
+          "site": "Grocer",
+          "hint": "Sent to the family phone"
+        }
+      },
+      {
+        "id": "secure-unlock",
+        "kind": "secure",
+        "title": "Unlock Bitwarden",
+        "detail": "Hermes needs the vault unlocked.",
+        "secure": {
+          "epoch": "epoch-1",
+          "sessionId": "session-household",
+          "method": "vault.unlock_prompt",
+          "backend": "bitwarden",
+          "displayName": "Bitwarden"
+        }
+      },
+      {
+        "id": "secure-secret",
+        "kind": "secure",
+        "title": "Add an API key",
+        "detail": "Hermes needs a key.",
+        "secure": {
+          "epoch": "epoch-1",
+          "sessionId": "session-household",
+          "method": "secret",
+          "envVar": "GROCER_API_KEY",
+          "prompt": "Grocer API key"
+        }
+      }
+    ],
+    "botId": "household",
+    "sessionId": "session-household",
+    "messages": [
+      {
+        "id": "message-user",
+        "runId": "run-dinner",
+        "role": "user",
+        "text": "Plan five dinners",
+        "createdAt": "2026-10-01T11:00:00.000Z",
+        "files": [
+          {
+            "id": "pantry.signature",
+            "name": "pantry.txt",
+            "mime": "text/plain",
+            "size": 120,
+            "url": "/api/files/pantry.signature"
+          }
+        ],
+        "sender": {
+          "id": "local-one",
+          "name": "Local member one"
+        }
+      },
+      {
+        "id": "message-tool",
+        "runId": "run-dinner",
+        "role": "tool",
+        "text": "",
+        "toolName": "web_search",
+        "toolCall": {
+          "id": "call-search",
+          "name": "web_search",
+          "arguments": "{\"query\":\"easy dinners\"}",
+          "status": "completed",
+          "result": "{\"ok\":true,\"url\":\"https://recipes.example.test\"}",
+          "startedAt": "2026-10-01T11:01:00.000Z",
+          "completedAt": "2026-10-01T11:02:00.000Z"
+        }
+      },
+      {
+        "id": "message-assistant",
+        "runId": "run-dinner",
+        "role": "assistant",
+        "text": "Here are five dinners.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Groceries\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"},{\"id\":\"basil\",\"text\":\"Basil\"}]}]}\n```",
+        "createdAt": "2026-10-01T11:05:00.000Z",
+        "reasoning": "Balanced the week around the pantry list.",
+        "files": [
+          {
+            "id": "plan.signature",
+            "name": "dinner-plan.pdf",
+            "mime": "application/pdf",
+            "size": 18432,
+            "url": "/api/files/plan.signature"
+          }
+        ]
+      }
+    ],
+    "activity": {
+      "state": "working",
+      "detail": "Comparing recipes",
+      "runId": "run-dinner",
+      "updatedAt": "2026-10-01T11:59:00.000Z"
+    },
+    "approvals": [
+      {
+        "id": "approval-order",
+        "title": "Place grocery order",
+        "detail": "Order 12 items from Grocer.",
+        "status": "pending",
+        "expiresAt": "2026-10-01T13:00:00.000Z"
+      }
+    ],
+    "files": [
+      {
+        "id": "plan.signature",
+        "name": "dinner-plan.pdf",
+        "mime": "application/pdf",
+        "size": 18432,
+        "url": "/api/files/plan.signature"
+      }
+    ],
+    "toolCalls": [
+      {
+        "id": "call-search",
+        "name": "web_search",
+        "arguments": "{\"query\":\"easy dinners\"}",
+        "status": "completed",
+        "result": "{\"ok\":true,\"url\":\"https://recipes.example.test\"}",
+        "startedAt": "2026-10-01T11:01:00.000Z",
+        "completedAt": "2026-10-01T11:02:00.000Z"
+      },
+      {
+        "id": "call-calendar",
+        "name": "calendar_read",
+        "arguments": "{}",
+        "status": "failed",
+        "error": "Calendar access expired.",
+        "startedAt": "2026-10-01T11:03:00.000Z",
+        "completedAt": "2026-10-01T11:03:00.000Z"
+      }
+    ],
+    "draft": {
+      "text": "Add basil",
+      "attachments": [
+        {
+          "id": "pantry.signature",
+          "name": "pantry.txt",
+          "mime": "text/plain",
+          "size": 120,
+          "url": "/api/files/pantry.signature"
+        }
+      ]
+    },
+    "readPosition": {
+      "messageId": "message-assistant",
+      "scrollTop": 240.5
+    }
+  }
+}

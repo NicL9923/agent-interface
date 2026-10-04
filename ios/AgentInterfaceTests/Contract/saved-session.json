@@ -1,0 +1,13 @@
+{
+  "request": "POST /api/saved",
+  "response": {
+    "kind": "session",
+    "botId": "household",
+    "sessionId": "session-household",
+    "messageId": "message-assistant",
+    "offset": 0,
+    "title": "Five dinners",
+    "id": "00000000-0000-4000-8000-000000000001",
+    "createdAt": "2026-10-01T12:00:00.000Z"
+  }
+}

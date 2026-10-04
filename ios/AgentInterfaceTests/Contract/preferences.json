@@ -1,0 +1,37 @@
+{
+  "request": "PATCH /api/preferences",
+  "response": {
+    "presentation": "advanced",
+    "theme": "dark",
+    "favorites": [
+      "household"
+    ],
+    "modelFavorites": [
+      {
+        "provider": "anthropic",
+        "model": "claude-sonnet"
+      }
+    ],
+    "defaultBotId": "household",
+    "sections": [
+      {
+        "id": "home",
+        "name": "Home",
+        "botIds": [
+          "household",
+          "garden"
+        ]
+      }
+    ],
+    "followBots": [
+      "household"
+    ],
+    "startPage": "today",
+    "notifications": {
+      "timezone": "America/Chicago",
+      "quietStart": "22:00",
+      "quietEnd": "07:00",
+      "batchMinutes": 15
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "request": "GET /api/bots/household/history/session-household?offset=0",
+  "response": {
+    "botId": "household",
+    "sessionId": "session-household",
+    "offset": 0,
+    "hasMore": true,
+    "messages": [
+      {
+        "id": "message-user",
+        "runId": "run-dinner",
+        "role": "user",
+        "text": "Plan five dinners",
+        "createdAt": "2026-10-01T11:00:00.000Z",
+        "files": [
+          {
+            "id": "pantry.signature",
+            "name": "pantry.txt",
+            "mime": "text/plain",
+            "size": 120,
+            "url": "/api/files/pantry.signature"
+          }
+        ],
+        "app_sender_id": "local-two",
+        "sender": {
+          "id": "local-two",
+          "name": "Local member two"
+        }
+      },
+      {
+        "id": "message-assistant",
+        "runId": "run-dinner",
+        "role": "assistant",
+        "text": "Here are five dinners.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Groceries\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"},{\"id\":\"basil\",\"text\":\"Basil\"}]}]}\n```",
+        "createdAt": "2026-10-01T11:05:00.000Z",
+        "reasoning": "Balanced the week around the pantry list.",
+        "files": [
+          {
+            "id": "plan.signature",
+            "name": "dinner-plan.pdf",
+            "mime": "application/pdf",
+            "size": 18432,
+            "url": "/api/files/plan.signature"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "request": "POST /api/groups/room-dinner/stop",
+  "response": {
+    "cancelled": 1
+  }
+}

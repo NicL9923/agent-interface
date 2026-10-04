@@ -1,0 +1,37 @@
+{
+  "request": "GET /api/groups",
+  "response": {
+    "supported": true,
+    "canSend": true,
+    "reason": "Hosted group chats run on the household VPS.",
+    "rooms": [
+      {
+        "room_id": "room-dinner",
+        "name": "Dinner team",
+        "latest_seq": 2,
+        "members": [
+          {
+            "member_id": "household",
+            "profile": "household",
+            "handle": "household",
+            "display_name": "Household",
+            "target": {
+              "kind": "local",
+              "profile": "household"
+            }
+          },
+          {
+            "member_id": "garden",
+            "profile": "garden",
+            "handle": "garden",
+            "display_name": "Garden",
+            "target": {
+              "kind": "local",
+              "profile": "garden"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

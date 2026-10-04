@@ -1,0 +1,63 @@
+{
+  "request": "POST /api/integrations/mcp",
+  "response": {
+    "id": "google-calendar",
+    "name": "Google Calendar",
+    "category": "productivity",
+    "owner": "Hermes",
+    "profile": "household",
+    "account": "one@example.test",
+    "status": "connected",
+    "detail": "Reads the family calendar.",
+    "checkedAt": "2026-10-01T11:00:00.000Z",
+    "capabilities": [
+      "calendar.read"
+    ],
+    "botIds": [
+      "household"
+    ],
+    "actions": {
+      "connect": true,
+      "check": true,
+      "disconnect": true
+    },
+    "permissions": [
+      {
+        "id": "calendar.read",
+        "name": "Read calendars",
+        "granted": true
+      },
+      {
+        "id": "calendar.write",
+        "name": "Change events",
+        "granted": false
+      },
+      {
+        "id": "contacts",
+        "name": "Contacts",
+        "granted": null
+      }
+    ],
+    "setup": [
+      {
+        "key": "calendar",
+        "label": "Calendar",
+        "kind": "text",
+        "required": true,
+        "defaultValue": "primary",
+        "options": [
+          {
+            "value": "primary",
+            "label": "Primary"
+          }
+        ]
+      },
+      {
+        "key": "token",
+        "label": "Token",
+        "kind": "secret",
+        "required": false
+      }
+    ]
+  }
+}

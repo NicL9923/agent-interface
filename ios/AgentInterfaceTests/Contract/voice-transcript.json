@@ -1,0 +1,7 @@
+{
+  "request": "POST /api/bots/household/voice/transcribe",
+  "response": {
+    "text": "Add basil to the list.",
+    "provider": "whisper"
+  }
+}

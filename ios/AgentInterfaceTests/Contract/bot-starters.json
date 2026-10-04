@@ -1,0 +1,25 @@
+{
+  "request": "GET /api/bots/household/starters",
+  "response": [
+    {
+      "id": "meals",
+      "title": "Plan dinners",
+      "prompt": "Help me plan five easy dinners. Ask about our preferences, budget and what we already have before making the plan."
+    },
+    {
+      "id": "document",
+      "title": "Explain a document",
+      "prompt": "Help me understand the document I attach. Summarize its key points and highlight questions I should ask."
+    },
+    {
+      "id": "server",
+      "title": "Check a server",
+      "prompt": "Help me review my server health. First confirm which server and connection to use. Inspect only, then show findings and ask before making changes."
+    },
+    {
+      "id": "research",
+      "title": "Research a question",
+      "prompt": "Research this question using current primary sources, link them and explain any uncertainty: "
+    }
+  ]
+}
