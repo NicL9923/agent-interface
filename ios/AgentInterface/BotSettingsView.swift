@@ -738,13 +738,19 @@ private struct ChipFlow: Layout {
     }
     return rows
   }
+  // Small typed steps keep older Swift type checkers within their time limit.
+  private func width(of row: [(Int, CGSize)]) -> CGFloat {
+    let content: CGFloat = row.map(\.1.width).reduce(0, +)
+    return content + spacing * CGFloat(max(row.count - 1, 0))
+  }
+  private func height(of row: [(Int, CGSize)]) -> CGFloat {
+    row.map(\.1.height).max() ?? 0
+  }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-    let width = proposal.width ?? .infinity
-    let rows = rows(width, subviews)
-    let height = rows.map { $0.map(\.1.height).max() ?? 0 }.reduce(0, +)
-      + spacing * CGFloat(max(rows.count - 1, 0))
-    let widest = rows.map { $0.map(\.1.width).reduce(0, +) + spacing * CGFloat(max($0.count - 1, 0)) }
-      .max() ?? 0
+    let rows = rows(proposal.width ?? .infinity, subviews)
+    let content: CGFloat = rows.map(height(of:)).reduce(0, +)
+    let height = content + spacing * CGFloat(max(rows.count - 1, 0))
+    let widest: CGFloat = rows.map(width(of:)).max() ?? 0
     return CGSize(width: proposal.width ?? widest, height: height)
   }
   func placeSubviews(
@@ -752,8 +758,8 @@ private struct ChipFlow: Layout {
   ) {
     var y = bounds.minY
     for row in rows(bounds.width, subviews) {
-      let rowWidth = row.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(row.count - 1, 0))
-      let rowHeight = row.map(\.1.height).max() ?? 0
+      let rowWidth = width(of: row)
+      let rowHeight = height(of: row)
       var x = bounds.midX - rowWidth / 2
       for (index, size) in row {
         subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
