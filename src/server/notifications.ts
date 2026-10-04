@@ -1,6 +1,6 @@
 import webpush from "web-push";
 import { allowedIdentity, type Config } from "./config.js";
-import type { Store } from "./store.js";
+import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
 import { createApnsSender, type ApnsSender } from "./apns.js";
 import { FailureTracker, quietLog, type Log } from "./logging.js";
@@ -19,6 +19,7 @@ export class BackgroundWorker {
   private running = false;
   private idleWaiters: (() => void)[] = [];
   private closeApns?: () => void;
+  private retainedAt = 0;
   readonly createdAt = Date.now();
   lastTickAt?: number;
   readonly loop: FailureTracker;
@@ -72,6 +73,13 @@ export class BackgroundWorker {
       // A runtime outage must not prevent delivery of already-durable events.
       await this.reconcileRuntime();
       this.store.enqueueKnownEvents();
+      const expired = this.store.expireNotifications();
+      if (expired) this.log.info({ expired }, "Expired notifications that stayed undelivered for 7 days");
+      if (Date.now() - this.retainedAt >= 3600000) {
+        this.retainedAt = Date.now();
+        const removed = this.store.pruneRetention();
+        if (removed.sessions || removed.notifications) this.log.info(removed, "Removed expired sessions and old notifications");
+      }
       await this.deliver();
       this.loop.success();
     } catch (error) {
@@ -165,10 +173,12 @@ export class BackgroundWorker {
           }
         }
       }
+      let abandoned = 0;
       for (const row of item.items) {
-        if (failed !== undefined) this.store.retryDelivery(row.id, row.attempts + 1);
-        else this.store.finishDelivery(row.id);
+        if (failed === undefined) this.store.finishDelivery(row.id);
+        else if (this.store.retryDelivery(row.id, row.attempts + 1, failed.slice(0, 300))) abandoned++;
       }
+      if (abandoned) this.log.warn({ notifications: abandoned, error: failed }, `Gave up delivering notifications after ${maxDeliveryAttempts} attempts`);
     }
   }
 }

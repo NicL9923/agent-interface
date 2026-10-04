@@ -69,6 +69,8 @@ const migrations: ((db: DatabaseSync) => void)[] = [
   },
 ];
 export const schemaVersion = migrations.length;
+// Exponential backoff spends about an hour on these; later news is stale.
+export const maxDeliveryAttempts = 12;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (!columns.some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -511,15 +513,16 @@ export class Store {
         .run(cursor);
     });
   }
-  enqueueKnownEvents() {
+  enqueueKnownEvents(now = Date.now()) {
     this.transaction(() => {
+      // Late participants still receive recent events; a new follower never gets a month of history.
       for (const row of this.db
-        .prepare("SELECT value FROM notification_events")
-        .all() as { value: string }[])
+        .prepare("SELECT value FROM notification_events WHERE created_at>=?")
+        .all(now - 86400000) as { value: string }[])
         this.enqueue(JSON.parse(row.value));
       this.db
         .prepare("DELETE FROM notification_events WHERE created_at<?")
-        .run(Date.now() - 30 * 86400000);
+        .run(now - 30 * 86400000);
     });
   }
   subscribe(
@@ -617,13 +620,37 @@ export class Store {
   finishDelivery(id: string) {
     this.db.prepare("UPDATE outbox SET state='delivered' WHERE id=?").run(id);
   }
-  retryDelivery(id: string, attempts: number) {
+  /** Returns true when the notification has used its last attempt and is now failed. */
+  retryDelivery(id: string, attempts: number, error?: string) {
+    const failed = attempts >= maxDeliveryAttempts;
     this.db
-      .prepare("UPDATE outbox SET attempts=?,next_attempt=? WHERE id=?")
+      .prepare("UPDATE outbox SET attempts=?,next_attempt=?,last_error=?,state=? WHERE id=?")
       .run(
         attempts,
         Date.now() + Math.min(3600000, 1000 * 2 ** Math.min(attempts, 12)),
+        error ?? null,
+        failed ? "failed" : "pending",
         id,
       );
+    return failed;
+  }
+  expireNotifications(now = Date.now()) {
+    // Rows queued by an older release have created_at 0 and no reliable age.
+    return Number(this.db
+      .prepare("UPDATE outbox SET state='expired' WHERE state='pending' AND created_at>0 AND created_at<?")
+      .run(now - 7 * 86400000).changes);
+  }
+  pruneRetention(now = Date.now()) {
+    // Only rows whose event has aged out of notification_events, so enqueueKnownEvents cannot re-create them.
+    const stale = "SELECT id FROM outbox WHERE state<>'pending' AND created_at<? AND NOT EXISTS(SELECT 1 FROM notification_events e WHERE e.id=outbox.event_id)";
+    const cutoff = now - 30 * 86400000;
+    return this.transaction(() => {
+      const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
+      this.db.prepare(`DELETE FROM delivered WHERE outbox_id IN (${stale})`).run(cutoff);
+      this.db.prepare(`DELETE FROM notification_batch_items WHERE outbox_id IN (${stale})`).run(cutoff);
+      const notifications = this.db.prepare(`DELETE FROM outbox WHERE id IN (${stale})`).run(cutoff).changes;
+      this.db.prepare("DELETE FROM notification_batches WHERE NOT EXISTS(SELECT 1 FROM notification_batch_items i WHERE i.batch_id=notification_batches.id)").run();
+      return { sessions: Number(sessions), notifications: Number(notifications) };
+    });
   }
 }
