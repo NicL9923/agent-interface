@@ -74,6 +74,7 @@ export async function installAuth(
       "/api/health",
       "/api/auth/native/complete",
       "/api/auth/native/exchange",
+      "/api/csp-report",
     ].includes(req.url.split("?")[0]);
     if (!publicRoute && !req.user)
       return reply.code(401).send({ error: "Sign in required" });
@@ -83,6 +84,8 @@ export async function installAuth(
           return reply.code(403).send({ error: "Native code exchange requires a native client" });
         return;
       }
+      // Browsers send violation reports without an Origin or CSRF token.
+      if (req.url.split("?")[0] === "/api/csp-report") return;
       if (req.nativeSessionHash && (!req.url.startsWith("/api/auth/") || req.url.split("?")[0] === "/api/auth/logout")) return;
       if (req.headers.origin !== config.origin)
         return reply

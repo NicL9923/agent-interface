@@ -28,6 +28,7 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
+import { installSecurityHeaders } from "./security-headers.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -126,12 +127,7 @@ export async function createApp(
     trustProxy: false,
     routerOptions: { maxParamLength: 8192 },
   });
-  app.addHook("onRequest", async (_req, reply) => {
-    reply
-      .header("X-Content-Type-Options", "nosniff")
-      .header("X-Frame-Options", "DENY")
-      .header("Referrer-Policy", "strict-origin-when-cross-origin");
-  });
+  installSecurityHeaders(app, config.origin);
   await app.register(cookie);
   await app.register(websocket, {options: {maxPayload: 256 * 1024}});
   await app.register(multipart, {
