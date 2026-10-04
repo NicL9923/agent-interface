@@ -22,7 +22,7 @@ import { useAppInstall, useMobile } from "./app/use-browser";
 import { Sidebar } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
-import { Composer, useComposerInput } from "./app/Composer";
+import { Composer } from "./app/Composer";
 import { PreferencesDialog } from "./app/PreferencesDialog";
 export function App() {
   const [view, setView] = useState<View>(initialView);
@@ -50,11 +50,10 @@ export function App() {
   const { draft, setDraft, draftReady, uploading, setUploading, upload } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, persistPosition } = useConversation(botId, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
-  const { pending, setPending, receipt, setReceipt, sending, send, retry, reset } = useSubmission({
+  const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
-  const composerInput = useComposerInput(draft.text, botId);
   useEffect(() => {
     const theme = boot?.preferences.theme || "system";
     document.documentElement.dataset.theme = theme;
@@ -75,9 +74,9 @@ export function App() {
       session.signedOut();
       setConversation(null);
       setDraft({ text: "", attachments: [] });
-      setPending(null);
+      // The signed-out account's in-flight work can never clear these once the identity changes.
+      reset(); setUploading(false);
       setRailOpen(false);
-      setReceipt(null);
       closePanels("settings", "preferences", "upgrade", "integrations");
     } catch (e) {
       setNotice((e as Error).message);
@@ -139,7 +138,7 @@ export function App() {
             draftReady={draftReady} uploading={uploading} upload={upload} pending={pending} receipt={receipt}
             sending={sending} send={send} retry={retry} reviewed={reviewed} setReviewed={setReviewed}
             starters={starters} startersOpen={startersOpen} setStartersOpen={setStartersOpen}
-            input={composerInput} refresh={() => void session.refresh()} />}
+            refresh={() => void session.refresh()} />}
         </>}
       </main>
       {panel?.kind === "settings" && (

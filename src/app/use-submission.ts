@@ -151,5 +151,5 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
   const reset = () => {
     setSending(false); setPending(null); setReceipt(null);
   };
-  return { pending, setPending, receipt, setReceipt, sending, send, retry, reset };
+  return { pending, receipt, sending, send, retry, reset };
 }

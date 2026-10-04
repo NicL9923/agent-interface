@@ -20,6 +20,7 @@ export function useSession(events: SessionEvents) {
   const [offline, setOffline] = useState(() => navigator.onLine === false);
   const [checkingConnection, setCheckingConnection] = useState(false);
   const bootstrapRequest = useRef<Promise<Bootstrap | null> | null>(null);
+  const lastBootstrap = useRef<Bootstrap | null>(null);
   const identityEpoch = useRef(0);
   // Responses cached for one account must never answer for the next.
   const nextIdentity = () => {
@@ -46,10 +47,13 @@ export function useSession(events: SessionEvents) {
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
-        setBoot((previous) => ({ ...next,
+        // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
+        const unchanged = lastBootstrap.current === next;
+        lastBootstrap.current = next;
+        setBoot((previous) => unchanged && previous ? previous : { ...next,
           bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
             ? previous.bots : next.bots,
-        }));
+        });
         setAuth(false);
         setAppUnavailable(false);
         setDisconnected(!next.connection.connected);

@@ -14,12 +14,13 @@ vi.mock("../src/client-api", async (original) => ({
   write: vi.fn().mockResolvedValue({}),
   clearResponseCache: vi.fn(),
 }));
+const renders = vi.hoisted(() => ({ avatar: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: (props: { state?: string; size?: number }) => createElement("span", {
+  Avatar: (props: { state?: string; size?: number }) => (renders.avatar++, createElement("span", {
     "data-avatar-state": props.state, "data-avatar-size": props.size,
-  }),
+  })),
 }));
 
 const bootstrap: Bootstrap = {
@@ -140,6 +141,16 @@ describe("conversation state", () => {
     await advance(30_000);
     expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
     expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
+  });
+
+  it("does not re-render the app when bootstrap and conversation polls are unchanged", async () => {
+    await render();
+    await advance(2000);
+    const settled = renders.avatar;
+    expect(settled).toBeGreaterThan(0);
+    await advance(16_000);
+    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap").length).toBeGreaterThanOrEqual(3);
+    expect(renders.avatar).toBe(settled);
   });
 
   it("shows current work inline in the transcript and stops claiming work during a disconnect", async () => {
