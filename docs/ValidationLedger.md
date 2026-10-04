@@ -1,5 +1,34 @@
 # Validation ledger
 
+## October 4 app release 48b68ad
+
+PR #32 merged at `48b68ad6d56649f8689223f32a33f38f8d6ac8bf`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `adedc5d03eafb410`, from the archive with SHA256
+`76338a853a0a83452f0f169d16e46e0beaab05f4c94ec8c43a1f30e3bd4e8ebd`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-48b68ad6-20261004T021449Z.json) records the result. Hermes remains
+at `5bba024d8ddd`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+The full repaired-source qualification bound integration digest
+`53cce604230c301023dfcd2ccb3db240c437e9b4fd02e73b3d5df06ca3f97692` with production
+source unchanged. Before activation, `APP_BACKUP_DIR` was added to the private app
+environment, after a private copy of the previous file was kept.
+
+After activation the app started on Node 24.21 at schema version 2. The worker
+expired the 10 queued notifications older than a day and delivered the 5 newer ones
+that the previous release had been holding behind test pushes, and push delivery
+resumed. Loopback readiness reported the database, Hermes, worker, push and backup as
+OK. The public readiness endpoint returned only `{"ok":true}`. Pages carried the new
+CSP, HSTS and Permissions-Policy, JSON responses the API policy, and native sign-in its
+own nonce policy. The administrator's existing terminal session was kept and no shell
+was pruned.
+
 ## October 3 production hardening
 
 This change versions the app database, restricts the system terminal to
