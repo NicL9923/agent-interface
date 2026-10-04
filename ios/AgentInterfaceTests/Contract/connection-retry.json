@@ -1,0 +1,12 @@
+{
+  "request": "POST /api/connection/retry",
+  "response": {
+    "connected": true,
+    "code": "ready",
+    "version": "0.9.4",
+    "detail": "Connected to Hermes on the household VPS.",
+    "address": "wss://hermes.example.test/agent-ui",
+    "retryAt": "2026-10-01T12:05:00.000Z",
+    "lastConnectedAt": "2026-10-01T11:58:00.000Z"
+  }
+}

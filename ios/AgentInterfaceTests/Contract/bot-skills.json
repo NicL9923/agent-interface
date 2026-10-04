@@ -1,0 +1,12 @@
+{
+  "request": "GET /api/bots/household/skills",
+  "response": [
+    {
+      "id": "meal-planning",
+      "name": "Meal planning",
+      "description": "Plan balanced meals.",
+      "enabled": true,
+      "required": true
+    }
+  ]
+}

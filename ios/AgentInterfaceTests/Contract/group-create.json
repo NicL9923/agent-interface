@@ -1,0 +1,24 @@
+{
+  "request": "POST /api/groups",
+  "response": {
+    "room": {
+      "room_id": "c0ffee00-1234-4abc-8def-0123456789ab",
+      "name": "Dinner team",
+      "members": [
+        {
+          "member_id": "household",
+          "profile": "household",
+          "handle": "household",
+          "display_name": "Household"
+        },
+        {
+          "member_id": "garden",
+          "profile": "garden",
+          "handle": "garden",
+          "display_name": "Garden"
+        }
+      ],
+      "latest_seq": 0
+    }
+  }
+}

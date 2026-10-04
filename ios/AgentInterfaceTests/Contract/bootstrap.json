@@ -1,0 +1,181 @@
+{
+  "request": "GET /api/bootstrap",
+  "response": {
+    "user": {
+      "id": "local-one",
+      "email": "one@localhost.invalid",
+      "name": "Local member one",
+      "picture": "https://lh3.googleusercontent.com/a/contract-fixture"
+    },
+    "household": [
+      {
+        "id": "local-one",
+        "email": "one@localhost.invalid",
+        "name": "Local member one",
+        "picture": "https://lh3.googleusercontent.com/a/contract-fixture"
+      },
+      {
+        "id": "local-two",
+        "email": "two@localhost.invalid",
+        "name": "Local member two",
+        "picture": null
+      }
+    ],
+    "preferences": {
+      "presentation": "advanced",
+      "theme": "dark",
+      "favorites": [
+        "household"
+      ],
+      "modelFavorites": [
+        {
+          "provider": "anthropic",
+          "model": "claude-sonnet"
+        }
+      ],
+      "defaultBotId": "household",
+      "sections": [
+        {
+          "id": "home",
+          "name": "Home",
+          "botIds": [
+            "household",
+            "garden"
+          ]
+        }
+      ],
+      "followBots": [
+        "household"
+      ],
+      "startPage": "today",
+      "notifications": {
+        "timezone": "America/Chicago",
+        "quietStart": "22:00",
+        "quietEnd": "07:00",
+        "batchMinutes": 15
+      }
+    },
+    "bots": [
+      {
+        "id": "household",
+        "name": "Household",
+        "description": "Plans meals and errands",
+        "instructions": "Be concise.",
+        "model": "claude-sonnet",
+        "provider": "anthropic",
+        "enabledMcpServers": [
+          "calendar"
+        ],
+        "shared": true,
+        "avatar": {
+          "mode": "geometric",
+          "shape": "pebble",
+          "color": "#00BCA6",
+          "eyes": "oval",
+          "accessory": "glasses",
+          "eyeWidth": 1.1,
+          "eyeHeight": 0.9,
+          "eyeSpacing": 1.2
+        },
+        "enabledTools": [
+          "terminal",
+          "web"
+        ],
+        "enabledSkills": [
+          "meal-planning"
+        ],
+        "sessionId": "session-household",
+        "activity": "working"
+      },
+      {
+        "id": "garden",
+        "name": "Garden",
+        "model": "gpt-mini",
+        "provider": "openai",
+        "shared": false,
+        "ownerId": "local-one",
+        "avatar": {
+          "mode": "mascot",
+          "family": "fox",
+          "color": "#FF9800",
+          "eyes": "round",
+          "accessory": "hat",
+          "eyeWidth": 1,
+          "eyeHeight": 1,
+          "eyeSpacing": 1
+        },
+        "activity": "waiting"
+      },
+      {
+        "id": "archive",
+        "name": "Archive",
+        "model": "claude-haiku",
+        "shared": true,
+        "avatar": {
+          "mode": "portrait",
+          "src": "/api/files/portrait.signature",
+          "origin": "generated"
+        },
+        "activity": "done"
+      }
+    ],
+    "capabilities": {
+      "chat": {
+        "supported": true
+      },
+      "steering": {
+        "supported": true
+      },
+      "approvals": {
+        "supported": true
+      },
+      "uploads": {
+        "supported": true
+      },
+      "generatedFiles": {
+        "supported": true
+      },
+      "botConfiguration": {
+        "supported": true
+      },
+      "tools": {
+        "supported": true
+      },
+      "skills": {
+        "supported": true
+      },
+      "routines": {
+        "supported": true
+      },
+      "durableEvents": {
+        "supported": true
+      },
+      "idempotency": {
+        "supported": true
+      },
+      "stop": {
+        "supported": true
+      },
+      "portraitGeneration": {
+        "supported": true
+      },
+      "avatarMetadata": {
+        "supported": true
+      },
+      "imageGeneration": {
+        "supported": false,
+        "reason": "The connected Hermes profile has no image provider."
+      }
+    },
+    "connection": {
+      "connected": true,
+      "code": "ready",
+      "version": "0.9.4",
+      "detail": "Connected to Hermes on the household VPS.",
+      "address": "wss://hermes.example.test/agent-ui",
+      "retryAt": "2026-10-01T12:05:00.000Z",
+      "lastConnectedAt": "2026-10-01T11:58:00.000Z"
+    },
+    "csrfToken": null
+  }
+}

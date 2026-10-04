@@ -1,0 +1,9 @@
+{
+  "request": "PUT /api/bots/household/messages/message-assistant/cards/groceries/state",
+  "response": {
+    "checkedIds": [
+      "milk"
+    ],
+    "notes": {}
+  }
+}

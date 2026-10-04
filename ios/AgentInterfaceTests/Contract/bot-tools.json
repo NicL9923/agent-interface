@@ -1,0 +1,17 @@
+{
+  "request": "GET /api/bots/household/tools",
+  "response": [
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "description": "Run shell commands.",
+      "enabled": true
+    },
+    {
+      "id": "web",
+      "name": "Web",
+      "description": "Search the web.",
+      "enabled": true
+    }
+  ]
+}

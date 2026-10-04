@@ -1,0 +1,10 @@
+{
+  "request": "POST /api/bots/household/portrait",
+  "response": {
+    "id": "portrait.signature",
+    "name": "portrait.png",
+    "mime": "image/png",
+    "size": 52000,
+    "url": "/api/files/portrait.signature"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "request": "POST /api/bots/household/secure-requests/secure-code",
+  "response": {
+    "status": "ok"
+  }
+}

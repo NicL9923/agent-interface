@@ -17,8 +17,8 @@ private final class NativeMockProtocol: URLProtocol, @unchecked Sendable {
         server.receive(self)
     }
     override func stopLoading() {}
-    func respond(status: Int, data: Data) {
-        guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]) else { return }
+    func respond(status: Int, data: Data, headers: [String: String] = [:]) {
+        guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "application/json"]) { value, _ in value }) else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
@@ -38,6 +38,9 @@ private final class NativeMockServer: @unchecked Sendable {
     private var connected = true
     private var conversationStatus = 200
     private var upgradeResponseStatus = 200
+    private var etags = false
+    private var forcedNotModified = 0
+    private var notModifiedCount = 0
     let origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).example.test")!
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
@@ -48,6 +51,11 @@ private final class NativeMockServer: @unchecked Sendable {
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
+    /// Mirrors the server: GET JSON carries a weak ETag, and a matching If-None-Match gets an empty 304.
+    func serveETags() { lock.withLock { etags = true } }
+    /// Answers the next GETs with 304 regardless of validators, like a confused intermediary.
+    func replyNotModified(times: Int) { lock.withLock { forcedNotModified = times } }
+    var notModified: Int { lock.withLock { notModifiedCount } }
     func receive(_ protocolInstance: NativeMockProtocol) {
         let path = protocolInstance.request.url!.path
         let delay = lock.withLock {
@@ -105,6 +113,17 @@ private final class NativeMockServer: @unchecked Sendable {
         else if path.hasPrefix("/api/hermes/upgrade") {
             status = lock.withLock { upgradeResponseStatus }
             data = status == 200 ? Self.json(["available": true, "phase": "ready", "current": ["revision": "current"], "candidate": ["revision": "candidate"], "message": "Update checked", "checks": [["id": "compatibility", "label": "Compatibility", "status": "passed"]], "canCheck": true, "canInstall": true, "canRetry": true, "canCancel": false, "canRestartService": true, "operationId": "failed-update", "busyBots": []]) : Self.json(["error": "Synthetic update failure"])
+        }
+        let validation = lock.withLock { () -> (etag: String, notModified: Bool)? in
+            guard etags, request.httpMethod == "GET", status == 200 else { return nil }
+            let etag = "W/\"" + Data(SHA256.hash(data: data)).base64URLEncoded.prefix(27) + "\""
+            let notModified = forcedNotModified > 0 || request.value(forHTTPHeaderField: "If-None-Match") == etag
+            if notModified { forcedNotModified = max(0, forcedNotModified - 1); notModifiedCount += 1 }
+            return (etag, notModified)
+        }
+        if let validation {
+            protocolInstance.respond(status: validation.notModified ? 304 : 200, data: validation.notModified ? Data() : data, headers: ["ETag": validation.etag])
+            return
         }
         protocolInstance.respond(status: status, data: data)
     }
@@ -363,6 +382,70 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertFalse(AppleDeviceConnection.includesReminder(due: nextDay, start: start, exclusiveEnd: nextDay, undated: false))
         XCTAssertFalse(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: false))
         XCTAssertTrue(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: true))
+    }
+
+    func testConditionalGetsReuseTheValidatedBodyOnlyForTheSamePathAndIdentity() async throws {
+        let server = NativeMockServer(), api = client(server); defer { clean(server) }
+        server.serveETags()
+        let first: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"))
+        let second: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertTrue(server.requests.last?.value(forHTTPHeaderField: "If-None-Match")?.hasPrefix("W/\"") == true)
+        XCTAssertEqual(server.requests.last?.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(server.notModified, 1); XCTAssertEqual(second.user.id, first.user.id)
+        let _: Conversation = try await api.get("/bots/bot/conversation")
+        XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "Each path validates only its own body")
+        let _: EmptyResponse = try await api.write("/auth/logout", [String: String]())
+        XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "Writes never send validators")
+        server.user = "two"
+        let changed: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertEqual(changed.user.id, "two"); XCTAssertEqual(server.notModified, 1)
+        let _: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertEqual(server.notModified, 2, "The changed body replaced the cached one")
+        api.token = "another-native-session"
+        let _: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "A new identity never reuses the previous body")
+    }
+
+    func testNotModifiedWithoutAValidatedBodyRetriesOnceInFull() async throws {
+        let server = NativeMockServer(), api = client(server); defer { clean(server) }
+        server.serveETags(); server.replyNotModified(times: 1)
+        let value: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertEqual(value.user.id, "one")
+        XCTAssertEqual(server.requests.count, 2)
+        XCTAssertTrue(server.requests.allSatisfy { $0.value(forHTTPHeaderField: "If-None-Match") == nil })
+        server.replyNotModified(times: 2)
+        do { let _: Conversation = try await api.get("/bots/bot/conversation"); XCTFail("A repeated 304 must not loop") }
+        catch let error as APIError { XCTAssertEqual(error.status, 304) }
+        XCTAssertEqual(server.requests.count, 4)
+    }
+
+    func testSignOutDuringAConditionalGetFetchesAFreshBodyInsteadOfTheOldOne() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let api = try XCTUnwrap(value.api)
+        server.serveETags()
+        let _: Bootstrap = try await api.get("/bootstrap")
+        let path = "/api/bootstrap"; server.hold(path)
+        let operation = Task { () async throws -> Bootstrap in try await api.get("/bootstrap") }
+        try await server.waitForHeld(path)
+        XCTAssertNotNil(server.requests.last?.value(forHTTPHeaderField: "If-None-Match"))
+        let signedOut = await value.signOut(); XCTAssertTrue(signedOut)
+        server.release(path)
+        _ = try await operation.value
+        let retry = try XCTUnwrap(server.requests.last)
+        XCTAssertEqual(retry.url?.path, path)
+        XCTAssertNil(retry.value(forHTTPHeaderField: "If-None-Match"), "The signed-out person's cached body is gone")
+        XCTAssertNil(retry.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(server.requests.map { $0.url!.path }, [path, path, "/api/auth/logout", path])
+    }
+
+    func testUnreadableResponseKeepsTheFriendlyMessageAndAddsTheCodingPath() async throws {
+        let server = NativeMockServer(), api = client(server); defer { clean(server) }
+        do { let _: Bootstrap = try await api.get("/auth/config"); XCTFail("Expected a decoding failure") }
+        catch let error as APIError {
+            XCTAssertEqual(error.code, "INVALID_RESPONSE"); XCTAssertEqual(error.status, 502)
+            XCTAssertTrue(error.message.contains("unreadable response")); XCTAssertEqual(error.detail, "user is missing")
+        }
     }
 
     func testDelayedUpgradeStatusCannotLeakAcrossAnIdentityChange() async throws {

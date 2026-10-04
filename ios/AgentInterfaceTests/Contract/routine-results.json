@@ -1,0 +1,12 @@
+{
+  "request": "GET /api/bots/household/routines/routine-morning/results",
+  "response": [
+    {
+      "id": "result-1",
+      "title": "Dinner ideas for the week",
+      "startedAt": "2026-10-01T07:00:00.000Z",
+      "preview": "Five dinners and a grocery list.",
+      "previewOnly": false
+    }
+  ]
+}

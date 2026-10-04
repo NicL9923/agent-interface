@@ -1,0 +1,30 @@
+{
+  "request": "GET /api/models?botId=household",
+  "response": {
+    "provider": "anthropic",
+    "model": "claude-sonnet",
+    "providers": [
+      {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "aliases": [
+          "claude"
+        ],
+        "authenticated": true,
+        "warning": "Usage is billed to the household account.",
+        "models": [
+          {
+            "id": "claude-sonnet",
+            "name": "Claude Sonnet",
+            "available": true
+          },
+          {
+            "id": "claude-opus",
+            "name": "Claude Opus",
+            "available": false
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "request": "POST /api/bots/household/vault/logins",
+  "response": {
+    "id": "login-new"
+  }
+}

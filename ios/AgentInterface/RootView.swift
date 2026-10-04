@@ -302,7 +302,7 @@ struct ActivityLabel: View {
     switch state {
     case .blocked: Palette.attention
     case .failed: Palette.danger
-    case .waiting, .interrupted, .disconnected: Palette.muted
+    case .waiting, .interrupted, .disconnected, .unknown: Palette.muted
     default: Palette.accent
     }
   }

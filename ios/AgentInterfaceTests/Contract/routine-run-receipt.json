@@ -1,0 +1,14 @@
+{
+  "request": "GET /api/routines/routine-morning/runs/7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6",
+  "response": {
+    "requestId": "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6",
+    "routineId": "routine-morning",
+    "botId": "household",
+    "status": "completed",
+    "message": "The trial finished.",
+    "startedAt": "2026-10-01T11:30:00.000Z",
+    "finishedAt": "2026-10-01T11:31:00.000Z",
+    "executionId": "execution-1",
+    "ownerStatus": "succeeded"
+  }
+}
