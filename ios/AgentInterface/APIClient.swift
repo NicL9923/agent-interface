@@ -81,11 +81,20 @@ extension Data {
 
 @MainActor final class APIClient {
   private static let log = Logger(subsystem: "dev.agentinterface.ios", category: "api")
-  var baseURL: URL
-  var token: String?
+  /// Paths kept for conditional GETs. Polling uses a handful; the bound covers browsing.
+  static let conditionalCacheLimit = 64
+  private struct Validated { var etag: String; var data: Data }
+  /// One server per client: changing servers creates a new client and a new cache.
+  let baseURL: URL
+  var token: String? {
+    // A cached body belongs to the identity that fetched it.
+    didSet { if token != oldValue { clearConditionalCache() } }
+  }
   var csrf: String?
   var localCookieAuth = false
   let session: URLSession
+  private var validated: [String: Validated] = [:]
+  private var validatedOrder: [String] = []
   init(baseURL: URL, session: URLSession? = nil) {
     self.baseURL = baseURL
     if let session {
@@ -114,14 +123,42 @@ extension Data {
     else { throw APIError(message: "Invalid application file address.", status: 0) }
     return url
   }
+  func clearConditionalCache() {
+    validated.removeAll()
+    validatedOrder.removeAll()
+  }
+  private func remember(_ path: String, etag: String?, data: Data) {
+    validatedOrder.removeAll { $0 == path }
+    guard let etag, !etag.isEmpty else {
+      validated[path] = nil
+      return
+    }
+    validated[path] = Validated(etag: etag, data: data)
+    validatedOrder.append(path)
+    while validatedOrder.count > Self.conditionalCacheLimit {
+      validated[validatedOrder.removeFirst()] = nil
+    }
+  }
   func data(
     path: String, method: String = "GET", body: Data? = nil, contentType: String? = nil,
     authenticated: Bool = true
+  ) async throws -> Data {
+    try await data(
+      path: path, method: method, body: body, contentType: contentType,
+      authenticated: authenticated, conditional: method == "GET")
+  }
+  private func data(
+    path: String, method: String, body: Data?, contentType: String?, authenticated: Bool,
+    conditional: Bool
   ) async throws -> Data {
     var request = URLRequest(url: try url(path))
     request.httpMethod = method
     request.httpBody = body
     request.timeoutInterval = method == "GET" ? 20 : 60
+    // Without a local HTTP cache, a 304 reaches the app instead of being replaced by a cached body.
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    let sent = conditional ? validated[path] : nil
+    if let sent { request.setValue(sent.etag, forHTTPHeaderField: "If-None-Match") }
     if authenticated, let token {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
@@ -144,6 +181,17 @@ extension Data {
     guard let response = response as? HTTPURLResponse else {
       throw APIError(message: "The server returned an invalid response.", status: 502)
     }
+    if response.statusCode == 304, conditional {
+      // Reuse the body only if it is still the one this request validated. A sign-out or
+      // identity change while the request was in flight clears it; then ask again in full.
+      if let sent, let current = validated[path], current.etag == sent.etag {
+        remember(path, etag: current.etag, data: current.data)
+        return current.data
+      }
+      return try await self.data(
+        path: path, method: method, body: body, contentType: contentType,
+        authenticated: authenticated, conditional: false)
+    }
     guard (200..<300).contains(response.statusCode) else {
       let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
       throw APIError(
@@ -151,6 +199,11 @@ extension Data {
           ?? "Request failed (\(response.statusCode)).", status: response.statusCode,
         code: object?["code"] as? String,
         confirmRequired: object?["confirmRequired"] as? Bool ?? false)
+    }
+    if method == "GET" {
+      // Only JSON is kept; file downloads can be large and are never polled.
+      let json = response.mimeType == "application/json"
+      remember(path, etag: json ? response.value(forHTTPHeaderField: "ETag") : nil, data: data)
     }
     return data
   }
