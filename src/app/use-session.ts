@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
-import { api, ApiError, setCsrf, write } from "../client-api";
+import { api, ApiError, clearResponseCache, setCsrf, write } from "../client-api";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -21,6 +21,11 @@ export function useSession(events: SessionEvents) {
   const [checkingConnection, setCheckingConnection] = useState(false);
   const bootstrapRequest = useRef<Promise<Bootstrap | null> | null>(null);
   const identityEpoch = useRef(0);
+  // Responses cached for one account must never answer for the next.
+  const nextIdentity = () => {
+    identityEpoch.current++;
+    clearResponseCache();
+  };
   const bootRef = useRef(boot);
   bootRef.current = boot;
   const authRef = useRef(auth);
@@ -33,7 +38,7 @@ export function useSession(events: SessionEvents) {
         const next = await api<Bootstrap>("/bootstrap");
         if (epoch !== identityEpoch.current) return null;
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
-          identityEpoch.current++;
+          nextIdentity();
           handlers.current.onIdentityChange();
         }
         if (!initialDestination.current) {
@@ -57,7 +62,7 @@ export function useSession(events: SessionEvents) {
       } catch (e) {
         if (epoch !== identityEpoch.current) return null;
         if (e instanceof ApiError && e.status === 401) {
-          identityEpoch.current++;
+          nextIdentity();
           handlers.current.onIdentityChange();
           setAuth(true); setBoot(null); setCsrf("");
         } else {
@@ -120,12 +125,12 @@ export function useSession(events: SessionEvents) {
     }
   };
   const signedIn = () => {
-    identityEpoch.current++;
+    nextIdentity();
     bootstrapRequest.current = null;
     void refresh();
   };
   const signedOut = () => {
-    identityEpoch.current++;
+    nextIdentity();
     bootstrapRequest.current = null;
     setCsrf("");
     setBoot(null);

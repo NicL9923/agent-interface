@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api, write } from "../src/client-api";
+import { api, clearResponseCache, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 
@@ -12,6 +12,7 @@ vi.mock("../src/client-api", async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn(),
   write: vi.fn().mockResolvedValue({}),
+  clearResponseCache: vi.fn(),
 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 vi.mock("../src/components/Avatar", async (original) => ({
@@ -124,6 +125,7 @@ describe("conversation state", () => {
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
+    expect(clearResponseCache).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".sign-in")).not.toBeNull();
     vi.mocked(write).mockReset().mockResolvedValue({});
   });
