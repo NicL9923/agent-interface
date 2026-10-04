@@ -15,14 +15,16 @@ identities are disabled.
 
 ## Installation boundaries
 
-The shared desktop/browser and per-member VPS terminal are documented in
+The shared desktop/browser and the administrators' VPS terminal are documented in
 [Shared computer](SharedComputer.md). Their supervisor is independent of chat
 sessions; its browser data stays in the private shared resource directory.
 
 The app has its own pinned Node 24.21.0 runtime, release directories, private
 configuration and SQLite database under the host user's application directory.
 It listens on loopback behind Caddy. The host's global Node installation remains
-available to existing services.
+available to existing services. The app sends its own Content-Security-Policy,
+Permissions-Policy and HSTS headers. Caddy should pass them through rather than
+add its own, because browsers enforce every policy they receive.
 
 Hermes keeps execution, profiles, sessions, provider credentials, tools, memory
 and scheduling. Its existing dashboard process must load the integration add-on;

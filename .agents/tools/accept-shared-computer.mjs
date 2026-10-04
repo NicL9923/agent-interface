@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Run on the Linux app host with its private env file and --import tsx.
-// Uses a short-lived app session for an existing allowed household member.
+// Uses a short-lived, already confirmed app session for an existing terminal administrator.
 import {randomBytes} from "node:crypto";
 import {spawnSync} from "node:child_process";
 import {once} from "node:events";
@@ -14,13 +14,15 @@ import {SystemTerminal} from "../../src/server/terminal.ts";
 const receipt = process.argv[2];
 if (!receipt?.startsWith("/")) throw new Error("Supply an absolute private acceptance receipt path");
 const config = loadConfig(), store = new Store(config.database), terminals = new SystemTerminal(config.computerTerminal);
-const user = store.db.prepare("SELECT id,email,name FROM users").all().find(row => config.householdEmails.includes(row.email.toLowerCase()));
-if (!user) throw new Error("Sign into the app once before running host acceptance");
+const user = store.db.prepare("SELECT id,email,name FROM users").all().find(row => config.householdEmails.includes(row.email.toLowerCase())
+  && config.computerTerminalAdmins.includes(row.email.toLowerCase()));
+if (!user) throw new Error("A terminal administrator must sign into the app once before running host acceptance");
 const sessionId = terminals.sessionId(user.id);
 if (spawnSync("tmux", ["-S", `${config.computerTerminal.stateDirectory}/tmux.sock`, "has-session", "-t", "=" + sessionId], {stdio: "ignore"}).status === 0)
   throw new Error("Acceptance needs an unused member terminal; it will not end an existing human shell");
 const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
 store.session(hash(token), user.id, csrf, Date.now() + 120000);
+store.confirmSession(hash(token), Date.now());
 const base = `http://127.0.0.1:${config.port}`;
 const headers = {cookie: `session=${token}`, origin: config.origin, "x-csrf-token": csrf};
 const checks = {}, sockets = [];

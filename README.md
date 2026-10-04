@@ -69,7 +69,8 @@ integration administrator. See the [integration guide](docs/Integrations.md) for
 supported services, one-time hosting configuration and device limitations.
 
 The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
-browser for all assistants, with human takeover and a real VPS terminal in the UI.
+browser for all assistants, with human takeover for every household member and a
+real VPS terminal for terminal administrators.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
