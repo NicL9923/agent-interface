@@ -97,6 +97,10 @@ Lines worth searching for:
   discovery and push delivery. A reminder repeats every 10 minutes while a failure lasts.
 - `Gave up delivering notifications`: a notification failed 12 attempts, about an
   hour of backoff. Its row keeps state `failed` and `last_error`.
+- `Could not deliver a notification`: that notification could not be processed. It
+  retries like a failed send, and everything queued after it is still delivered.
+- `Expired notifications`: pending notifications older than a day, matching the
+  Web Push TTL, are marked `expired` instead of being sent late.
 - `Readiness check degraded`, `alerting administrators`, `recovered`: see below.
 
 `/api/health` is liveness only and always answers `{"ok":true}` while the process

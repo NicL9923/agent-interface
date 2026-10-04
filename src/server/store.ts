@@ -306,7 +306,9 @@ export class Store {
     return this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=? AND value=?")
       .run(JSON.stringify({text: "", attachments: []}), userId, botId, JSON.stringify(expected)).changes > 0;
   }
-  presentation(botId: string) {
+  presentation(botId: string | undefined) {
+    // Alerts and test pushes have no assistant; node:sqlite on Node 24 refuses to bind undefined.
+    if (!botId) return {};
     const row = this.db
       .prepare(
         "SELECT owner_id AS ownerId,shared,avatar FROM bot_presentation WHERE bot_id=?",
@@ -642,10 +644,11 @@ export class Store {
     return failed;
   }
   expireNotifications(now = Date.now()) {
-    // Rows queued by an older release have created_at 0 and no reliable age.
+    // Matches the Web Push TTL: push services drop older messages anyway. Rows queued by an
+    // older release have created_at 0 and no reliable age.
     return Number(this.db
       .prepare("UPDATE outbox SET state='expired' WHERE state='pending' AND created_at>0 AND created_at<?")
-      .run(now - 7 * 86400000).changes);
+      .run(now - 86400000).changes);
   }
   pruneRetention(now = Date.now()) {
     // Only rows whose event has aged out of notification_events, so enqueueKnownEvents cannot re-create them.

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { Store } from "../src/server/store.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { loadConfig } from "../src/server/config.js";
@@ -188,13 +188,13 @@ it("gives up after 12 attempts and keeps the last delivery error", async () => {
   expect(worker.loop.consecutiveFailures).toBe(0);
   store.close();
 });
-it("expires week-old pending notifications even when partly delivered or never deliverable", async () => {
+it("expires day-old pending notifications even when partly delivered or never deliverable", async () => {
   const store = storeWithUsers();
-  const old = Date.now() - 8 * day;
+  const old = Date.now() - day - 3600000;
   queue(store, "partly-delivered", old);
   store.markDelivered("partly-delivered", "https://push.example.test/first");
   queue(store, "no-subscription", old, "pending", "two");
-  queue(store, "recent", Date.now() - 6 * day);
+  queue(store, "recent", Date.now() - day + 3600000);
   queue(store, "unknown-age", 0);
   queue(store, "already-delivered", old, "delivered");
   await new BackgroundWorker(store, offline, household(), async () => { throw new Error("not reached"); }).tick();
@@ -202,6 +202,22 @@ it("expires week-old pending notifications even when partly delivered or never d
     .map(id => [id, outboxRow(store, id)!.state]))).toEqual({
     "partly-delivered": "expired", "no-subscription": "expired", recent: "pending", "unknown-age": "pending", "already-delivered": "delivered",
   });
+  store.close();
+});
+it("delivers notifications without an assistant, and one failing notification never blocks the rest", async () => {
+  const store = storeWithUsers();
+  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
+  const push = (id: string, botId?: string) => store.queueNotification(id, "one", { title: id, body: "", url: "/", tag: id, ...(botId ? { botId, kind: "approval" } : {}) });
+  push("test-push");
+  push("poisoned", "poison");
+  push("after-poison", "shared");
+  const presentation = store.presentation.bind(store);
+  vi.spyOn(store, "presentation").mockImplementation(botId => { if (botId === "poison") throw new Error("boom"); return presentation(botId); });
+  const sent: string[] = [];
+  await new BackgroundWorker(store, offline, household(), async (_subscription, payload) => { sent.push(JSON.parse(payload).title); }).tick();
+  expect(sent).toEqual(["test-push", "after-poison"]);
+  const poisoned = store.db.prepare("SELECT state,attempts,last_error FROM outbox WHERE event_id='poisoned'").get();
+  expect(poisoned).toEqual({ state: "pending", attempts: 1, last_error: "Delivery error: boom" });
   store.close();
 });
 it("re-sweeps only events from the last day for new recipients", () => {
