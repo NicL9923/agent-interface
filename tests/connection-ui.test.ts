@@ -265,3 +265,17 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
   expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(false);
 });
+it('fits a restored multi-line draft when returning to the conversation',async()=>{
+  Object.defineProperty(HTMLTextAreaElement.prototype,'scrollHeight',{configurable:true,get(this:HTMLTextAreaElement){return this.value.split('\n').length*24;}});
+  try{
+    const previous=vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path:string)=>path==='/bots/shared/draft'?{text:'Milk\nEggs\nFlour\nButter',attachments:[]} as T
+      :path==='/today'?{generatedAt:new Date().toISOString(),since:new Date().toISOString(),frontier:'0',hasMore:false,items:[],events:[],unavailableBots:[],upcoming:[]} as T:previous(path) as Promise<T>);
+    await renderApp();
+    expect(container.querySelector('textarea')!.style.height).toBe('96px');
+    await act(async()=>[...container.querySelectorAll<HTMLButtonElement>('.rail-nav button')].find(node=>node.textContent?.includes('Today'))!.click());
+    expect(container.querySelector('textarea')).toBeNull();
+    await act(async()=>container.querySelector<HTMLButtonElement>('.bot-item')!.click());
+    expect(container.querySelector('textarea')!.style.height).toBe('96px');
+  }finally{Reflect.deleteProperty(HTMLTextAreaElement.prototype,'scrollHeight');}
+});

@@ -10,8 +10,8 @@ import type { useStarters } from "../components/DiscoveryPanel";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { When } from "../components/When";
 import type { Draft, Pending, SavedConversation } from "./storage";
-// Lives with the app shell: the fit runs when the draft text or assistant changes, not when the composer remounts.
-export function useComposerInput(text: string, botId: string) {
+// Fits on mount too, so a restored multi-line draft is sized when returning from another view.
+function useComposerInput(text: string, botId: string) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const fitComposer = useCallback(() => {
     // Grow the composer with its draft up to the CSS max-height, then scroll.
@@ -39,7 +39,7 @@ export function useComposerInput(text: string, botId: string) {
   }, [fitComposer]);
   return { ref, focus: () => composerInput.current?.focus() };
 }
-export function Composer({ boot, selected, botId, conversation, state, active, showActivity, connectionLost, draft, setDraft, draftReady, uploading, upload, pending, receipt, sending, send, retry, reviewed, setReviewed, starters, startersOpen, setStartersOpen, input, refresh }: {
+export function Composer({ boot, selected, botId, conversation, state, active, showActivity, connectionLost, draft, setDraft, draftReady, uploading, upload, pending, receipt, sending, send, retry, reviewed, setReviewed, starters, startersOpen, setStartersOpen, refresh }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
@@ -63,10 +63,10 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
   starters: ReturnType<typeof useStarters>;
   startersOpen: boolean;
   setStartersOpen: Dispatch<SetStateAction<boolean>>;
-  input: ReturnType<typeof useComposerInput>;
   refresh(): void;
 }) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const input = useComposerInput(draft.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
   return (
     <footer className="composer-area">
