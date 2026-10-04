@@ -24,6 +24,7 @@ it("records the Google token time at sign-in and confirms only a fresh token for
   const seconds = () => Math.floor(Date.now() / 1000);
   let identity = { sub: "family-sub", email: "family@example.test", email_verified: true, name: "Family", iat: seconds() - 1800 };
   const { app, store } = await start({ GOOGLE_CLIENT_ID: "test", HOUSEHOLD_EMAILS: "family@example.test" }, async () => identity);
+  const signedInAt = identity.iat * 1000;
   const { token, ...headers } = session(await app.inject({ method: "POST", url: "/api/auth/google", headers: { origin }, payload: { credential: "token" } }));
   expect(store.sessionConfirmedAt(hash(token))).toBe(identity.iat * 1000);
   const confirm = (extra: Record<string, string> = headers) =>
@@ -35,7 +36,7 @@ it("records the Google token time at sign-in and confirms only a fresh token for
   expect((await confirm()).statusCode).toBe(403);
   identity = { ...identity, sub: "family-sub", iat: seconds() - 11 * 60 };
   expect((await confirm()).statusCode).toBe(401);
-  expect(store.sessionConfirmedAt(hash(token))).toBe((seconds() - 1800) * 1000);
+  expect(store.sessionConfirmedAt(hash(token))).toBe(signedInAt);
   identity = { ...identity, iat: seconds() - 60 };
   const confirmed = await confirm();
   expect(confirmed.statusCode).toBe(200);
