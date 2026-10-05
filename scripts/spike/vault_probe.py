@@ -225,8 +225,14 @@ def canonical_task(client, headers, journal, home, profile, call, canary):
         assert port_file.exists(), 'Disposable Chromium did not start; exit='+str(process.poll())
         endpoint='http://127.0.0.1:'+port_file.read_text().splitlines()[0]
         opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(endpoint+'/json/list',timeout=3) as response: targets=json.load(response)
-        target=next(row for row in targets if row.get('type')=='page')
+        # Chromium writes its port before it registers the initial page.
+        target=None
+        while target is None:
+            with opener.open(endpoint+'/json/list',timeout=3) as response: targets=json.load(response)
+            target=next((row for row in targets if row.get('type')=='page'),None)
+            if target is None:
+                assert process.poll() is None and time.monotonic()<deadline, 'Disposable Chromium opened no page; exit='+str(process.poll())
+                time.sleep(.05)
         class Supervisor:
             def evaluate_runtime(self,expression):
                 with connect(target['webSocketDebuggerUrl'],open_timeout=3,proxy=None) as socket:
