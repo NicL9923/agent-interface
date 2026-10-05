@@ -87,3 +87,12 @@ wait for browser readiness, then choose **Take over** again. Restarting the shar
 computer closes its desktop applications and open tabs; its browser sign-ins
 remain on disk. Keep the private `bot-desktop/computer-recovery.json` record until
 the coordinator proves recovery. Deleting it bypasses the input safeguard.
+
+Hermes updates, recoveries and app releases restart the gateway, not the shared
+computer. The computer supervisor checks once a minute. Once the running gateway
+uses a Hermes revision that differs from the supervisor's but matches the
+installed source, or the app release changes, the supervisor exits with status 75
+at the next idle moment. It waits while a member has control, a bot action is
+running or a browser recovery is pending. It also holds the action lock while
+shutting down, and systemd starts it again on matching code. Desktop applications
+close; the browser reopens its last session with sign-ins intact.

@@ -16,6 +16,9 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("computer", Path(__file__).resolve().parents[1] / "src/hermes/computer.py")
 computer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(computer)
+spec = importlib.util.spec_from_file_location("computer_host", Path(__file__).resolve().parents[1] / "src/hermes/computer_host.py")
+computer_host = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(computer_host)
 
 
 class TestLease:
@@ -52,7 +55,7 @@ def try_lock(path, queue):
         queue.put("busy")
 
 
-class ComputerTests(unittest.TestCase):
+class ComputerFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name) / "computer"
@@ -78,6 +81,8 @@ class ComputerTests(unittest.TestCase):
             _, _, viewer = self.instance._viewer({"actorId": actor, "actorName": name}, create=True)
         return {"actorId": actor, "actorName": name, "viewerId": viewer, "service_key": "private-test-key"}
 
+
+class ComputerTests(ComputerFixture):
     def test_member_identity_survives_coordinator_restart(self):
         first = self.member()
         restarted = computer.Computer(self.home, self.instance.endpoint, self.runtime, self.lease)
@@ -259,6 +264,82 @@ class ComputerTests(unittest.TestCase):
             with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": str(self.home), "HERMES_AGENT_INTERFACE_COMPUTER_CDP_URL": endpoint}):
                 with self.assertRaises(computer.ComputerError):
                     computer.configured()
+
+
+class SupervisorRestartTests(ComputerFixture):
+    def setUp(self):
+        super().setUp()
+        self.source = Path(self.temp.name) / "source"
+        self.source.mkdir()
+        git = lambda *args: subprocess.run(["git", "-C", str(self.source), *args], check=True, capture_output=True)
+        self.git = git
+        git("init", "-q"); git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "--allow-empty", "-m", "old")
+        self.hermes = Path(self.temp.name) / "hermes"
+        self.hermes.mkdir()
+        self.loaded = computer_host.loaded_code(self.source)
+
+    def gateway(self, state, code_sha):
+        (self.hermes / "gateway_state.json").write_text(json.dumps({"gateway_state": state, "code_sha": code_sha}))
+
+    def update_source(self):
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "--allow-empty", "-m", "new")
+        return computer_host.installed_revision(self.source)
+
+    def reason(self):
+        return computer_host.restart_reason(self.loaded, self.source, self.hermes)
+
+    def test_restarts_once_the_gateway_runs_the_installed_update(self):
+        self.gateway("running", self.loaded[1])
+        self.assertIsNone(self.reason())
+        new = self.update_source()
+        self.gateway("draining", new)
+        self.assertIsNone(self.reason(), "An update in progress must finish first")
+        self.gateway("running", new)
+        self.assertEqual(self.reason(), "Hermes is running revision " + new[:12])
+
+    def test_gateway_still_on_old_code_after_an_outside_update_never_loops(self):
+        new = self.update_source()
+        restarted = computer_host.loaded_code(self.source)
+        self.gateway("running", self.loaded[1])
+        self.assertIsNone(computer_host.restart_reason(restarted, self.source, self.hermes))
+        self.assertIsNone(self.reason(), "Restarting cannot reach the gateway's revision")
+        self.gateway("running", new)
+        self.assertIsNone(computer_host.restart_reason(restarted, self.source, self.hermes))
+
+    def test_restarts_after_an_app_release_once_the_gateway_runs(self):
+        released = (Path("/releases/new/computer_host.py"), self.loaded[1])
+        self.gateway("stopped", self.loaded[1])
+        self.assertIsNone(computer_host.restart_reason(released, self.source, self.hermes))
+        self.gateway("running", self.loaded[1])
+        self.assertEqual(computer_host.restart_reason(released, self.source, self.hermes), "The app release changed")
+        (self.hermes / "gateway_state.json").write_text("{")
+        self.assertIsNone(computer_host.restart_reason(released, self.source, self.hermes))
+
+    def test_restart_waits_for_human_control_running_bot_and_pending_recovery(self):
+        held = contextlib.ExitStack()
+        self.lease.acquire("viewer")
+        self.assertFalse(computer_host.claim_idle(self.instance, held, computer.ComputerError))
+        self.lease.release("viewer")
+        with self.instance.bot_operation("Assistant"):
+            self.assertFalse(computer_host.claim_idle(self.instance, held, computer.ComputerError))
+        self.instance._write("computer-recovery.json", {"pending": True})
+        self.assertFalse(computer_host.claim_idle(self.instance, held, computer.ComputerError))
+        (self.instance.state / "computer-recovery.json").unlink()
+        # Recovery recorded by an action that ends while the supervisor waits for the lock.
+        operation = self.instance.operation
+        def recovery_left_behind(timeout):
+            self.instance._write("computer-recovery.json", {"pending": True})
+            return operation(timeout=timeout)
+        with patch.object(self.instance, "operation", recovery_left_behind):
+            self.assertFalse(computer_host.claim_idle(self.instance, held, computer.ComputerError))
+        (self.instance.state / "computer-recovery.json").unlink()
+        self.assertTrue(computer_host.claim_idle(self.instance, held, computer.ComputerError))
+        with self.assertRaises(computer.ComputerError):
+            with self.instance.bot_operation("Assistant"):
+                pass
+        held.close()
+        with self.instance.bot_operation("Assistant"):
+            pass
 
 
 if __name__ == "__main__":
