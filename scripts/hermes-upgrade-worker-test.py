@@ -5,6 +5,7 @@ worker separately requires the complete real Hermes qualification suite.
 """
 import importlib.util
 import base64
+import re
 import fcntl
 import signal
 import time
@@ -657,17 +658,28 @@ with w.NativeUpdateClaim(sys.argv[3],sys.argv[4]) as claim:
         with self.assertRaisesRegex(RuntimeError,'claim is unavailable'):
             with worker.NativeUpdateClaim(self.source,self.root/'native-home'): pass
 
-    def test_exact_dashboard_and_gateway_symlinks_are_preserved_and_unknown_source_is_blocked(self):
+    def test_exact_wrapper_symlinks_are_preserved_and_unknown_source_is_blocked(self):
         target=self.app/'src/hermes/dashboard.py'; target.write_text('# trusted dashboard wrapper')
         gateway=self.app/'src/hermes/gateway_guard.py'; gateway.write_text('# trusted gateway wrapper')
+        computer=self.app/'src/hermes/computer_host.py'; computer.write_text('# trusted computer host')
         link=self.source/'agent_interface_dashboard.py'; link.symlink_to(target)
         gateway_link=self.source/'agent_interface_gateway.py'; gateway_link.symlink_to(gateway)
+        computer_link=self.source/'agent_interface_computer_host.py'; computer_link.symlink_to(computer)
         stage=self.check(); self.install()
         self.assertEqual(link.resolve(),target.resolve()); self.assertEqual(self.status()['phase'],'succeeded')
-        self.assertEqual(gateway_link.resolve(),gateway.resolve())
-        self.assertEqual(set(self.status()['qualification']['dashboardLink']),{'agent_interface_dashboard.py','agent_interface_gateway.py'})
+        self.assertEqual(gateway_link.resolve(),gateway.resolve()); self.assertEqual(computer_link.resolve(),computer.resolve())
+        self.assertEqual(set(self.status()['qualification']['dashboardLink']),set(worker.MANAGED_WRAPPERS))
         (self.source/'unknown.py').write_text('# unreviewed source')
         with self.assertRaisesRegex(RuntimeError,'Untracked'): worker.source_state(self.source,target)
+
+    def test_every_installed_wrapper_link_is_a_managed_wrapper(self):
+        # An installer link missing from MANAGED_WRAPPERS blocks every in-app update check.
+        root=Path(worker.__file__).resolve().parents[1]
+        files=[*root.glob('.agents/tools/*'),*root.glob('src/hermes/*.py'),*root.glob('scripts/*.py'),*root.glob('docs/*.md')]
+        named={name for path in files if path.is_file() for name in re.findall(r'agent_interface_[a-z_]+\.py',path.read_text())}
+        self.assertIn('agent_interface_computer_host.py',named)
+        self.assertLessEqual(named,set(worker.MANAGED_WRAPPERS))
+        for name,target in worker.MANAGED_WRAPPERS.items(): self.assertTrue((root/'src/hermes'/target).is_file(),name)
 
     def test_wrong_gateway_wrapper_target_blocks_source_qualification(self):
         target=self.app/'src/hermes/dashboard.py'; target.write_text('# trusted dashboard wrapper')

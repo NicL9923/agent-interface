@@ -72,6 +72,15 @@ def complete_history(source):
     return shallow
 
 
+# Installer-created links beside hermes_cli, each to its file in the app's src/hermes.
+# Every wrapper an installer adds must be listed here, or update checks refuse the source.
+MANAGED_WRAPPERS = {
+    "agent_interface_dashboard.py": "dashboard.py",
+    "agent_interface_gateway.py": "gateway_guard.py",
+    "agent_interface_computer_host.py": "computer_host.py",
+}
+
+
 def source_state(source, dashboard_target=None):
     revision = git(source, "rev-parse", "HEAD").decode().strip()
     patch = git(source, "diff", "HEAD", "--binary")
@@ -79,9 +88,7 @@ def source_state(source, dashboard_target=None):
     # silently dropped during a source replacement.
     unknown = git(source, "ls-files", "--others", "--exclude-standard").decode().splitlines()
     wrappers = {} if dashboard_target is None else {
-        "agent_interface_dashboard.py": Path(dashboard_target),
-        "agent_interface_gateway.py": Path(dashboard_target).with_name("gateway_guard.py"),
-    }
+        name: Path(dashboard_target).with_name(target) for name, target in MANAGED_WRAPPERS.items()}
     for name in unknown:
         path = Path(source) / name
         if name not in wrappers or not path.is_symlink() or path.resolve() != wrappers[name].resolve():
@@ -258,7 +265,7 @@ class Worker:
 
     def dashboard_link(self):
         links = {}
-        for name, target in (("agent_interface_dashboard.py", "dashboard.py"), ("agent_interface_gateway.py", "gateway_guard.py")):
+        for name, target in MANAGED_WRAPPERS.items():
             link = self.source / name
             if not link.is_symlink(): continue
             if link.resolve() != (self.app / "src/hermes" / target).resolve(): raise RuntimeError("Managed Hermes wrapper link changed")

@@ -164,6 +164,11 @@ Cancellation restores the previous version when needed; recovery never clears
 maintenance without verifying the resulting runtime. Unverifiable legacy failures
 still require installer repair. The app does not silently update Hermes.
 
+The add-on turns off the native Hermes dashboard's own updater, which would skip
+qualification and disable the add-on. Its update control directs administrators
+to the app. Running `hermes update` on the host still bypasses the app; recover
+with `release-app.py recover` as described in the capability matrix.
+
 Conversations show an animated avatar inline after the latest message while
 Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
