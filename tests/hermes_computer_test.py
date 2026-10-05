@@ -325,6 +325,14 @@ class SupervisorRestartTests(ComputerFixture):
         self.instance._write("computer-recovery.json", {"pending": True})
         self.assertFalse(computer_host.claim_idle(self.instance, held, computer.ComputerError))
         (self.instance.state / "computer-recovery.json").unlink()
+        # Recovery recorded by an action that ends while the supervisor waits for the lock.
+        operation = self.instance.operation
+        def recovery_left_behind(timeout):
+            self.instance._write("computer-recovery.json", {"pending": True})
+            return operation(timeout=timeout)
+        with patch.object(self.instance, "operation", recovery_left_behind):
+            self.assertFalse(computer_host.claim_idle(self.instance, held, computer.ComputerError))
+        (self.instance.state / "computer-recovery.json").unlink()
         self.assertTrue(computer_host.claim_idle(self.instance, held, computer.ComputerError))
         with self.assertRaises(computer.ComputerError):
             with self.instance.bot_operation("Assistant"):

@@ -56,14 +56,16 @@ def restart_reason(loaded, source, hermes_home):
 
 def claim_idle(computer, held, error):
     """Hold the computer's operation lock if nobody is using it; True when held."""
-    if (computer.state / "computer-recovery.json").exists() or computer._lease().holder == computer.lease.HUMAN:
+    def in_use():
+        return (computer.state / "computer-recovery.json").exists() or computer._lease().holder == computer.lease.HUMAN
+    if in_use():
         return False
     try:
         held.enter_context(computer.operation(timeout=0))
     except error:
         return False
-    # Human control could have started while the lock was free.
-    if computer._lease().holder == computer.lease.HUMAN:
+    # A bot action can leave recovery pending, or a member take control, before the lock is free.
+    if in_use():
         held.close()
         return False
     return True
@@ -132,7 +134,14 @@ def main():
                     restart = None
                 # Keep the lock through shutdown, so no bot action starts on the old browser.
                 if restart and claim_idle(computer, held, module.ComputerError):
-                    break
+                    # Recheck under the lock; an update or release may have started meanwhile.
+                    try:
+                        restart = restart_reason(loaded, source, hermes_home)
+                    except (OSError, subprocess.SubprocessError):
+                        restart = None
+                    if restart:
+                        break
+                    held.close()
                 restart = None
             time.sleep(1)
     finally:
