@@ -1,5 +1,45 @@
 # Validation ledger
 
+## October 5 app release f8dac19
+
+PR #36 merged at `f8dac1949829a4cc527a4bb9f72e4a7c2f1a3484`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `adedc5d03eafb410`, from the archive with SHA256
+`dbd55a73044d4a3aa5151b12ad826516175ec93b33d5553f6783d3c119f28ca7`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-f8dac194-20261005T183331Z.json) records the result. Hermes remains
+at `1298c8e74baa`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+The release includes PRs #34, #35 and #36. Qualification also required the native
+dashboard's update switch; the first attempt failed on a Chromium startup race in
+the vault probe, fixed separately, and the retry passed. Each stage removed its
+disposable checkout and runtime afterwards. The shared computer predated #36, so
+it was restarted once by hand while idle, outside the guarded activation. Its
+browser was ready on Hermes `1298c8e74baa`.
+
+## October 5 external native update recovery
+
+An outside `hermes update` on October 4 at 12:42 UTC moved Hermes from
+`5bba024d8ddd` to `1298c8e74baa` after the in-app check had refused
+`agent_interface_computer_host.py` as an untracked source file. The restarted
+dashboard disabled the unqualified add-on, and the app reported a rejected service
+credential for about 25 hours. The gateway kept running the earlier generation.
+
+The host disk was full, from eleven retained qualification stages of about 3 GB
+each. Their disposable `source` and `pm-home` trees were removed, keeping receipts,
+logs and probe evidence. The unchanged release `48b68ad` then qualified against
+`1298c8e74baa73e1a2b90124228d017261ac6bc4` with the tracked repair
+`50aaad61643d004d955a93a336bb1466578e0d95fd1b2b9a1b52bccda98d8acb` unchanged.
+The reviewed recovery helper's read-only check passed, then recovery restarted the
+app, dashboard and gateway under an owned lease. It verified original Google HTTP
+and fresh WebSockets, both Discord connections and the installer maintenance route
+before clearing maintenance. The app doctor then reported Hermes ready.
+
 ## October 4 app release 48b68ad
 
 PR #32 merged at `48b68ad6d56649f8689223f32a33f38f8d6ac8bf`. The release is live at `https://agentui.wildflowersranch.com`,
