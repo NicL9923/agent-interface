@@ -33,7 +33,9 @@ The [recovery tool](../.agents/tools/recover-app-after-native-update.py) uses na
 Google retirement and an owned gateway drain to replace that receipt and restart
 both native services under a persistent lease. Existing guards and household
 settings stay intact. A normal guarded app release follows only after recovery
-verifies the restored maintenance route.
+verifies the restored maintenance route. `release-app.py recover` runs the whole
+sequence from a staged copy of the live commit that `qualify-app-release.py` has
+qualified.
 
 Native `prompt.submit` supplies a durable `user_row_id` but no durable client request key. The add-on writes a FULL-synchronous receipt before calling native admission, compares retries against the original input and actor, and never automatically replays an uncertain submission. Each independent task has a distinct root request ID. Steering receipts join that root and bind to the actual canonical user row once native Hermes persists it. Sender attribution does not alter the message body or forge protected Hermes author metadata.
 
