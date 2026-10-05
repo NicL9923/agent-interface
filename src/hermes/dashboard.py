@@ -11,6 +11,31 @@ import subprocess
 from pathlib import Path
 
 
+UPDATE_HANDOFF_MESSAGE = ("Hermes updates are managed by Agent Interface. Check for and install them "
+                          "from Hermes updates in the app.")
+
+
+def hand_updates_to_app():
+    """Turn off the native dashboard's own Hermes updater.
+
+    A native update moves Hermes past the app's qualification, which disables this
+    add-on until an installer recovers it. The app's updater qualifies first. Uses
+    the native switch for externally managed installs, so the update control, check
+    and install routes all refuse. Returns False, leaving the native updater on, when
+    this Hermes revision lacks the switch; qualification requires True.
+    """
+    try:
+        import hermes_cli.web_server_files as files
+        import hermes_cli.web_routers.actions as actions
+    except ImportError:
+        return False
+    if not hasattr(files, "_dashboard_local_update_managed_externally") or not hasattr(actions, "_MANAGED_EXTERNALLY_MESSAGE"):
+        return False
+    files._dashboard_local_update_managed_externally = lambda: True
+    actions._MANAGED_EXTERNALLY_MESSAGE = UPDATE_HANDOFF_MESSAGE
+    return True
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] != "dashboard" or "--isolated" in sys.argv:
         raise SystemExit("This wrapper starts the existing supervised dashboard only.")
@@ -34,6 +59,10 @@ def main():
         qualified = False
     # Let the native entrypoint initialize the same environment before importing the web app.
     from hermes_cli import main as cli
+    # Applies even while the add-on is disabled, so a second native update cannot
+    # move Hermes further from the app's last qualification.
+    if not hand_updates_to_app():
+        print("Agent Interface could not turn off the native Hermes updater. Update Hermes from the app only.", file=sys.stderr)
     if qualified:
         import hermes_cli.web_server as web
         from tui_gateway import server

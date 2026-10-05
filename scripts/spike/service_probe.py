@@ -95,6 +95,16 @@ for auth in [{"Authorization": "Bearer verified-google-fixture"}, {"Cookie": "he
         raise AssertionError("Original fixture WS rejected: " + str(exc.code) + " " + exc.reason + " auth=" + str(list(auth))) from None
 checks["original_google_cookie_and_native_http_ws_unchanged"] = True
 
+from dashboard import hand_updates_to_app, UPDATE_HANDOFF_MESSAGE
+google = {"Authorization": "Bearer verified-google-fixture"}
+assert client.get("/api/status", headers=google).json()["can_update_hermes"] is True
+assert hand_updates_to_app(), "This Hermes revision has no switch for its native updater"
+assert client.get("/api/status", headers=google).json()["can_update_hermes"] is False
+assert client.get("/api/hermes/update/check", headers=google).json()["message"] == UPDATE_HANDOFF_MESSAGE
+refused = client.post("/api/hermes/update", headers=google).json()
+assert (refused["ok"], refused["pid"], refused["error"]) == (False, None, "dashboard_update_managed_externally"), refused
+checks["native_dashboard_updater_handed_to_app"] = True
+
 for extra in [{"Origin": "https://fixture.example.test"}, {"Cookie": "hermes_session_at=verified-google-fixture"}, {"X-Forwarded-For": "127.0.0.1"}]:
     assert client.post(TICKET_PATH, headers={**headers, **extra}).status_code == 401
 assert client.post(TICKET_PATH).status_code == 401

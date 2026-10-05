@@ -25,6 +25,11 @@ the UI marks activity unknown and preserves the loaded conversation and draft.
 
 The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, attribution, and event discovery through `agent-interface.capabilities/open/submit/receipt/discover`. Its private SQLite journal lives at `HERMES_HOME/runtime/agent-interface.db`. It writes no Hermes database rows. The adapter enables mutations only after the add-on reports a qualified revision. A native gateway without that contract stays unavailable with an explanation.
 
+The dashboard wrapper sets the native switch for externally managed installs, so
+the native dashboard hides its update control and its check and install routes
+refuse with a message directing administrators to the app. The service probe requires that switch on each
+qualified revision. Command-line `hermes update` remains available to the installer.
+
 Updating Hermes outside the app can invalidate the running app's receipt. A native
 dashboard restart then preserves the official interface while disabling the
 unqualified add-on, including its private maintenance route. Installer recovery
