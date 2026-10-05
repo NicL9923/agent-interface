@@ -10,13 +10,19 @@
                    post-release check failed and the cause is fixed.
   verify NAME      Read-only public and service checks for an activated release.
   discard NAME     Remove a prepared release that was never activated.
+  recover NAME     After an outside Hermes update disabled the add-on, install the fresh
+                   qualification of staged release NAME for the unchanged live release.
+                   Runs the recovery helper's read-only check, then the recovery,
+                   which restarts the app, dashboard and gateway under maintenance.
 
 The guarded activation itself stays in deploy-guarded-app-release.py. This wrapper
 only replaces the hand-assembled steps around it. Host access details are passed as
 arguments and kept in the ignored .private/releases manifests.
 """
 import argparse
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import re
@@ -33,7 +39,7 @@ GUARDED_TOOL = ".agents/tools/deploy-guarded-app-release.py"
 APP_UNITS = ("agent-interface.service", "hermes-dashboard.service", "hermes-gateway.service")
 RUNNING_PHASES = ("checking", "qualifying", "installing", "verifying", "recovering")
 # A release in these states may be mid-cutover or live; only review may change it.
-UNDISCARDABLE = ("activating", "needs-review", "activated", "recorded")
+UNDISCARDABLE = ("activating", "needs-review", "activated", "recorded", "recovering", "recovered")
 
 
 # Pure release rules. Tests cover these without a host.
@@ -225,6 +231,69 @@ finish({"current": str((base / "current").resolve()), "release": str(Path(PAYLOA
         "result": json.loads(result.read_text()) if result.is_file() else None})
 """
 
+REMOTE_RECOVER = """
+import datetime, time
+base = Path(PAYLOAD["appBase"]); operations = base / "operations"
+release = (base / "current").resolve(strict=True)
+tools = release / ".agents/tools"
+helper = tools / "recover-app-after-native-update.py"
+fingerprint = runpy.run_path(str(helper))["fingerprint"]
+# The live release's own deploy configuration carries every installer setting.
+prior = json.loads((operations / release.name / "deploy-config.json").read_text())
+assert prior["release"] == str(release), "The live release has no deploy configuration of its own."
+source, home = Path(prior["source"]), Path(prior["hermesHome"])
+operation = PAYLOAD["operationId"]
+path = operations / ("native-recovery-config-" + operation) / "config.json"
+if not PAYLOAD["check"]:
+    # Recovery reuses the exact configuration its read-only check passed with.
+    assert path.is_file(), "Run the recovery check first."
+else:
+    units = Path.home() / ".config/systemd/user"
+    preserved = [base / "shared/app.env", base / "shared/hermes-service.env", base / "shared/hermes-worker.json",
+                 *(units / (unit + ".service.d") / name for unit in ("hermes-gateway", "hermes-dashboard")
+                   for name in ("90-agent-interface.conf", "computer.conf")),
+                 *(source / ("agent_interface_" + name + ".py") for name in ("gateway", "dashboard", "computer_host"))]
+    config = dict(prior,
+        release=str(release), expectedRelease=str(release), operationId=operation,
+        hermesRevision=subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
+        repairSha256=hashlib.sha256(subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest(),
+        newQualificationReceipt=PAYLOAD["receipt"],
+        profileHashes={item: fingerprint(item) for item in prior["profileHashes"]},
+        preservedFiles={str(item): fingerprint(item) for item in preserved if os.path.lexists(item)},
+        deployFunctionsSha256=fingerprint(tools / "deploy-app-release.py"))
+    path.parent.mkdir(mode=0o700)
+    path.write_text(json.dumps(config, indent=2) + "\\n"); path.chmod(0o600)
+
+def heartbeat_age():
+    try:
+        updated = json.loads((home / "gateway_state.json").read_text())["updated_at"]
+        return time.time() - datetime.datetime.fromisoformat(updated).timestamp()
+    except (OSError, ValueError, KeyError):
+        return None
+
+def run_helper(*flags):
+    # The helper requires a gateway heartbeat under ten seconds old; heartbeats
+    # arrive about once a minute, so start right after one.
+    deadline = time.monotonic() + PAYLOAD["heartbeatWaitSeconds"]
+    while (age := heartbeat_age()) is None or age > 1:
+        if time.monotonic() > deadline:
+            raise SystemExit("The gateway reported no fresh heartbeat. Check hermes-gateway.service; nothing was changed.")
+        time.sleep(0.25)
+    done = subprocess.run([sys.executable, str(helper), "--config", str(path), *flags],
+                          capture_output=True, text=True, timeout=1500)
+    lines = done.stdout.strip().splitlines()
+    if done.returncode == 0 and lines:
+        return json.loads(lines[-1])
+    audits = sorted((item for item in operations.glob("native-recovery*-" + operation + "*") if item != path.parent),
+                    key=lambda item: item.stat().st_mtime)
+    log = audits[-1] / "commands.log" if audits else None
+    tail = log.read_text()[-1500:] if log and log.is_file() else done.stderr[-1500:]
+    raise SystemExit(("Recovery check" if flags else "Recovery") + " stopped. "
+                     + (lines[-1] if lines else "") + "\\nAudit: " + str(log) + "\\n" + tail)
+
+finish(run_helper("--check") if PAYLOAD["check"] else run_helper())
+"""
+
 REMOTE_DISCARD = """
 base = Path(PAYLOAD["appBase"]); release = Path(PAYLOAD["release"]); operation = Path(PAYLOAD["operationDir"])
 # Compare resolved paths, so a symlinked base can never hide the live release.
@@ -278,6 +347,19 @@ def manifest_path(name):
 
 def load_manifest(name):
     return json.loads(manifest_path(name).read_text())
+
+
+@contextlib.contextmanager
+def manifest_lock(name):
+    """Hold one release's manifest for a whole command, so a concurrent run cannot
+    overwrite its state with a stale copy."""
+    MANIFESTS.mkdir(parents=True, exist_ok=True)
+    with open(MANIFESTS / f"{name}.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.")
+        yield
 
 
 def save_manifest(manifest):
@@ -471,6 +553,43 @@ def discard(args):
     save_manifest(manifest)
 
 
+def recover(args):
+    with manifest_lock(args.name):
+        run_recovery(args)
+
+
+def run_recovery(args):
+    manifest = load_manifest(args.name)
+    if manifest["status"] not in ("preparing", "prepared"):
+        raise SystemExit(f"{args.name} is {manifest['status']}; recover with a qualified, unactivated release.")
+    qualification = MANIFESTS / f"{args.name}-qualification.json"
+    result = json.loads(qualification.read_text()) if qualification.is_file() else {}
+    if result.get("qualificationComplete") is not True:
+        raise SystemExit(f"Qualify first: qualify-app-release.py {args.name}")
+    host = args.host or manifest["host"]
+    operation = str(uuid.uuid4())
+    payload = {"appBase": manifest["appBase"], "receipt": result["receipt"], "operationId": operation,
+               "check": True, "heartbeatWaitSeconds": 150}
+    # A failed check changes nothing, so the release stays recoverable.
+    print(json.dumps(remote(host, REMOTE_RECOVER, payload, timeout=1800), indent=2))
+    if args.check:
+        return
+    # Recorded before services change, so an interrupted run never looks merely prepared.
+    manifest.update(status="recovering", recoveryOperationId=operation)
+    save_manifest(manifest)
+    try:
+        outcome = remote(host, REMOTE_RECOVER, {**payload, "check": False}, timeout=3600)
+    except BaseException:
+        manifest["status"] = "needs-review"
+        save_manifest(manifest)
+        print("Recovery needs review. The helper records its phase under "
+              f"{manifest['appBase']}/operations/native-recovery-{operation}.", file=sys.stderr)
+        raise
+    manifest.update(status="recovered", recoveryResult=outcome)
+    save_manifest(manifest)
+    print(json.dumps(outcome, indent=2))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -490,6 +609,11 @@ def main(argv=None):
         step.add_argument("name")
         step.add_argument("--host", help="override the SSH alias recorded at preparation")
         step.set_defaults(run=run)
+    step = commands.add_parser("recover", help="restore the add-on after an outside Hermes update")
+    step.add_argument("name", help="staged release of the live commit, qualified against the installed Hermes")
+    step.add_argument("--host", help="override the SSH alias recorded at preparation")
+    step.add_argument("--check", action="store_true", help="run only the read-only recovery preflight")
+    step.set_defaults(run=recover)
     args = parser.parse_args(argv)
     args.run(args)
 

@@ -14,6 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
 release_app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_app)
+spec = importlib.util.spec_from_file_location("qualify_app", ROOT / ".agents/tools/qualify-app-release.py")
+qualify_app = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qualify_app)
+
+FAKE_RECOVERY_HELPER = """
+import json, sys
+from pathlib import Path
+def fingerprint(path):
+    path = Path(path)
+    return "link:" + str(path.readlink()) if path.is_symlink() else "file:" + path.name
+if __name__ == "__main__":
+    calls = Path(__file__).with_name("calls.json")
+    calls.write_text(json.dumps([*(json.loads(calls.read_text()) if calls.exists() else []), sys.argv[1:]]))
+    if Path(__file__).with_name("fail").exists():
+        print("Recovery stopped for review. Private phase retained; native owners and admission were not replayed.")
+        raise SystemExit(2)
+    print(json.dumps({"checked": "--check" in sys.argv}))
+"""
 
 
 def run_remote(program, payload):
@@ -237,6 +255,54 @@ class Activation(unittest.TestCase):
             release_app.main(["record", self.NAME])
 
 
+class RecoveryCommand(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.original = release_app.MANIFESTS
+        release_app.MANIFESTS = Path(self.temporary.name)
+        release_app.save_manifest({"name": "release-x", "status": "prepared", "host": "host", "appBase": "/srv/app"})
+        (release_app.MANIFESTS / "release-x-qualification.json").write_text(
+            json.dumps({"qualificationComplete": True, "receipt": "/srv/app/operations/release-x/q/qualification.json"}))
+
+    def tearDown(self):
+        release_app.MANIFESTS = self.original
+        self.temporary.cleanup()
+
+    def test_concurrent_recovery_of_the_same_release_is_refused_before_any_host_step(self):
+        import fcntl
+        calls = []
+        original = release_app.remote
+        release_app.remote = lambda *args, **kwargs: calls.append(args)
+        try:
+            with open(release_app.MANIFESTS / "release-x.lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                with self.assertRaisesRegex(SystemExit, "Another release-app.py command is using release-x"):
+                    release_app.main(["recover", "release-x"])
+        finally:
+            release_app.remote = original
+        self.assertEqual(calls, [])
+        self.assertEqual(release_app.load_manifest("release-x")["status"], "prepared")
+
+    def test_uncertain_recovery_is_held_for_review_and_cannot_run_again(self):
+        replies = iter([{"currentReleaseQualificationVerified": True}, ConnectionError("lost reply")])
+        def remote(host, program, payload, timeout):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                self.assertEqual(release_app.load_manifest("release-x")["status"], "recovering")
+                raise reply
+            return reply
+        original = release_app.remote
+        release_app.remote = remote
+        try:
+            with self.assertRaises(ConnectionError):
+                release_app.main(["recover", "release-x"])
+            self.assertEqual(release_app.load_manifest("release-x")["status"], "needs-review")
+            with self.assertRaisesRegex(SystemExit, "needs-review"):
+                release_app.main(["recover", "release-x"])
+        finally:
+            release_app.remote = original
+
+
 class HostPrograms(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -301,6 +367,125 @@ class HostPrograms(unittest.TestCase):
             self.assertTrue(release.exists())
         self.assertEqual(run_remote(release_app.REMOTE_DISCARD, dict(payload, upgradeStateDir=str(self.host.base / "shared/upgrade-state")))[0], 0)
         self.assertFalse(release.exists() or operation.exists())
+
+    def stage(self, name, state="active", age=0):
+        stage = self.host.base / "operations/release-x" / name
+        for path in ("source/.git/objects/ab", "pm-home/tools/python/bin", "pm-home/installs/hermes",
+                     "pm-home/cache/uv/wheels", "pm-home/cache/scratch/agent-interface-spike-1/evidence", "pm-home/logs"):
+            (stage / path).mkdir(parents=True)
+        (stage / "source/.git/objects/ab/cdef").write_text("object")
+        (stage / "pm-home/cache/scratch/agent-interface-spike-1/evidence/app-probe.json").write_text("{}")
+        (stage / "pm-home/logs/pm.log").write_text("log")
+        (stage / "pm-home/cache/uv/wheels/a.whl").write_text("wheel")
+        (stage / "qualification.json").write_text("{}")
+        (stage / "integration.log").write_text("log")
+        # Native caches can leave directories without owner write access.
+        (stage / "source/.git/objects/ab").chmod(0o500)
+        marker = stage / ".agent-interface-upgrade-stage"
+        marker.write_text(json.dumps({"schemaVersion": 1, "operationId": name, "state": state}))
+        os.utime(marker, (time.time() - age,) * 2)
+        return stage
+
+    def assert_pruned(self, stage):
+        self.assertFalse((stage / "source").exists())
+        self.assertEqual(sorted(path.name for path in (stage / "pm-home").iterdir()), ["cache", "logs"])
+        self.assertEqual([path.name for path in (stage / "pm-home/cache").iterdir()], ["scratch"])
+        self.assertTrue((stage / "pm-home/cache/scratch/agent-interface-spike-1/evidence/app-probe.json").is_file())
+        self.assertTrue((stage / "qualification.json").is_file() and (stage / "integration.log").is_file())
+        self.assertEqual(json.loads((stage / ".agent-interface-upgrade-stage").read_text())["state"], "completed")
+
+    def test_finished_qualification_keeps_only_receipts_logs_and_probe_evidence(self):
+        stage = self.stage("qualification-done")
+        code, output, error = run_remote(qualify_app.PRUNE + 'finish(prune_stage(Path(PAYLOAD["stage"])))', {"stage": str(stage)})
+        self.assertEqual((code, output), (0, "true"), error)
+        self.assert_pruned(stage)
+
+    def test_sweep_prunes_only_stages_interrupted_more_than_a_day_ago(self):
+        interrupted = self.stage("qualification-interrupted", age=2 * 24 * 3600)
+        running = self.stage("qualification-running", age=3600)
+        settled = self.stage("qualification-settled", state="completed", age=2 * 24 * 3600)
+        program = qualify_app.PRUNE + 'sweep_stale_stages(Path(PAYLOAD["operations"]), time.time()); finish(True)'
+        code, _, error = run_remote(program, {"operations": str(self.host.base / "operations")})
+        self.assertEqual(code, 0, error)
+        self.assert_pruned(interrupted)
+        self.assertTrue((running / "source").exists() and (settled / "source").exists())
+
+    def recovery_host(self):
+        release = (self.host.base / "releases/release-live").resolve()
+        tools = release / ".agents/tools"
+        tools.mkdir(parents=True)
+        (tools / "recover-app-after-native-update.py").write_text(FAKE_RECOVERY_HELPER)
+        (tools / "deploy-app-release.py").write_text("# deployment functions\n")
+        for name in ("app.env", "hermes-service.env"):
+            (self.host.base / "shared" / name).write_text("KEY=value\n")
+        (self.host.source / "agent_interface_gateway.py").symlink_to(release / "gateway_guard.py")
+        prior = self.host.deployment("release-live", "op-live", True, release=str(release), expectedRelease="older",
+                                     hermesRevision="old", repairSha256="old", newQualificationReceipt="old.json",
+                                     node="node", appOrigin="https://app.example.test")
+        return tools, prior
+
+    def heartbeat(self, age=0):
+        updated = datetime.datetime.fromtimestamp(time.time() - age, datetime.timezone.utc).isoformat()
+        (self.host.home / "gateway_state.json").write_text(json.dumps({"updated_at": updated}))
+
+    def recover(self, check, **overrides):
+        payload = {"appBase": str(self.host.base), "receipt": "/stage/qualification.json", "operationId": "op-new",
+                   "check": check, "heartbeatWaitSeconds": 5, **overrides}
+        return run_remote(release_app.REMOTE_RECOVER, payload)
+
+    def test_recovery_binds_live_release_to_installed_hermes_then_reuses_its_checked_configuration(self):
+        tools, prior = self.recovery_host()
+        self.heartbeat()
+        code, output, error = self.recover(check=True)
+        self.assertEqual((code, json.loads(output or "null")), (0, {"checked": True}), error)
+        path = self.host.base / "operations/native-recovery-config-op-new/config.json"
+        config = json.loads(path.read_text())
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        head = subprocess.check_output(["git", "-C", str(self.host.source), "rev-parse", "HEAD"], text=True).strip()
+        repair = subprocess.check_output(["git", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
+        release = str((self.host.base / "releases/release-live").resolve())
+        self.assertEqual({key for key in config if config[key] != prior.get(key)},
+                         {"expectedRelease", "hermesRevision", "repairSha256", "newQualificationReceipt",
+                          "operationId", "profileHashes", "preservedFiles", "deployFunctionsSha256"})
+        self.assertEqual((config["release"], config["expectedRelease"]), (release, release))
+        self.assertEqual((config["hermesRevision"], config["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
+        self.assertEqual(config["newQualificationReceipt"], "/stage/qualification.json")
+        self.assertEqual(config["profileHashes"], {str(self.host.profile): "file:config.yaml"})
+        self.assertEqual(config["preservedFiles"], {
+            str(self.host.base / "shared/app.env"): "file:app.env",
+            str(self.host.base / "shared/hermes-service.env"): "file:hermes-service.env",
+            str(self.host.base / "shared/hermes-worker.json"): "file:hermes-worker.json",
+            str(self.host.source / "agent_interface_gateway.py"): "link:" + release + "/gateway_guard.py"})
+        self.heartbeat()
+        code, output, error = self.recover(check=False)
+        self.assertEqual((code, json.loads(output or "null")), (0, {"checked": False}), error)
+        self.assertEqual(json.loads((tools / "calls.json").read_text()),
+                         [["--config", str(path), "--check"], ["--config", str(path)]])
+
+    def test_recovery_needs_a_passed_check_and_a_fresh_heartbeat_before_the_helper_runs(self):
+        tools, _ = self.recovery_host()
+        self.heartbeat()
+        code, _, error = self.recover(check=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("Run the recovery check first", error)
+        self.heartbeat(age=30)
+        code, _, error = self.recover(check=True, heartbeatWaitSeconds=0)
+        self.assertNotEqual(code, 0)
+        self.assertIn("no fresh heartbeat", error)
+        self.assertFalse((tools / "calls.json").exists())
+
+    def test_stopped_helper_reports_its_audit_log(self):
+        tools, _ = self.recovery_host()
+        (tools / "fail").touch()
+        audit = self.host.base / "operations/native-recovery-check-op-new-1"
+        audit.mkdir()
+        (audit / "commands.log").write_text("AssertionError: gateway busy\n")
+        self.heartbeat()
+        code, _, error = self.recover(check=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("Recovery check stopped. Recovery stopped for review.", error)
+        self.assertIn(str(audit / "commands.log"), error)
+        self.assertIn("gateway busy", error)
 
 
 if __name__ == "__main__":

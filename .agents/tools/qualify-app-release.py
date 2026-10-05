@@ -4,13 +4,75 @@
 Uses the installed source and approved repair, a separate PM generation and the
 installer's private shared-OAuth/Google fixtures. Prints only receipt metadata.
 Run before release-app.py prepare --qualification when integration inputs change.
+
+Each run leaves about 3 GB of disposable checkout and runtime. The run removes its
+own when it ends, and earlier stages that were interrupted more than a day ago,
+keeping receipts, logs and native probe evidence.
 """
 import argparse
 import importlib.util
 import json
 from pathlib import Path
 
-REMOTE = r'''
+PRUNE = r'''
+import time
+STALE_STAGE_SECONDS = 24 * 3600
+
+
+def remove_tree(path):
+    # Native caches can contain read-only directories; restore owner access first.
+    for root, directories, _ in os.walk(path):
+        for name in directories:
+            child = os.path.join(root, name)
+            if not os.path.islink(child):
+                os.chmod(child, 0o700)
+    shutil.rmtree(path)
+
+
+def prune_stage(stage):
+    """Remove a finished stage's disposable checkout and runtime.
+
+    Keeps the receipt, step logs, PM logs and probe scratch evidence that
+    archive-app-qualification.py reads. Returns False when removal failed.
+    """
+    marker = stage / ".agent-interface-upgrade-stage"
+    try:
+        disposable = [stage / "source"]
+        pm_home = stage / "pm-home"
+        if pm_home.is_dir() and not pm_home.is_symlink():
+            for child in pm_home.iterdir():
+                if child.name == "cache" and child.is_dir() and not child.is_symlink():
+                    disposable += [item for item in child.iterdir() if item.name != "scratch"]
+                elif child.name != "logs":
+                    disposable.append(child)
+        for path in disposable:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                remove_tree(path)
+        state = json.loads(marker.read_text())
+        marker.write_text(json.dumps({**state, "state": "completed"}))
+        return True
+    except OSError as error:
+        print(f"Could not prune {stage}: {error}", file=sys.stderr)
+        return False
+
+
+def sweep_stale_stages(operations, now):
+    """Prune earlier qualification stages whose run ended without cleanup."""
+    for marker in operations.glob("*/qualification-*/.agent-interface-upgrade-stage"):
+        stage = marker.parent
+        if stage.is_symlink() or stage.parent.is_symlink():
+            continue
+        try:
+            state = json.loads(marker.read_text()).get("state")
+        except (OSError, ValueError):
+            continue
+        if state == "active" and now - marker.stat().st_mtime > STALE_STAGE_SECONDS:
+            prune_stage(stage)
+'''
+
+REMOTE = PRUNE + r'''
 import datetime, importlib.util, types, uuid
 base = Path(PAYLOAD["appBase"])
 release = Path(PAYLOAD["release"])
@@ -18,6 +80,7 @@ ops = Path(PAYLOAD["operationDir"])
 assert release.parent == base / "releases" and ops.parent == base / "operations"
 assert release.is_dir() and not release.is_symlink()
 assert sha(ops / "release.tar.gz") == PAYLOAD["archiveSha256"]
+sweep_stale_stages(base / "operations", time.time())
 worker_path = base / "shared/hermes-worker.json"
 worker = json.loads(worker_path.read_text())
 live, home = Path(worker["source"]), Path(worker["managedHome"])
@@ -70,50 +133,56 @@ def run(argv, name, environment=None, capture=False, cwd=release):
         raise RuntimeError("Qualification step failed: " + name + ". Inspect its owner-private log; no receipt was issued.")
     return result.stdout
 
-run(["git", "clone", "--no-hardlinks", "--no-checkout", live, source], "source-clone.log")
-run(["git", "-C", source, "checkout", "--detach", baseline[0]], "source-checkout.log")
-run(["git", "-C", source, "apply", "--index", patch], "source-repair.log")
-assert snapshot(source) == baseline
-prepared = json.loads(run([python, "-I", release / "scripts/hermes-qualified-python.py", "prepare",
-    "--source", source, "--stage", stage, "--launcher", launcher,
-    "--installed-source", live, "--installed-home", home], "managed-prepare.log",
-    environment={**env, "HERMES_HOME": str(home)}, capture=True))
-(stage / "prepared-runtime.json").write_text(json.dumps(prepared, indent=2))
-qualified = Path(prepared["python"])
-assert qualified.parent == stage and qualified.is_file()
-isolated_app = stage / "app"
-isolated_app.mkdir(mode=0o700)
-for directory in ("src", "scripts"):
-    shutil.copytree(release / directory, isolated_app / directory)
-(isolated_app / "docs/evidence").mkdir(parents=True)
-for name in ("package.json", "package-lock.json", "tsconfig.json"):
-    shutil.copy2(release / name, isolated_app / name)
-(isolated_app / "node_modules").symlink_to(release / "node_modules", target_is_directory=True)
-assert qualification["integration_digest"](isolated_app) == digest
-run([qualified, isolated_app / "scripts/spike/run.py", "--qualification", "--revision", baseline[0],
-    "--source", source, "--python", qualified, "--source-patch-sha256", baseline[1]], "integration.log", cwd=isolated_app)
-regression_home = stage / "regression-home"
-regression_home.mkdir(mode=0o700)
-(regression_home / "config.yaml").write_text("plugins:\n  enabled: []\n")
-regression_env = {**env, "HERMES_UPGRADE_STAGE_HOME": str(stage), "HERMES_UPGRADE_STAGE_SOURCE": str(source),
-    "HERMES_UPGRADE_OPERATION_ID": operation, "HERMES_HOME": str(regression_home)}
-run([qualified, runner, "shared-oauth", "--pytest-harness", private / "pytest-harness"],
-    "shared-oauth-regressions.log", regression_env)
-run([qualified, runner, "google-auth", "--google-bundle", private / "google-plugin"],
-    "google-regressions.log", regression_env)
-assert snapshot(live) == snapshot(source) == baseline
-assert all(sha(p) == expected for p, expected in host_files.items())
-assert qualification["integration_digest"](release) == digest
-assert qualification["integration_digest"](isolated_app) == digest
-utility = runpy.run_path(str(release / "scripts/hermes-qualified-python.py"))
-assert utility["fingerprint"](qualified) == prepared["fingerprint"]
-receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
-    qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
-receipt_path = stage / "qualification.json"
-receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
-qualification["read_receipt"](receipt_path, release)
+try:
+    run(["git", "clone", "--no-hardlinks", "--no-checkout", live, source], "source-clone.log")
+    run(["git", "-C", source, "checkout", "--detach", baseline[0]], "source-checkout.log")
+    run(["git", "-C", source, "apply", "--index", patch], "source-repair.log")
+    assert snapshot(source) == baseline
+    prepared = json.loads(run([python, "-I", release / "scripts/hermes-qualified-python.py", "prepare",
+        "--source", source, "--stage", stage, "--launcher", launcher,
+        "--installed-source", live, "--installed-home", home], "managed-prepare.log",
+        environment={**env, "HERMES_HOME": str(home)}, capture=True))
+    (stage / "prepared-runtime.json").write_text(json.dumps(prepared, indent=2))
+    qualified = Path(prepared["python"])
+    assert qualified.parent == stage and qualified.is_file()
+    isolated_app = stage / "app"
+    isolated_app.mkdir(mode=0o700)
+    for directory in ("src", "scripts"):
+        shutil.copytree(release / directory, isolated_app / directory)
+    (isolated_app / "docs/evidence").mkdir(parents=True)
+    for name in ("package.json", "package-lock.json", "tsconfig.json"):
+        shutil.copy2(release / name, isolated_app / name)
+    (isolated_app / "node_modules").symlink_to(release / "node_modules", target_is_directory=True)
+    assert qualification["integration_digest"](isolated_app) == digest
+    run([qualified, isolated_app / "scripts/spike/run.py", "--qualification", "--revision", baseline[0],
+        "--source", source, "--python", qualified, "--source-patch-sha256", baseline[1]], "integration.log", cwd=isolated_app)
+    regression_home = stage / "regression-home"
+    regression_home.mkdir(mode=0o700)
+    (regression_home / "config.yaml").write_text("plugins:\n  enabled: []\n")
+    regression_env = {**env, "HERMES_UPGRADE_STAGE_HOME": str(stage), "HERMES_UPGRADE_STAGE_SOURCE": str(source),
+        "HERMES_UPGRADE_OPERATION_ID": operation, "HERMES_HOME": str(regression_home)}
+    run([qualified, runner, "shared-oauth", "--pytest-harness", private / "pytest-harness"],
+        "shared-oauth-regressions.log", regression_env)
+    run([qualified, runner, "google-auth", "--google-bundle", private / "google-plugin"],
+        "google-regressions.log", regression_env)
+    assert snapshot(live) == snapshot(source) == baseline
+    assert all(sha(p) == expected for p, expected in host_files.items())
+    assert qualification["integration_digest"](release) == digest
+    assert qualification["integration_digest"](isolated_app) == digest
+    utility = runpy.run_path(str(release / "scripts/hermes-qualified-python.py"))
+    assert utility["fingerprint"](qualified) == prepared["fingerprint"]
+    receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
+        qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
+    receipt_path = stage / "qualification.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    qualification["read_receipt"](receipt_path, release)
+except BaseException:
+    prune_stage(stage)
+    raise
+pruned = prune_stage(stage)
 finish(dict(qualificationComplete=True, receipt=str(receipt_path), integrationDigest=digest,
-    revision=baseline[0], trackedPatchSha256=baseline[1], browserExecutableSha256=host_files[str(browser)], productionSourceUnchanged=True))
+    revision=baseline[0], trackedPatchSha256=baseline[1], browserExecutableSha256=host_files[str(browser)], productionSourceUnchanged=True,
+    disposableFilesRemoved=pruned))
 '''
 
 
