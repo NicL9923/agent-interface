@@ -255,6 +255,54 @@ class Activation(unittest.TestCase):
             release_app.main(["record", self.NAME])
 
 
+class RecoveryCommand(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.original = release_app.MANIFESTS
+        release_app.MANIFESTS = Path(self.temporary.name)
+        release_app.save_manifest({"name": "release-x", "status": "prepared", "host": "host", "appBase": "/srv/app"})
+        (release_app.MANIFESTS / "release-x-qualification.json").write_text(
+            json.dumps({"qualificationComplete": True, "receipt": "/srv/app/operations/release-x/q/qualification.json"}))
+
+    def tearDown(self):
+        release_app.MANIFESTS = self.original
+        self.temporary.cleanup()
+
+    def test_concurrent_recovery_of_the_same_release_is_refused_before_any_host_step(self):
+        import fcntl
+        calls = []
+        original = release_app.remote
+        release_app.remote = lambda *args, **kwargs: calls.append(args)
+        try:
+            with open(release_app.MANIFESTS / "release-x.lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                with self.assertRaisesRegex(SystemExit, "Another release-app.py command is using release-x"):
+                    release_app.main(["recover", "release-x"])
+        finally:
+            release_app.remote = original
+        self.assertEqual(calls, [])
+        self.assertEqual(release_app.load_manifest("release-x")["status"], "prepared")
+
+    def test_uncertain_recovery_is_held_for_review_and_cannot_run_again(self):
+        replies = iter([{"currentReleaseQualificationVerified": True}, ConnectionError("lost reply")])
+        def remote(host, program, payload, timeout):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                self.assertEqual(release_app.load_manifest("release-x")["status"], "recovering")
+                raise reply
+            return reply
+        original = release_app.remote
+        release_app.remote = remote
+        try:
+            with self.assertRaises(ConnectionError):
+                release_app.main(["recover", "release-x"])
+            self.assertEqual(release_app.load_manifest("release-x")["status"], "needs-review")
+            with self.assertRaisesRegex(SystemExit, "needs-review"):
+                release_app.main(["recover", "release-x"])
+        finally:
+            release_app.remote = original
+
+
 class HostPrograms(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

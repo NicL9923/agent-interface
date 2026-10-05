@@ -20,7 +20,9 @@ only replaces the hand-assembled steps around it. Host access details are passed
 arguments and kept in the ignored .private/releases manifests.
 """
 import argparse
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import re
@@ -347,6 +349,19 @@ def load_manifest(name):
     return json.loads(manifest_path(name).read_text())
 
 
+@contextlib.contextmanager
+def manifest_lock(name):
+    """Hold one release's manifest for a whole command, so a concurrent run cannot
+    overwrite its state with a stale copy."""
+    MANIFESTS.mkdir(parents=True, exist_ok=True)
+    with open(MANIFESTS / f"{name}.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.")
+        yield
+
+
 def save_manifest(manifest):
     MANIFESTS.mkdir(parents=True, exist_ok=True)
     manifest_path(manifest["name"]).write_text(json.dumps(manifest, indent=2) + "\n")
@@ -539,6 +554,11 @@ def discard(args):
 
 
 def recover(args):
+    with manifest_lock(args.name):
+        run_recovery(args)
+
+
+def run_recovery(args):
     manifest = load_manifest(args.name)
     if manifest["status"] not in ("preparing", "prepared"):
         raise SystemExit(f"{args.name} is {manifest['status']}; recover with a qualified, unactivated release.")
