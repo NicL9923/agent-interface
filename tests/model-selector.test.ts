@@ -29,7 +29,7 @@ const render = async (model = "saved-model") => {
   await act(async () => root.render(createElement(ModelSelector, { value: { provider: "custom:house", model }, profile: "shared",
     favorites: [], disabled: false, onChange, onFavoritesSaved })));
 };
-const button = (label: string) => Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === label)!;
+const button = (label: string) => Array.from(container.querySelectorAll("button")).find((b) => (b.getAttribute("aria-label") || b.textContent?.trim()) === label)!;
 
 it("loads actual profile models, uses provider disclosures, preserves aliases and chooses available options", async () => {
   await render();

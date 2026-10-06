@@ -63,6 +63,12 @@ export interface Preferences {
   startPage?: "today" | "assistant";
   notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
 }
+export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
+export interface InferenceSettings {
+  reasoning: typeof reasoningLevels[number];
+  speed: typeof serviceTiers[number];
+}
 export interface ModelChoice {
   provider: string;
   model: string;
@@ -276,6 +282,7 @@ export interface Runtime {
   vaultRequest?(input: VaultRequest): Promise<VaultResponse>;
   computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
   connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
+  inferenceSettings?(botId: string, update?: Partial<InferenceSettings>): Promise<InferenceSettings>;
   modelOptions?(profile?: string): Promise<ModelCatalog>;
   integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
   status(): Promise<RuntimeStatus>;

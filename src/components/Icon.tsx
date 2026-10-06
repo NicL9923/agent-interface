@@ -23,6 +23,9 @@ function gear() {
 }
 
 const paths = {
+  robot: "M7 6h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3ZM12 3v3M1 11v4M23 11v4M8 11h.01M16 11h.01M9 16h6",
+  refresh: "M20 8a8 8 0 1 0 0 8M20 3v5h-5",
+  spinner: "M20 12a8 8 0 1 1-8-8",
   today: "M5 5h14v15H5ZM8 3v4M16 3v4M5 10h14M8 14h2M14 14h2M8 17h2",
   menu: "M4 7h16M4 12h16M4 17h16",
   computer: "M4 4h16v12H4ZM9 20h6M12 16v4",

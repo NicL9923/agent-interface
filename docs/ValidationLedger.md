@@ -1,5 +1,24 @@
 # Validation ledger
 
+## October 5 web chat controls and activity
+
+Source fingerprint `sha256:7cd53d6fea80a8e5c1d011221072b9f597ef8f22f6eae16648f8ebc962645045`.
+The complete web suite passed 437 tests across 46 files. Type checking and the
+production build passed, web build `459506b57fe35aae`.
+
+Agent browser checks used synthetic fixtures with the production CSP at 1280×800
+and 390×844 in light/dark appearances. Checked counted tool accordions and
+expanded arguments, subagent grouping, approval busy feedback, empty role
+discussion, reasoning persistence, compact model dialog bounds, and Stop/Send
+switching as draft text changes. Voice capture was unavailable on the HTTP LAN
+fixture; actual microphone and speaker execution were not retested.
+
+The independent GPT-6.1 Sol review found historical tool-ID collisions, model
+confirmation during an inference save, and pending Stop state leaking between
+assistants. All three were fixed and covered by regressions. The reviewer
+verified the corrections and native Hermes configuration contracts.
+
+
 ## October 5 app release f8dac19
 
 PR #36 merged at `f8dac1949829a4cc527a4bb9f72e4a7c2f1a3484`. The release is live at `https://agentui.wildflowersranch.com`,

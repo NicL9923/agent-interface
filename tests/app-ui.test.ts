@@ -157,8 +157,13 @@ describe("conversation state", () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" } };
     await render();
     expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
-    expect(container.querySelector(".activity-copy")?.textContent).toContain("Running terminal");
-    const stop = container.querySelector<HTMLButtonElement>(".conversation-activity button")!;
+    expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const stop = container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!;
     await act(async () => stop.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
@@ -167,7 +172,94 @@ describe("conversation state", () => {
     });
     await advance(1500);
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
-    expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Running terminal");
+    expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
+  });
+
+  it("switches Stop back to Send while drafting guidance", async () => {
+    conversation = { ...conversation, activity: { state: "working" } };
+    await render();
+    const textarea = container.querySelector("textarea")!;
+    const type = (text: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();
+    await type(""); expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
+    await type("Try the other file"); expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();
+    await type(" "); expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
+  });
+
+  it("counts history and live tools once and groups delegated work separately", async () => {
+    const call = { id: "lookup", name: "web", status: "completed" as const, result: "Found it" };
+    conversation = { ...conversation, activity: { state: "working" }, messages: [
+      { id: "question", role: "user", text: "Find it" },
+      { id: "tool-row", role: "tool", text: "Found it", toolCall: call },
+      { id: "handoff", role: "tool", text: "Done", toolCall: { id: "worker", name: "delegate_task", status: "completed", result: "Done" } },
+    ], toolCalls: [call, { id: "second", name: "terminal", status: "running" }] };
+    await render();
+    const groups = [...container.querySelectorAll<HTMLDetailsElement>(".tool-calls")];
+    expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Tool calls2Running", "Subagents1"]);
+    expect(groups.every(group => !group.open)).toBe(true);
+    expect(container.querySelectorAll('.tool-call-detail, .action-receipt')).toHaveLength(3);
+    expect(container.textContent).toContain("Found it");
+  });
+
+  it("preserves separate historical tool results and files when Hermes reuses a call ID", async () => {
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "question", role: "user", text: "Get both reports" },
+      { id: "first-row", role: "tool", text: "First", toolCall: { id: "reused", name: "terminal", status: "completed", result: "First result" } },
+      { id: "second-row", role: "tool", text: "Second", toolCall: { id: "reused", name: "terminal", status: "completed", result: "Second result" }, files: [{ id: "report", name: "report.txt", mime: "text/plain" }] },
+    ] };
+    await render();
+    expect(container.querySelector(".tool-count")?.textContent).toBe("2");
+    expect(container.textContent).toContain("First result"); expect(container.textContent).toContain("Second result");
+    expect(container.querySelector('.tool-calls a')?.textContent).toContain("report.txt");
+  });
+
+  it("shows Send for an attachment-only draft while the assistant works", async () => {
+    conversation = { ...conversation, activity: { state: "working" } };
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path.endsWith("/draft")
+      ? { text: "", attachments: [{ id: "document", name: "report.txt", mime: "text/plain" }] } as T : original(path) as Promise<T>);
+    await render();
+    expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();
+  });
+
+  it("keeps an unanswered Stop isolated when switching assistants", async () => {
+    const other = { ...bootstrap.bots[0], id: "other", name: "Other" };
+    bootstrap.bots.push(other);
+    try {
+      conversation = { ...conversation, activity: { state: "working" } };
+      const original = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async <T>(path: string) => path.endsWith("/draft") ? { text: "", attachments: [] } as T
+        : path === "/bots/other/conversation" ? { ...conversation, botId: "other" } as T : original(path) as Promise<T>);
+      let reject!: (error: Error) => void;
+      vi.mocked(write).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+      await render(); await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!.click());
+      expect(container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!.disabled).toBe(true);
+      await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes("Other"))!.click());
+      expect(container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!.disabled).toBe(false);
+      await act(async () => reject(new Error("Previous assistant failed")));
+      expect(container.textContent).not.toContain("Previous assistant failed");
+    } finally { bootstrap.bots.pop(); vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("shows approval submission immediately, blocks duplicate decisions and allows retry after failure", async () => {
+    conversation = { ...conversation, approvals: [{ id: "approval", title: "Run action?", detail: "Details", status: "pending" }] };
+    let reject!: (error: Error) => void;
+    vi.mocked(write).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    await render();
+    const [approve, decline] = [...container.querySelectorAll<HTMLButtonElement>(".approval-card button")];
+    await act(async () => approve.click());
+    expect(approve.textContent).toBe("Approving…"); expect(approve.querySelector(".spin")).not.toBeNull();
+    expect(approve.disabled).toBe(true); expect(decline.disabled).toBe(true);
+    await act(async () => decline.click()); expect(write).toHaveBeenCalledOnce();
+    await act(async () => reject(new Error("Could not send decision")));
+    expect(approve.disabled).toBe(false); expect(decline.disabled).toBe(false);
+    expect(container.textContent).toContain("Could not send decision");
+    vi.mocked(write).mockResolvedValueOnce({}); await act(async () => decline.click());
+    expect(decline.textContent).toBe("Declined"); expect(decline.disabled).toBe(true);
+    vi.mocked(write).mockReset().mockResolvedValue({});
   });
 
   it("replaces inline thinking with the final reply when work completes", async () => {
@@ -176,7 +268,7 @@ describe("conversation state", () => {
     ] };
     await render();
     const activity = container.querySelector(".message-activity")!;
-    expect(activity.previousElementSibling?.getAttribute("data-message-id")).toBe("question");
+    expect(activity.previousElementSibling?.querySelector("[data-message-id]")?.getAttribute("data-message-id")).toBe("question");
     expect(activity.querySelector("[data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("thinking");
     conversation = { ...conversation, activity: { state: "done", detail: "Finished finding the file." }, messages: [
       ...conversation.messages,

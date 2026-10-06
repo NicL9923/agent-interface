@@ -157,8 +157,8 @@ export function VoiceControls({ botId, reply, disabled = false, onTranscript, on
   return <div className="voice-controls" data-voice-state={state}>
     <div className="voice-actions">
       {state === "recording" ? <button type="button" className="voice-recording" onClick={stopRecording}>Stop recording · {elapsed}s</button>
-        : <button type="button" disabled={disabled || busy || !supported} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
-      {reply && <button type="button" disabled={disabled || busy} onClick={() => void speak()}><Icon name="speaker" size={18} /><span className="tool-label">Listen to reply</span></button>}
+        : <button type="button" aria-label="Record voice" disabled={disabled || busy || !supported} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
+      {reply && <button type="button" aria-label="Listen to reply" title="Listen to reply" disabled={disabled || busy} onClick={() => void speak()}><Icon name="speaker" size={18} /><span className="tool-label">Listen to reply</span></button>}
       {busy && <button type="button" onClick={cancel}>{state === "speaking" ? "Stop speaking" : "Cancel voice"}</button>}
       {recording && !busy && <><button type="button" disabled={disabled} onClick={() => void transcribe(recording)}>Retry transcription</button><button type="button" onClick={() => { setRecording(null); setError(""); }}>Discard recording</button></>}
       {playable && !busy && <button type="button" disabled={disabled} onClick={() => void playAudio()}>Play audio</button>}

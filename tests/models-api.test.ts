@@ -12,7 +12,8 @@ async function setup() {
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:",
     GOOGLE_CLIENT_ID: "fixture-client", HOUSEHOLD_EMAILS: "one@example.invalid,two@example.invalid" });
   const modelOptions = vi.fn(async () => ({ providers: [], provider: "saved-provider", model: "saved-model" }));
-  const runtime = { modelOptions, close: async () => {} } as unknown as Runtime;
+  const inferenceSettings = vi.fn(async () => ({ reasoning: "high", speed: "normal" }));
+  const runtime = { inferenceSettings, capabilities: async () => ({ botConfiguration: { supported: true } }), modelOptions, close: async () => {} } as unknown as Runtime;
   const result = await createApp(config, runtime, { background: false }); apps.push(result.app);
   const login = (id: string) => {
     result.store.user({ id, name: id, email: `${id}@example.invalid` });
@@ -20,7 +21,7 @@ async function setup() {
     result.store.session(hash(token), id, csrf, Date.now() + 60000);
     return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
   };
-  return { ...result, runtime, modelOptions, one: login("one"), two: login("two") };
+  return { ...result, runtime, modelOptions, inferenceSettings, one: login("one"), two: login("two") };
 }
 
 it("requires sign-in for the scoped model catalog and explains unsupported Hermes installations", async () => {
@@ -52,4 +53,21 @@ it("rejects favorite writes without Origin/CSRF and validates bounded provider/m
   expect((await s.app.inject({ ...request, headers: s.one, payload: { modelFavorites: [{ provider: "", model: "model" }] } })).statusCode).toBe(400);
   expect((await s.app.inject({ ...request, headers: s.one, payload: { modelFavorites: [], userId: "two" } })).statusCode).toBe(400);
   expect(s.store.preferences("one").modelFavorites).toBeUndefined();
+});
+
+it("protects inference settings with sign-in and CSRF and only accepts native reasoning and tier values", async () => {
+  const s = await setup();
+  const url = "/api/bots/house/inference";
+  expect((await s.app.inject(url)).statusCode).toBe(401);
+  expect((await s.app.inject({url,headers:s.one})).json()).toEqual({reasoning:"high",speed:"normal"});
+  expect(s.inferenceSettings).toHaveBeenCalledWith("house");
+  const request = {method:"PATCH" as const,url,payload:{reasoning:"ultra"}};
+  expect((await s.app.inject({...request,headers:{origin,cookie:s.one.cookie}})).statusCode).toBe(403);
+  for (const payload of [{reasoning:"unknown"}, {speed:"turbo"}, {}, {scope:"global",reasoning:"low"}])
+    expect((await s.app.inject({...request,headers:s.one,payload})).statusCode).toBe(400);
+  expect(s.inferenceSettings).toHaveBeenCalledTimes(1);
+  expect((await s.app.inject({...request,headers:s.one})).statusCode).toBe(200);
+  expect(s.inferenceSettings).toHaveBeenLastCalledWith("house",{reasoning:"ultra"});
+  delete s.runtime.inferenceSettings;
+  expect((await s.app.inject({url,headers:s.one})).statusCode).toBe(409);
 });

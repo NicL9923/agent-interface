@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { RefObject } from "react";
-import type { ActivityState, AttentionRequest, Bootstrap, Bot, FileRef, ToolCall } from "../shared/types";
+import type { ActivityState, Approval, AttentionRequest, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { write } from "../client-api";
-import { Avatar, stateLabels } from "../components/Avatar";
+import { Avatar } from "../components/Avatar";
 import { MessageMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
@@ -13,13 +13,12 @@ import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import type { SavedConversation } from "./storage";
-export function Conversation({ boot, selected, botId, conversation, state, active, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, onScroll, onCreate }: {
+export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, onScroll, onCreate, onDraft }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
   conversation: SavedConversation | null;
   state: ActivityState;
-  active: boolean;
   showActivity: boolean;
   avatarState: ActivityState;
   connectionLost: boolean;
@@ -34,11 +33,35 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
   scroll: RefObject<HTMLDivElement | null>;
   onScroll(): void;
   onCreate(): void;
+  onDraft(text: string): void;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
-  const historicalToolIds = new Set(conversation?.messages.flatMap(message => message.toolCall ? [message.toolCall.id] : []) || []);
-  const liveTools = conversation?.toolCalls?.filter(call => !historicalToolIds.has(call.id)) || [];
+  const blocks: { messages: Message[]; tools: Map<string, Message> }[] = [];
+  for (const message of conversation?.messages || []) {
+    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map() });
+    const block = blocks.at(-1)!;
+    if (message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
+    if (message.role !== "tool") block.messages.push(message);
+  }
+  for (const call of conversation?.toolCalls || []) {
+    // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
+    const matches = blocks.flatMap(block => [...block.tools.values()].filter(message => message.toolCall?.id === call.id)
+      .map(message => ({ block, message })));
+    if (matches.length === 1) {
+      const { block, message } = matches[0];
+      block.tools.set(message.id, { ...message, toolCall: call });
+    } else {
+      if (!blocks.length) blocks.push({ messages: [], tools: new Map() });
+      blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
+    }
+  }
+  const actions: Record<ActivityState, string> = {
+    idle: "ready", thinking: "thinking", working: "working", waiting: "waiting for approval",
+    blocked: "waiting for your input", done: "done", failed: "having trouble", interrupted: "stopped", disconnected: "reconnecting",
+  };
+  const detail = conversation?.activity.detail?.trim().replace(/[.…]+$/, "");
+  const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
   return (
     <>
       {workerUpdate && (
@@ -111,11 +134,10 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
           </div>
         ) : !conversation && !connectionLost ? (
           <div className="empty-state" role="status"><p>Opening your conversation…</p></div>
-        ) : conversation?.messages.length ? (
+        ) : blocks.length ? (
           <>
-            {conversation.messages
-              .filter((message) => message.role !== "tool" || advanced || message.files?.length || message.toolCall || isAgentExchange(message))
-              .map((message) => (
+            {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
+              {block.messages.map((message) => (
                 <article
                   className={`message message-${isAgentExchange(message) ? "agent" : message.role}`}
                   key={message.id}
@@ -140,19 +162,13 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
                       <p>{message.reasoning}</p>
                     </details>
                   )}
-                  {!advanced && message.toolCall && !isAgentExchange(message) && <ActionReceipt call={message.toolCall} />}
-                  {advanced && message.toolCall && !isAgentExchange(message) && <ToolCallDetail call={message.toolCall} disconnected={connectionLost} />}
-                  {advanced && message.role === "tool" && !message.toolCall && (
-                    <details className="message-detail tool-call-detail">
-                      <summary>{message.toolName || "Tool result"}</summary>
-                      <pre>{message.text || "No result was exposed by Hermes."}</pre>
-                    </details>
-                  )}
                   {message.files?.map((file) => (
                     <FileLink file={file} key={file.id} />
                   ))}
                 </article>
               ))}
+              <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={connectionLost} recipient={selected.name} />
+            </div>)}
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -162,42 +178,20 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
               size={112}
               name={selected.name}
             />
-            <h2>What’s on your mind?</h2>
-            <p>
-              Ask a question, share a file, or hand over something from your
-              to-do list.
-            </p>
+            <h2>Let's discuss your role.</h2>
+            <p>{selected.description || `Tell ${selected.name} what you need help with.`}</p>
+            <button type="button" onClick={() => onDraft(`Let's discuss your role${selected.description ? `: ${selected.description}` : ". Ask me what I need help with and how I like to work"}.`)}>Discuss {selected.name}'s role</button>
             {!boot.capabilities.chat.supported && (
               <p className="muted">{boot.capabilities.chat.reason}</p>
             )}
           </div>
         ) : null}
-        {advanced && liveTools.map(call => <article className="message message-tool" key={`tool-${call.id}`}>
-          <ToolCallDetail call={call} disconnected={connectionLost} />
-        </article>)}
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}`}>
             <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} />
             <div className="activity-copy" role="status">
-              <strong>{stateLabels[state]}</strong>
-              <p>{connectionLost ? "Restoring activity when Hermes reconnects."
-                : conversation?.activity.detail || (state === "thinking" ? "Considering your message."
-                  : state === "working" ? "Working on your request." : "")}</p>
+              <span className="activity-shimmer">{selected.name} is {action}...</span>
             </div>
-            {active && (
-              <button
-                disabled={!boot.capabilities.stop.supported}
-                title={boot.capabilities.stop.reason}
-                onClick={() =>
-                  void write(
-                    `/bots/${encodeURIComponent(botId)}/stop`,
-                    {},
-                  ).catch((e) => setError(e.message))
-                }
-              >
-                <Icon name="stop" size={14} /> Stop
-              </button>
-            )}
           </div>
         )}
         {conversation?.attention?.map((request) => (
@@ -214,50 +208,49 @@ export function Conversation({ boot, selected, botId, conversation, state, activ
         ))}
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")
-          .map((approval) => (
-            <article className="approval-card" key={approval.id}>
-              <p className="eyebrow">Your decision needed</p>
-              <h2>{approval.title}</h2>
-              <p>{approval.detail}</p>
-              {approval.expiresAt && (
-                <small>
-                  Expires <When value={approval.expiresAt} inline />
-                </small>
-              )}
-              <div className="actions">
-                <button
-                  className="primary"
-                  disabled={!boot.capabilities.approvals.supported}
-                  onClick={() =>
-                    void write(
-                      `/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`,
-                      { decision: "approved" },
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  Approve
-                </button>
-                <button
-                  disabled={!boot.capabilities.approvals.supported}
-                  onClick={() =>
-                    void write(
-                      `/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`,
-                      { decision: "denied" },
-                    ).catch((e) => setError(e.message))
-                  }
-                >
-                  Decline
-                </button>
-              </div>
-              <small>
-                Either household member can decide. Hermes checks whether this
-                request is still pending.
-              </small>
-            </article>
-          ))}
+          .map((approval) => <ApprovalCard key={`${botId}:${approval.id}`} approval={approval} botId={botId}
+            supported={boot.capabilities.approvals.supported} report={setError} />)}
       </div>
     </>
   );
+}
+function ApprovalCard({ approval, botId, supported, report }: { approval: Approval; botId: string; supported: boolean; report(message: string): void }) {
+  const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
+  const [settled, setSettled] = useState(false);
+  async function decide(value: "approved" | "denied") {
+    if (decision) return;
+    setDecision(value);
+    try {
+      await write(`/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`, { decision: value });
+      setSettled(true);
+    } catch (error) { setDecision(null); report((error as Error).message); }
+  }
+  return <article className="approval-card" aria-busy={!!decision && !settled}>
+    <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
+    {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
+    <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
+      className={value === "approved" ? "primary" : undefined} disabled={!supported || !!decision} onClick={() => void decide(value)}>
+      {decision === value && <Icon name={settled ? "check" : "spinner"} className={settled ? undefined : "spin"} size={16} />}
+      {decision === value ? settled ? value === "approved" ? "Approved" : "Declined" : value === "approved" ? "Approving…" : "Declining…" : value === "approved" ? "Approve" : "Decline"}
+    </button>)}</div>
+    {decision && <span className="sr-only" role="status">{settled ? "Decision sent" : "Sending decision"}</span>}
+  </article>;
+}
+function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }) {
+  const delegated = (message: Message) => isAgentExchange(message) || /^(delegate_task|spawn_agent|subagent|task)$/.test(message.toolCall?.name || message.toolName || "");
+  const groups = [{ label: "Tool calls", items: messages.filter(message => !delegated(message)) },
+    { label: "Subagents", items: messages.filter(delegated) }];
+  return groups.filter(group => group.items.length).map(group => <details className="tool-calls" key={group.label}>
+    <summary><Icon name={group.label === "Subagents" ? "robot" : "terminal"} size={16} /><span>{group.label}</span><span className="tool-count">{group.items.length}</span>
+      {group.items.some(message => message.toolCall?.status === "running") && <span className="muted">{disconnected ? "Last seen running" : "Running"}</span>}
+      <Icon name="chevron" size={16} /></summary>
+    <div className="tool-calls-content">{group.items.map(message => <div key={message.id}>
+      {isAgentExchange(message) ? <AgentExchange message={message} recipient={recipient} /> : message.toolCall
+        ? advanced ? <ToolCallDetail call={message.toolCall} disconnected={disconnected} /> : <ActionReceipt call={message.toolCall} />
+        : <details className="message-detail"><summary>{message.toolName || "Tool result"}</summary><pre>{message.text || "No result was exposed by Hermes."}</pre></details>}
+      {message.files?.map(file => <FileLink key={file.id} file={file} />)}
+    </div>)}</div>
+  </details>);
 }
 function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?: boolean }) {
   return <details className="message-detail tool-call-detail" data-tool-call-id={call.id}>

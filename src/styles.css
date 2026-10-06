@@ -1416,3 +1416,29 @@ dialog[open]::backdrop {
     animation: none;
   }
 }
+
+/* Compact chat activity and controls. */
+.composer-tools .tool-label { display: none; }
+.composer-tools .send-button { margin-left: auto; flex-shrink: 0; }
+.activity-shimmer { display: inline-block; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.state-thinking .activity-shimmer, .state-working .activity-shimmer, .state-waiting .activity-shimmer {
+  background: linear-gradient(110deg, var(--muted) 25%, var(--ink) 43%, var(--muted) 60%);
+  background-size: 250% 100%; background-clip: text; color: transparent;
+  animation: glass-shimmer 2.8s linear infinite;
+}
+.tool-calls { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
+.tool-calls > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; list-style: none; }
+.tool-calls > summary::-webkit-details-marker { display: none; }
+.tool-calls > summary > .icon:last-child { margin-left: auto; transition: transform 250ms ease; }
+.tool-calls[open] > summary > .icon:last-child { transform: rotate(90deg); }
+.tool-count { padding: 2px 7px; border-radius: 6px; background: var(--rail); font-variant-numeric: tabular-nums; }
+.tool-calls-content { display: grid; gap: 8px; }
+.tool-calls-content pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.approval-card .actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.spin { animation: control-spin 1s linear infinite; }
+@keyframes control-spin { to { transform: rotate(360deg); } }
+@keyframes glass-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .activity-shimmer { animation: none !important; background: none !important; color: var(--muted) !important; }
+  .spin { animation: none; }
+}

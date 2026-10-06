@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, write } from '../client-api';
 import type { Bootstrap } from '../shared/types';
-import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, Starter } from '../shared/discovery';
+import type { AutomationOverview, HistoryPage, SavedItem, SearchHit } from '../shared/discovery';
 import { AgentExchange, isAgentExchange } from "./AgentExchange";
 import { ActionReceipt } from "./ActionReceipt";
 import { MessageMarkdown } from './MessageMarkdown';
@@ -31,12 +31,4 @@ export function DiscoveryPanel({ bootstrap, onRoutine }: { bootstrap: Bootstrap;
       <h3>Usage over 30 days</h3><p className="muted">Recorded main-session usage. Estimates and provider invoices may differ. Auxiliary calls are not included.</p>{overview?.usage.map(usage=><article className="automation-row" key={usage.botId}><strong>{bootstrap.bots.find(bot=>bot.id===usage.botId)?.name}</strong><p>{usage.sessions} sessions · {usage.inputTokens.toLocaleString()} input / {usage.outputTokens.toLocaleString()} output tokens</p><p>Reported cost: {usage.actualCost===null?'Unknown':`$${usage.actualCost.toFixed(2)}${usage.partial?' (partial)':''}`} · Estimate: {usage.estimatedCost===null?'Unknown':`$${usage.estimatedCost.toFixed(2)}`}</p></article>)}{!!overview?.unavailableBots.length&&<p role="status">Usage unavailable for {overview.unavailableBots.length} assistant(s).</p>}</>}
     </>}
   </div>;
-}
-export function useStarters(botId:string) {
-  const [items,setItems]=useState<Starter[]>([]);
-  useEffect(()=>{let active=true;setItems([]);if(!botId)return;void api<Starter[]>(`/bots/${encodeURIComponent(botId)}/starters`).then(rows=>{if(active)setItems(Array.isArray(rows)?rows:[]);}).catch(()=>{});return()=>{active=false;};},[botId]);
-  return items;
-}
-export function StarterActions({items,onDraft}:{items:Starter[];onDraft:(prompt:string)=>void}) {
-  return items.length?<div className="starter-actions" aria-label="Start a draft">{items.map(item=><button type="button" key={item.id} onClick={()=>onDraft(item.prompt)}>{item.title}</button>)}</div>:null;
 }

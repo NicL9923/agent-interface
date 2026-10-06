@@ -92,10 +92,11 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
     </div>;
   };
   const content = <div className="model-picker-content">
-        <label className="model-search">Search models<input type="search" value={search} placeholder="Find a model or provider"
+        <div className="model-search-row"><label className="model-search"><span className="sr-only">Search models</span><input type="search" value={search} placeholder="Find a model or provider"
           onChange={(event) => setSearch(event.target.value)} /></label>
-        {!error && !!catalog?.providers.length && <button className="model-refresh" type="button" disabled={loading}
-          onClick={() => setRetry((n) => n + 1)}>Refresh models</button>}
+        {!error && !!catalog?.providers.length && <button className="model-refresh" type="button" aria-label="Refresh models" title="Refresh models" disabled={loading}
+          onClick={() => setRetry((n) => n + 1)}><Icon name="refresh" size={18} className={loading ? "spin" : undefined} /></button>}
+        </div>
         {loading && <p className="muted" role="status">Loading models from Hermes…</p>}
         {error && <div className="model-load-error"><p role="alert">{error}</p><button type="button" onClick={() => setRetry((n) => n + 1)}>Retry loading models</button></div>}
         {favoriteError && <p className="form-error" role="alert">{favoriteError}</p>}

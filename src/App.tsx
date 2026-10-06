@@ -9,7 +9,7 @@ import { ComputerPanel } from "./components/ComputerPanel";
 import { useDeviceNotifications } from "./components/use-device-notifications";
 import { TodayPanel } from "./components/TodayPanel";
 import { RoutineResults } from "./components/RoutineResults";
-import { DiscoveryPanel, useStarters } from "./components/DiscoveryPanel";
+import { DiscoveryPanel } from "./components/DiscoveryPanel";
 import "./components/discovery.css";
 import { GroupChats } from "./components/GroupChats";
 import { initialPanel, initialView, startsOnToday, useUrlSync } from "./app/view";
@@ -30,7 +30,6 @@ export function App() {
   const closePanels = (...kinds: Panel["kind"][]) =>
     setPanel(current => current && kinds.includes(current.kind) ? null : current);
   const [error, setError] = useState("");
-  const [startersOpen, setStartersOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const mobile = useMobile();
   const session = useSession({
@@ -45,8 +44,6 @@ export function App() {
   const userId = boot?.user.id;
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  // Only known assistants: a stale deep link must not reach Hermes.
-  const starters = useStarters(boot?.bots.some(bot => bot.id === botId) ? botId : "");
   const { draft, setDraft, draftReady, uploading, setUploading, upload } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, persistPosition } = useConversation(botId, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
@@ -63,7 +60,6 @@ export function App() {
     persistPosition();
     setView("conversation");
     setBotId(id);
-    setStartersOpen(false);
     setRailOpen(false);
     setError("");
   };
@@ -128,16 +124,17 @@ export function App() {
           onSettings={bot => setPanel({ kind: "settings", bot })} savePreferences={session.savePreferences} />
         {view === "find" ? <DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /> : view === "groups" ? <GroupChats key={boot.user.id} bootstrap={boot} /> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
-            active={active} showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
+            showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError} workerUpdate={workerUpdate}
             notifications={notifications} scroll={scroll} onScroll={persistPosition}
+            onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
-          {selected && <Composer boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
-            active={active} showActivity={showActivity} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
+          {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
+            active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploading={uploading} upload={upload} pending={pending} receipt={receipt}
             sending={sending} send={send} retry={retry} reviewed={reviewed} setReviewed={setReviewed}
-            starters={starters} startersOpen={startersOpen} setStartersOpen={setStartersOpen}
+            report={setError}
             refresh={() => void session.refresh()} />}
         </>}
       </main>

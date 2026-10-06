@@ -1,6 +1,7 @@
+import { reasoningLevels, serviceTiers } from "../shared/types";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, write } from "../client-api";
-import type { Bootstrap, Bot, BotInput, ModelChoice } from "../shared/types";
+import { ApiError, api, write } from "../client-api";
+import type { Bootstrap, Bot, BotInput, InferenceSettings, ModelChoice } from "../shared/types";
 import { Icon } from "./Icon";
 import { ModelSelector } from "./ModelSelector";
 
@@ -14,6 +15,9 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [settings, setSettings] = useState<InferenceSettings>();
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
   const [confirm, setConfirm] = useState<ModelChoice | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -35,11 +39,30 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
     document.addEventListener("pointerdown", close);
     return () => { document.removeEventListener("keydown", close); document.removeEventListener("pointerdown", close); };
   }, [open]);
-  useEffect(() => { setOpen(false); setBusy(false); setError(""); setConfirm(null); }, [bot.id]);
+  useEffect(() => { setOpen(false); setBusy(false); setError(""); setConfirm(null); setSettingsBusy(false); }, [bot.id]);
   useEffect(() => { if (blocked) { setOpen(false); setConfirm(null); } }, [blocked]);
   useEffect(() => { if (open) root.current?.querySelector<HTMLInputElement>("input[type=search]")?.focus(); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setSettings(undefined); setSettingsError("");
+    void api<InferenceSettings>(`/bots/${encodeURIComponent(bot.id)}/inference`, { signal: controller.signal })
+      .then(value => { if (!controller.signal.aborted) setSettings(value); })
+      .catch(error => { if (!controller.signal.aborted) setSettingsError(error.message); });
+    return () => controller.abort();
+  }, [open, bot.id]);
+  async function changeSettings(update: Partial<InferenceSettings>) {
+    if (blocked || settingsBusy || busy) return;
+    const target = bot.id;
+    setSettingsBusy(true); setSettingsError("");
+    try {
+      const value = await write<InferenceSettings>(`/bots/${encodeURIComponent(target)}/inference`, update, "PATCH");
+      if (current.current === target) setSettings(value);
+    } catch (error) { if (current.current === target) setSettingsError((error as Error).message); }
+    finally { if (current.current === target) setSettingsBusy(false); }
+  }
   async function save(choice: ModelChoice, confirmed = false) {
-    if (blocked) return;
+    if (blocked || busy || settingsBusy) return;
     const target = bot.id;
     const input: BotInput = {
       name: bot.name, description: bot.description || "", instructions: bot.instructions || "",
@@ -64,16 +87,30 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
       aria-label={`Model: ${label}`} disabled={blocked}
       title={unavailable ? bootstrap.capabilities.botConfiguration.reason || "Change this model in assistant settings." : label}
       onClick={() => setOpen(value => !value)}>
-      <Icon name="model" size={18} /><span className="tool-label composer-model-name">{bot.model}</span>
+      <Icon name="robot" size={18} /><span className="tool-label composer-model-name">{bot.model}</span>
     </button>
     {open && <div className="model-popover" role="dialog" aria-label="Choose a model">
       <ModelSelector inline value={{ provider: bot.provider || "", model: bot.model }} profile={bot.id}
-        favorites={bootstrap.preferences.modelFavorites || []} disabled={busy}
+        favorites={bootstrap.preferences.modelFavorites || []} disabled={busy || settingsBusy}
         onChange={choice => void save(choice)} onFavoritesSaved={onSaved} />
-      {bot.shared && <p className="muted">Shared assistant: the model changes for your whole household.</p>}
+      <div className="inference-controls" aria-busy={settingsBusy}>
+        {settings ? <>
+          <label>Reasoning<select value={settings.reasoning} disabled={busy || settingsBusy}
+            onChange={event => void changeSettings({ reasoning: event.target.value as InferenceSettings["reasoning"] })}>
+            {reasoningLevels.map(value => <option key={value} value={value}>{value === "none" ? "Off" : value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
+          </select></label>
+          <label>Speed<select value={settings.speed} disabled={busy || settingsBusy}
+            onChange={event => void changeSettings({ speed: event.target.value as InferenceSettings["speed"] })}>
+            {serviceTiers.map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
+          </select></label>
+          <small className="muted">Applies to this conversation. Available levels and speeds depend on the model.</small>
+        </> : !settingsError && <span role="status" className="muted">Loading reasoning and speed…</span>}
+        {settingsBusy && <span role="status"><Icon name="spinner" className="spin" size={14} /> Saving…</span>}
+        {settingsError && <p role="alert" className="form-error">{settingsError}</p>}
+      </div>
       {error && <p className="form-error" role="alert">{error}</p>}
       {confirm && <div className="actions">
-        <button type="button" className="primary" disabled={busy} onClick={() => void save(confirm, true)}>Confirm this model</button>
+        <button type="button" className="primary" disabled={busy || settingsBusy} onClick={() => void save(confirm, true)}>Confirm this model</button>
         <button type="button" onClick={() => { setConfirm(null); setError(""); }}>Cancel</button>
       </div>}
     </div>}
