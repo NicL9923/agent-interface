@@ -232,20 +232,15 @@ it.each(['','?bot=shared'])('uses Today only when initial navigation has no expl
   history.replaceState(null,'',`/${query}`);await renderApp();
   expect(!!container.querySelector('.today-panel')).toBe(!query);expect(!!container.querySelector('.transcript')).toBe(!!query);
 });
-it('offers starters in an empty conversation and keeps them behind a toggle once it has history',async()=>{
-  const previous=vi.mocked(api).getMockImplementation()!;
-  vi.mocked(api).mockImplementation(async <T>(path:string)=>path==='/bots/shared/starters'?[{id:'meals',title:'Plan dinners',prompt:'Plan three dinners'}] as T:previous(path));
-  const chips=()=>[...container.querySelectorAll('.starter-actions button')].map(button=>button.textContent);
-  const toggle=()=>[...container.querySelectorAll<HTMLButtonElement>('.composer-tool')].find(button=>button.textContent==='Starters');
+it('offers a role discussion specific to an empty assistant and preserves an existing draft',async()=>{
+  conversation.messages=[];
+  boot.bots[0].description='Plan easy family dinners';
   await renderApp();await advance(20);
-  expect(chips()).toEqual([]);
-  await act(async()=>toggle()!.click());
-  expect(chips()).toEqual(['Plan dinners']);expect(toggle()!.getAttribute('aria-expanded')).toBe('true');
-  await act(async()=>container.querySelector<HTMLButtonElement>('.starter-actions button')!.click());
-  expect(container.querySelector('textarea')!.value).toContain('Plan three dinners');expect(chips()).toEqual([]);
-  await act(async()=>root.unmount());root=createRoot(container);conversation.messages=[];
-  await renderApp();await advance(20);
-  expect(chips()).toEqual(['Plan dinners']);expect(toggle()).toBeUndefined();
+  const button=container.querySelector<HTMLButtonElement>('.empty-state button')!;
+  expect(button.textContent).toContain(boot.bots[0].name);
+  await act(async()=>button.click());
+  expect(container.querySelector('textarea')!.value).toContain('Plan easy family dinners');
+  expect(write).not.toHaveBeenCalledWith('/bots/shared/messages',expect.anything());
 });
 it('lets the next sign-in send after signing out while a send was unanswered',async()=>{
   for(const [name,open] of [['showModal',true],['close',false]] as const)Object.defineProperty(HTMLDialogElement.prototype,name,{configurable:true,value:function(this:HTMLDialogElement){this.open=open;}});

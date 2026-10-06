@@ -233,6 +233,26 @@ const server = createServer(async (request, response) => {
       else { source.enabled = body.enabled === true; source.canUnlock = source.enabled && !source.unlocked; }
       return json(response, { ok: true });
     }
+    const inferenceMatch = /^\/bots\/([^/]+)\/inference$/.exec(path);
+    if (inferenceMatch) {
+      const bot = bots.find(bot => bot.id === inferenceMatch[1]);
+      if (!bot) return json(response, { error: 'Unknown fixture assistant.' }, 404);
+      bot.inference ||= { reasoning: 'high', speed: 'normal' };
+      if (request.method === 'PATCH') bot.inference = { ...bot.inference, ...body };
+      return json(response, bot.inference);
+    }
+    const approvalMatch = /^\/bots\/([^/]+)\/approvals\/([^/]+)$/.exec(path);
+    if (approvalMatch) {
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const conversation = conversations[approvalMatch[1]];
+      conversation.approvals = conversation.approvals.filter(approval => approval.id !== approvalMatch[2]);
+      return json(response, { ok: true });
+    }
+    const stopMatch = /^\/bots\/([^/]+)\/stop$/.exec(path);
+    if (stopMatch) {
+      conversations[stopMatch[1]].activity = { state: 'interrupted' };
+      return json(response, { ok: true });
+    }
     const secureMatch = /^\/bots\/([^/]+)\/secure-requests\/([^/]+)$/.exec(path);
     if (secureMatch) {
       const botId = decodeURIComponent(secureMatch[1]), conversation = conversations[botId], pending = conversation?.attention?.find(item => item.id === secureMatch[2]);

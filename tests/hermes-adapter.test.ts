@@ -51,6 +51,7 @@ class WireSocket extends EventTarget {
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3}}]};
     if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
+    if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
     if(request.method==='profiles.set_asset')result={ok:true};
     queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,result}));
@@ -678,4 +679,14 @@ it('routes routine history and output through the private scoped native experien
   expect(url.pathname).toBe('/api/agent-interface/service/agent-interface/experience');
   expect(new Headers(init.headers).get('Authorization')).toBe('Bearer '+token);
   expect(JSON.parse(init.body as string)).toEqual({operation:'routine_results',profile:'shared',routineId:'morning'});
+});
+
+it('scopes reasoning and service tier controls to the canonical assistant session', async () => {
+  expect(await runtime.inferenceSettings!('shared', {reasoning:'ultra',speed:'fast'})).toEqual({reasoning:'high',speed:'normal'});
+  expect(calls.filter(call=>call.method==='config.set').map(call=>call.params)).toEqual([
+    {profile:'shared',session_id:'live-one',key:'reasoning',value:'ultra'},
+    {profile:'shared',session_id:'live-one',key:'fast',value:'fast'},
+  ]);
+  rpcErrors.set('config.set', {code:4002,message:'Fast mode is unavailable'});
+  await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toThrow();
 });

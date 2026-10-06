@@ -35,3 +35,13 @@
 .model-popover .model-picker-content { border-top: 0; padding: 0; }
 .model-popover > p { margin: 10px 2px 0; }
 .model-popover .actions { margin: 10px 0 0; }
+.model-search-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.model-search-row .model-search { flex: 1; min-width: 0; margin: 0; }
+.model-search-row input { min-height: 38px; padding: 8px 10px; font-size: 13px; }
+.model-search-row .model-refresh { display: grid; place-items: center; min-height: 44px; width: 44px; padding: 0; margin: 0; flex-shrink: 0; }
+.inference-controls { display: flex; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+.inference-controls label { flex: 1; min-width: 100px; font-size: 12px; margin: 0; }
+.inference-controls select { font-size: 13px; padding: 8px; min-height: 40px; }
+.inference-controls > small, .inference-controls > p { flex-basis: 100%; margin: 0; font-size: 11px; }
+.model-popover { max-height: min(680px, 75dvh); overflow-y: auto; overscroll-behavior: contain; }
+.model-popover .model-picker-content { max-height: min(340px, 40dvh); }

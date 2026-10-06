@@ -1,14 +1,11 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ActivityState, Bootstrap, Bot, SubmissionReceipt } from "../shared/types";
 import type { VoiceState } from "../shared/voice";
-import { Avatar, stateLabels } from "../components/Avatar";
+import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
-import { StarterActions } from "../components/DiscoveryPanel";
-import type { useStarters } from "../components/DiscoveryPanel";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
-import { When } from "../components/When";
+import { write } from "../client-api";
 import type { Draft, Pending, SavedConversation } from "./storage";
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
 function useComposerInput(text: string, botId: string) {
@@ -37,16 +34,15 @@ function useComposerInput(text: string, botId: string) {
       composerInput.current = null;
     };
   }, [fitComposer]);
-  return { ref, focus: () => composerInput.current?.focus() };
+  return { ref };
 }
-export function Composer({ boot, selected, botId, conversation, state, active, showActivity, connectionLost, draft, setDraft, draftReady, uploading, upload, pending, receipt, sending, send, retry, reviewed, setReviewed, starters, startersOpen, setStartersOpen, refresh }: {
+export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploading, upload, pending, receipt, sending, send, retry, reviewed, setReviewed, refresh, report }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
   conversation: SavedConversation | null;
   state: ActivityState;
   active: boolean;
-  showActivity: boolean;
   connectionLost: boolean;
   draft: Draft;
   setDraft(update: (current: Draft) => Draft): void;
@@ -60,17 +56,18 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
   retry(): void;
   reviewed: boolean;
   setReviewed(value: boolean): void;
-  starters: ReturnType<typeof useStarters>;
-  startersOpen: boolean;
-  setStartersOpen: Dispatch<SetStateAction<boolean>>;
   refresh(): void;
+  report(message: string): void;
 }) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [stopping, setStopping] = useState(false);
+  const stopVisible = active && !draft.text.trim() && !draft.attachments.length;
   const input = useComposerInput(draft.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
   return (
     <footer className="composer-area">
-      {(startersOpen || (conversation && !conversation.messages.length)) && <StarterActions items={starters} onDraft={prompt=>{setDraft(previous=>({...previous,dirty:true,text:previous.text?`${previous.text}\n\n${prompt}`:prompt}));setStartersOpen(false);input.focus();}} />}
       {state === "interrupted" && (
         <label className="interruption-review">
           <input
@@ -82,18 +79,9 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
           continuing.
         </label>
       )}
-      {conversation && advanced && showActivity && (
-          <details className="activity-details">
-            <summary>Activity details</summary>
-            <p>{connectionLost ? "Activity is unknown until Hermes reconnects." : conversation.activity.detail || stateLabels[state]}</p>
-            {conversation.activity.updatedAt && <p>Last reported <When value={conversation.activity.updatedAt} inline /></p>}
-            {conversation.activity.runId && <p>Run <code>{conversation.activity.runId}</code></p>}
-          </details>
-        )}
       {pending && (
         <div className="notice" role="status">
-          Checking whether Hermes accepted your message. Your draft is
-          preserved; sending stays paused to prevent duplicates.
+          <Icon name="spinner" className="spin" size={16} /> Sending…
           <button
             disabled={sending || !boot.capabilities.idempotency.supported}
             title={boot.capabilities.idempotency.reason}
@@ -211,12 +199,6 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
               }}
             />
           </label>
-          {!!starters.length && !!conversation?.messages.length && (
-            <button type="button" className="composer-tool" aria-expanded={startersOpen}
-              onClick={() => setStartersOpen(open => !open)}>
-              <Icon name="sparkle" size={18} /><span className="tool-label">Starters</span>
-            </button>
-          )}
           {advanced && <ComposerModelPicker bot={selected} bootstrap={boot}
             disabled={connectionLost || sending} onSaved={refresh} />}
           <div className="composer-voice">
@@ -227,14 +209,18 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
           </div>
-          <span className="composer-hint">
-            {uploading
-              ? "Uploading…"
-              : active
-                ? "New messages guide the current work"
-                : "Enter to send · Shift + Enter for a new line"}
-          </span>
-          <button
+          {uploading && <span className="composer-hint" role="status">Uploading…</span>}
+          {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
+            disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
+            title={boot.capabilities.stop.reason || "Stop response"}
+            onClick={() => {
+              setStopping(true);
+              void write(`/bots/${encodeURIComponent(botId)}/stop`, {})
+                .catch(error => { if (mounted.current) report(error.message); })
+                .finally(() => { if (mounted.current) setStopping(false); });
+            }}>
+            <Icon name={stopping ? "spinner" : "stop"} className={stopping ? "spin" : undefined} size={19} />
+          </button> : <button
             className="send-button"
             aria-label={active ? "Send guidance" : "Send message"}
             disabled={
@@ -249,15 +235,10 @@ export function Composer({ boot, selected, botId, conversation, state, active, s
               (!draft.text.trim() && !draft.attachments.length)
             }
           >
-            <Icon name="send" size={19} />
-          </button>
+            <Icon name={sending ? "spinner" : "send"} className={sending ? "spin" : undefined} size={19} />
+          </button>}
         </div>
       </form>
-      <p className="shared-note">
-        {selected.shared
-          ? "One shared conversation. Messages and decisions keep their sender."
-          : "Personal organization does not create a privacy boundary."}
-      </p>
     </footer>
   );
 }

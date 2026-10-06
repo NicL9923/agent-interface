@@ -1,3 +1,4 @@
+import { reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -256,6 +257,17 @@ export async function createApp(
     const userId = signedIn(req).id;
     store.savePreferences(userId, { ...store.preferences(userId), modelFavorites });
     return { modelFavorites };
+  });
+  app.get("/api/bots/:id/inference", async req => {
+    if (!runtime.inferenceSettings) throw failure(409, "Hermes inference controls are unavailable.");
+    return runtime.inferenceSettings(params(req).id);
+  });
+  app.patch("/api/bots/:id/inference", async req => {
+    await requireCapability("botConfiguration");
+    if (!runtime.inferenceSettings) throw failure(409, "Hermes inference controls are unavailable.");
+    const update = z.object({ reasoning: z.enum(reasoningLevels).optional(), speed: z.enum(serviceTiers).optional() })
+      .strict().refine(value => Object.keys(value).length > 0).parse(req.body);
+    return runtime.inferenceSettings(params(req).id, update);
   });
   app.get("/api/models", async (req) => {
     const { botId } = z.object({ botId: id.optional() }).parse(req.query);

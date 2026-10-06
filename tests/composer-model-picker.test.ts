@@ -19,7 +19,7 @@ const bootstrap = { capabilities: { botConfiguration: { supported: true } }, pre
 let container: HTMLDivElement, root: Root;
 const onSaved = vi.fn();
 beforeEach(() => {
-  vi.clearAllMocks(); vi.mocked(api).mockResolvedValue(catalog); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : catalog) as T); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
@@ -75,4 +75,27 @@ it("closes when the assistant can no longer be saved safely and returns focus af
   await render(); await act(async () => trigger().click());
   await click("New model");
   expect(document.activeElement).toBe(trigger());
+});
+
+ it("saves conversation reasoning and restores the saved value after an unsupported speed fails", async () => {
+  vi.mocked(write).mockResolvedValueOnce({ reasoning: "ultra", speed: "normal" }).mockRejectedValueOnce(new Error("Fast mode is unavailable for this model."));
+  await render(); await act(async () => trigger().click());
+  const [reasoning, speed] = [...container.querySelectorAll("select")];
+  await act(async () => { reasoning.value = "ultra"; reasoning.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(write).toHaveBeenCalledWith("/bots/ranch/inference", { reasoning: "ultra" }, "PATCH");
+  expect(reasoning.value).toBe("ultra"); expect(container.querySelector(".model-popover")).not.toBeNull();
+  await act(async () => { speed.value = "fast"; speed.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(speed.value).toBe("normal"); expect(container.textContent).toContain("Fast mode is unavailable");
+});
+
+it("blocks expensive-model confirmation while inference settings are saving", async () => {
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Confirm this model", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+  await render(); await act(async () => trigger().click()); await click("New model");
+  let finish!: (value: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const reasoning = container.querySelector("select")!;
+  await act(async () => { reasoning.value = "ultra"; reasoning.dispatchEvent(new Event("change", { bubbles: true })); });
+  const confirm = [...container.querySelectorAll("button")].find(button => button.textContent === "Confirm this model")!;
+  expect(confirm.disabled).toBe(true); await act(async () => confirm.click()); expect(write).toHaveBeenCalledTimes(2);
+  await act(async () => finish({ reasoning: "ultra", speed: "normal" })); expect(confirm.disabled).toBe(false);
 });

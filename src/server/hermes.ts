@@ -1,3 +1,4 @@
+import { reasoningLevels, serviceTiers } from "../shared/types.js";
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
@@ -522,6 +523,19 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if (input.operation === 'send') return rpc('groups.send', { room_id, event_id: input.requestId, payload: { text: input.text, thread_id: input.threadId } });
       if (input.operation === 'stop') return rpc('groups.stop', { room_id, cancel_id: input.requestId });
       return rpc('groups.approve', { room_id, member_id: input.memberId, task_id: input.taskId, execution_generation: input.generation, choice: input.choice, request_id: input.requestId });
+    },
+    async inferenceSettings(botId, update) {
+      const session = await open(botId);
+      const scope = { profile: botId, session_id: session.session_id };
+      for (const [key, value] of Object.entries(update || {})) {
+        await rpc('config.set', { ...scope, key: key === 'speed' ? 'fast' : 'reasoning', value });
+      }
+      const [reasoning, speed] = await Promise.all([
+        rpc('config.get', { ...scope, key: 'reasoning' }), rpc('config.get', { ...scope, key: 'fast' }),
+      ]);
+      if (!reasoningLevels.includes(reasoning.value) || !serviceTiers.includes(speed.value))
+        throw new Error('Hermes returned unreadable inference settings.');
+      return { reasoning: reasoning.value, speed: speed.value };
     },
     async modelOptions(profile) {
       // Use Hermes's account-aware catalog, including custom provider aliases.
