@@ -1,5 +1,33 @@
 # Validation ledger
 
+## October 6 app release 4c2959e
+
+PR #39 merged at `4c2959ebf6fa8eb4af964934f3306e7e3b86c7e1`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `459506b57fe35aae`, from the archive with SHA256
+`85d00e2c101631a725f8729258cc56a7934e35d95ed1195aa9a252794b0ccf58`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-4c2959eb-20261006T012028Z.json) records the result. Hermes remains
+at `1298c8e74baa`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+The [fresh native qualification](evidence/chat-polish-qualification-2026-10-06/manifest.json)
+completed in disposable homes, including private authentication regressions.
+An [authenticated app check](evidence/chat-polish-inference-acceptance-2026-10-06.json)
+read reasoning and speed settings for both household profiles, rejected invalid
+changes, and confirmed the settings stayed unchanged. Its temporary app session
+was removed before the receipt was issued. A fresh browser sign-in and physical
+phone voice controls were not exercised.
+
+The first preflight refused deployment while the default Bot Chat awaited a
+clarification answer. Nicolas authorized cancelling that turn, but it had already
+ended when checked again. No interrupt was sent; activation followed fresh idle
+admission.
+
 ## October 5 web chat controls and activity
 
 Source fingerprint `sha256:7cd53d6fea80a8e5c1d011221072b9f597ef8f22f6eae16648f8ebc962645045`.
