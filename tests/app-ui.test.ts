@@ -231,6 +231,27 @@ describe("conversation state", () => {
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
+  it("keeps guidance submission feedback when the draft is cleared mid-send", async () => {
+    conversation = { ...conversation, activity: { state: "working" } };
+    let finish!: (receipt: { requestId: string; status: "accepted" }) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = receipt => resolve(receipt as T); }) : {} as T);
+    try {
+      await render();
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send guidance"]')!.click());
+      const textarea = container.querySelector("textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(container.querySelector('[aria-label="Stop response"]')).toBeNull();
+      expect(container.querySelector('[aria-label="Send guidance"]')?.getAttribute("aria-busy")).toBe("true");
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      await act(async () => finish({ requestId, status: "accepted" }));
+      expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
   it("opens the file picker from a real Attach button", async () => {
     conversation = { ...conversation, activity: { state: "idle" } };
     const click = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});

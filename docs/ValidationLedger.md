@@ -1,5 +1,24 @@
 # Validation ledger
 
+## October 7 chat transcript and composer fixes
+
+Source fingerprint `sha256:3d03cace4d81f7d2e45955e4ff4df9abf73863e702ea658a1619673736fa16e4`.
+The complete web suite passed 455 tests across 46 files on Node 26 and Node
+24.21. Type checking and the production build passed, web build `10d94c8630a564e0`.
+
+Agent WebKit checks used synthetic fixtures with an iPhone 15 Pro viewport in
+dark appearance. Checked that tool-call-only replies no longer leave name-only
+blocks, replies omit the assistant's name with one timestamp per turn, a delayed
+send spins Send without a status bar and clears on acceptance, and all four held
+props render and animate. A regression proves typing no longer re-renders the
+transcript. The iOS tap fix replaces the invisible file input overlay with a real
+button and wider spacing. Device control was unavailable, so a physical iPhone tap
+was not retested.
+
+The independent GPT-6.1 Sol review found that clearing the draft during an
+in-flight guidance send swapped the busy Send button for Stop. Stop now waits for
+the send to finish, covered by a regression.
+
 ## October 6 app release 4c2959e
 
 PR #39 merged at `4c2959ebf6fa8eb4af964934f3306e7e3b86c7e1`. The release is live at `https://agentui.wildflowersranch.com`,

@@ -63,7 +63,8 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [stopping, setStopping] = useState(false);
-  const stopVisible = active && !draft.text.trim() && !draft.attachments.length;
+  // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
+  const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
   const input = useComposerInput(draft.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
   const fileInput = useRef<HTMLInputElement>(null);
