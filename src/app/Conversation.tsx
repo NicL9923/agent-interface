@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import type { ActivityState, Approval, AttentionRequest, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { write } from "../client-api";
 import { Avatar } from "../components/Avatar";
+import { avatarProp } from "../components/avatar-motion";
 import { MessageMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
@@ -37,30 +38,13 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
-  const blocks: { messages: Message[]; tools: Map<string, Message> }[] = [];
-  for (const message of conversation?.messages || []) {
-    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map() });
-    const block = blocks.at(-1)!;
-    if (message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
-    if (message.role !== "tool") block.messages.push(message);
-  }
-  for (const call of conversation?.toolCalls || []) {
-    // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
-    const matches = blocks.flatMap(block => [...block.tools.values()].filter(message => message.toolCall?.id === call.id)
-      .map(message => ({ block, message })));
-    if (matches.length === 1) {
-      const { block, message } = matches[0];
-      block.tools.set(message.id, { ...message, toolCall: call });
-    } else {
-      if (!blocks.length) blocks.push({ messages: [], tools: new Map() });
-      blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
-    }
-  }
+  const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
   const actions: Record<ActivityState, string> = {
     idle: "ready", thinking: "thinking", working: "working", waiting: "waiting for approval",
     blocked: "waiting for your input", done: "done", failed: "having trouble", interrupted: "stopped", disconnected: "reconnecting",
   };
   const detail = conversation?.activity.detail?.trim().replace(/[.…]+$/, "");
+  const prop = connectionLost ? undefined : avatarProp(conversation?.toolCalls?.findLast(call => call.status === "running")?.name);
   const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
   return (
     <>
@@ -136,39 +120,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
           <div className="empty-state" role="status"><p>Opening your conversation…</p></div>
         ) : blocks.length ? (
           <>
-            {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
-              {block.messages.map((message) => (
-                <article
-                  className={`message message-${isAgentExchange(message) ? "agent" : message.role}`}
-                  key={message.id}
-                  data-message-id={message.id}
-                >
-                  {!isAgentExchange(message) && <div className="message-attribution">
-                    {message.role === "user"
-                      ? message.sender?.name || "Household member"
-                      : message.role === "assistant" || message.role === "tool"
-                        ? selected.name
-                        : message.toolName || message.role}
-                    {message.createdAt && <When value={message.createdAt} />}
-                  </div>}
-                  {isAgentExchange(message) ? <AgentExchange message={message} recipient={selected.name} /> : message.role === "assistant" ? (
-                    <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={boot.user.id} unavailable={connectionLost} />
-                  ) : message.role !== "tool" && (
-                    <div className="message-text">{message.text}</div>
-                  )}
-                  {advanced && message.reasoning && (
-                    <details className="message-detail">
-                      <summary>Reasoning</summary>
-                      <p>{message.reasoning}</p>
-                    </details>
-                  )}
-                  {message.files?.map((file) => (
-                    <FileLink file={file} key={file.id} />
-                  ))}
-                </article>
-              ))}
-              <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={connectionLost} recipient={selected.name} />
-            </div>)}
+            <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id} />
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -188,7 +140,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
         ) : null}
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}`}>
-            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} />
+            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy" role="status">
               <span className="activity-shimmer">{selected.name} is {action}...</span>
             </div>
@@ -213,6 +165,76 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
       </div>
     </>
   );
+}
+type Turn = { messages: Message[]; tools: Map<string, Message> };
+function turns(conversation: SavedConversation | null, advanced: boolean) {
+  const blocks: Turn[] = [];
+  for (const message of conversation?.messages || []) {
+    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map() });
+    const block = blocks.at(-1)!;
+    if (message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
+    // A tool-call row with no reply text would render as an empty bubble.
+    if (message.role !== "tool" && visibleMessage(message, advanced)) block.messages.push(message);
+  }
+  for (const call of conversation?.toolCalls || []) {
+    // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
+    const matches = blocks.flatMap(block => [...block.tools.values()].filter(message => message.toolCall?.id === call.id)
+      .map(message => ({ block, message })));
+    if (matches.length === 1) {
+      const { block, message } = matches[0];
+      block.tools.set(message.id, { ...message, toolCall: call });
+    } else {
+      if (!blocks.length) blocks.push({ messages: [], tools: new Map() });
+      blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
+    }
+  }
+  return blocks;
+}
+// Memoized so typing in the composer does not re-render the whole transcript.
+const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId, userId }: {
+  blocks: Turn[]; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
+}) {
+  return <>
+    {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
+      {block.messages.map((message, position) => {
+        // The conversation is with one assistant, so its replies need no name, and
+        // consecutive reply parts in a turn share the first part's timestamp.
+        const reply = message.role === "assistant";
+        const continued = reply && block.messages[position - 1]?.role === "assistant";
+        const label = message.role === "user" ? message.sender?.name || "Household member"
+          : reply ? "" : message.toolName || message.role;
+        return <article
+          className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}`}
+          key={message.id}
+          data-message-id={message.id}
+        >
+          {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
+            {label}
+            {message.createdAt && <When value={message.createdAt} />}
+          </div>}
+          {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : message.role === "assistant" ? (
+            <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} />
+          ) : message.role !== "tool" && (
+            <div className="message-text">{message.text}</div>
+          )}
+          {advanced && message.reasoning && (
+            <details className="message-detail">
+              <summary>Reasoning</summary>
+              <p>{message.reasoning}</p>
+            </details>
+          )}
+          {message.files?.map((file) => (
+            <FileLink file={file} key={file.id} />
+          ))}
+        </article>;
+      })}
+      <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />
+    </div>)}
+  </>;
+});
+function visibleMessage(message: Message, advanced: boolean) {
+  return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length
+    || (advanced && !!message.reasoning?.trim());
 }
 function ApprovalCard({ approval, botId, supported, report }: { approval: Approval; botId: string; supported: boolean; report(message: string): void }) {
   const [decision, setDecision] = useState<"approved" | "denied" | null>(null);

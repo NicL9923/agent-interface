@@ -179,7 +179,12 @@ Done status. Web tool calls and delegated work appear in counted accordions.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning
 Hermes exposes. Approval buttons show submission feedback immediately. Stop
 replaces Send while a response is active and the draft has no text or attachments;
-adding a draft brings Send back for guidance. Disconnecting marks activity unknown;
+adding a draft brings Send back for guidance. Sending spins the Send button; a
+notice with Retry appears only when a send ends without a receipt. Replies do not
+repeat the assistant's name, and tool-call rows without reply text stay in the
+tool accordion. While a recognizable tool runs, the web avatar holds a small prop:
+a magnifying glass for search and browsing, a laptop for terminal and code, a book
+for reading, or a notepad for writing. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
 
 Avatar settings include Pumpkin, Santa, Rudolph, Turkey and Easter Bunny

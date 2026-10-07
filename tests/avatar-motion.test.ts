@@ -5,6 +5,7 @@ import {
   WORK_SPIN,
   animatesAt,
   avatarPose,
+  avatarProp,
   blinkAt,
   expressionFor,
   faceInk,
@@ -44,6 +45,25 @@ describe("avatar motion", () => {
     const spin = samples(scanEnd, WORK_CYCLE).map((t) => avatarPose("working", t, false));
     expect(spin.some((pose) => !project(0, pose.yaw).visible)).toBe(true);
     expect(Math.max(...spin.map((pose) => pose.trails))).toBeGreaterThan(0.9);
+  });
+
+  it.each([
+    ["web_search", "search"], ["browser_navigate", "search"], ["search_files", "search"],
+    ["terminal", "computer"], ["execute_code", "computer"],
+    ["read_file", "read"], ["skill_view", "read"],
+    ["write_file", "write"], ["patch", "write"], ["calendar.create_event", "write"],
+    ["send_message", undefined], [undefined, undefined],
+  ])("holds a fitting prop for %s", (tool, prop) => {
+    expect(avatarProp(tool)).toBe(prop);
+  });
+
+  it("watches a held prop calmly instead of spinning away", () => {
+    for (const prop of ["search", "computer", "read", "write"] as const) {
+      const poses = samples(0, WORK_CYCLE * 2).map((t) => avatarPose("working", t, false, prop));
+      expect(poses.every((pose) => project(0, pose.yaw).visible && pose.trails === 0)).toBe(true);
+      expect(Math.max(...poses.map((pose) => pose.gazeX)) - Math.min(...poses.map((pose) => pose.gazeX))).toBeGreaterThan(0.1);
+      expect(avatarPose("working", 1.3, true, prop)).toEqual(restingPose);
+    }
   });
 
   it("settles a completion into a calm, happy face", () => {

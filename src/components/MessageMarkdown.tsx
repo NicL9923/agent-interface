@@ -1,4 +1,4 @@
-import { Children, createContext, isValidElement, useContext, useMemo, useState } from "react";
+import { Children, createContext, isValidElement, memo, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -101,7 +101,9 @@ const components: Components = {
   },
 };
 
-export function MessageMarkdown({ text, botId, messageId, userId, unavailable }: {
+// Memoized because the composer re-renders the app on every keystroke, and
+// re-parsing every reply in a long transcript made typing lag.
+export const MessageMarkdown = memo(function MessageMarkdown({ text, botId, messageId, userId, unavailable }: {
   text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean;
 }) {
   const context = useMemo(() => ({ actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, botId, messageId, userId, unavailable]);
@@ -114,4 +116,4 @@ export function MessageMarkdown({ text, botId, messageId, userId, unavailable }:
     </div>
     </ReplyContext.Provider>
   );
-}
+});

@@ -85,7 +85,60 @@ function arrival(t: number) {
   return 1 + 0.07 * Math.exp(-t * 7) * Math.sin(t * 24);
 }
 
-export function avatarPose(state: ActivityState, t: number, reduce: boolean): Pose {
+/** A small tool the avatar holds while Hermes runs a recognizable kind of tool. */
+export type AvatarProp = "search" | "computer" | "read" | "write";
+const propTools: [AvatarProp, RegExp][] = [
+  ["search", /search|find|grep|lookup|fetch|extract|browse|browser|navigate|crawl|scrape|vision/],
+  ["computer", /terminal|shell|bash|exec|process|code|computer|ssh|command/],
+  ["read", /read|view|skill|open|load|list/],
+  ["write", /write|patch|edit|create|save|update|note|todo|memory|remind|draft|generate/],
+];
+/** Picks a prop from a Hermes tool name; unknown tools keep the plain working motion. */
+export function avatarProp(tool?: string): AvatarProp | undefined {
+  const name = tool?.toLowerCase();
+  return name ? propTools.find(([, pattern]) => pattern.test(name))?.[0] : undefined;
+}
+
+/** Where the held prop sits in avatar units, and its tilt in degrees. */
+export function propMotion(prop: AvatarProp, t: number) {
+  switch (prop) {
+    case "search": return { x: 72 + Math.sin(t * 1.6) * 9, y: 70 + Math.sin(t * 3.2) * 2.5, rotate: -8 + Math.sin(t * 1.6) * 6 };
+    case "computer": return { x: 50, y: 88 - Math.abs(Math.sin(t * 9)) * 0.5, rotate: 0 };
+    case "read": return { x: 50, y: 86 + Math.sin(t * 1.4) * 1, rotate: Math.sin(t * 0.7) * 2 };
+    case "write": return { x: 74 + Math.sin(t * 7) * 2.5, y: 78 + Math.cos(t * 7) * 1.2 + Math.sin(t * 0.9) * 2, rotate: 0 };
+  }
+}
+
+/** Replaces the working scan and spin with a calm pose that watches the prop. */
+function propPose(pose: Pose, prop: AvatarProp, t: number) {
+  const motion = propMotion(prop, t);
+  // Reading eyes sweep across a line, then hop back to start the next one.
+  const line = (rate: number) => {
+    const u = (t * rate) % 1;
+    return u < 0.85 ? -0.6 + 1.2 * (u / 0.85) : 0.6 - 1.2 * smoothstep((u - 0.85) / 0.15);
+  };
+  const b = Math.sin(t * 1.9);
+  pose.scaleY *= 1 + 0.014 * b;
+  pose.scaleX *= 1 - 0.008 * b;
+  pose.lift = -0.8 * b;
+  if (prop === "search") {
+    pose.gazeX = (motion.x - 72) / 12;
+    pose.gazeY = 0.4;
+    pose.roll = (motion.x - 72) * 0.25;
+  } else if (prop === "write") {
+    pose.gazeX = 0.55 + Math.sin(t * 7) * 0.12;
+    pose.gazeY = 0.7;
+    pose.roll = 3;
+  } else {
+    pose.gazeX = line(prop === "computer" ? 0.7 : 0.4);
+    pose.gazeY = 0.85;
+    pose.lift += prop === "computer" ? -Math.abs(Math.sin(t * 9)) * 0.5 : 0;
+  }
+  pose.yaw = pose.gazeX * 0.12;
+  return pose;
+}
+
+export function avatarPose(state: ActivityState, t: number, reduce: boolean, prop?: AvatarProp): Pose {
   if (reduce || frozenStates.includes(state)) return restingPose;
   const pop = arrival(t);
   const pose: Pose = { ...restingPose, blink: blinkAt(t), scaleX: pop, scaleY: pop };
@@ -116,6 +169,7 @@ export function avatarPose(state: ActivityState, t: number, reduce: boolean): Po
       break;
     }
     case "working": {
+      if (prop) return propPose(pose, prop, t);
       const u = t % WORK_CYCLE;
       const scanEnd = WORK_CYCLE - WORK_SPIN;
       if (u < scanEnd) {
