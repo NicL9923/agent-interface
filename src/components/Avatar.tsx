@@ -9,8 +9,10 @@ import {
   frozenStates,
   orbitArcs,
   project,
+  propMotion,
   smoothstep,
   tint,
+  type AvatarProp,
   type Expression,
 } from "./avatar-motion";
 import "./avatar.css";
@@ -177,6 +179,7 @@ export function Avatar({
   name = "Assistant",
   reducedMotion = false,
   showState = false,
+  prop,
 }: {
   avatar?: AvatarConfig;
   state?: ActivityState;
@@ -184,6 +187,8 @@ export function Avatar({
   name?: string;
   reducedMotion?: boolean;
   showState?: boolean;
+  /** A tool to hold while working, such as a magnifying glass during a search. */
+  prop?: AvatarProp;
 }) {
   const wrapper = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(true);
@@ -208,10 +213,17 @@ export function Avatar({
     sweep: 0,
     carry: 0,
     carrySweep: 0,
+    now: performance.now(),
+    prop,
+    propSince: performance.now(),
   });
   const expression = useRef<Expression>(expressionFor(state, 0));
   const morph = useRef(morphTargets(state));
   const still = reduce || !visible || avatar.mode === "portrait" || frozenStates.includes(state);
+  useLayoutEffect(() => {
+    if (motion.current.prop === prop) return;
+    motion.current = { ...motion.current, prop, propSince: performance.now() };
+  }, [prop]);
   useLayoutEffect(() => {
     const clock = motion.current;
     if (clock.state === state) return;
@@ -241,8 +253,8 @@ export function Avatar({
       last = now;
       const clock = motion.current;
       const t = (now - clock.since) / 1000;
-      const trail = trailsAt(avatarPose(state, t, false), t, clock.carry, clock.carrySweep);
-      motion.current = { ...clock, elapsed: t, ...trail };
+      const trail = trailsAt(avatarPose(state, t, false, clock.prop), t, clock.carry, clock.carrySweep);
+      motion.current = { ...clock, elapsed: t, now, ...trail };
       expression.current = approach(expression.current, expressionFor(state, t), dt);
       const targets = morphTargets(state);
       const k = 1 - Math.exp(-dt / 0.13);
@@ -265,7 +277,8 @@ export function Avatar({
   const clock = motion.current;
   const fresh = clock.state !== state;
   const t = still || fresh ? 0 : clock.elapsed;
-  const pose = avatarPose(state, t, still);
+  const held = state === "working" && avatar.mode !== "portrait" ? prop : undefined;
+  const pose = avatarPose(state, t, still, held);
   const { level: trailLevel, sweep } = still
     ? { level: 0, sweep: 0 }
     : fresh
@@ -464,6 +477,13 @@ export function Avatar({
       <path d="M-37 -4 Q-34 5 0 5 Q34 5 37 -4 Q38 -8 33 -6 Q0 2 -33 -6 Q-38 -8 -37 -4Z" fill="#302925" />
     </g>
   );
+  // A held prop pops in when Hermes starts a new kind of tool.
+  const propAge = still ? 1 : clock.prop !== prop ? 0 : (clock.now - clock.propSince) / 1000;
+  const heldProp = held && (
+    <g className="avatar-prop" data-prop={held} opacity={smoothstep(propAge / 0.2)}>
+      <PropArt prop={held} t={t} grow={popIn(propAge / 0.4)} />
+    </g>
+  );
   const bodyScale = 1 - 0.45 * symbolic;
   const bodyTransform = [
     `translate(${pose.shiftX} ${pose.lift})`,
@@ -520,6 +540,7 @@ export function Avatar({
             {hat}
             {trailLayer("front")}
           </g>
+          {heldProp}
           <g fill={color}>
             {bang > 0.01 && (
               <g opacity={smoothstep(bang)}
@@ -541,6 +562,45 @@ export function Avatar({
       )}
     </span>
   );
+}
+
+const popIn = (t: number) => {
+  const x = Math.min(Math.max(t, 0), 1);
+  return 1 + 2.2 * (x - 1) ** 3 + 1.2 * (x - 1) ** 2;
+};
+
+/** Small held props, drawn in avatar units in front of the body. */
+function PropArt({ prop, t, grow }: { prop: AvatarProp; t: number; grow: number }) {
+  const { x, y, rotate } = propMotion(prop, t);
+  const outline = { stroke: "#2b201b", strokeWidth: 2.2, strokeLinejoin: "round" as const, strokeLinecap: "round" as const };
+  const art = prop === "search" ? <>
+    <path d="M8 8 L19 19" {...outline} strokeWidth={6.5} />
+    <path d="M8 8 L19 19" stroke="#b07a4a" strokeWidth={3.6} strokeLinecap="round" />
+    <circle r="11" fill="#d9f2ff" fillOpacity="0.55" {...outline} strokeWidth={3.4} />
+    <path d="M-6 -3 Q-5 -6 -2 -7" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" opacity="0.9" />
+  </> : prop === "computer" ? <>
+    <rect x="-21" y="-23" width="42" height="27" rx="4" fill="#cfd5dc" {...outline} />
+    <circle cy="-10" r="3" fill="#9aa4ae" />
+    <path d="M-27 4 H27 L24 10 H-24Z" fill="#aab3bc" {...outline} />
+    <circle cx="16" cy="7" r="1.1" fill="#7bd88f" opacity={0.5 + 0.5 * Math.sin(t * 5)} />
+  </> : prop === "read" ? <>
+    <path d="M0 -10 Q-12 -15 -24 -11 V7 Q-12 3 0 8Z" fill="#fff8ec" {...outline} />
+    <path d="M0 -10 Q12 -15 24 -11 V7 Q12 3 0 8Z" fill="#fff8ec" {...outline} />
+    <path d="M-19 -6 Q-11 -9 -4 -6 M-19 -1 Q-11 -4 -4 -1 M4 -6 Q11 -9 19 -6 M4 -1 Q11 -4 19 -1" fill="none" stroke="#b9ab96" strokeWidth={1.4} strokeLinecap="round" />
+    <path d="M-25 8 Q-12 4 0 9 Q12 4 25 8" fill="none" stroke="#c0503a" strokeWidth={3} strokeLinecap="round" />
+  </> : <>
+    <g transform="rotate(-8 0 12)">
+      <rect x="-15" y="2" width="26" height="20" rx="2.5" fill="#fff8ec" {...outline} />
+      <path d={`M-10 9 H${-10 + 16 * ((t * 0.5) % 1)} M-10 15 H2`} fill="none" stroke="#9db7d6" strokeWidth={1.6} strokeLinecap="round" />
+    </g>
+    <g transform="rotate(38)">
+      <rect x="-3.2" y="-22" width="6.4" height="22" rx="1.2" fill="#ffc94a" {...outline} />
+      <path d="M-3.2 -22 H3.2 V-25.5 Q3.2 -27 0 -27 Q-3.2 -27 -3.2 -25.5Z" fill="#f28fa0" {...outline} />
+      <path d="M-3.2 0 L0 6 L3.2 0Z" fill="#f2d1a8" {...outline} />
+    </g>
+  </>;
+  const size = prop === "search" ? 1.3 : 1;
+  return <g transform={`translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rotate.toFixed(2)}) scale(${(grow * size).toFixed(3)})`}>{art}</g>;
 }
 
 function StateGlyph({ state }: { state: ActivityState }) {

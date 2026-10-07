@@ -63,9 +63,13 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [stopping, setStopping] = useState(false);
-  const stopVisible = active && !draft.text.trim() && !draft.attachments.length;
+  // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
+  const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
   const input = useComposerInput(draft.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
+  const fileInput = useRef<HTMLInputElement>(null);
+  const attachDisabled = !draftReady || !boot.capabilities.uploads.supported || uploading || draft.attachments.length >= 10;
+  const submitting = sending || pending !== null;
   return (
     <footer className="composer-area">
       {state === "interrupted" && (
@@ -79,9 +83,10 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           continuing.
         </label>
       )}
-      {pending && (
+      {/* A normal send only spins the send button. This appears once the request ended without a receipt. */}
+      {pending && !sending && (
         <div className="notice" role="status">
-          <Icon name="spinner" className="spin" size={16} /> Sending…
+          Checking whether your last message arrived…
           <button
             disabled={sending || !boot.capabilities.idempotency.supported}
             title={boot.capabilities.idempotency.reason}
@@ -176,29 +181,30 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           disabled={!draftReady || draft.botId !== botId}
         />
         <div className="composer-tools">
-          <label
-            className={`attach-control ${!boot.capabilities.uploads.supported ? "disabled" : ""}`}
-            title={boot.capabilities.uploads.reason}
+          {/* A real button opens a hidden picker. An invisible file input overlay
+              won iOS touch adjustment for taps meant for the model button beside it. */}
+          <button
+            type="button"
+            className="composer-tool"
+            aria-label="Attach images, PDFs, or text"
+            title={boot.capabilities.uploads.reason || "Attach images, PDFs, or text"}
+            disabled={attachDisabled}
+            onClick={() => fileInput.current?.click()}
           >
             <Icon name="attach" size={18} />
-            <span className="tool-label">Attach</span>
-            <input
-              aria-label="Attach images, PDFs, or text"
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain"
-              multiple
-              disabled={
-                !draftReady ||
-                !boot.capabilities.uploads.supported ||
-                uploading ||
-                draft.attachments.length >= 10
-              }
-              onChange={(event) => {
-                void upload(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
+          </button>
+          <input
+            ref={fileInput}
+            hidden
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain"
+            multiple
+            disabled={attachDisabled}
+            onChange={(event) => {
+              void upload(event.target.files);
+              event.target.value = "";
+            }}
+          />
           {advanced && <ComposerModelPicker bot={selected} bootstrap={boot}
             disabled={connectionLost || sending} onSaved={refresh} />}
           <div className="composer-voice">
@@ -223,6 +229,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           </button> : <button
             className="send-button"
             aria-label={active ? "Send guidance" : "Send message"}
+            aria-busy={submitting}
             disabled={
               !draftReady ||
               pending !== null ||
@@ -235,7 +242,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               (!draft.text.trim() && !draft.attachments.length)
             }
           >
-            <Icon name={sending ? "spinner" : "send"} className={sending ? "spin" : undefined} size={19} />
+            <Icon name={submitting ? "spinner" : "send"} className={submitting ? "spin" : undefined} size={19} />
           </button>}
         </div>
       </form>

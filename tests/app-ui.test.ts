@@ -14,13 +14,17 @@ vi.mock("../src/client-api", async (original) => ({
   write: vi.fn().mockResolvedValue({}),
   clearResponseCache: vi.fn(),
 }));
-const renders = vi.hoisted(() => ({ avatar: 0 }));
+const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: (props: { state?: string; size?: number }) => (renders.avatar++, createElement("span", {
-    "data-avatar-state": props.state, "data-avatar-size": props.size,
+  Avatar: (props: { state?: string; size?: number; prop?: string }) => (renders.avatar++, createElement("span", {
+    "data-avatar-state": props.state, "data-avatar-size": props.size, "data-avatar-prop": props.prop,
   })),
+}));
+// Unmemoized on purpose, so the count shows whether the transcript re-renders.
+vi.mock("../src/components/MessageMarkdown", () => ({
+  MessageMarkdown: (props: { text: string }) => (renders.markdown++, createElement("div", { className: "message-markdown" }, props.text)),
 }));
 
 const bootstrap: Bootstrap = {
@@ -154,9 +158,11 @@ describe("conversation state", () => {
   });
 
   it("shows current work inline in the transcript and stops claiming work during a disconnect", async () => {
-    conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" } };
+    conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" },
+      toolCalls: [{ id: "shell", name: "terminal", status: "running" }] };
     await render();
     expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
+    expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-prop")).toBe("computer");
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
     const textarea = container.querySelector("textarea")!;
     await act(async () => {
@@ -172,7 +178,91 @@ describe("conversation state", () => {
     });
     await advance(1500);
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
+    expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.hasAttribute("data-avatar-prop")).toBe(false);
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
+  });
+
+  it("hides empty tool-call replies and the assistant's own name, keeping one timestamp per reply", async () => {
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "question", role: "user", text: "Check the NAS", sender: { id: "one", name: "One" }, createdAt: "2026-10-07T12:00:00Z" },
+      { id: "call-row", role: "assistant", text: "", createdAt: "2026-10-07T12:00:05Z", toolCall: { id: "ssh", name: "terminal", status: "completed" } },
+      { id: "first", role: "assistant", text: "Tailscale is installed.", createdAt: "2026-10-07T12:00:09Z" },
+      { id: "second", role: "assistant", text: "It is connected." },
+    ] };
+    await render();
+    const replies = [...container.querySelectorAll(".message-assistant")];
+    expect(replies.map(reply => reply.getAttribute("data-message-id"))).toEqual(["first", "second"]);
+    expect(replies.map(reply => reply.querySelectorAll(".message-attribution time").length)).toEqual([1, 0]);
+    expect(replies.some(reply => reply.querySelector(".message-attribution")?.textContent?.includes("Shared"))).toBe(false);
+    expect(container.querySelector(".message-user .message-attribution")?.textContent).toContain("One");
+    expect(container.querySelector(".tool-count")?.textContent).toBe("1");
+  });
+
+  it("keeps the transcript from re-rendering while typing", async () => {
+    conversation = { ...conversation, activity: { state: "idle" }, messages: [{ id: "answer", role: "assistant", text: "Ready when you are." }] };
+    await render();
+    const settled = renders.markdown;
+    expect(settled).toBeGreaterThan(0);
+    const textarea = container.querySelector("textarea")!;
+    for (const text of ["H", "He", "Hey"]) await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(textarea.value).toBe("Hey");
+    expect(renders.markdown).toBe(settled);
+  });
+
+  it("spins Send without a status bar until a send ends without a receipt", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    let finish!: (receipt: { requestId: string; status: "uncertain" }) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = receipt => resolve(receipt as T); void value; }) : {} as T);
+    try {
+      await render();
+      await act(async () => sendButton().click());
+      expect(sendButton().disabled).toBe(true);
+      expect(sendButton().getAttribute("aria-busy")).toBe("true");
+      expect(sendButton().querySelector(".spin")).not.toBeNull();
+      expect(container.querySelector(".composer-area .notice")).toBeNull();
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      await act(async () => finish({ requestId, status: "uncertain" }));
+      expect(container.querySelector(".composer-area .notice")?.textContent).toContain("Retry this saved message");
+      expect(sendButton().disabled).toBe(true);
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("keeps guidance submission feedback when the draft is cleared mid-send", async () => {
+    conversation = { ...conversation, activity: { state: "working" } };
+    let finish!: (receipt: { requestId: string; status: "accepted" }) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = receipt => resolve(receipt as T); }) : {} as T);
+    try {
+      await render();
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send guidance"]')!.click());
+      const textarea = container.querySelector("textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(container.querySelector('[aria-label="Stop response"]')).toBeNull();
+      expect(container.querySelector('[aria-label="Send guidance"]')?.getAttribute("aria-busy")).toBe("true");
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      await act(async () => finish({ requestId, status: "accepted" }));
+      expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("opens the file picker from a real Attach button", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    const click = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+    try {
+      await render();
+      const attach = container.querySelector<HTMLButtonElement>('button[aria-label="Attach images, PDFs, or text"]')!;
+      await act(async () => attach.click());
+      expect(click).toHaveBeenCalledOnce();
+      expect((click.mock.contexts[0] as HTMLInputElement).type).toBe("file");
+      expect((click.mock.contexts[0] as HTMLInputElement).hidden).toBe(true);
+    } finally { click.mockRestore(); }
   });
 
   it("switches Stop back to Send while drafting guidance", async () => {

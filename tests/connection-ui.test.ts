@@ -161,8 +161,9 @@ describe('setup and recovery interface',()=>{
     await act(async()=>finish());
     expect(container.textContent).not.toContain('Old account');
     expect(container.querySelector('textarea')?.value).toBe('Second member draft');
-    const nextRetry=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Retry this saved message')!;
-    expect(nextRetry.disabled).toBe(true);
+    // An in-flight send only spins the send button; Retry returns if it ends without a receipt.
+    expect(Array.from(container.querySelectorAll('button')).some(node=>node.textContent==='Retry this saved message')).toBe(false);
+    expect(container.querySelector('[aria-label="Send message"]')?.getAttribute('aria-busy')).toBe('true');
     expect(JSON.parse(localStorage.getItem('agent-interface:submission:one:shared')!).requestId).toBe('saved-request');
   });
 
