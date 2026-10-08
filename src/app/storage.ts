@@ -21,8 +21,9 @@ export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
+// v2 drops offsets that an assistant switch wrongly saved as the top of the conversation.
 export const scrollKey = (user: string, bot: string) =>
-  `agent-interface:scroll:${user}:${bot}`;
+  `agent-interface:scroll-v2:${user}:${bot}`;
 export function localRead<T>(key: string): T | null {
   try {
     return JSON.parse(localStorage.getItem(key) || "null");

@@ -311,6 +311,31 @@ describe("conversation state", () => {
     expect(container.querySelector(".bot-menu")).not.toBeNull();
   });
 
+  it("does not save the switch-time scroll clamp as the next assistant's reading position", async () => {
+    const other = { ...bootstrap.bots[0], id: "other", name: "Other" };
+    bootstrap.bots.push(other);
+    try {
+      conversation = { ...conversation, activity: { state: "idle" }, messages: [{ id: "answer", role: "assistant", text: "Earlier" }] };
+      let finish!: () => void;
+      const original = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bots/other/conversation"
+        ? await new Promise<T>(resolve => { finish = () => resolve({ ...conversation, botId: "other", messages: [{ id: "latest", role: "assistant", text: "Latest" }] } as T); })
+        : original(path) as Promise<T>);
+      await render(); await advance(20);
+      await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes("Other"))!.click());
+      const transcript = container.querySelector<HTMLElement>(".transcript")!;
+      Object.defineProperties(transcript, { scrollHeight: { value: 2000, configurable: true }, clientHeight: { value: 300, configurable: true } });
+      transcript.scrollTop = 0;
+      await act(async () => transcript.dispatchEvent(new Event("scroll")));
+      await advance(310);
+      expect(localStorage.getItem("agent-interface:scroll-v2:one:other")).toBeNull();
+      expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/other/read-position")).toBe(false);
+      await act(async () => finish());
+      await advance(20);
+      expect(transcript.scrollTop).toBe(2000);
+    } finally { bootstrap.bots.pop(); }
+  });
+
   it("opens phones on home, pushes into a chat and returns with Back", async () => {
     vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     conversation = { ...conversation, activity: { state: "idle" } };
