@@ -59,8 +59,8 @@ final class ShareViewController: UIViewController {
       }
       guard text.count <= 50000 else { throw CocoaError(.fileReadTooLarge) }
       loading = false
-      status.text = "\(files.count) attachment(s) ready. Save, then open Agent Interface to review your draft. Nothing is sent automatically."
-    } catch { status.text = context == nil ? "Open Agent Interface and sign in before sharing." : "Could not prepare this share. Use a webpage, photo, PDF, or text, up to 10 items and 20 MB per file." }
+      status.text = "\(files.count) attachment(s) ready. Save, then open WildBots to review your draft. Nothing is sent automatically."
+    } catch { status.text = context == nil ? "Open WildBots and sign in before sharing." : "Could not prepare this share. Use a webpage, photo, PDF, or text, up to 10 items and 20 MB per file." }
   }
   private func load(_ provider: NSItemProvider, _ type: String) async throws -> NSSecureCoding {
     try await withCheckedThrowingContinuation { continuation in provider.loadItem(forTypeIdentifier:type, options:nil) { item,error in

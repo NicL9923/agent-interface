@@ -92,7 +92,7 @@ export function App() {
   if (!boot)
     return (
       <main className="welcome">
-        <p className="eyebrow">Agent Interface</p>
+        <p className="eyebrow">WildBots</p>
         <AvatarTrio />
         <h1>
           Your assistants,

@@ -66,7 +66,7 @@ export function ConnectionPanel({ connection, offline = false, appUnavailable = 
         {connection.detail && <p>{connection.detail}</p>}
         {connection.lastConnectedAt && <p>Last connected <When value={connection.lastConnectedAt} inline />.</p>}
         {copy.setup && <>
-          <p>On the computer running Agent Interface, open its project folder and run:</p>
+          <p>On the computer running WildBots, open its project folder and run:</p>
           <SetupCommand />
           <p>Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.</p>
         </>}

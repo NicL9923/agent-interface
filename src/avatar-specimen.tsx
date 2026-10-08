@@ -34,7 +34,7 @@ function Specimen() {
   return (
     <main data-theme={dark ? "dark" : "light"}>
       <header>
-        <p>Agent Interface · standalone specimen</p>
+        <p>WildBots · standalone specimen</p>
         <h1>
           A familiar face.
           <br />

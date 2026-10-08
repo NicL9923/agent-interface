@@ -175,14 +175,14 @@ describe("health", () => {
     await at(11 * minute);
     expect(alerts().map(row => [row.event_id, row.user_id])).toEqual([[`health:hermes:${start}`, "one"]]);
     expect(JSON.parse(alerts()[0].payload)).toMatchObject({
-      title: "Agent Interface needs attention", url: "/", kind: "failed",
+      title: "WildBots needs attention", url: "/", kind: "failed",
       body: expect.stringMatching(/^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./),
     });
     hermes.status = { connected: true };
     await at(12 * minute);
     await at(13 * minute);
     expect(alerts().map(row => row.event_id)).toEqual([`health:hermes:${start}`, `health:hermes:${start}:recovered`]);
-    expect(JSON.parse(alerts()[1].payload)).toMatchObject({ title: "Agent Interface recovered", body: "The Hermes connection is working again.", kind: "failed" });
+    expect(JSON.parse(alerts()[1].payload)).toMatchObject({ title: "WildBots recovered", body: "The Hermes connection is working again.", kind: "failed" });
     const messages = lines.map(line => JSON.parse(line).msg);
     expect(messages.filter(message => message.startsWith("Readiness check"))).toEqual([
       "Readiness check degraded", "Readiness check degraded for 10 minutes; alerting administrators", "Readiness check recovered",

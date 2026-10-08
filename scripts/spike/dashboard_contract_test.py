@@ -68,7 +68,7 @@ class DashboardContract(unittest.TestCase):
     def assert_native_updater_off(self):
         files, actions = self.native_updater
         self.assertTrue(files._dashboard_local_update_managed_externally())
-        self.assertIn("managed by Agent Interface", actions._MANAGED_EXTERNALLY_MESSAGE)
+        self.assertIn("managed by WildBots", actions._MANAGED_EXTERNALLY_MESSAGE)
 
     def test_original_cli_receives_unchanged_dashboard_arguments_after_install(self):
         events, argv, web = self.exercise()

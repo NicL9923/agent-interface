@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Agent Interface",
-  "short_name": "Assistants",
+  "name": "WildBots",
+  "short_name": "WildBots",
   "description": "Return to your assistants and their saved conversations.",
   "start_url": "/",
   "scope": "/",

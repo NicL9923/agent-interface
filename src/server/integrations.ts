@@ -44,6 +44,6 @@ export async function installIntegrationsRoutes(app: FastifyInstance, runtime: R
   app.get("/integrations/google/callback", async (req, reply) => {
     const query = z.object({ state: z.string().min(20).max(200), code: z.string().max(10000).optional(), error: z.string().max(200).optional(), scope: z.string().max(10000).optional() }).parse(req.query);
     await request({ operation: "callback", profile: "default", callbackUrl: `${options.origin}/integrations/google/callback?${new URLSearchParams(query as Record<string,string>)}` });
-    return reply.header("Cache-Control", "no-store").header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'").type("text/html").send("<!doctype html><title>Google connection</title><h1>Authorization received</h1><p>Return to Agent Interface to check your Google Workspace connection.</p>");
+    return reply.header("Cache-Control", "no-store").header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'").type("text/html").send("<!doctype html><title>Google connection</title><h1>Authorization received</h1><p>Return to WildBots to check your Google Workspace connection.</p>");
   });
 }

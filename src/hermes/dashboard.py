@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 
-UPDATE_HANDOFF_MESSAGE = ("Hermes updates are managed by Agent Interface. Check for and install them "
+UPDATE_HANDOFF_MESSAGE = ("Hermes updates are managed by WildBots. Check for and install them "
                           "from Hermes updates in the app.")
 
 
@@ -55,14 +55,14 @@ def main():
     except (SystemExit, OSError, subprocess.SubprocessError):
         # This check is pure. Preserve the native dashboard if its separately
         # deployed integration needs requalification or credential repair.
-        print("Agent Interface add-on disabled: source qualification or service key unavailable. Native dashboard continues.", file=sys.stderr)
+        print("WildBots add-on disabled: source qualification or service key unavailable. Native dashboard continues.", file=sys.stderr)
         qualified = False
     # Let the native entrypoint initialize the same environment before importing the web app.
     from hermes_cli import main as cli
     # Applies even while the add-on is disabled, so a second native update cannot
     # move Hermes further from the app's last qualification.
     if not hand_updates_to_app():
-        print("Agent Interface could not turn off the native Hermes updater. Update Hermes from the app only.", file=sys.stderr)
+        print("WildBots could not turn off the native Hermes updater. Update Hermes from the app only.", file=sys.stderr)
     if qualified:
         import hermes_cli.web_server as web
         from tui_gateway import server

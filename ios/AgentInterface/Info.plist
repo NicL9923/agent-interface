@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Agent Interface</string>
+	<string>WildBots</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -54,7 +54,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record a voice message for transcription on your app server. Review the transcript before sending.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to your self-hosted Agent Interface app server.</string>
+	<string>Connect to your self-hosted WildBots app server.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

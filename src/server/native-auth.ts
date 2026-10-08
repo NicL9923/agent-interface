@@ -28,12 +28,12 @@ export async function installNativeAuth(app: FastifyInstance, store: Store, conf
       ? '<button id="one">Sign in as local member one</button><button id="two">Sign in as local member two</button>' : "";
     return `<!doctype html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in to Agent Interface</title>
+<title>Sign in to WildBots</title>
 <style nonce="${scriptNonce}">
 body{font:17px system-ui;max-width:480px;margin:10vh auto;padding:24px;color:#18332a;background:#f6f8f4}
 button{display:block;margin:20px 0;padding:12px}#error{color:#a12626}
 </style></head><body>
-<h1>Connect Agent Interface</h1><p>Choose the household account to use in the iOS app.</p>
+<h1>Connect WildBots</h1><p>Choose the household account to use in the iOS app.</p>
 <div id="google"></div>${local}<p id="error" role="alert"></p>
 ${config.googleClientId ? `<script nonce="${scriptNonce}" id="google-script" src="https://accounts.google.com/gsi/client" defer></script>` : ""}
 <script nonce="${scriptNonce}">

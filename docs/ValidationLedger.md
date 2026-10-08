@@ -1,5 +1,15 @@
 # Validation ledger
 
+## October 8 WildBots name
+
+Source fingerprint `sha256:66ad62ac90350fe72324e48341a4962081c7da9c3a1779643139753a79cfb143`.
+The complete web suite passed 493 tests across 47 files, with type checking, the
+production build, the Python compile check and the dashboard contract test.
+User-visible names on web, iOS, notifications, the native sign-in page and the
+Hermes add-on messages now say WildBots. Repository, storage keys, add-on RPC
+names, bundle identifiers and hosts keep `agent-interface`. Copy-only change; no
+independent review or device check.
+
 ## October 8 app release 991e0bd
 
 PR #47 merged at `991e0bdb7a8de325ca5361d382ece729f7a9bbad`. The release is live at `https://agentui.wildflowersranch.com`,

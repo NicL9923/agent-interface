@@ -578,7 +578,7 @@ def install(server):
         if not name.startswith("display."):
             continue
         if name in ("display.lease.acquire", "display.lease.release", "display.stop", "display.install", "display.switchSandboxImage"):
-            server.register_method(name, lambda rid, params: server._err(rid, 409, "Manage the shared household computer from Agent Interface."))
+            server.register_method(name, lambda rid, params: server._err(rid, 409, "Manage the shared household computer from WildBots."))
             continue
         cells = dict(zip(handler.__code__.co_freevars, handler.__closure__ or ()))
         if "handler" not in cells or not callable(cells["handler"].cell_contents):

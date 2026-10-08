@@ -375,7 +375,7 @@ server.on('upgrade', (request, socket, head) => {
     client.computerKind = kind;
     if (kind === 'desktop') return fixtureDesktop(client);
     const output = data => client.send(JSON.stringify({ type: 'output', data }));
-    output('\x1b[32mAgent Interface terminal preview\x1b[0m\r\nExplicit fixture. Commands are echoed, never executed.\r\n\r\npreview@fixture:~$ ');
+    output('\x1b[32mWildBots terminal preview\x1b[0m\r\nExplicit fixture. Commands are echoed, never executed.\r\n\r\npreview@fixture:~$ ');
     let line = '';
     client.on('message', bytes => {
       let message; try { message = JSON.parse(String(bytes)); } catch { return; }

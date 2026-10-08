@@ -130,8 +130,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
         <p className="settings-footnote">On iPhone, choose Share, then Add to Home Screen. Install before enabling notifications.</p>
         {notice && <p className="settings-footnote" role="status">{notice}</p>}
         <footer className="settings-footer">
-          <span className="brand-mark" aria-hidden="true">a.</span>
-          <strong>Agent Interface</strong>
+          <span className="brand-mark" aria-hidden="true">w.</span>
+          <strong>WildBots</strong>
           {version && <small>Hermes {version}</small>}
         </footer>
       </div>

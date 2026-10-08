@@ -99,7 +99,7 @@ struct ConnectionView: View {
               .font(.largeTitle.bold())
             Text(
               store.api == nil
-                ? "Connect to the Agent Interface app server your self-hoster set up. Your assistants and their work stay on that server."
+                ? "Connect to the WildBots app server your self-hoster set up. Your assistants and their work stay on that server."
                 : "Sign in with an allowed household account. This device connects through the app server."
             ).foregroundStyle(.secondary)
           }
@@ -149,7 +149,7 @@ struct ConnectionView: View {
           ).font(.footnote).foregroundStyle(.secondary)
         }.padding(24).frame(maxWidth: 560)
       }.frame(maxWidth: .infinity).background(Palette.surface(scheme)).navigationTitle(
-        "Agent Interface"
+        "WildBots"
       ).navigationBarTitleDisplayMode(.inline)
     }
   }

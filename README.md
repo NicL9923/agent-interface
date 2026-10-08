@@ -1,6 +1,6 @@
-# Agent Interface
+# WildBots
 
-A web client and native iOS app for a shared Hermes installation. Each bot has a
+WildBots is a web client and native iOS app for a shared Hermes installation. The repository and internal identifiers keep the original `agent-interface` name. Each bot has a
 persistent conversation, configurable instructions and capabilities, and an avatar
 that reflects its current state. Each household member has separate preferences,
 drafts and notification subscriptions.

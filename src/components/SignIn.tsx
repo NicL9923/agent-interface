@@ -79,7 +79,7 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
   }, [config?.googleClientId, attempt]);
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
   return <main className="welcome sign-in">
-    <p className="eyebrow">Agent Interface</p>
+    <p className="eyebrow">WildBots</p>
     <div className="sign-in-content">
       <div className="sign-in-intro">
         <AvatarTrio />
@@ -92,7 +92,7 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
     {!config && !configError && <p role="status">Checking sign-in…</p>}
     {needsSetup && <div className="sign-in-setup">
       <h2>Start on the computer running this app</h2>
-      <p>Open the Agent Interface project folder and run the guided setup:</p>
+      <p>Open the WildBots project folder and run the guided setup:</p>
       <SetupCommand />
       <p>It checks Hermes and saves your connection privately. Choose Google sign-in for the household, or local test accounts for development.</p>
       <p className="muted">After saving, restart the app. This page will pick up the new settings automatically.</p>
