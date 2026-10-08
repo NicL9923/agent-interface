@@ -328,7 +328,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   /** End offset in `text` after `segment`'s non-whitespace characters, starting at `from`. */
   function matchedPrefix(text: string, from: number, segment: string): number | undefined {
     let i = from, matched = false;
-    for (const char of segment) {
+    // UTF-16 units on both sides, so emoji compare correctly.
+    for (let k = 0; k < segment.length; k++) {
+      const char = segment[k];
       if (/\s/.test(char)) continue;
       while (i < text.length && /\s/.test(text[i])) i++;
       if (text[i] !== char) return undefined;
@@ -672,9 +674,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const active=!!value.info?.running||!!value.app_run_id;
       // Live text and reasoning accumulate across the whole turn, while each segment
       // before a tool call is already a history row. Show only the unpersisted tail.
-      // The run ID is the only proven turn boundary; without one, nothing is removed.
+      // The run ID proves rows belong to this task, and queued follow-ups share it, so
+      // only rows after the latest prompt count. Without a run ID, nothing is removed.
       const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
-      const persisted=run?rows.filter(row=>row.role==='assistant'&&row.runId===run):[];
+      const persisted=run?rows.slice(rows.findLastIndex(row=>row.role==='user')+1).filter(row=>row.role==='assistant'&&row.runId===run):[];
       const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
       const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}

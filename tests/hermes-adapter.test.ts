@@ -200,6 +200,20 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     snapshot.inflight = {user:'Join the NAS',assistant:'A rewritten answer',streaming:true};
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'A rewritten answer'});
   });
+  it('matches emoji and ignores earlier turns of a queued follow-up run', async () => {
+    snapshot.info.running = true;
+    snapshot.app_run_id = 'queued-run';
+    snapshot.messages = [
+      {role:'user',row_id:1,text:'Check it',app_run_id:'queued-run'},
+      {role:'assistant',row_id:2,text:'Same opening.',app_run_id:'queued-run'},
+      {role:'user',row_id:3,text:'And the barn?',app_run_id:'queued-run'},
+    ];
+    snapshot.inflight = {user:'And the barn?',assistant:'Same opening. Barn is fine.',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Same opening. Barn is fine.'});
+    snapshot.messages.push({role:'assistant',row_id:4,text:'Looking 🔍 now.',app_run_id:'queued-run'});
+    snapshot.inflight = {user:'And the barn?',assistant:'Looking 🔍 now. Found it.',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Found it.'});
+  });
   it('keeps live text intact until the running turn has a persisted boundary', async () => {
     snapshot.info.running = true;
     snapshot.app_run_id = 'image-run';
