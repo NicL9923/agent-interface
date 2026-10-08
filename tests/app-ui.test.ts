@@ -330,7 +330,11 @@ describe("conversation state", () => {
       await advance(310);
       expect(localStorage.getItem("agent-interface:scroll-v2:one:other")).toBeNull();
       expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/other/read-position")).toBe(false);
+      // A clamp event can also arrive after the response but before the restore frame.
       await act(async () => finish());
+      transcript.scrollTop = 0;
+      await act(async () => transcript.dispatchEvent(new Event("scroll")));
+      expect(localStorage.getItem("agent-interface:scroll-v2:one:other")).toBeNull();
       await advance(20);
       expect(transcript.scrollTop).toBe(2000);
     } finally { bootstrap.bots.pop(); }
