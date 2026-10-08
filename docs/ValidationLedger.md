@@ -1,5 +1,23 @@
 # Validation ledger
 
+## October 8 app release 1eb2caf
+
+PR #49 merged at `1eb2caf98be9bf06219d8c215332ae280750a73c`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `7f083a6428df7ac4`, from the archive with SHA256
+`c86ee0c9f9acd3648a53cf64b5a702277713c94bf250201c839d766279fb5cd9`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-1eb2caf9-20261008T122759Z.json) records the result. Hermes remains
+at `1298c8e74baa`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+The [fresh native qualification](evidence/wildbots-qualification-2026-10-08/manifest.json)
+completed in disposable homes, including private authentication regressions.
+
 ## October 8 WildBots name
 
 Source fingerprint `sha256:66ad62ac90350fe72324e48341a4962081c7da9c3a1779643139753a79cfb143`.
