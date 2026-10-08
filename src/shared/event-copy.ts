@@ -22,7 +22,8 @@ export function eventHeadline(event: Pick<RuntimeEvent, "kind" | "title" | "body
   const body = excerpt(event.body);
   if (!generic.test(event.title)) return body ? `${excerpt(event.title, 80)}: ${body}` : excerpt(event.title);
   switch (event.kind) {
-    case "approval": return body ? `Needs your approval: ${body}` : "Needs your approval to continue.";
+    // Approval details can include commands and credentials; they stay in the signed-in chat.
+    case "approval": return "Needs your approval to continue.";
     case "failed": return body ? `Couldn't finish: ${body}` : "Couldn't finish. Open the chat to see what happened.";
     case "interrupted": return body || "Stopped before finishing. Review it before retrying.";
     default: return body || "Finished. Open the chat for the reply.";

@@ -184,6 +184,10 @@ export async function createApp(
   ) => ({ ...bot, ...store.presentation(bot.id),
     ...(nativeAvatar ? { avatar: bot.avatar } : {}),
   });
+  // Home previews follow notification visibility: a private assistant's latest
+  // reply appears only for its owner, never ambiently for the rest of the household.
+  const forMember = <T extends { shared: boolean; ownerId?: string; lastMessage?: unknown }>(bots: T[], userId: string) =>
+    bots.map(bot => bot.shared || !bot.ownerId || bot.ownerId === userId ? bot : { ...bot, lastMessage: undefined });
   app.get("/api/health", async () => ({ ok: true }));
   app.get("/api/hermes/upgrade", async req => upgrades.status(signedIn(req)));
   app.post("/api/hermes/upgrade/check", async req => {
@@ -224,7 +228,7 @@ export async function createApp(
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: store.preferences(signedIn(req).id),
-    ...await runtimeSnapshot(),
+    ...await runtimeSnapshot().then(value => ({ ...value, bots: forMember(value.bots, signedIn(req).id) })),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
   }));
@@ -264,9 +268,9 @@ export async function createApp(
     if (!runtime.modelOptions) throw failure(409, "The connected Hermes installation does not expose model options.");
     return runtime.modelOptions(botId);
   });
-  app.get("/api/bots", async () => {
+  app.get("/api/bots", async (req) => {
     const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
-    return bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported));
+    return forMember(bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)), signedIn(req).id);
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");

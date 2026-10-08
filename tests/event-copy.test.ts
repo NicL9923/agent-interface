@@ -4,7 +4,7 @@ import { eventHeadline, excerpt, notificationCopy } from "../src/shared/event-co
 it("titles task notifications with the assistant and quotes what happened", () => {
   expect(notificationCopy({ kind: "completed", title: "Hermes completed", body: "**Tailscale is up** on the NAS. Run `tailscale status` to confirm." }, "Nic's Chief"))
     .toEqual({ title: "Nic's Chief", body: "Tailscale is up on the NAS. Run tailscale status to confirm." });
-  expect(eventHeadline({ kind: "approval", title: "Approval requested", body: "rm -rf /tmp/build" })).toBe("Needs your approval: rm -rf /tmp/build");
+  expect(eventHeadline({ kind: "approval", title: "Approval requested", body: "curl -H 'Authorization: Bearer SYNTHETIC_SECRET'" })).toBe("Needs your approval to continue.");
   expect(eventHeadline({ kind: "failed", title: "Hermes failed", body: "Provider rate limit" })).toBe("Couldn't finish: Provider rate limit");
 });
 

@@ -3,7 +3,7 @@
 ## October 8 home, settings and notification copy
 
 Source fingerprint `FINGERPRINT`.
-The complete web suite passed 490 tests across 47 files on Node 26 and Node
+The complete web suite passed 491 tests across 47 files on Node 26 and Node
 24.21. Type checking, the production build and the Python compile and contract
 checks passed.
 
@@ -19,7 +19,11 @@ push delivery were not exercised.
 
 The independent GPT-6.1 Sol review of the redesign found lost focus during phone
 navigation, slow drags opening the pin menu, and base styles overriding home
-sizing. All three were fixed and the first two are covered by regressions.
+sizing. All three were fixed and the first two are covered by regressions. A
+focused review of the notifications and shapes found approval commands, which can
+carry credentials, reaching notification text, and private assistants' previews
+reaching other members. Approval notifications now say only that a decision is
+needed, and previews follow notification visibility; both are covered by tests.
 
 ## October 7 new avatar shapes
 

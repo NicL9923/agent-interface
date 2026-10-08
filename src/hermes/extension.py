@@ -397,9 +397,8 @@ def install(path=None):
                 row = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
                 root = row[0] if row else None
                 identity = f"{root}:{event_kind}:{frame.get('id') if event_kind == 'approval' else ''}" if root else None
-                request = frame.get("params") or {}
-                journal.event(profile_for(sid), sid, event_kind, "Approval requested" if event_kind == "approval" else "Hermes " + event_kind, root,
-                              body=event_body(request.get("description") or request.get("command")) if event_kind == "approval" else None, event_key=identity)
+                # Approval commands can carry credentials, so the event body stays empty; the chat shows them after sign-in.
+                journal.event(profile_for(sid), sid, event_kind, "Approval requested" if event_kind == "approval" else "Hermes " + event_kind, root, event_key=identity)
         elif sid and event_kind:
             # A native message.complete closes one turn, before steering/goal queue drain.
             # The post-followup seam below is the task boundary.
