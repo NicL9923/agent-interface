@@ -8,6 +8,11 @@ import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
 
+// SVG geometry is a browser concern; these tests cover the form around the avatar.
+vi.mock("../src/components/Avatar", async (original) => ({
+  ...await original<typeof import("../src/components/Avatar")>(),
+  Avatar: () => createElement("span", { "data-avatar": "" }),
+}));
 vi.mock("../src/client-api", async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn().mockResolvedValue({}),
@@ -194,4 +199,24 @@ describe("compact settings navigation", () => {
     await act(async () => root.unmount());
     expect(media.removeEventListener).toHaveBeenCalledWith("change", changed);
   });
+});
+
+it("shows saving and saved on the avatar button itself, then resets", async () => {
+  vi.useFakeTimers();
+  try {
+    const avatarTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[aria-label="Settings sections"] button')).find(button => button.textContent === "avatar")!;
+    await act(async () => avatarTab.click());
+    let finish!: () => void;
+    vi.mocked(write).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({}); }));
+    const save = () => container.querySelector<HTMLButtonElement>(".sticky-actions .primary")!;
+    expect(save().textContent).toBe("Save avatar");
+    await act(async () => save().click());
+    expect(save().textContent).toBe("Saving…");
+    expect(save().disabled).toBe(true);
+    await act(async () => finish());
+    expect(save().textContent).toBe("Saved");
+    expect(write).toHaveBeenCalledWith("/bots/shared/avatar", expect.anything(), "PUT");
+    await act(async () => vi.advanceTimersByTimeAsync(2600));
+    expect(save().textContent).toBe("Save avatar");
+  } finally { vi.useRealTimers(); }
 });

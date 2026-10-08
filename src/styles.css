@@ -983,7 +983,6 @@ a {
   }
   .conversation-activity {
     gap: 10px;
-    align-items: flex-start;
   }
   .conversation-activity > button {
     padding: 9px;
@@ -1209,3 +1208,4 @@ dialog[open]::backdrop {
   .spin { animation: none; }
 }
 .reasoning-part { margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; background: var(--raised); border-radius: 10px; }
+button.with-progress { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
