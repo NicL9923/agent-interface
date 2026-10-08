@@ -232,7 +232,10 @@ async def main(args):
     before = await c.call("agent-interface.discover", cursor="0")
     again = await c.call("agent-interface.discover", cursor=before["cursor"])
     assert not again["events"]
-    evidence["checks"]["durable_discovery"] = {"completion_events": sum(x["kind"] == "completed" for x in before["events"]), "approval_events": sum(x["kind"] == "approval" for x in before["events"]), "cursor_replay_duplicates": 0}
+    completions = [x for x in before["events"] if x["kind"] == "completed"]
+    # Notifications quote the reply, so a completed turn must carry its final text.
+    assert completions and any(isinstance(x.get("body"), str) and x["body"].strip() for x in completions), completions
+    evidence["checks"]["durable_discovery"] = {"completion_events": len(completions), "completion_bodies": sum(bool(x.get("body")) for x in completions), "approval_events": sum(x["kind"] == "approval" for x in before["events"]), "cursor_replay_duplicates": 0}
     interrupted_id = "spike-interrupted-" + str(time.time_ns())
     await send(interrupted_id, "PROBE_SLOW executor kill")
     try:

@@ -290,6 +290,24 @@ describe("conversation state", () => {
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
+  it("opens the pin menu on a held touch but not while the list scrolls", async () => {
+    await render();
+    const row = container.querySelector<HTMLButtonElement>(".bot-row")!;
+    const touch = (type: string, x: number, y: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y });
+      Object.defineProperty(event, "pointerType", { value: "touch" });
+      return act(async () => row.dispatchEvent(event));
+    };
+    await touch("pointerdown", 20, 20);
+    for (let y = 22; y <= 60; y += 2) await touch("pointermove", 20, y);
+    await advance(600);
+    expect(container.querySelector(".bot-menu")).toBeNull();
+    await touch("pointerup", 20, 60);
+    await touch("pointerdown", 20, 20);
+    await advance(600);
+    expect(container.querySelector(".bot-menu")).not.toBeNull();
+  });
+
   it("opens phones on home, pushes into a chat and returns with Back", async () => {
     vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     conversation = { ...conversation, activity: { state: "idle" } };
@@ -300,8 +318,11 @@ describe("conversation state", () => {
     await act(async () => container.querySelector<HTMLButtonElement>(".bot-row")!.click());
     expect(rail().classList.contains("open")).toBe(false);
     expect(container.querySelector("main")!.hasAttribute("inert")).toBe(false);
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Back to assistants"]')!.click());
+    const back = container.querySelector<HTMLButtonElement>('[aria-label="Back to assistants"]')!;
+    expect(document.activeElement).toBe(back);
+    await act(async () => back.click());
     expect(rail().classList.contains("open")).toBe(true);
+    expect(document.activeElement).toBe(container.querySelector(".bot-rail [aria-current='page']"));
   });
 
   it("collects a turn's reasoning into one accordion between the prompt and the reply", async () => {

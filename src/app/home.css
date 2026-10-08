@@ -91,7 +91,7 @@
   gap: 6px 4px;
   padding: 6px 0 18px;
 }
-.pinned-bot {
+.home .pinned-bot {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -102,10 +102,10 @@
   border-radius: 16px;
   background: transparent;
 }
-.pinned-bot:hover:enabled {
+.home .pinned-bot:hover:enabled {
   background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
 }
-.pinned-bot.selected {
+.home .pinned-bot.selected {
   background: var(--accent-soft);
 }
 .pinned-avatar {
@@ -134,7 +134,7 @@
   font-size: 12px;
   color: var(--muted);
 }
-.pinned-bot.selected .pinned-name { color: var(--ink); font-weight: 600; }
+.home .pinned-bot.selected .pinned-name { color: var(--ink); font-weight: 600; }
 .home-links {
   display: flex;
   flex-wrap: wrap;
@@ -156,26 +156,26 @@
   border-color: transparent;
 }
 .home-links button[aria-current="page"] .icon { color: var(--accent); }
-.bot-row {
+.home .bot-row {
   gap: 13px;
   min-height: 64px;
   padding: 10px;
   margin-bottom: 2px;
 }
-.bot-row-text { flex: 1; min-width: 0; }
-.bot-row-top {
+.home .bot-row-text { flex: 1; min-width: 0; }
+.home .bot-row-top {
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
-.bot-row-top strong { flex: 1; min-width: 0; }
-.bot-row-top time {
+.home .bot-row-top strong { flex: 1; min-width: 0; }
+.home .bot-row-top time {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--muted);
 }
-.bot-row,
-.pinned-bot {
+.home .bot-row,
+.home .pinned-bot {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
@@ -420,15 +420,15 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   .home-scroll { margin: 0 -18px; padding: 0 18px 24px; }
   .home-bar { padding-bottom: 20px; }
   .home-pinned { gap: 10px 18px; padding: 8px 0 26px; }
-  .pinned-bot { width: 124px; gap: 10px; }
+  .home .pinned-bot { width: 124px; gap: 10px; }
   .pinned-name { font-size: 15px; }
   .home-links { padding-bottom: 12px; }
   .home-links button { font-size: 14px; min-height: 40px; }
-  .bot-row { min-height: 78px; gap: 16px; padding: 12px 6px; }
-  .bot-row strong { font-size: 17px; }
-  .bot-row small { font-size: 14px; margin-top: 4px; }
-  .bot-row-top time { font-size: 13px; }
-  .bot-row.selected { background: transparent; }
+  .home .bot-row { min-height: 78px; gap: 16px; padding: 12px 6px; }
+  .home .bot-row strong { font-size: 17px; }
+  .home .bot-row small { font-size: 14px; margin-top: 4px; }
+  .home .bot-row-top time { font-size: 13px; }
+  .home .bot-row.selected { background: transparent; }
   .settings-sheet {
     width: auto;
     max-width: none;

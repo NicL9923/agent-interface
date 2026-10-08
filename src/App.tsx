@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActivityState, Bot } from "./shared/types";
 import { write } from "./client-api";
 import { BotSettings } from "./BotSettings";
@@ -57,6 +57,15 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [boot?.preferences.theme]);
   const { workerUpdate, installEvent, notice, setNotice } = useAppInstall();
+  // Phone navigation hides one screen behind inert, so move focus to the one shown.
+  const shownRail = useRef(railOpen);
+  useEffect(() => {
+    if (!mobile || shownRail.current === railOpen) return;
+    shownRail.current = railOpen;
+    (railOpen
+      ? document.querySelector<HTMLElement>(".bot-rail [aria-current='page']") ?? document.querySelector<HTMLElement>(".bot-rail .home-account")
+      : document.querySelector<HTMLElement>("[aria-label='Back to assistants']"))?.focus();
+  }, [railOpen, mobile]);
   const selectBot = (id: string) => {
     persistPosition();
     setView("conversation");

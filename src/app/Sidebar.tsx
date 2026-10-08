@@ -37,18 +37,30 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
   const activity = (bot: Bot): ActivityState => connectionLost ? "disconnected" : bot.id === botId ? state : bot.activity;
   const current = (bot: Bot) => bot.id === botId && view === "conversation";
   // Long-press on touch and the context menu elsewhere offer Pin and Settings.
-  const press = useRef<{ timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
+  const press = useRef<{ timer: ReturnType<typeof setTimeout>; fired: boolean; x: number; y: number } | null>(null);
+  useEffect(() => () => { if (press.current) clearTimeout(press.current.timer); }, []);
+  const cancelPress = () => { if (press.current && !press.current.fired) { clearTimeout(press.current.timer); press.current = null; } };
   const menuProps = (bot: Bot) => ({
-    onContextMenu: (event: MouseEvent) => { event.preventDefault(); setMenu({ bot, x: event.clientX, y: event.clientY }); },
+    onContextMenu: (event: MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      // The keyboard's menu key reports no pointer position; open beside the row instead.
+      const rect = event.currentTarget.getBoundingClientRect();
+      const keyboard = !event.clientX && !event.clientY;
+      setMenu({ bot, x: keyboard ? rect.left + 24 : event.clientX, y: keyboard ? rect.bottom - 8 : event.clientY });
+    },
     onPointerDown: (event: PointerEvent) => {
       if (event.pointerType !== "touch") return;
       const { clientX: x, clientY: y } = event;
-      const state = { fired: false, timer: setTimeout(() => { state.fired = true; setMenu({ bot, x, y }); }, 500) };
+      cancelPress();
+      const state = { x, y, fired: false, timer: setTimeout(() => { state.fired = true; setMenu({ bot, x, y }); }, 500) };
       press.current = state;
     },
-    onPointerUp: () => { if (press.current) clearTimeout(press.current.timer); },
-    onPointerCancel: () => { if (press.current) clearTimeout(press.current.timer); },
-    onPointerMove: (event: PointerEvent) => { if (press.current && event.pointerType === "touch" && (Math.abs(event.movementX) > 4 || Math.abs(event.movementY) > 4)) clearTimeout(press.current.timer); },
+    onPointerUp: cancelPress,
+    onPointerCancel: cancelPress,
+    // Scrolling the list is not a long-press, however slowly the finger drifts.
+    onPointerMove: (event: PointerEvent) => {
+      if (press.current && Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 10) cancelPress();
+    },
     onClickCapture: (event: MouseEvent) => { if (press.current?.fired) { event.preventDefault(); event.stopPropagation(); press.current = null; } },
   });
   const row = (bot: Bot) => {
