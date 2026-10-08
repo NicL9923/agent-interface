@@ -1,0 +1,75 @@
+{
+  "revision": "1298c8e74baa73e1a2b90124228d017261ac6bc4",
+  "provider": "deterministic wire fixture; real Hermes execution",
+  "checks": {
+    "image_backend_unavailable": {
+      "native_capability_probe": true,
+      "native_generation_request_refused": true,
+      "real_image_backend_validated": false
+    },
+    "private_maintenance_fence": {
+      "browser_identity_refused": true,
+      "two_native_clients_fenced": true,
+      "native_pool_work_fenced": true,
+      "no_model_execution": true,
+      "same_owner_release": true
+    },
+    "canonical_tool_details": {
+      "actual_arguments": true,
+      "actual_result": true,
+      "stable_call_identity": true,
+      "completion_state": true
+    },
+    "canonical_message_run_provenance": true,
+    "duplicate_admission": {
+      "same_receipt": true,
+      "canonical_user_rows": 1,
+      "real_tool_output": true
+    },
+    "sequential_task_identity": {
+      "distinct_runs": true,
+      "same_canonical_conversation": true
+    },
+    "steering_attribution": {
+      "shares_active_run": true,
+      "canonical_correction_saved": true,
+      "sender_survives_projection": true
+    },
+    "approval_reconnect": {
+      "same_native_request": true,
+      "second_client_approved": true,
+      "stale_answer_refused": true
+    },
+    "clarification": {
+      "native_question": true,
+      "answered_by_question_id": true
+    },
+    "generated_file": {
+      "created_by_real_terminal_tool": true,
+      "authenticated_delivery_bytes": true
+    },
+    "image_only_canonical_projection": {
+      "native_row_binding": true,
+      "sender_attributed": true,
+      "trusted_attachment_rendered": true,
+      "trusted_display_empty": true
+    },
+    "image_preparation_failure": {
+      "definite_rejected_receipt": true,
+      "partially_staged_images_cleared": true,
+      "next_native_admission_accepted": true
+    },
+    "durable_discovery": {
+      "completion_events": 8,
+      "approval_events": 1,
+      "cursor_replay_duplicates": 0
+    },
+    "active_work_upgrade_refused": true,
+    "executor_restart": {
+      "receipt_status": "interrupted",
+      "epoch_changed": true,
+      "durable_interrupted_event": true,
+      "automatic_replay": false
+    }
+  }
+}
