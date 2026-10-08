@@ -67,7 +67,7 @@ function calendarLine(value: string) {
   lines.push(line); return lines.join("\r\n");
 }
 export function eventCalendarFile(card: EventCard, now = new Date()): string {
-  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Agent Interface//Event proposal//EN", "CALSCALE:GREGORIAN", "BEGIN:VEVENT",
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//WildBots//Event proposal//EN", "CALSCALE:GREGORIAN", "BEGIN:VEVENT",
     `UID:${card.id}-${calendarStamp(card.start)}@agent-interface`, `DTSTAMP:${calendarStamp(now.toISOString())}`,
     `DTSTART:${calendarStamp(card.start)}`, ...(card.end ? [`DTEND:${calendarStamp(card.end)}`] : []),
     `SUMMARY:${calendarEscape(card.title)}`, ...(card.location ? [`LOCATION:${calendarEscape(card.location)}`] : []),

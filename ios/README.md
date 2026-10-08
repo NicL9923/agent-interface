@@ -1,6 +1,6 @@
 # Native iOS client
 
-Agent Interface's native SwiftUI client supports iPhone and iPad on iOS 17 or
+WildBots' native SwiftUI client supports iPhone and iPad on iOS 17 or
 later. It uses the same authenticated app server and canonical Hermes
 conversations as the web client. There are no third-party dependencies or embedded
 web views. Household sign-in opens Apple's system authentication browser.

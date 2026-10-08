@@ -57,7 +57,7 @@ function conversationUrl(value) {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data?.json() || {}; } catch { /* A malformed payload still opens the app. */ }
-  event.waitUntil(self.registration.showNotification(String(data.title || 'Agent Interface').slice(0, 100), {
+  event.waitUntil(self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
     body: String(data.body || 'Your assistant has an update.').slice(0, 240),
     icon: '/icon-192.png',
     badge: '/icon-192.png',

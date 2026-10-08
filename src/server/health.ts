@@ -113,14 +113,14 @@ export class HealthMonitor {
         if (!incident) continue;
         this.incidents.delete(name);
         log.info({ check: name, since: incident.since }, "Readiness check recovered");
-        if (incident.alerted) this.notify(`health:${name}:${incident.since}:recovered`, "Agent Interface recovered", `${labels[name]} is working again.`);
+        if (incident.alerted) this.notify(`health:${name}:${incident.since}:recovered`, "WildBots recovered", `${labels[name]} is working again.`);
       } else if (!incident) {
         this.incidents.set(name, { since: now, alerted: false });
         log.warn({ check: name, status, detail }, "Readiness check degraded");
       } else if (!incident.alerted && now - incident.since >= 10 * minute) {
         incident.alerted = true;
         log.error({ check: name, status, detail, since: incident.since }, "Readiness check degraded for 10 minutes; alerting administrators");
-        this.notify(`health:${name}:${incident.since}`, "Agent Interface needs attention", `${labels[name]} needs attention. ${detail}`);
+        this.notify(`health:${name}:${incident.since}`, "WildBots needs attention", `${labels[name]} needs attention. ${detail}`);
       }
     }
   }

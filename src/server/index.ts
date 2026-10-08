@@ -17,12 +17,12 @@ const runtime = createHermesRuntime({
 // pino writes JSON lines to stdout; systemd keeps them in journald.
 const { app } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime);
 await app.listen({ host: config.host, port: config.port });
-app.log.info({ origin: config.origin, schemaVersion, node: process.version }, "Agent Interface started");
+app.log.info({ origin: config.origin, schemaVersion, node: process.version }, "WildBots started");
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
-    app.log.info({ signal }, "Agent Interface stopping");
+    app.log.info({ signal }, "WildBots stopping");
     void app.close().then(
-      () => { app.log.info("Agent Interface stopped"); process.exit(0); },
-      error => { app.log.error({ error: safeError(error) }, "Agent Interface did not stop cleanly"); process.exit(1); },
+      () => { app.log.info("WildBots stopped"); process.exit(0); },
+      error => { app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly"); process.exit(1); },
     );
   });

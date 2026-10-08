@@ -640,7 +640,7 @@ export async function createApp(
     const botId = z.object({ botId: id }).parse(req.body).botId;
     const eventId = crypto.randomUUID();
     store.queueNotification(eventId, signedIn(req).id, {
-      title: "Agent Interface test",
+      title: "WildBots test",
       body: "Push delivery is connected.",
       url: `/?bot=${encodeURIComponent(botId)}`,
       tag: eventId,
@@ -681,7 +681,7 @@ export async function createApp(
     const { botId } = z.object({ botId: id }).strict().parse(req.body);
     if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw failure(404, "Bot not found");
     const eventId = crypto.randomUUID();
-    store.queueNotification(eventId, signedIn(req).id, { title: "Agent Interface test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId });
+    store.queueNotification(eventId, signedIn(req).id, { title: "WildBots test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId });
     return { ok: true, detail: "Queued for this person. Confirm delivery on the signed-in physical device." };
   });
   const clientRoot = resolve("dist/client");
