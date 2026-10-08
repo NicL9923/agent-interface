@@ -2,7 +2,7 @@
 
 ## October 8 home, settings and notification copy
 
-Source fingerprint `FINGERPRINT`.
+Source fingerprint `sha256:a61eef8bf5fa5487619bedffa1dc97b0fa9c3d256d2c5cb6779aec6ed736d354`.
 The complete web suite passed 491 tests across 47 files on Node 26 and Node
 24.21. Type checking, the production build and the Python compile and contract
 checks passed.
