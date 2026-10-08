@@ -1,5 +1,25 @@
 # Validation ledger
 
+## October 8 app release 964caba
+
+PR #45 merged at `964caba3a17792143ae67885cff5d3f39b2d5bdd`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `381723bbbe57154b`, from the archive with SHA256
+`bc0dfeb81321b53092f2433e5e698cf0553c99fc5eaa1f21652d99b05bb1e81e`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-964caba3-20261008T033421Z.json) records the result. Hermes remains
+at `1298c8e74baa`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+The [fresh native qualification](evidence/home-settings-qualification-2026-10-08/manifest.json)
+completed in disposable homes, including private authentication regressions and
+the new check that completion events carry the reply text. The first preflights
+refused while an assistant was busy; activation followed fresh idle admission.
+
 ## October 8 home, settings and notification copy
 
 Source fingerprint `sha256:a61eef8bf5fa5487619bedffa1dc97b0fa9c3d256d2c5cb6779aec6ed736d354`.
