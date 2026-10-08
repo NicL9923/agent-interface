@@ -1,5 +1,21 @@
 # Validation ledger
 
+## October 8 save feedback and conversation position
+
+Source fingerprint `sha256:e6dcb42403711925184c54f81264644c72c9c1436183eb63497a5274e0525515`.
+The complete web suite passed 493 tests across 47 files on Node 26 and Node
+24.21. Type checking and the production build passed.
+
+Agent WebKit checks at 390×844 confirmed the avatar save button shows Saving and
+then Saved, the working message centers on its avatar, and opening three chats
+in turn from the phone home lands each at the latest message. Switching
+assistants had saved the transcript's clamp to the top as the next assistant's
+reading position; regressions cover both event orderings.
+
+The independent GPT-6.1 Sol review found that a clamp delivered after the new
+conversation arrived could still save the top. Persistence now waits for the
+restore, covered by the same regression.
+
 ## October 8 app release 964caba
 
 PR #45 merged at `964caba3a17792143ae67885cff5d3f39b2d5bdd`. The release is live at `https://agentui.wildflowersranch.com`,
