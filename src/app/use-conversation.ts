@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, write } from "../client-api";
 import { localRead, localSave, scrollKey } from "./storage";
+/** Saved in place of a pixel offset when the reader was at the latest message. */
+const AT_LATEST = -1;
 import type { SavedConversation } from "./storage";
 export function useConversation(botId: string, userId?: string) {
   const [conversation, setConversation] = useState<SavedConversation | null>(
@@ -15,9 +17,12 @@ export function useConversation(botId: string, userId?: string) {
   }, [userId]);
   const scroll = useRef<HTMLDivElement>(null);
   const bottom = useRef(true);
+  // Scroll events count only after the opened conversation's position is restored.
+  const restored = useRef(false);
   useEffect(() => {
     if (!botId || !userId) return;
     let live = true;
+    restored.current = false;
     setConversation(null);
     setDisconnected(false);
     setReviewed(false);
@@ -45,6 +50,7 @@ export function useConversation(botId: string, userId?: string) {
               .find(element => element.dataset.requestId === newSecureRequest.id);
             if (card) scroll.current.scrollTop += card.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top;
             bottom.current = false;
+            restored.current = true;
           });
         } else if (firstConversation) {
           firstConversation = false;
@@ -55,11 +61,15 @@ export function useConversation(botId: string, userId?: string) {
             const anchorIndex = result.messages.findIndex(message => message.id === result.readPosition?.messageId);
             const anchor = messages.find(element => element.dataset.messageId === result.readPosition?.messageId)
               ?? (anchorIndex >= 0 ? messages.find(element => result.messages.findIndex(message => message.id === element.dataset.messageId) >= anchorIndex) : undefined);
-            scroll.current.scrollTop = saved ?? (anchor
+            // Someone who was reading the latest message returns to the latest, including anything new.
+            // A saved position without a message is only a pixel offset from another screen, so it is ignored.
+            const latest = saved === AT_LATEST || saved == null && !result.readPosition?.messageId;
+            scroll.current.scrollTop = latest ? scroll.current.scrollHeight : saved ?? (anchor
               ? scroll.current.scrollTop + anchor.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top
               : result.readPosition?.scrollTop ?? scroll.current.scrollHeight);
             bottom.current = scroll.current.scrollHeight - scroll.current.scrollTop
               - scroll.current.clientHeight < 100;
+            restored.current = true;
           });
         } else if (bottom.current) {
           requestAnimationFrame(() => {
@@ -91,11 +101,13 @@ export function useConversation(botId: string, userId?: string) {
     };
   }, [botId, userId]);
   const persistPosition = () => {
-    if (!userId || !botId || !scroll.current) return;
+    // Switching assistants empties the shared transcript, and the browser reports that
+    // clamp to the top as a scroll. Only the loaded conversation's own scrolling counts.
+    if (!userId || !botId || !scroll.current || !restored.current || conversation?.botId !== botId) return;
     const top = scroll.current.scrollTop;
     bottom.current =
       scroll.current.scrollHeight - top - scroll.current.clientHeight < 100;
-    localSave(scrollKey(userId, botId), top);
+    localSave(scrollKey(userId, botId), bottom.current ? AT_LATEST : top);
     if (positionTimer.current) clearTimeout(positionTimer.current);
     const positionBot = botId;
     const viewportTop = scroll.current.getBoundingClientRect().top;

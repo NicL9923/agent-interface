@@ -81,6 +81,14 @@ export function BotSettings({
   const [busy, setBusy] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [notice, setNotice] = useState("");
+  // The banner sits above the fold on phones, so each save button reports its own progress.
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
+  const progress = (key: string) => saving === key ? "saving" : saved === key ? "saved" : undefined;
+  const errorBanner = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (error) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [error]);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     dialog.current?.showModal();
@@ -113,18 +121,25 @@ export function BotSettings({
     return () => { current = false; };
   }, [tab, existing?.id, catalogRetry, bootstrap.capabilities.tools.supported,
     bootstrap.capabilities.skills.supported, bootstrap.capabilities.routines.supported]);
-  const run = async (action: () => Promise<unknown>, success = "Saved") => {
+  const run = async (action: () => Promise<unknown>, success = "Saved", key?: string) => {
     setBusy(true);
     setError("");
+    setNotice("");
+    if (key) { setSaving(key); setSaved(null); clearTimeout(savedTimer.current); }
     try {
       await action();
       setNotice(success);
+      if (key) {
+        setSaved(key);
+        savedTimer.current = setTimeout(() => setSaved(current => current === key ? null : current), 2500);
+      }
       onSaved();
     } catch (e) {
       setError((e as Error).message);
       if (e instanceof ApiError && e.confirmRequired) setConfirmModel(true);
     } finally {
       setBusy(false);
+      if (key) setSaving(null);
     }
   };
   const saveBot = (confirmed = false) =>
@@ -141,6 +156,7 @@ export function BotSettings({
       existing?.shared
         ? "Changes saved for both household members."
         : "Assistant saved.",
+      "details",
     );
   const uploadPortrait = async (file: File | undefined) => {
     if (!file || !existing) return;
@@ -237,7 +253,7 @@ export function BotSettings({
       </nav>
       <div className="settings-content">
         {error && (
-          <p className="form-error" role="alert">
+          <p ref={errorBanner} className="form-error" role="alert">
             {error}
           </p>
         )}
@@ -351,16 +367,12 @@ export function BotSettings({
             </p>
             <div className="actions">
               <button
-                className="primary"
+                className="primary with-progress"
                 disabled={
                   busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
-                {busy
-                  ? "Saving…"
-                  : existing
-                    ? "Save changes"
-                    : "Create assistant"}
+                <SaveProgress state={progress("details")} label={existing ? "Save changes" : "Create assistant"} />
               </button>
               {existing && (
                 <DeleteBot
@@ -452,7 +464,7 @@ export function BotSettings({
             )}
             <div className="actions sticky-actions">
               <button
-                className="primary"
+                className="primary with-progress"
                 disabled={
                   !existing ||
                   busy ||
@@ -467,10 +479,11 @@ export function BotSettings({
                         "PUT",
                       ),
                     "Avatar saved",
+                    "avatar",
                   )
                 }
               >
-                Save avatar
+                <SaveProgress state={progress("avatar")} label="Save avatar" />
               </button>
             </div>
           </>
@@ -530,7 +543,7 @@ export function BotSettings({
                     <p className="muted">No {tab} were reported by Hermes.</p>
                   )}
                 <button
-                  className="primary"
+                  className="primary with-progress"
                   disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported}
                   onClick={() =>
                     void run(() =>
@@ -542,11 +555,11 @@ export function BotSettings({
                             .map((item) => item.id),
                         },
                         "PUT",
-                      ),
+                      ), "Saved", tab,
                     )
                   }
                 >
-                  Save {tab}
+                  <SaveProgress state={progress(tab)} label={`Save ${tab}`} />
                 </button>
               </>
             )}
@@ -833,4 +846,9 @@ function RoutineManager({
       </form>
     </>
   );
+}
+
+function SaveProgress({ state, label }: { state?: "saving" | "saved"; label: string }) {
+  return state === "saving" ? <><Icon name="spinner" className="spin" size={16} />Saving…</>
+    : state === "saved" ? <><Icon name="check" size={16} />Saved</> : <>{label}</>;
 }
