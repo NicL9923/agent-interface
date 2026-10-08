@@ -1,14 +1,12 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import type { Accessory, ActivityState, Avatar as AvatarConfig, Eyes } from "../shared/types";
+import { avatarShapes, type Accessory, type ActivityState, type Avatar as AvatarConfig, type AvatarShape, type Eyes } from "../shared/types";
 import { Avatar, avatarColors, defaultAvatar, stateLabels } from "./Avatar";
 import "./avatar-editor.css";
 import { seasonalAvatar, seasonalChoices } from "./seasonal-avatars";
 
 type DrawnAvatar = Exclude<AvatarConfig, { mode: "portrait" }>;
-type Shape = Extract<AvatarConfig, { mode: "geometric" }>["shape"];
 type Family = Extract<AvatarConfig, { mode: "mascot" }>["family"];
 
-const shapes: Shape[] = ["blob", "pebble", "squircle", "capsule", "triangle", "hex", "cloud", "drop", "circle"];
 const families: Family[] = ["bear", "fox", "sprout"];
 const eyeStyles: Eyes[] = ["oval", "round", "visor", "spark"];
 const accessories: Accessory[] = ["none", "hat", "glasses"];
@@ -58,7 +56,7 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls }: {
   // Switching styles keeps every earlier choice: the drawn character's colors and
   // eyes, the last shape and character, and a portrait chosen before.
   const lastDrawn = useRef<DrawnAvatar>(drawn ?? defaultAvatar);
-  const lastShape = useRef<Shape>(drawn?.mode === "geometric" ? drawn.shape : "blob");
+  const lastShape = useRef<AvatarShape>(drawn?.mode === "geometric" ? drawn.shape : "blob");
   const lastFamily = useRef<Family>(drawn?.mode === "mascot" ? drawn.family : "bear");
   const lastPortrait = useRef(avatar.mode === "portrait" ? avatar : null);
   if (drawn) lastDrawn.current = drawn;
@@ -113,7 +111,7 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls }: {
             <fieldset className="choice-group">
               <legend>Shape</legend>
               <div className="choice-grid">
-                {shapes.map((shape) => (
+                {avatarShapes.map((shape) => (
                   <Choice key={shape} group={`${id}-shape`} label={title(shape)}
                     checked={drawn.shape === shape} onSelect={() => update({ shape })}>
                     <Avatar avatar={{ ...drawn, shape, accessory: "none" }} size={44} reducedMotion />

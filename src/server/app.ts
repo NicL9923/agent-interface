@@ -1,4 +1,4 @@
-import { reasoningLevels, serviceTiers } from "../shared/types.js";
+import { avatarShapes, reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -37,17 +37,7 @@ const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("geometric"),
-    shape: z.enum([
-      "drop",
-      "triangle",
-      "cloud",
-      "circle",
-      "capsule",
-      "blob",
-      "pebble",
-      "squircle",
-      "hex",
-    ]),
+    shape: z.enum(avatarShapes),
     color: z.string().regex(/^#[0-9a-f]{6}$/i),
     eyes: z.enum(["round", "oval", "visor", "spark"]),
     accessory: z.enum(["none", "hat", "glasses"]),

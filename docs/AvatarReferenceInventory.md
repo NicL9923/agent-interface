@@ -31,7 +31,7 @@ The live desktop gallery contains eight silhouettes. Colors were confirmed in th
 | Cloud, overlapping soft lobes | Cloud | `#FF9800` |
 | Teardrop | Drop | `#97683D` |
 
-A compact gallery shows a subset of four. The article hero also shows a neutral gray drop and black circle, so a neutral color and explicit circle shape are useful app choices. Eyes are contrasting cutouts without a conventional mouth. Common resting eyes are two upright rounded capsules; their sizes, spacing, lid opening, angle and location change with expression. The source varies eye width/height and spacing between active and emotive states, interpolated over 280 ms in the lifecycle example. It includes natural lids and minimum stroke treatments for tired expressions.
+A compact gallery shows a subset of four. The article hero also shows a neutral gray drop and black circle, so a neutral color and explicit circle shape are useful app choices. The app adds 11 original shapes with no reference counterpart: diamond, sparkle, clover, heart, cookie, pentagon, burst, alien, ghost, flower and sun, for 20 in all. Eyes are contrasting cutouts without a conventional mouth. Common resting eyes are two upright rounded capsules; their sizes, spacing, lid opening, angle and location change with expression. The source varies eye width/height and spacing between active and emotive states, interpolated over 280 ms in the lifecycle example. It includes natural lids and minimum stroke treatments for tired expressions.
 
 ## Motion inventory
 

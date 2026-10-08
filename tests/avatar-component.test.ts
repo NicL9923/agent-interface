@@ -2,8 +2,10 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Avatar } from "../src/components/Avatar";
-import type { ActivityState, Avatar as AvatarConfig } from "../src/shared/types";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { Avatar, faces, silhouette } from "../src/components/Avatar";
+import { avatarShapes, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
 import { seasonalAvatar, seasonalChoices } from "../src/components/seasonal-avatars";
 
 let container: HTMLDivElement;
@@ -139,5 +141,29 @@ describe("avatar animation loop", () => {
   it("names the assistant and its state for assistive technology", async () => {
     await render("blocked");
     expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Needs your help");
+  });
+});
+
+describe("avatar silhouettes", () => {
+  // jsdom rewrites import.meta.url, so read from the project root.
+  const native = (file: string) => readFileSync(resolve("ios/AgentInterface", file), "utf8");
+  const swift = native("AvatarView.swift");
+
+  it("lists the same shapes natively", () => {
+    const list = native("Models.swift").match(/static let shapes = \[([^\]]*)\]/)![1];
+    expect([...list.matchAll(/"(\w+)"/g)].map((m) => m[1])).toEqual([...avatarShapes]);
+  });
+
+  it.each(avatarShapes)("draws %s as one closed outline with a matching native face", (shape) => {
+    const d = silhouette(shape);
+    if (shape !== "blob") expect(d).not.toBe(silhouette("blob"));
+    const nativePath = shape === "blob"
+      ? swift.match(/default: "([^"]+)"/)![1]
+      : swift.match(new RegExp(`case "${shape}":\\s*"([^"]+)"`))![1];
+    // Morphing samples one continuous outline; native parses only absolute M L H V Q C Z.
+    expect(nativePath).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
+    if (shape !== "circle") expect(nativePath).toBe(d);
+    const anchor = swift.match(new RegExp(`"${shape}": Anchor\\(cy: ([\\d.]+), scale: ([\\d.]+), top: ([\\d.]+), hat: ([\\d.]+)\\)`))!;
+    expect(anchor.slice(1).map(Number)).toEqual(Object.values(faces[shape]));
   });
 });
