@@ -13,21 +13,36 @@ export type ActivityState =
   | "disconnected"
   | "failed"
   | "interrupted";
+/** Geometric silhouettes in picker order. ios/AgentInterface/Models.swift mirrors this list. */
+export const avatarShapes = [
+  "blob",
+  "pebble",
+  "squircle",
+  "capsule",
+  "triangle",
+  "hex",
+  "cloud",
+  "drop",
+  "circle",
+  "diamond",
+  "sparkle",
+  "clover",
+  "heart",
+  "cookie",
+  "pentagon",
+  "burst",
+  "alien",
+  "ghost",
+  "flower",
+  "sun",
+] as const;
+export type AvatarShape = (typeof avatarShapes)[number];
 export type Eyes = "round" | "oval" | "visor" | "spark";
 export type Accessory = "none" | "hat" | "glasses";
 export type Avatar =
   | {
       mode: "geometric";
-      shape:
-        | "drop"
-        | "triangle"
-        | "cloud"
-        | "circle"
-        | "capsule"
-        | "blob"
-        | "pebble"
-        | "squircle"
-        | "hex";
+      shape: AvatarShape;
       color: string;
       eyes: Eyes;
       accessory: Accessory;

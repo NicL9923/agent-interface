@@ -42,6 +42,8 @@ struct AvatarConfig: Codable, Equatable {
   var origin: String? = nil
   static let shapes = [
     "blob", "pebble", "squircle", "capsule", "triangle", "hex", "cloud", "drop", "circle",
+    "diamond", "sparkle", "clover", "heart", "cookie", "pentagon", "burst", "alien", "ghost",
+    "flower", "sun",
   ]
   static let families: [(id: String, label: String)] = [
     ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"),

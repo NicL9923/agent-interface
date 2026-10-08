@@ -1,5 +1,20 @@
 # Validation ledger
 
+## October 7 new avatar shapes
+
+Source fingerprint `sha256:5ec24a0aca06247bf6f8eae5c70bfb631656d50a04b93848c74e8b229cff38cf`.
+The complete web suite passed 479 tests across 46 files on Node 26 and Node
+24.21. Type checking and the production build passed. The native simulator run
+passed 69 unit tests and 25 UI tests, with 2 skipped, on an iPhone 18 Pro.
+
+Geometric avatars gain diamond, sparkle, clover, heart, cookie, pentagon, burst,
+alien, ghost, flower and sun on web and iOS. Each is one closed cubic outline
+that morphs like the original nine. The sun is a round disc with 12 short
+triangular rays, so it does not read as a germ. A web test checks that every native path
+and face anchor matches the web and stays within the native parser's commands.
+WebKit renders of all 20 shapes with idle eyes, and of each new shape with
+glasses and the hat, were reviewed at 120 px.
+
 ## October 8 app release f15d46c
 
 PR #43 merged at `f15d46c80847568ded64846e4db2f7667f46ef78`. The release is live at `https://agentui.wildflowersranch.com`,

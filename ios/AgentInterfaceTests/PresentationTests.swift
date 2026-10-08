@@ -88,6 +88,8 @@ final class PresentationTests: XCTestCase {
       XCTAssertEqual(points.values.count, 144, shape)
       XCTAssertTrue(points.values.allSatisfy(\.isFinite), shape)
       XCTAssertGreaterThan(points.magnitudeSquared, 0)
+      XCTAssertNotNil(AvatarGeometry.faces[shape], shape)
+      if shape != "blob" { XCTAssertNotEqual(AvatarGeometry.svg(shape), AvatarGeometry.svg("blob"), shape) }
     }
   }
   func testSeasonalAvatarsDecodeAndKeepCustomizationWhenSelected() throws {
