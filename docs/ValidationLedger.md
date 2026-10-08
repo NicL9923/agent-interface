@@ -1,5 +1,23 @@
 # Validation ledger
 
+## October 8 app release f15d46c
+
+PR #43 merged at `f15d46c80847568ded64846e4db2f7667f46ef78`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `10d94c8630a564e0`, from the archive with SHA256
+`144af551f1aff0ee83b8457adbb67852ef9c57d87df975093aa248869f0f3063`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-f15d46c8-20261008T020304Z.json) records the result. Hermes remains
+at `1298c8e74baa`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+The [fresh native qualification](evidence/live-reply-qualification-2026-10-08/manifest.json)
+completed in disposable homes, including private authentication regressions.
+
 ## October 7 live reply replay fix
 
 Source fingerprint `sha256:1e7045178492ab73005545336baf4b44bd8e97b8af36aabd12b5dc34a0ca81c5`.
