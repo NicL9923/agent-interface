@@ -107,6 +107,14 @@ class Journal:
         return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3]}
 
 
+def event_body(value):
+    """A bounded, single-line excerpt for event bodies; the app shortens it further for display."""
+    if not isinstance(value, str):
+        value = "" if value is None else str(value)
+    text = " ".join(value.split())
+    return text[:500] or None
+
+
 def install(path=None):
     actual_revision, patch_hash = source_state()
     from tui_gateway import server
@@ -389,6 +397,7 @@ def install(path=None):
                 row = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
                 root = row[0] if row else None
                 identity = f"{root}:{event_kind}:{frame.get('id') if event_kind == 'approval' else ''}" if root else None
+                # Approval commands can carry credentials, so the event body stays empty; the chat shows them after sign-in.
                 journal.event(profile_for(sid), sid, event_kind, "Approval requested" if event_kind == "approval" else "Hermes " + event_kind, root, event_key=identity)
         elif sid and event_kind:
             # A native message.complete closes one turn, before steering/goal queue drain.
@@ -410,7 +419,10 @@ def install(path=None):
                 with journal.lock, journal.db:
                     row = journal.db.execute("SELECT COALESCE(run_id,request_id),profile FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created LIMIT 1", (sid,)).fetchone()
                     if row:
-                        journal.event(row[1], sid, kind, "Hermes " + kind, row[0], event_key=f"{row[0]}:{kind}")
+                        # Notifications quote what actually happened instead of a generic status.
+                        outcome = result if isinstance(result, dict) else {}
+                        body = event_body(outcome.get("final_response") if kind == "completed" else outcome.get("error") if kind == "failed" else None)
+                        journal.event(row[1], sid, kind, "Hermes " + kind, row[0], body=body, event_key=f"{row[0]}:{kind}")
                         journal.db.execute("UPDATE receipts SET terminal=1,status=CASE WHEN ? THEN 'interrupted' ELSE status END WHERE COALESCE(run_id,request_id)=? AND terminal=0", (kind == "interrupted", row[0]))
     server._run_post_turn_followups = followups
 

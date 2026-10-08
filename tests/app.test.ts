@@ -234,6 +234,29 @@ describe("authentication and household state", () => {
     expect((await signIn()).statusCode).toBe(200);
     await app.close();
   });
+  it("shows a private assistant's latest reply only to its owner", async () => {
+    const fake = runtimeDouble();
+    const lastMessage = { text: "Your private reply", at: "2026-10-08T12:00:00.000Z" };
+    fake.runtime.listBots = async () => [
+      { id: "shared", name: "Shared", model: "test", shared: true, activity: "idle", lastMessage },
+      { id: "mine", name: "Mine", model: "test", shared: false, activity: "idle", lastMessage },
+    ];
+    const { app, store } = await createApp(config(), fake.runtime, { background: false });
+    const one = await login(app), two = await login(app, "two");
+    const ownerId = (await app.inject({ url: "/api/bootstrap", headers: one })).json().user.id;
+    store.savePresentation("mine", { shared: false, ownerId });
+    for (const url of ["/api/bootstrap", "/api/bots"]) {
+      const bots = (response: { json(): { bots?: unknown[] } | unknown[] }) => {
+        const value = response.json();
+        return (Array.isArray(value) ? value : value.bots) as { id: string; lastMessage?: unknown }[];
+      };
+      const theirs = bots(await app.inject({ url, headers: two }));
+      expect(theirs.find(bot => bot.id === "mine")?.lastMessage).toBeUndefined();
+      expect(theirs.find(bot => bot.id === "shared")?.lastMessage).toEqual(lastMessage);
+      expect(bots(await app.inject({ url, headers: one })).find(bot => bot.id === "mine")?.lastMessage).toEqual(lastMessage);
+    }
+    await app.close();
+  });
   it("keeps personal drafts and read positions separate while bots stay shared", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {
       background: false,

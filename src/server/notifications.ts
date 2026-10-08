@@ -109,6 +109,10 @@ export class BackgroundWorker {
       const discovery = await this.runtime.discoverEvents(
         this.store.cursor(),
       );
+      // Titles name the assistant; a roster failure keeps the previous names.
+      if (discovery.events.length) try {
+        this.store.botNames = new Map((await this.runtime.listBots()).map(bot => [bot.id, bot.name]));
+      } catch { /* Fall back to the last known names. */ }
       this.store.recordEvents(discovery.events, discovery.cursor);
       this.discovery.success();
     } catch (error) {

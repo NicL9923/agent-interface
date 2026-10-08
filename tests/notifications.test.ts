@@ -33,6 +33,14 @@ it("persists durable event discovery with participant/routine recipient semantic
   expect(JSON.parse(store.outbox().find(x => x.user_id === 'two')!.payload).url).toBe('/?bot=shared&routine=routine');
   store.close();
 });
+it("names the assistant and quotes the reply in queued notifications", () => {
+  const store = storeWithUsers();
+  store.participate("run", "one");
+  store.botNames = new Map([["shared", "Nic's Chief"]]);
+  store.recordEvents([{ ...event, title: "Hermes completed", body: "Tailscale is up on the NAS." }], "cursor-1");
+  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({ title: "Nic's Chief", body: "Tailscale is up on the NAS." });
+  store.close();
+});
 it("keeps completion pending without a subscription and retries failed delivery without resending successful endpoints", async () => {
   const store = storeWithUsers();
   store.participate("run", "one");

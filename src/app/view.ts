@@ -18,11 +18,14 @@ export function initialPanel(): Panel | null {
     ? { kind: "routine", botId: query.get("bot")!, routineId: query.get("routine")! }
     : null;
 }
+/** Whether the first URL names a destination, such as a notification link. */
+export function hasDestination() {
+  const query = new URLSearchParams(location.search);
+  return ["bot", "view", "routine", "computer"].some(key => query.has(key));
+}
 // An explicit destination in the first URL wins over the start page preference.
 export function startsOnToday({ startPage, defaultBotId }: Preferences) {
-  const query = new URLSearchParams(location.search);
-  return !["bot", "view", "routine", "computer"].some(key => query.has(key)) &&
-    (startPage === "today" || startPage !== "assistant" && !defaultBotId);
+  return !hasDestination() && (startPage === "today" || startPage !== "assistant" && !defaultBotId);
 }
 export function useUrlSync(view: View, panel: Panel | null, botId: string, userId?: string) {
   const routineId = panel?.kind === "routine" ? panel.routineId : null;

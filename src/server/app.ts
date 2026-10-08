@@ -1,4 +1,4 @@
-import { reasoningLevels, serviceTiers } from "../shared/types.js";
+import { avatarShapes, reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -37,17 +37,7 @@ const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("geometric"),
-    shape: z.enum([
-      "drop",
-      "triangle",
-      "cloud",
-      "circle",
-      "capsule",
-      "blob",
-      "pebble",
-      "squircle",
-      "hex",
-    ]),
+    shape: z.enum(avatarShapes),
     color: z.string().regex(/^#[0-9a-f]{6}$/i),
     eyes: z.enum(["round", "oval", "visor", "spark"]),
     accessory: z.enum(["none", "hat", "glasses"]),
@@ -194,6 +184,10 @@ export async function createApp(
   ) => ({ ...bot, ...store.presentation(bot.id),
     ...(nativeAvatar ? { avatar: bot.avatar } : {}),
   });
+  // Home previews follow notification visibility: a private assistant's latest
+  // reply appears only for its owner, never ambiently for the rest of the household.
+  const forMember = <T extends { shared: boolean; ownerId?: string; lastMessage?: unknown }>(bots: T[], userId: string) =>
+    bots.map(bot => bot.shared || !bot.ownerId || bot.ownerId === userId ? bot : { ...bot, lastMessage: undefined });
   app.get("/api/health", async () => ({ ok: true }));
   app.get("/api/hermes/upgrade", async req => upgrades.status(signedIn(req)));
   app.post("/api/hermes/upgrade/check", async req => {
@@ -234,7 +228,7 @@ export async function createApp(
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: store.preferences(signedIn(req).id),
-    ...await runtimeSnapshot(),
+    ...await runtimeSnapshot().then(value => ({ ...value, bots: forMember(value.bots, signedIn(req).id) })),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
   }));
@@ -274,9 +268,9 @@ export async function createApp(
     if (!runtime.modelOptions) throw failure(409, "The connected Hermes installation does not expose model options.");
     return runtime.modelOptions(botId);
   });
-  app.get("/api/bots", async () => {
+  app.get("/api/bots", async (req) => {
     const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
-    return bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported));
+    return forMember(bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)), signedIn(req).id);
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");

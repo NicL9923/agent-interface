@@ -252,7 +252,7 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   const button=(label:string)=>[...container.querySelectorAll('button')].find(node=>node.textContent?.trim()===label)!;
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
-  await act(async()=>button('Preferences').click());
+  await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
   await act(async()=>button('Sign out').click());
   expect(container.querySelector('.sign-in')).not.toBeNull();
   await act(async()=>button('Enter local workspace').click());
@@ -269,7 +269,7 @@ it('fits a restored multi-line draft when returning to the conversation',async()
       :path==='/today'?{generatedAt:new Date().toISOString(),since:new Date().toISOString(),frontier:'0',hasMore:false,items:[],events:[],unavailableBots:[],upcoming:[]} as T:previous(path) as Promise<T>);
     await renderApp();
     expect(container.querySelector('textarea')!.style.height).toBe('96px');
-    await act(async()=>[...container.querySelectorAll<HTMLButtonElement>('.rail-nav button')].find(node=>node.textContent?.includes('Today'))!.click());
+    await act(async()=>[...container.querySelectorAll<HTMLButtonElement>('.home-links button')].find(node=>node.textContent?.includes('Today'))!.click());
     expect(container.querySelector('textarea')).toBeNull();
     await act(async()=>container.querySelector<HTMLButtonElement>('.bot-item')!.click());
     expect(container.querySelector('textarea')!.style.height).toBe('96px');

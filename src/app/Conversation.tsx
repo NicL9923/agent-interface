@@ -129,6 +129,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
               state={avatarState}
               size={112}
               name={selected.name}
+              reducedMotion
             />
             <h2>Let's discuss your role.</h2>
             <p>{selected.description || `Tell ${selected.name} what you need help with.`}</p>
@@ -140,6 +141,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
         ) : null}
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}`}>
+            {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
             <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy" role="status">
               <span className="activity-shimmer">{selected.name} is {action}...</span>
@@ -166,15 +168,17 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
     </>
   );
 }
-type Turn = { messages: Message[]; tools: Map<string, Message> };
+type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[] };
 function turns(conversation: SavedConversation | null, advanced: boolean) {
   const blocks: Turn[] = [];
   for (const message of conversation?.messages || []) {
-    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map() });
+    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map(), reasoning: [] });
     const block = blocks.at(-1)!;
+    // A turn's reasoning parts share one accordion instead of a block per reply row.
+    if (advanced && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
     if (message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
     // A tool-call row with no reply text would render as an empty bubble.
-    if (message.role !== "tool" && visibleMessage(message, advanced)) block.messages.push(message);
+    if (message.role !== "tool" && visibleMessage(message)) block.messages.push(message);
   }
   for (const call of conversation?.toolCalls || []) {
     // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
@@ -184,7 +188,7 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
       const { block, message } = matches[0];
       block.tools.set(message.id, { ...message, toolCall: call });
     } else {
-      if (!blocks.length) blocks.push({ messages: [], tools: new Map() });
+      if (!blocks.length) blocks.push({ messages: [], tools: new Map(), reasoning: [] });
       blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
     }
   }
@@ -196,14 +200,16 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
 }) {
   return <>
     {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
-      {block.messages.map((message, position) => {
+      {block.messages.flatMap((message, position) => {
         // The conversation is with one assistant, so its replies need no name, and
         // consecutive reply parts in a turn share the first part's timestamp.
         const reply = message.role === "assistant";
         const continued = reply && block.messages[position - 1]?.role === "assistant";
         const label = message.role === "user" ? message.sender?.name || "Household member"
           : reply ? "" : message.toolName || message.role;
-        return <article
+        // Reasoning follows the prompt and precedes the reply.
+        const opensReply = !!block.reasoning.length && message.role !== "user" && block.messages.slice(0, position).every(item => item.role === "user");
+        const article = <article
           className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}`}
           key={message.id}
           data-message-id={message.id}
@@ -217,24 +223,26 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
           ) : message.role !== "tool" && (
             <div className="message-text">{message.text}</div>
           )}
-          {advanced && message.reasoning && (
-            <details className="message-detail">
-              <summary>Reasoning</summary>
-              <p>{message.reasoning}</p>
-            </details>
-          )}
           {message.files?.map((file) => (
             <FileLink file={file} key={file.id} />
           ))}
         </article>;
+        return opensReply ? [<Reasoning key="reasoning" parts={block.reasoning} />, article] : [article];
       })}
+      {!!block.reasoning.length && block.messages.every(message => message.role === "user") && <Reasoning parts={block.reasoning} />}
       <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />
     </div>)}
   </>;
 });
-function visibleMessage(message: Message, advanced: boolean) {
-  return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length
-    || (advanced && !!message.reasoning?.trim());
+function visibleMessage(message: Message) {
+  return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
+}
+function Reasoning({ parts }: { parts: string[] }) {
+  return <details className="tool-calls reasoning-calls">
+    <summary><Icon name="brain" size={16} /><span>Reasoning</span>{parts.length > 1 && <span className="tool-count">{parts.length}</span>}
+      <Icon name="chevron" size={16} /></summary>
+    <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
+  </details>;
 }
 function ApprovalCard({ approval, botId, supported, report }: { approval: Approval; botId: string; supported: boolean; report(message: string): void }) {
   const [decision, setDecision] = useState<"approved" | "denied" | null>(null);

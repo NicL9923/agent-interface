@@ -1,4 +1,4 @@
-import type { ActivityState, Bootstrap, Bot, Preferences } from "../shared/types";
+import type { ActivityState, Bootstrap, Bot } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { ArtifactsButton } from "../components/Artifacts";
 import { Icon } from "../components/Icon";
@@ -9,7 +9,7 @@ const titles: Record<Exclude<View, "conversation">, [string, string]> = {
   groups: ["Group chats", "Two to six assistants in one conversation"],
   today: ["Today", "Your assistants, at a glance"],
 };
-export function ChatHeader({ boot, view, selected, avatarState, conversation, connectionLost, railOpen, onOpenRail, onSettings, savePreferences }: {
+export function ChatHeader({ boot, view, selected, avatarState, conversation, connectionLost, railOpen, onOpenRail, onSettings, onPin }: {
   boot: Bootstrap;
   view: View;
   selected?: Bot;
@@ -19,19 +19,19 @@ export function ChatHeader({ boot, view, selected, avatarState, conversation, co
   railOpen: boolean;
   onOpenRail(): void;
   onSettings(bot: Bot): void;
-  savePreferences(value: Preferences): Promise<void>;
+  onPin(bot: Bot): void;
 }) {
-  const prefs = boot.preferences;
+  const pinned = !!selected && boot.preferences.favorites.includes(selected.id);
   return (
     <header className="chat-header">
       <button
         className="mobile-only icon-button"
-        aria-label="Open assistants"
+        aria-label="Back to assistants"
         aria-expanded={railOpen}
         aria-controls="assistant-navigation"
         onClick={onOpenRail}
       >
-        <Icon name="menu" />
+        <Icon name="back" />
       </button>
       {view !== "conversation" ? <div className="chat-title"><h1>{titles[view][0]}</h1><p>{titles[view][1]}</p></div> : selected ? (
         <>
@@ -40,6 +40,7 @@ export function ChatHeader({ boot, view, selected, avatarState, conversation, co
             state={avatarState}
             size={42}
             name={selected.name}
+            reducedMotion
           />
           <div className="chat-title">
             <h1>{selected.name}</h1>
@@ -55,24 +56,13 @@ export function ChatHeader({ boot, view, selected, avatarState, conversation, co
             <Icon name="gear" />
           </button>
           <button
-            className={`icon-button favorite-toggle ${prefs.favorites.includes(selected.id) ? "on" : ""}`}
-            aria-label={
-              prefs.favorites.includes(selected.id)
-                ? "Remove favorite"
-                : "Favorite assistant"
-            }
-            aria-pressed={prefs.favorites.includes(selected.id)}
-            title={prefs.favorites.includes(selected.id) ? "Remove favorite" : "Favorite"}
-            onClick={() =>
-              void savePreferences({
-                ...prefs,
-                favorites: prefs.favorites.includes(selected.id)
-                  ? prefs.favorites.filter((id) => id !== selected.id)
-                  : [...prefs.favorites, selected.id],
-              })
-            }
+            className={`icon-button favorite-toggle ${pinned ? "on" : ""}`}
+            aria-label={pinned ? "Unpin assistant" : "Pin assistant"}
+            aria-pressed={pinned}
+            title={pinned ? "Unpin from the top of home" : "Pin to the top of home"}
+            onClick={() => onPin(selected)}
           >
-            <Icon name="star" filled={prefs.favorites.includes(selected.id)} />
+            <Icon name="pin" filled={pinned} />
           </button>
         </>
       ) : (

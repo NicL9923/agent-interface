@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { ActivityState } from "./shared/types";
+import { useEffect, useRef, useState } from "react";
+import type { ActivityState, Bot } from "./shared/types";
 import { write } from "./client-api";
 import { BotSettings } from "./BotSettings";
 import { AvatarTrio, SignIn } from "./components/SignIn";
@@ -12,7 +12,7 @@ import { RoutineResults } from "./components/RoutineResults";
 import { DiscoveryPanel } from "./components/DiscoveryPanel";
 import "./components/discovery.css";
 import { GroupChats } from "./components/GroupChats";
-import { initialPanel, initialView, startsOnToday, useUrlSync } from "./app/view";
+import { hasDestination, initialPanel, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
 import { useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
@@ -30,7 +30,8 @@ export function App() {
   const closePanels = (...kinds: Panel["kind"][]) =>
     setPanel(current => current && kinds.includes(current.kind) ? null : current);
   const [error, setError] = useState("");
-  const [railOpen, setRailOpen] = useState(false);
+  // Phones open on the home list unless a link names a destination.
+  const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && !hasDestination());
   const mobile = useMobile();
   const session = useSession({
     onIdentityChange: () => {
@@ -56,6 +57,15 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [boot?.preferences.theme]);
   const { workerUpdate, installEvent, notice, setNotice } = useAppInstall();
+  // Phone navigation hides one screen behind inert, so move focus to the one shown.
+  const shownRail = useRef(railOpen);
+  useEffect(() => {
+    if (!mobile || shownRail.current === railOpen) return;
+    shownRail.current = railOpen;
+    (railOpen
+      ? document.querySelector<HTMLElement>(".bot-rail [aria-current='page']") ?? document.querySelector<HTMLElement>(".bot-rail .home-account")
+      : document.querySelector<HTMLElement>("[aria-label='Back to assistants']"))?.focus();
+  }, [railOpen, mobile]);
   const selectBot = (id: string) => {
     persistPosition();
     setView("conversation");
@@ -72,7 +82,7 @@ export function App() {
       setDraft({ text: "", attachments: [] });
       // The signed-out account's in-flight work can never clear these once the identity changes.
       reset(); setUploading(false);
-      setRailOpen(false);
+      setRailOpen(mobile);
       closePanels("settings", "preferences", "upgrade", "integrations");
     } catch (e) {
       setNotice((e as Error).message);
@@ -100,28 +110,27 @@ export function App() {
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;
-  const open = (next: Panel) => { setRailOpen(false); setPanel(next); };
+  const open = (next: Panel) => setPanel(next);
+  const togglePin = (bot: Bot) => void session.savePreferences({
+    ...boot.preferences,
+    favorites: boot.preferences.favorites.includes(bot.id)
+      ? boot.preferences.favorites.filter(id => id !== bot.id)
+      : [...boot.preferences.favorites, bot.id],
+  });
   return (
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} view={view} state={state} connectionLost={connectionLost} offline={offline}
-        mobile={mobile} open={railOpen} onClose={() => setRailOpen(false)} onSelectBot={selectBot}
+        mobile={mobile} open={railOpen} onSelectBot={selectBot}
         onView={next => { setView(next); setRailOpen(false); }}
         onNewBot={() => open({ kind: "settings", bot: "new" })}
-        onComputer={() => open({ kind: "computer" })}
-        onPreferences={() => {
-          setRailOpen(false);
-          setPanel(current => current?.kind === "preferences" ? null : { kind: "preferences" });
-        }}
-        onIntegrations={() => open({ kind: "integrations" })}
-        onUpgrade={() => open({ kind: "upgrade" })} />
+        onSettings={() => open({ kind: "preferences" })}
+        onPin={togglePin}
+        onBotSettings={bot => open({ kind: "settings", bot })} />
       <main className="conversation-panel" inert={mobile && railOpen}>
         <ChatHeader boot={boot} view={view} selected={selected} avatarState={avatarState} conversation={conversation}
           connectionLost={connectionLost} railOpen={railOpen}
-          onOpenRail={() => {
-            closePanels("preferences");
-            setRailOpen(true);
-          }}
-          onSettings={bot => setPanel({ kind: "settings", bot })} savePreferences={session.savePreferences} />
+          onOpenRail={() => setRailOpen(true)}
+          onSettings={bot => setPanel({ kind: "settings", bot })} onPin={togglePin} />
         {view === "find" ? <DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /> : view === "groups" ? <GroupChats key={boot.user.id} bootstrap={boot} /> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
@@ -153,9 +162,11 @@ export function App() {
       <HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
         bots={boot.bots} currentVersion={boot.connection.version} />
       {panel?.kind === "preferences" && (
-        <PreferencesDialog prefs={boot.preferences} bots={boot.bots} savePreferences={session.savePreferences}
-          notifications={notifications} mobile={mobile} installEvent={installEvent} notice={notice}
-          onClose={() => closePanels("preferences")} onSignOut={signOut} />
+        <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} savePreferences={session.savePreferences}
+          notifications={notifications} installEvent={installEvent} notice={notice}
+          onClose={() => closePanels("preferences")} onSignOut={signOut}
+          onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
+          onUpgrade={() => open({ kind: "upgrade" })} />
       )}
     </div>
   );

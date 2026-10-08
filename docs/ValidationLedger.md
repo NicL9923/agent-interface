@@ -1,5 +1,45 @@
 # Validation ledger
 
+## October 8 home, settings and notification copy
+
+Source fingerprint `sha256:a61eef8bf5fa5487619bedffa1dc97b0fa9c3d256d2c5cb6779aec6ed736d354`.
+The complete web suite passed 491 tests across 47 files on Node 26 and Node
+24.21. Type checking, the production build and the Python compile and contract
+checks passed.
+
+Agent WebKit checks used synthetic fixtures at 390×844 and 1280×800 in light and
+dark appearances. Checked the phone home with pinned assistants, previews and
+dates, push into a conversation and Back, the long-press pin menu with click
+suppression, right-click pinning on desktop, the grouped settings sheet and its
+rows into Hermes updates, Computer and Integrations, and the reasoning accordion.
+Only the inline work avatar animates; header, home, Today and settings avatars stay still.
+Notification copy is covered by unit and payload tests; the qualification probe
+now requires completion events to carry reply text. A physical iPhone and a live
+push delivery were not exercised.
+
+The independent GPT-6.1 Sol review of the redesign found lost focus during phone
+navigation, slow drags opening the pin menu, and base styles overriding home
+sizing. All three were fixed and the first two are covered by regressions. A
+focused review of the notifications and shapes found approval commands, which can
+carry credentials, reaching notification text, and private assistants' previews
+reaching other members. Approval notifications now say only that a decision is
+needed, and previews follow notification visibility; both are covered by tests.
+
+## October 7 new avatar shapes
+
+Source fingerprint `sha256:5ec24a0aca06247bf6f8eae5c70bfb631656d50a04b93848c74e8b229cff38cf`.
+The complete web suite passed 479 tests across 46 files on Node 26 and Node
+24.21. Type checking and the production build passed. The native simulator run
+passed 69 unit tests and 25 UI tests, with 2 skipped, on an iPhone 18 Pro.
+
+Geometric avatars gain diamond, sparkle, clover, heart, cookie, pentagon, burst,
+alien, ghost, flower and sun on web and iOS. Each is one closed cubic outline
+that morphs like the original nine. The sun is a round disc with 12 short
+triangular rays, so it does not read as a germ. A web test checks that every native path
+and face anchor matches the web and stays within the native parser's commands.
+WebKit renders of all 20 shapes with idle eyes, and of each new shape with
+glasses and the hat, were reviewed at 120 px.
+
 ## October 8 app release f15d46c
 
 PR #43 merged at `f15d46c80847568ded64846e4db2f7667f46ef78`. The release is live at `https://agentui.wildflowersranch.com`,

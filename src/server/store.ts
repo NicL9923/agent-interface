@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { notificationCopy } from "../shared/event-copy.js";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -484,11 +485,14 @@ export class Store {
       .prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload,created_at) VALUES(?,?,?,?,?)")
       .run(randomUUID(), eventId, userId, JSON.stringify(payload), Date.now()).changes > 0;
   }
+  /** Assistant display names for notification titles, refreshed by the background worker. */
+  botNames = new Map<string, string>();
   enqueue(event: RuntimeEvent) {
+    const copy = notificationCopy(event, this.botNames.get(event.botId));
     for (const userId of this.recipients(event))
       this.queueNotification(event.id, userId, {
-        title: event.title,
-        body: event.body ?? "",
+        title: copy.title,
+        body: copy.body,
         url: `/?bot=${encodeURIComponent(event.botId)}${event.routineId ? `&routine=${encodeURIComponent(event.routineId)}` : ''}`,
         tag: event.id,
         kind: event.kind,

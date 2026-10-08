@@ -15,6 +15,7 @@ let addonReady:boolean;
 let metadataConflict:boolean;
 let connectionFails:boolean;
 let imageReady:boolean;
+let rosterSession:Record<string,unknown>|undefined;
 let opening: 'open' | 'close' | 'hang';
 let deferredMethods: Set<string>;
 let rpcErrors: Map<string, {code:number; message:string}>;
@@ -48,7 +49,7 @@ class WireSocket extends EventTarget {
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one'};
-    if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3}}]};
+    if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
     if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
@@ -60,7 +61,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;metadataConflict=false;connectionFails=false;imageReady=false;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -587,6 +588,10 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(sockets).toHaveLength(3);
   });
 
+  it('lists the canonical chat preview and its last activity for the home screen', async () => {
+    rosterSession = {resolved_id:'stored-one',preview:'  Tailscale is\n up on the NAS. ',last_active:1791400000.5};
+    expect((await runtime.listBots())[0].lastMessage).toEqual({text:'Tailscale is up on the NAS.',at:new Date(1791400000500).toISOString()});
+  });
   it('keeps the successful bot roster visible and disconnected during an outage', async () => {
     const before = await runtime.listBots();
     sockets[0].close();

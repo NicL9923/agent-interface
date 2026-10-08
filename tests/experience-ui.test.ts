@@ -40,7 +40,7 @@ it("shows every loaded recap event, opens the right assistant and marks only the
   await render(createElement(TodayPanel, { bootstrap, onOpen }));
   expect(container.textContent).toContain("0 at work"); expect(container.textContent).toContain("Couldn't check 1 assistant");
   expect(container.textContent).toContain("Result 0"); expect(container.textContent).toContain("Result 39");
-  await act(async () => Array.from(container.querySelectorAll(".today-row")).find(row => row.textContent?.startsWith("Result 0"))!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await act(async () => Array.from(container.querySelectorAll(".today-row")).find(row => row.querySelector("small")?.textContent?.startsWith("Result 0"))!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(onOpen).toHaveBeenCalledWith("ranch"); await click("Mark this page caught up");
   expect(write).toHaveBeenCalledWith("/today/seen", { seenAt: generatedAt, frontier: "40" }, "PUT");
 });

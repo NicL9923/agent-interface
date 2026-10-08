@@ -208,7 +208,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           {advanced && <ComposerModelPicker bot={selected} bootstrap={boot}
             disabled={connectionLost || sending} onSaved={refresh} />}
           <div className="composer-voice">
-            {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} /></span>}
+            {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
             <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
               reply={!active ? conversation?.messages.findLast(message => message.role === "assistant") : undefined}
               disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}

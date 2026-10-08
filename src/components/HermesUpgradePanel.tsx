@@ -57,7 +57,8 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
     return () => {
       element?.close();
       if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
-      else document.querySelector<HTMLButtonElement>("[aria-label='Open assistants']")?.focus();
+      else (document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
+        ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
     };
   }, [open]);
 
