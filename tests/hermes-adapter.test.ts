@@ -180,6 +180,50 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(cold.toolCalls).toEqual(snapshot.app_tool_calls);
     expect(cold.messages.at(-1)).toMatchObject({text:'',reasoning:snapshot.inflight.reasoning});
   });
+  it('does not replay persisted segments of the running turn in the live reply', async () => {
+    snapshot.info.running = true;
+    snapshot.app_run_id = 'current-run';
+    snapshot.messages = [
+      {role:'user',row_id:1,text:'Describe it',app_run_id:'earlier-run'},
+      {role:'assistant',row_id:2,text:'A brown dog.',app_run_id:'earlier-run'},
+      {role:'user',row_id:3,text:'Join the NAS',app_run_id:'current-run'},
+      {role:'assistant',row_id:4,text:'Checking the NAS first.',reasoning:'Plan A.\nPlan B.',app_run_id:'current-run'},
+      {role:'tool',row_id:5,name:'terminal',tool_call_id:'call-one',content:'ok',app_run_id:'current-run'},
+    ];
+    snapshot.inflight = {user:'Join the NAS',assistant:'Checking the NAS first.',reasoning:'Plan A.\n\nPlan B.',streaming:true};
+    const between = await runtime.conversation('shared');
+    expect(between.messages.map(message => message.id)).not.toContain('live-one-inflight');
+    // Streamed reasoning separates summary parts differently from the stored row.
+    snapshot.inflight = {...snapshot.inflight,assistant:'Checking the NAS first.\n\n    tailscale up',reasoning:'Plan A.\n\nPlan B.Verify the status.'};
+    const streaming = await runtime.conversation('shared');
+    expect(streaming.messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'    tailscale up',reasoning:'Verify the status.'});
+    snapshot.inflight = {user:'Join the NAS',assistant:'A rewritten answer',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'A rewritten answer'});
+  });
+  it('matches emoji and ignores earlier turns of a queued follow-up run', async () => {
+    snapshot.info.running = true;
+    snapshot.app_run_id = 'queued-run';
+    snapshot.messages = [
+      {role:'user',row_id:1,text:'Check it',app_run_id:'queued-run'},
+      {role:'assistant',row_id:2,text:'Same opening.',app_run_id:'queued-run'},
+      {role:'user',row_id:3,text:'And the barn?',app_run_id:'queued-run'},
+    ];
+    snapshot.inflight = {user:'And the barn?',assistant:'Same opening. Barn is fine.',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Same opening. Barn is fine.'});
+    snapshot.messages.push({role:'assistant',row_id:4,text:'Looking 🔍 now.',app_run_id:'queued-run'});
+    snapshot.inflight = {user:'And the barn?',assistant:'Looking 🔍 now. Found it.',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Found it.'});
+  });
+  it('keeps live text intact until the running turn has a persisted boundary', async () => {
+    snapshot.info.running = true;
+    snapshot.app_run_id = 'image-run';
+    snapshot.messages = [
+      {role:'user',row_id:1,text:'Describe it',app_run_id:'earlier-run'},
+      {role:'assistant',row_id:2,text:'A brown dog.',app_run_id:'earlier-run'},
+    ];
+    snapshot.inflight = {user:'',assistant:'A brown dog. Sitting in grass.',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'A brown dog. Sitting in grass.'});
+  });
   it('settles missed streamed completion without adding stale reasoning to canonical history', async () => {
     snapshot.info.running = true;
     await runtime.conversation('shared');

@@ -1,5 +1,26 @@
 # Validation ledger
 
+## October 7 live reply replay fix
+
+Source fingerprint `sha256:1e7045178492ab73005545336baf4b44bd8e97b8af36aabd12b5dc34a0ca81c5`.
+The complete web suite passed 458 tests across 46 files on Node 26 and Node
+24.21. Type checking and the production build passed.
+
+Hermes accumulates a turn's streamed text and exposed reasoning across tool
+calls while persisting each earlier segment as a history row, so the live bubble
+replayed old text between tool calls. Adapter regressions cover persisted segment
+removal, reasoning separator differences, preserved code indentation, image-only
+turns without a persisted boundary, queued follow-ups sharing a run ID, emoji and
+a mismatched rewrite. No browser or physical device check was run against live
+Hermes streaming.
+
+The independent GPT-6.1 Sol review ran four rounds. It found image-only turns
+subtracting the previous answer, steering and attachment prompt mismatches,
+differing reasoning separators, lost indentation, queued follow-up boundaries and
+emoji mismatches. All were fixed and covered. A steering correction persisted
+mid-turn still replays the earlier segment, the previous behavior, because history
+rows do not identify steering.
+
 ## October 7 app release b2f2f72
 
 PR #41 merged at `b2f2f720b758696762edae801dbeb398271d42c8`. The release is live at `https://agentui.wildflowersranch.com`,

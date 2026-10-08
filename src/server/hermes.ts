@@ -306,6 +306,38 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
     }
   }
+  /**
+   * Removes persisted segments from the front of accumulated live text. Whitespace
+   * is ignored while matching, because streamed and stored separators differ. A
+   * mismatch keeps the remainder.
+   */
+  function unseen(live: string | undefined, segments: (string | undefined)[]): string | undefined {
+    if (!live) return live;
+    let offset = 0;
+    for (const segment of segments) {
+      const end = matchedPrefix(live, offset, segment ?? '');
+      if (end === undefined) break;
+      offset = end;
+    }
+    if (!offset) return live;
+    const rest = live.slice(offset);
+    // Drop only the separator before the tail, keeping a code block's indentation.
+    const lead = /^\s*/.exec(rest)![0];
+    return rest.slice(lead.includes('\n') ? lead.lastIndexOf('\n') + 1 : lead.length);
+  }
+  /** End offset in `text` after `segment`'s non-whitespace characters, starting at `from`. */
+  function matchedPrefix(text: string, from: number, segment: string): number | undefined {
+    let i = from, matched = false;
+    // UTF-16 units on both sides, so emoji compare correctly.
+    for (let k = 0; k < segment.length; k++) {
+      const char = segment[k];
+      if (/\s/.test(char)) continue;
+      while (i < text.length && /\s/.test(text[i])) i++;
+      if (text[i] !== char) return undefined;
+      i++; matched = true;
+    }
+    return matched ? i : from;
+  }
   function exposedText(value: unknown): string | undefined {
     if (typeof value === 'string') return value;
     if (value !== undefined && value !== null) return JSON.stringify(value, null, 2);
@@ -640,8 +672,14 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       });
       const state=transient.get(sid);const inflight=value.inflight??{};
       const active=!!value.info?.running||!!value.app_run_id;
-      const text=inflight.assistant||(active?state?.text:undefined);
-      const reasoning=typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined;
+      // Live text and reasoning accumulate across the whole turn, while each segment
+      // before a tool call is already a history row. Show only the unpersisted tail.
+      // The run ID proves rows belong to this task, and queued follow-ups share it, so
+      // only rows after the latest prompt count. Without a run ID, nothing is removed.
+      const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
+      const persisted=run?rows.slice(rows.findLastIndex(row=>row.role==='user')+1).filter(row=>row.role==='assistant'&&row.runId===run):[];
+      const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
+      const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
       if(text||reasoning)rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning});
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];
