@@ -306,18 +306,35 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
     }
   }
-  /** Removes persisted segments from the front of accumulated live text. A mismatch keeps the remainder. */
+  /**
+   * Removes persisted segments from the front of accumulated live text. Whitespace
+   * is ignored while matching, because streamed and stored separators differ. A
+   * mismatch keeps the remainder.
+   */
   function unseen(live: string | undefined, segments: (string | undefined)[]): string | undefined {
     if (!live) return live;
-    let rest = live;
+    let offset = 0;
     for (const segment of segments) {
-      const seen = segment?.trim();
-      if (!seen) continue;
-      const at = rest.indexOf(seen);
-      if (at < 0 || rest.slice(0, at).trim()) break;
-      rest = rest.slice(at + seen.length);
+      const end = matchedPrefix(live, offset, segment ?? '');
+      if (end === undefined) break;
+      offset = end;
     }
-    return rest === live ? live : rest.trimStart();
+    if (!offset) return live;
+    const rest = live.slice(offset);
+    // Drop only the separator before the tail, keeping a code block's indentation.
+    const lead = /^\s*/.exec(rest)![0];
+    return rest.slice(lead.includes('\n') ? lead.lastIndexOf('\n') + 1 : lead.length);
+  }
+  /** End offset in `text` after `segment`'s non-whitespace characters, starting at `from`. */
+  function matchedPrefix(text: string, from: number, segment: string): number | undefined {
+    let i = from, matched = false;
+    for (const char of segment) {
+      if (/\s/.test(char)) continue;
+      while (i < text.length && /\s/.test(text[i])) i++;
+      if (text[i] !== char) return undefined;
+      i++; matched = true;
+    }
+    return matched ? i : from;
   }
   function exposedText(value: unknown): string | undefined {
     if (typeof value === 'string') return value;
@@ -655,10 +672,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const active=!!value.info?.running||!!value.app_run_id;
       // Live text and reasoning accumulate across the whole turn, while each segment
       // before a tool call is already a history row. Show only the unpersisted tail.
-      const prompt=typeof inflight.user==='string'?inflight.user.trim():'';
-      let start=rows.findLastIndex(row=>row.role==='user'&&!!prompt&&row.text.trim()===prompt);
-      if(start<0)start=rows.findLastIndex(row=>row.role==='user');
-      const persisted=rows.slice(start+1).filter(row=>row.role==='assistant');
+      // The run ID is the only proven turn boundary; without one, nothing is removed.
+      const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
+      const persisted=run?rows.filter(row=>row.role==='assistant'&&row.runId===run):[];
       const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
       const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
