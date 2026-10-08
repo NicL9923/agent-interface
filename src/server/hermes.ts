@@ -458,9 +458,15 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     if(extension){const value=await rpc('agent-interface.open',{profile:botId});live.set(botId,value.session_id);owners.set(value.session_id,botId);const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
     throw new Error('The verified durable Hermes add-on is required before opening a conversation.');
   }
+  function preview(session?:Wire):Bot['lastMessage']{
+    const text=typeof session?.preview==='string'?session.preview.replace(/\s+/g,' ').trim().slice(0,160):'';
+    if(!text)return undefined;
+    const at=typeof session?.last_active==='number'&&Number.isFinite(session.last_active)?new Date(session.last_active*1000).toISOString():undefined;
+    return at?{text,at}:{text};
+  }
   function bot(row:Wire,detail?:Wire):Bot{
     const meta=row.ui_meta?.agent_interface??{};
-    return {id:row.name,name:meta.name||row.display_name||row.ui_meta?.['hermes-bots']?.title||row.name,description:row.description,instructions:detail?.soul,model:row.model??detail?.model?.default??'Inherited',provider:row.provider??detail?.model?.provider,shared:meta.shared??true,avatar:meta.avatar,enabledTools:detail?.toolsets?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledSkills:detail?.skills?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledMcpServers:detail?.mcp_servers?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),sessionId:row.canonical_session?.resolved_id,activity:transient.get(live.get(row.name)??'')?.state??'idle'};
+    return {id:row.name,name:meta.name||row.display_name||row.ui_meta?.['hermes-bots']?.title||row.name,description:row.description,instructions:detail?.soul,model:row.model??detail?.model?.default??'Inherited',provider:row.provider??detail?.model?.provider,shared:meta.shared??true,avatar:meta.avatar,enabledTools:detail?.toolsets?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledSkills:detail?.skills?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledMcpServers:detail?.mcp_servers?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),sessionId:row.canonical_session?.resolved_id,activity:transient.get(live.get(row.name)??'')?.state??'idle',lastMessage:preview(row.canonical_session)};
   }
   function signFile(value:RegisteredFile):FileRef{
     if(!options.token)throw unavailable();const body=Buffer.from(JSON.stringify(value)).toString('base64url');const signature=createHmac('sha256',options.token).update(body).digest('base64url');

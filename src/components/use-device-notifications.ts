@@ -103,7 +103,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       if (permission !== "granted") {
         setState({ ...initialState, checking: false, message: permission === "denied"
           ? "Notifications are blocked for this app. Allow them in your browser or device settings, then return here."
-          : "Notifications stay disabled. You can enable them later in Preferences > Notifications.", canEnable: permission !== "denied" });
+          : "Notifications stay disabled. You can enable them later in Settings > Notifications.", canEnable: permission !== "denied" });
         return;
       }
       const existing = await worker.pushManager.getSubscription();

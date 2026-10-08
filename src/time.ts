@@ -35,3 +35,15 @@ export function formatFull(value: Instant, locale?: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString(locale, { dateStyle: "full", timeStyle: "medium" });
 }
+/** Short list label: a clock time today, then Yesterday, a weekday, or a date. */
+export function formatListDate(value: Instant, { now = Date.now(), locale }: Pick<WhenOptions, "now" | "locale"> = {}) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const current = new Date(now);
+  const days = dayNumber(current) - dayNumber(date);
+  return days <= 0 ? date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })
+    : days === 1 ? "Yesterday"
+    : days < 7 ? date.toLocaleDateString(locale, { weekday: "short" })
+    : date.getFullYear() === current.getFullYear() ? date.toLocaleDateString(locale, { month: "short", day: "numeric" })
+    : date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
+}

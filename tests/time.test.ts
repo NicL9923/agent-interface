@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatFull, formatWhen } from "../src/time";
+import { formatFull, formatListDate, formatWhen } from "../src/time";
 import type { WhenOptions } from "../src/time";
 import { When } from "../src/components/When";
 
@@ -13,6 +13,15 @@ const label = (value: Date | string | number, options: WhenOptions = {}) =>
   formatWhen(value, { now: saturdayEvening, locale: "en-US", ...options }).replace(/ /g, " ");
 
 describe("timestamp labels", () => {
+  it("keeps list dates short: clock today, then Yesterday, weekday and date", () => {
+    const list = (value: Date) => formatListDate(value, { now: saturdayEvening, locale: "en-US" }).replace(/ /g, " ");
+    expect(list(at(10, 3, 9, 41))).toBe("9:41 AM");
+    expect(list(at(10, 2, 23, 59))).toBe("Yesterday");
+    expect(list(at(9, 28, 12))).toBe("Mon");
+    expect(list(at(9, 19, 12))).toBe("Sep 19");
+    expect(list(at(12, 30, 12, 0, 2025))).toBe("Dec 30, 2025");
+  });
+
   it("uses relative words within the hour in both directions", () => {
     expect(label(saturdayEvening - 20_000)).toBe("Just now");
     expect(label(saturdayEvening + 20_000)).toBe("Just now");

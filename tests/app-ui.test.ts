@@ -126,7 +126,7 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/auth/config" ? { localDevAuth: true } as T : original(path) as Promise<T>);
     vi.mocked(write).mockImplementation(async <T>(path: string) => { order.push(path); return {} as T; });
     await render();
-    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Preferences")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
@@ -141,7 +141,8 @@ describe("conversation state", () => {
     const original = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/integrations") ? { profile: "shared", canManage: true, connections: [] } as T : original(path) as Promise<T>);
     await render();
-    await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Integrations")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Integrations"))!.click());
     await advance(30_000);
     expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
     expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
@@ -263,6 +264,63 @@ describe("conversation state", () => {
       expect((click.mock.contexts[0] as HTMLInputElement).type).toBe("file");
       expect((click.mock.contexts[0] as HTMLInputElement).hidden).toBe(true);
     } finally { click.mockRestore(); }
+  });
+
+  it("pins assistants to the top of home and shows everyone else's latest message", async () => {
+    const other = { ...bootstrap.bots[0], id: "other", name: "Other", lastMessage: { text: "Pot roast tonight.", at: new Date().toISOString() } };
+    const home = { ...bootstrap, bots: [...bootstrap.bots, other], preferences: { ...bootstrap.preferences, favorites: ["shared"] } };
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bootstrap" ? home as T : original(path) as Promise<T>);
+    vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T);
+    try {
+      await render();
+      const pinned = () => [...container.querySelectorAll(".home-pinned .pinned-bot")].map(item => item.textContent);
+      expect(pinned()).toEqual(["Shared"]);
+      const row = container.querySelector<HTMLButtonElement>(".home-list .bot-row")!;
+      expect(row.textContent).toContain("Pot roast tonight.");
+      expect(row.querySelector("time")?.getAttribute("dateTime")).toBe(other.lastMessage.at);
+      await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 20, clientY: 20 })));
+      await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.bot-menu [role="menuitem"]')].find(item => item.textContent === "Pin to top")!.click());
+      expect(write).toHaveBeenCalledWith("/preferences", expect.objectContaining({ favorites: ["shared", "other"] }), "PATCH");
+      expect(pinned()).toEqual(["Shared", "Other"]);
+      expect(container.querySelector(".bot-menu")).toBeNull();
+      const toggle = container.querySelector<HTMLButtonElement>('.chat-header [aria-label="Unpin assistant"]')!;
+      await act(async () => toggle.click());
+      expect(pinned()).toEqual(["Other"]);
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("opens phones on home, pushes into a chat and returns with Back", async () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    conversation = { ...conversation, activity: { state: "idle" } };
+    await render();
+    const rail = () => container.querySelector(".bot-rail")!;
+    expect(rail().classList.contains("open")).toBe(true);
+    expect(container.querySelector("main")!.hasAttribute("inert")).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>(".bot-row")!.click());
+    expect(rail().classList.contains("open")).toBe(false);
+    expect(container.querySelector("main")!.hasAttribute("inert")).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Back to assistants"]')!.click());
+    expect(rail().classList.contains("open")).toBe(true);
+  });
+
+  it("collects a turn's reasoning into one accordion between the prompt and the reply", async () => {
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "question", role: "user", text: "Join the NAS" },
+      { id: "plan", role: "assistant", text: "", reasoning: "Plan the SSH steps." },
+      { id: "call", role: "assistant", text: "", reasoning: "Check the status.", toolCall: { id: "ssh", name: "terminal", status: "completed" } },
+      { id: "answer", role: "assistant", text: "Tailscale is up." },
+    ] };
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+      ? { ...bootstrap, preferences: { ...defaultPreferences, startPage: "assistant", presentation: "advanced" } }
+      : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
+    await render();
+    const accordions = container.querySelectorAll(".reasoning-calls");
+    expect(accordions).toHaveLength(1);
+    expect(accordions[0].querySelector(".tool-count")?.textContent).toBe("2");
+    expect([...accordions[0].querySelectorAll(".reasoning-part")].map(part => part.textContent)).toEqual(["Plan the SSH steps.", "Check the status."]);
+    expect(accordions[0].previousElementSibling?.getAttribute("data-message-id")).toBe("question");
+    expect(accordions[0].nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
   });
 
   it("switches Stop back to Send while drafting guidance", async () => {

@@ -52,7 +52,7 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 it("asks a new device once without requesting browser permission, including across remounts and account changes", async () => {
   await render();
   expect(container.textContent).toContain("Enable notifications on this device?");
-  expect(container.textContent).toContain("Preferences > Notifications");
+  expect(container.textContent).toContain("Settings > Notifications");
   expect(requestPermission).not.toHaveBeenCalled();
   await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!.click());
   await render("two");

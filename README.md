@@ -7,6 +7,12 @@ drafts and notification subscriptions.
 
 Household installation: [agentui.wildflowersranch.com](https://agentui.wildflowersranch.com).
 
+The web home lists every assistant with its latest message. Pin assistants to show
+them as large live avatars at the top: use the pin in a conversation's header, or
+long-press (right-click on a computer) an assistant on home. Phones open on home and
+push into a conversation; Back returns. The account button opens Settings, which also
+holds Hermes updates, Computer and Integrations.
+
 The self-hoster connects this server to Hermes once. Web users sign in to that
 installation. iOS users enter its HTTPS address, then sign in to the same
 household. The mobile app connects to this server, not directly to Hermes.
@@ -20,7 +26,7 @@ the assistant's model from the same catalog without opening settings. The web di
 also controls reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. Hermes validates support for the selected model.
 
-Preferences > Notifications shows whether this account has notifications enabled
+Web Settings > Notifications, or the same section in iOS Preferences, shows whether this account has notifications enabled
 on the current device. Turn the switch on or off there. A new browser asks once
 whether to enable notifications and explains where to change the setting later.
 On iPhone or iPad, add the app to the Home Screen and open it before enabling
@@ -114,7 +120,7 @@ device voice.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
-An empty web conversation offers a role discussion using the assistant's description and fills an editable draft. iOS starter actions remain available from the **+** menu. Preferences includes a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
+An empty web conversation offers a role discussion using the assistant's description and fills an editable draft. iOS starter actions remain available from the **+** menu. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 
@@ -149,7 +155,7 @@ external password managers and uncertain-request recovery.
 
 ## Hermes updates and activity
 
-Open the connection status in the web sidebar, or Hermes updates in iOS
+Open Hermes and updates in web Settings, or Hermes updates in iOS
 Preferences. Administrators can check the next official Hermes revision before
 choosing to upgrade. Checking stages the exact source and tests it in a disposable
 home. It never installs an update. Progress survives closing the client and

@@ -3,11 +3,11 @@ import type { useDeviceNotifications } from "./use-device-notifications";
 import "./device-notifications.css";
 
 type Notifications = ReturnType<typeof useDeviceNotifications>;
-export function NotificationSettings({ notifications }: { notifications: Notifications }) {
+export function NotificationSettings({ notifications, title = "Notifications" }: { notifications: Notifications; title?: string }) {
   const descriptionId = useId();
   return <section className="notification-settings" aria-labelledby="notifications-title">
     <div className="notification-settings-header">
-      <h3 id="notifications-title">Notifications</h3>
+      <h3 id="notifications-title">{title}</h3>
       <label className="notification-toggle">
         <input type="checkbox" role="switch" aria-label="Notifications on this device" aria-describedby={descriptionId}
           checked={notifications.enabled} disabled={notifications.checking || notifications.busy || !notifications.enabled && !notifications.canEnable}
@@ -26,7 +26,7 @@ export function NotificationOnboarding({ notifications }: { notifications: Notif
   if (!notifications.prompt) return null;
   return <section className="notification-onboarding" aria-labelledby="notification-onboarding-title">
     <div><h3 id="notification-onboarding-title">Enable notifications on this device?</h3>
-      <p>Get notified when work finishes or an assistant needs your attention. You can change this later in Preferences &gt; Notifications.</p>
+      <p>Get notified when work finishes or an assistant needs your attention. You can change this later in Settings &gt; Notifications.</p>
       {!notifications.canEnable && <p className="muted">{notifications.message}</p>}
       {notifications.error && <p className="form-error" role="alert">{notifications.error}</p>}
     </div>

@@ -122,6 +122,8 @@ export interface Bot {
   enabledSkills?: string[];
   sessionId?: string;
   activity: ActivityState;
+  /** Latest canonical message preview from Hermes's roster, for the home list. */
+  lastMessage?: { text: string; at?: string };
 }
 export interface BotInput {
   confirmModel?: boolean;
