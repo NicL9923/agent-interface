@@ -306,6 +306,19 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
     }
   }
+  /** Removes persisted segments from the front of accumulated live text. A mismatch keeps the remainder. */
+  function unseen(live: string | undefined, segments: (string | undefined)[]): string | undefined {
+    if (!live) return live;
+    let rest = live;
+    for (const segment of segments) {
+      const seen = segment?.trim();
+      if (!seen) continue;
+      const at = rest.indexOf(seen);
+      if (at < 0 || rest.slice(0, at).trim()) break;
+      rest = rest.slice(at + seen.length);
+    }
+    return rest === live ? live : rest.trimStart();
+  }
   function exposedText(value: unknown): string | undefined {
     if (typeof value === 'string') return value;
     if (value !== undefined && value !== null) return JSON.stringify(value, null, 2);
@@ -640,8 +653,14 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       });
       const state=transient.get(sid);const inflight=value.inflight??{};
       const active=!!value.info?.running||!!value.app_run_id;
-      const text=inflight.assistant||(active?state?.text:undefined);
-      const reasoning=typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined;
+      // Live text and reasoning accumulate across the whole turn, while each segment
+      // before a tool call is already a history row. Show only the unpersisted tail.
+      const prompt=typeof inflight.user==='string'?inflight.user.trim():'';
+      let start=rows.findLastIndex(row=>row.role==='user'&&!!prompt&&row.text.trim()===prompt);
+      if(start<0)start=rows.findLastIndex(row=>row.role==='user');
+      const persisted=rows.slice(start+1).filter(row=>row.role==='assistant');
+      const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
+      const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
       if(text||reasoning)rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning});
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];

@@ -180,6 +180,24 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(cold.toolCalls).toEqual(snapshot.app_tool_calls);
     expect(cold.messages.at(-1)).toMatchObject({text:'',reasoning:snapshot.inflight.reasoning});
   });
+  it('does not replay persisted segments of the running turn in the live reply', async () => {
+    snapshot.info.running = true;
+    snapshot.messages = [
+      {role:'user',row_id:1,text:'Earlier question'},
+      {role:'assistant',row_id:2,text:'Earlier answer'},
+      {role:'user',row_id:3,text:'Join the NAS'},
+      {role:'assistant',row_id:4,text:'Checking the NAS first.',reasoning:'Plan the SSH steps.'},
+      {role:'tool',row_id:5,name:'terminal',tool_call_id:'call-one',content:'ok'},
+    ];
+    snapshot.inflight = {user:'Join the NAS',assistant:'Checking the NAS first.',reasoning:'Plan the SSH steps.',streaming:true};
+    const between = await runtime.conversation('shared');
+    expect(between.messages.map(message => message.id)).not.toContain('live-one-inflight');
+    snapshot.inflight = {...snapshot.inflight,assistant:'Checking the NAS first.\n\nTailscale is up.',reasoning:'Plan the SSH steps.Verify the status.'};
+    const streaming = await runtime.conversation('shared');
+    expect(streaming.messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'Tailscale is up.',reasoning:'Verify the status.'});
+    snapshot.inflight = {user:'Join the NAS',assistant:'A rewritten answer',streaming:true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'A rewritten answer'});
+  });
   it('settles missed streamed completion without adding stale reasoning to canonical history', async () => {
     snapshot.info.running = true;
     await runtime.conversation('shared');
