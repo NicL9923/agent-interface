@@ -129,6 +129,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
               state={avatarState}
               size={112}
               name={selected.name}
+              reducedMotion
             />
             <h2>Let's discuss your role.</h2>
             <p>{selected.description || `Tell ${selected.name} what you need help with.`}</p>
@@ -140,6 +141,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
         ) : null}
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}`}>
+            {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
             <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy" role="status">
               <span className="activity-shimmer">{selected.name} is {action}...</span>

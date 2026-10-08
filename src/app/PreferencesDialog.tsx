@@ -112,7 +112,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
           <h3 className="settings-heading">Follow all activity</h3>
           <div className="settings-group">
             {bots.map(bot => <Switch key={bot.id} label={bot.name} checked={prefs.followBots.includes(bot.id)}
-              icon={<Avatar avatar={bot.avatar} size={28} name={bot.name} />}
+              icon={<Avatar avatar={bot.avatar} size={28} name={bot.name} reducedMotion />}
               onChange={checked => save({ followBots: checked ? [...prefs.followBots, bot.id] : prefs.followBots.filter(id => id !== bot.id) })} />)}
           </div>
           <p className="settings-footnote">Shared-task notifications already go to participants. Follow an assistant to receive all their activity.</p>
@@ -166,7 +166,7 @@ function SectionEditor({ preferences, bots, save }: { preferences: Preferences; 
           onClick={() => update(preferences.sections.filter(item => item.id !== section.id))}><Icon name="close" size={16} /></button>
       </div>
       {bots.map(bot => <Switch key={bot.id} label={bot.name} checked={section.botIds.includes(bot.id)}
-        icon={<Avatar avatar={bot.avatar} size={28} name={bot.name} />}
+        icon={<Avatar avatar={bot.avatar} size={28} name={bot.name} reducedMotion />}
         onChange={checked => update(preferences.sections.map(item => item.id === section.id
           ? { ...item, botIds: checked ? [...item.botIds, bot.id] : item.botIds.filter(id => id !== bot.id) } : item))} />)}
     </div>)}

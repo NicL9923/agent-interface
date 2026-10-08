@@ -1,5 +1,26 @@
 # Validation ledger
 
+## October 8 home, settings and notification copy
+
+Source fingerprint `FINGERPRINT`.
+The complete web suite passed 490 tests across 47 files on Node 26 and Node
+24.21. Type checking, the production build and the Python compile and contract
+checks passed.
+
+Agent WebKit checks used synthetic fixtures at 390×844 and 1280×800 in light and
+dark appearances. Checked the phone home with pinned assistants, previews and
+dates, push into a conversation and Back, the long-press pin menu with click
+suppression, right-click pinning on desktop, the grouped settings sheet and its
+rows into Hermes updates, Computer and Integrations, and the reasoning accordion.
+Only the inline work avatar animates; header, home, Today and settings avatars stay still.
+Notification copy is covered by unit and payload tests; the qualification probe
+now requires completion events to carry reply text. A physical iPhone and a live
+push delivery were not exercised.
+
+The independent GPT-6.1 Sol review of the redesign found lost focus during phone
+navigation, slow drags opening the pin menu, and base styles overriding home
+sizing. All three were fixed and the first two are covered by regressions.
+
 ## October 7 new avatar shapes
 
 Source fingerprint `sha256:5ec24a0aca06247bf6f8eae5c70bfb631656d50a04b93848c74e8b229cff38cf`.

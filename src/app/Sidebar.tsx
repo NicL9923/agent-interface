@@ -69,7 +69,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
     return <li key={bot.id}>
       <button type="button" className={`bot-item bot-row${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
         onClick={() => onSelectBot(bot.id)} {...menuProps(bot)}>
-        <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} />
+        <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion />
         <span className="bot-row-text">
           <span className="bot-row-top"><strong>{bot.name}</strong>
             {bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}</span>
@@ -105,7 +105,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
               <button type="button" className={`bot-item pinned-bot${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
                 onClick={() => onSelectBot(bot.id)} {...menuProps(bot)}>
                 <span className="pinned-avatar">
-                  <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} />
+                  <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} reducedMotion />
                   <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                 </span>
                 <span className="pinned-name">{bot.name}</span>

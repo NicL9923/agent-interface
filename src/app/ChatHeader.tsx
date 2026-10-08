@@ -40,6 +40,7 @@ export function ChatHeader({ boot, view, selected, avatarState, conversation, co
             state={avatarState}
             size={42}
             name={selected.name}
+            reducedMotion
           />
           <div className="chat-title">
             <h1>{selected.name}</h1>

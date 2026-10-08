@@ -18,8 +18,8 @@ const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: (props: { state?: string; size?: number; prop?: string }) => (renders.avatar++, createElement("span", {
-    "data-avatar-state": props.state, "data-avatar-size": props.size, "data-avatar-prop": props.prop,
+  Avatar: (props: { state?: string; size?: number; prop?: string; reducedMotion?: boolean }) => (renders.avatar++, createElement("span", {
+    "data-avatar-state": props.state, "data-avatar-size": props.size, "data-avatar-prop": props.prop, "data-avatar-still": props.reducedMotion ? "" : undefined,
   })),
 }));
 // Unmemoized on purpose, so the count shows whether the transcript re-renders.
@@ -164,6 +164,9 @@ describe("conversation state", () => {
     await render();
     expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-prop")).toBe("computer");
+    // Only the inline work indicator animates; the header and home stay still.
+    expect(container.querySelector(".conversation-activity [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
+    expect([...container.querySelectorAll(".chat-header [data-avatar-state], .bot-rail [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
     const textarea = container.querySelector("textarea")!;
     await act(async () => {
