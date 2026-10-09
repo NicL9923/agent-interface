@@ -210,6 +210,33 @@ class QualificationWorkerTests(unittest.TestCase):
         worker.atomic(controls / ("request-" + intent["requestId"] + ".json"), intent)
         return operation
 
+    def flaky_integration(self, failures):
+        counter = self.root / 'integration-runs'
+        (self.app / 'scripts/spike/run.py').write_text(f'''import pathlib, sys
+counter = pathlib.Path({str(counter)!r})
+runs = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(runs))
+if runs <= {failures}: sys.exit("fixture intermittent probe failure")
+print("fixture integration command complete")
+''')
+        return counter
+
+    def test_integration_suite_reruns_once_and_says_so(self):
+        counter = self.flaky_integration(1)
+        self.check()
+        self.assertEqual(counter.read_text(), '2')
+        integration = next(item for item in self.status()['checks'] if item['id'] == 'integration')
+        self.assertEqual(integration['status'], 'passed')
+        self.assertIn('second run', integration['detail'])
+
+    def test_integration_suite_failing_twice_still_fails_the_check(self):
+        counter = self.flaky_integration(2)
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking', 'checks': []})
+        with self.assertRaises(subprocess.CalledProcessError): worker.Worker(self.config, self.state, 'check', operation).main()
+        self.assertEqual(counter.read_text(), '2')
+        self.assertEqual(self.status()['phase'], 'failed')
+        self.assertEqual(next(item for item in self.status()['checks'] if item['id'] == 'integration')['status'], 'failed')
+
     def test_cancel_staged_check_and_retry_create_a_new_qualification(self):
         self.check()
         operation = self.control("cancel")

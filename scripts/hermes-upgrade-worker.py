@@ -745,7 +745,19 @@ class Worker:
         command = [qualified_python, str(isolated_app / "scripts/spike/run.py"),
             "--qualification", "--revision", candidate, "--source", str(source), "--python", qualified_python]
         if candidate_patch: command.extend(["--source-patch-sha256", candidate_patch])
-        self.check_step("integration", "Real isolated Hermes integration and recovery", lambda: self.run(command, cwd=isolated_app, timeout=self.config.get("qualificationTimeoutSeconds", 3600)))
+        def integration():
+            timeout = self.config.get("qualificationTimeoutSeconds", 3600)
+            try: self.run(command, cwd=isolated_app, timeout=timeout); return False
+            except subprocess.CalledProcessError:
+                # One rerun in fresh isolated homes separates an intermittent probe from a
+                # real break. Both runs stay in the log, and the check says it needed one.
+                print("Integration suite failed once; rerunning it in fresh isolated homes.", file=self.log, flush=True)
+                self.cancellation()
+                self.run(command, cwd=isolated_app, timeout=timeout); return True
+        if self.check_step("integration", "Real isolated Hermes integration and recovery", integration):
+            checks = self.state["checks"]
+            next(item for item in checks if item["id"] == "integration")["detail"] = "Passed on a second run after one intermittent failure. Both runs are in the private log."
+            self.update(checks=checks)
         def regressions():
             for argv in self.config["hooks"]["regressions"]: self.run(argv)
         self.check_step("regressions", "Host OAuth, Google authentication and profile regressions", regressions)

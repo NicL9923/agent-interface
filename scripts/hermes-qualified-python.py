@@ -18,6 +18,7 @@ import shutil
 import site
 import stat
 import subprocess
+import traceback
 import sys
 import urllib.parse
 import uuid
@@ -372,4 +373,6 @@ def main():
 if __name__ == "__main__":
     try: main()
     except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as error:
+        # The caller's log needs the stack: "Permission denied: '/'" alone cannot be traced.
+        traceback.print_exc()
         raise SystemExit("Managed qualification failed: " + str(error))
