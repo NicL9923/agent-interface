@@ -18,7 +18,7 @@
 }
 .upgrade-mark.is-working { animation: upgrade-breathe 2s ease-in-out infinite; }
 .upgrade-mark.needs-attention { color: var(--danger); background: var(--rail); }
-.hermes-upgrade-panel h2 { font-size: 25px; line-height: 1.2; margin-bottom: 12px; }
+.hermes-upgrade-panel h2 { font-size: 25px; line-height: 1.2; margin-bottom: 12px; outline: none; }
 .upgrade-description { color: var(--muted); font-size: 14px; min-height: 44px; margin-bottom: 24px; }
 .upgrade-versions { display: flex; gap: 26px; padding: 18px 0; margin: 0 0 22px; border-block: 1px solid var(--line); }
 .upgrade-versions > div { flex: 1; min-width: 0; }
@@ -50,3 +50,21 @@
 .upgrade-recovery p { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .upgrade-recovery .actions { flex-wrap: wrap; }
 .upgrade-confirmation { padding: 12px; background: var(--rail); border-radius: 12px; }
+
+/* Find → Test → Install makes clear that a check never installs. */
+.upgrade-steps { display: flex; list-style: none; padding: 0; margin: -8px 0 24px; gap: 0; }
+.upgrade-steps li { position: relative; flex: 1; display: grid; justify-items: center; gap: 8px; font-size: 12px; color: var(--muted); text-align: center; }
+.upgrade-steps li + li::before { content: ""; position: absolute; top: 11px; right: calc(50% + 15px); left: calc(-50% + 15px); height: 2px; background: var(--line); border-radius: 2px; }
+.upgrade-steps li[data-step="done"] + li::before, .upgrade-steps li[data-step="done"] + li[data-step]::before { background: var(--accent); }
+.upgrade-step-dot { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); background: var(--raised); font-size: 12px; font-weight: 700; }
+.upgrade-steps [data-step="active"] { color: var(--ink); font-weight: 600; }
+.upgrade-steps [data-step="active"] .upgrade-step-dot { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); animation: upgrade-step-pulse 1.6s ease-in-out infinite; }
+.upgrade-steps [data-step="done"] .upgrade-step-dot { border-color: var(--accent); background: var(--accent); color: var(--surface); }
+.upgrade-steps [data-step="done"] { color: var(--ink); }
+.upgrade-steps [data-step="failed"] .upgrade-step-dot { border-color: var(--danger); background: var(--danger); color: var(--surface); }
+.upgrade-steps [data-step="failed"] { color: var(--danger); }
+.upgrade-action > .primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.upgrade-stop { display: block; margin: -12px auto 18px; border: 0; padding: 8px 12px; font-size: 12px; color: var(--muted); text-decoration: underline; }
+.upgrade-checks[open] [data-check-status="failed"] small { color: var(--ink); }
+@keyframes upgrade-step-pulse { 50% { box-shadow: 0 0 0 7px var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { .upgrade-steps [data-step="active"] .upgrade-step-dot { animation: none; } }

@@ -1,5 +1,32 @@
 # Validation ledger
 
+## October 9 Hermes updater repair merge and panel
+
+Source fingerprint `sha256:108dafabc13b6baf30186216acbf49240ee70864b307f7ac5c69f4c2802e8394`.
+The complete web suite passed 497 tests across 47 files on Node 26 and Node
+24.21. The worker suite passed 49 tests with one skip, and the Linux hook,
+release, recovery and contract checks passed.
+
+The October 9 in-app check stopped because Hermes `73162b0` linted a signature
+directly above the approved OAuth repair. The worker now merges approved repairs
+over adjacent upstream edits under the documented rules, and binds merged
+installations to the artifact through `repairArtifactSha256`. Against the host's
+real `auth_xai.py` and `credential_pool.py` from `1298c8e` and `73162b0`, the
+merge kept the repair's edits identical and every helper it uses exists upstream.
+That ran offline; no in-app check or install was run against this release.
+
+Agent WebKit checks at 390×844 covered the up-to-date, testing, blocked-check
+and ready panel states. The panel no longer disables controls during polls,
+keeps clicks made during a poll, and separates check and install wording.
+
+The independent GPT-6.1 Sol review ran three rounds. It found header-like
+payload lines hidden from comparison, symlinked candidate paths, relocated
+repairs passing the next proof, duplicate occurrences attracting the merge, app
+release reconstruction from the original artifact, and no-newline markers on
+context. All were fixed with regressions. Deliberate duplication by a hostile
+upstream is documented as outside the merge's scope, since upstream code runs
+with full privileges.
+
 ## October 8 app release 1eb2caf
 
 PR #49 merged at `1eb2caf98be9bf06219d8c215332ae280750a73c`. The release is live at `https://agentui.wildflowersranch.com`,

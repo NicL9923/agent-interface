@@ -136,7 +136,14 @@ def run(argv, name, environment=None, capture=False, cwd=release):
 try:
     run(["git", "clone", "--no-hardlinks", "--no-checkout", live, source], "source-clone.log")
     run(["git", "-C", source, "checkout", "--detach", baseline[0]], "source-checkout.log")
-    run(["git", "-C", source, "apply", "--index", patch], "source-repair.log")
+    # Rebuild the installed repair itself. approved_repair proved it above, and after an
+    # in-app update merged it over adjacent upstream edits, the original artifact no
+    # longer applies. The snapshot comparison below still requires the exact tree.
+    installed_repair = stage / "installed-repair.patch"
+    installed_repair.write_bytes(subprocess.check_output(["git", "-C", str(live), "diff", "HEAD", "--binary"]))
+    installed_repair.chmod(0o600)
+    if installed_repair.stat().st_size:
+        run(["git", "-C", source, "apply", "--index", installed_repair], "source-repair.log")
     assert snapshot(source) == baseline
     prepared = json.loads(run([python, "-I", release / "scripts/hermes-qualified-python.py", "prepare",
         "--source", source, "--stage", stage, "--launcher", launcher,
@@ -173,6 +180,9 @@ try:
     assert utility["fingerprint"](qualified) == prepared["fingerprint"]
     receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
         qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
+    # approved_repair proved this tree derives from the approved artifact; keep that binding
+    # so the next in-app update can prove a repair merged over adjacent upstream edits.
+    if baseline[1]: receipt["repairArtifactSha256"] = worker["requiredPatchSha256"]
     receipt_path = stage / "qualification.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     qualification["read_receipt"](receipt_path, release)

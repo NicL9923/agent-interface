@@ -7,6 +7,7 @@ separate action and revalidates all qualification inputs under an exclusive lock
 """
 import argparse
 import base64
+import difflib
 import datetime
 import fcntl
 import hashlib
@@ -79,6 +80,103 @@ MANAGED_WRAPPERS = {
     "agent_interface_gateway.py": "gateway_guard.py",
     "agent_interface_computer_host.py": "computer_host.py",
 }
+
+
+REPAIR_FILE_LINES = (b"new file mode ", b"deleted file mode ", b"old mode ", b"new mode ",
+    b"rename from ", b"rename to ", b"copy from ", b"copy to ")
+
+
+HUNK = re.compile(rb"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def repair_changes(patch):
+    """The lines a repair adds and removes, per file and in order. Context and hunk
+    positions are excluded, so upstream edits beside a repair do not change it.
+    Hunk bodies are read by their declared counts, so payload lines that look like
+    headers are kept. Binary hunks are kept verbatim; a diff without binary
+    content, or a malformed one, returns None."""
+    files, current, binary, old, new, changed = {}, None, False, 0, 0, False
+    for line in patch.split(b"\n"):
+        # "\ No newline" belongs to the line before it; keep it only after a changed line.
+        if line.startswith(b"\\") and current is not None:
+            if changed: current.append(line)
+            continue
+        if old or new:
+            marker = line[:1]
+            if marker == b" ": old -= 1; new -= 1; changed = False
+            elif marker == b"-": old -= 1; current.append(line); changed = True
+            elif marker == b"+": new -= 1; current.append(line); changed = True
+            else: return None
+            if old < 0 or new < 0: return None
+        elif line.startswith(b"diff --git "):
+            current, binary = files.setdefault(line, []), False
+        elif current is None:
+            if line: return None
+        elif binary:
+            current.append(line)
+        elif line.startswith(b"GIT binary patch"):
+            binary = True; current.append(line)
+        elif line.startswith(b"Binary files "):
+            return None
+        elif (match := HUNK.match(line)):
+            old, new = (int(group) if group is not None else 1 for group in match.groups())
+        elif line.startswith(REPAIR_FILE_LINES):
+            current.append(line)
+        elif not line.startswith((b"index ", b"--- ", b"+++ ", b"similarity index ", b"dissimilarity index ")) and line:
+            return None
+    return None if old or new else files
+
+
+ANCHOR_LINES = 3
+
+
+def occurrences(lines, block):
+    """How many times a run of lines appears, so ambiguous placements are refused."""
+    size = len(block)
+    return sum(lines[index:index + size] == block for index in range(len(lines) - size + 1)) if size else 0
+
+
+def merge_lines(base, ours, theirs):
+    """Re-apply ours' edits of base onto theirs, line by line. Each replaced run of
+    base lines must survive unchanged and contiguous in theirs; each insertion needs
+    both neighbours unchanged and still adjacent. Edits beside a change are fine,
+    unlike Git's merge, which treats touching edits as conflicts. None means refuse."""
+    mapping = {}
+    for tag, i1, i2, j1, _ in difflib.SequenceMatcher(None, base, theirs, autojunk=False).get_opcodes():
+        if tag == "equal": mapping.update((i1 + k, j1 + k) for k in range(i2 - i1))
+    def anchored(i1, i2, start, end):
+        # A nearby unchanged line on each side, at the same relative offset, ties the
+        # edit to its original place. A duplicate of the line elsewhere cannot.
+        # Within the window, the file's start or end anchors at the same distance.
+        before = any(mapping.get(i1 - k) == start - k for k in range(1, ANCHOR_LINES + 1)) or i1 < ANCHOR_LINES and start == i1
+        after = (any(mapping.get(i2 + k) == end + k for k in range(ANCHOR_LINES))
+            or len(base) - i2 < ANCHOR_LINES and len(theirs) - end == len(base) - i2)
+        return before and after
+    edits = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base, ours, autojunk=False).get_opcodes():
+        if tag == "equal": continue
+        if i2 > i1:
+            positions = [mapping.get(index) for index in range(i1, i2)]
+            if None in positions or positions != list(range(positions[0], positions[0] + len(positions))): return None
+            start, end = positions[0], positions[-1] + 1
+        else:
+            before = mapping.get(i1 - 1) if i1 else -1
+            after = mapping.get(i1) if i1 < len(base) else len(theirs)
+            if before is None or after is None or after != before + 1: return None
+            start = end = after
+        if not anchored(i1, i2, start, end): return None
+        # The edited block, with a line of context each side, must be unique in both
+        # files, so an identical copy elsewhere cannot be mistaken for it.
+        window = base[max(i1 - 1, 0):min(i2 + 1, len(base))]
+        if occurrences(base, window) != 1 or occurrences(theirs, theirs[max(start - 1, 0):min(end + 1, len(theirs))]) != 1:
+            return None
+        if i2 > i1 and occurrences(theirs, base[i1:i2]) != 1: return None
+        edits.append((start, end, ours[j1:j2]))
+    merged, boundary = list(theirs), None
+    for start, end, replacement in sorted(edits, reverse=True):
+        if boundary is not None and end > boundary: return None
+        merged[start:end] = replacement; boundary = start
+    return merged
 
 
 def source_state(source, dashboard_target=None):
@@ -393,8 +491,11 @@ class Worker:
             item = {"id": identifier, "label": label}; checks.append(item)
         item["status"] = "running"; self.update(checks=checks)
         try: result = work()
-        except Exception:
-            item["status"] = "failed"; self.update(checks=checks); raise
+        except Exception as error:
+            # Explained refusals say why on the check itself; others point at the private log.
+            item["status"] = "failed"
+            item["detail"] = str(error) if isinstance(error, (UnsupportedRepair, UnsupportedDependencies)) else "Details are in the update's private log."
+            self.update(checks=checks); raise
         item["status"] = "passed"; self.update(checks=checks)
         self.cancellation()
         return result
@@ -482,12 +583,71 @@ class Worker:
                 expected = tree("expected-index", patch)
                 actual = tree("actual-index", actual_patch)
             except subprocess.CalledProcessError as error:
-                raise UnsupportedRepair("The approved Hermes repair needs installer review before this version can be updated.") from error
-            if expected != actual:
-                raise UnsupportedRepair("The installed Hermes files differ from the approved repair. Ask the installer to review them before updating.")
+                expected = actual = None
+                proof_error = error
+            else:
+                proof_error = None
+            if expected != actual or proof_error:
+                # A previous update may have re-applied the repair over upstream edits
+                # beside it. Accept that only when its changed lines are identical.
+                # The deployed receipt must bind this exact installed tree to the same
+                # approved artifact; equal changed lines alone could sit elsewhere.
+                receipt_path = Path(self.config["qualificationReceipt"])
+                receipt = json.loads(private_file(receipt_path).read_text()) if receipt_path.exists() else {}
+                bound = (receipt.get("revision") == revision and receipt.get("trackedPatchSha256") == actual_hash
+                    and receipt.get("repairArtifactSha256") == self.config["requiredPatchSha256"])
+                approved_changes = repair_changes(patch)
+                if not bound or approved_changes is None or repair_changes(actual_patch) != approved_changes:
+                    if proof_error: raise UnsupportedRepair("The approved Hermes repair needs installer review before this version can be updated.") from proof_error
+                    raise UnsupportedRepair("The installed Hermes files differ from the approved repair. Ask the installer to review them before updating.")
         self.environment.update({"HERMES_UPGRADE_APPROVED_PATCH_FILE": filename,
             "HERMES_UPGRADE_APPROVED_PATCH_SHA256": self.config["requiredPatchSha256"]})
         return patch
+
+    def merge_repair(self, target, current, candidate):
+        """Carry the installed repair onto a staged candidate whose upstream edited lines
+        beside it. Uses the installed files, already proven against the approved artifact."""
+        def blob(repository, revision, path):
+            listed = git(repository, "ls-tree", "-z", revision, "--", path).split(b"\0")[0]
+            if not listed: return None, None
+            mode, _, identity = listed.split(b"\t")[0].split(b" ")
+            return mode, git(repository, "cat-file", "blob", identity.decode())
+        entries = git(self.source, "diff", "HEAD", "--name-status", "--no-renames", "-z").split(b"\0")
+        changes = list(zip(entries[0::2], entries[1::2]))
+        if not changes: return False
+        for status, raw in changes:
+            path = raw.decode()
+            live, destination = self.source / path, target / path
+            # Regular files only, and never through a symlinked directory in either tree.
+            for root, candidate_path in ((self.source, live), (target, destination)):
+                parent = candidate_path.parent
+                while parent != root:
+                    if parent.is_symlink(): return False
+                    parent = parent.parent
+            if live.is_symlink() or not live.is_file() or destination.is_symlink(): return False
+            if not destination.resolve().is_relative_to(target.resolve()): return False
+            ours = live.read_bytes()
+            base_mode, base = blob(self.source, current, path)
+            their_mode, theirs = blob(target, candidate, path)
+            if status == b"A":
+                # An added repair file may not collide with a different upstream file.
+                if theirs is not None and theirs != ours: return False
+                merged = ours
+            elif status == b"M":
+                if theirs is None or their_mode != base_mode: return False
+                if theirs == base: merged = ours
+                elif b"\0" in base + ours + theirs: return False
+                else:
+                    lines = merge_lines(base.splitlines(True), ours.splitlines(True), theirs.splitlines(True))
+                    if lines is None: return False
+                    merged = b"".join(lines)
+            else:
+                return False
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(merged)
+            destination.chmod(live.stat().st_mode & 0o777)
+            self.run(["git", "-C", str(target), "add", "--", path])
+        return True
 
     def qualify(self):
         self.update(phase="checking", message="Checking Hermes and preserving the current repair.", checks=[], maintenance=False)
@@ -527,16 +687,34 @@ class Worker:
             "HERMES_UPGRADE_BACKUP_DIR": str(stage / "backup")})
         def prepare():
             self.stage_source(source, candidate)
+            rebased = False
             if patch:
                 patch_path = stage / "preserved.patch"; patch_path.write_bytes(patch); patch_path.chmod(0o600)
                 try: self.run(["git", "-C", str(source), "apply", "--index", str(patch_path)])
                 except subprocess.CalledProcessError as error:
-                    raise UnsupportedRepair("The approved Hermes repair cannot be applied to this update. Ask the installer to review it before updating.") from error
-            actual, patch_hash, _ = self.snapshot(source)
+                    # Upstream may have edited lines beside the repair, such as a linter
+                    # rewriting a signature. Only an approved artifact may be merged, and
+                    # only when the merge leaves the repair's own lines unchanged.
+                    if not self.config.get("approvedPatchFile") or repair_changes(patch) is None:
+                        raise UnsupportedRepair("The approved Hermes repair cannot be applied to this update. Ask the installer to review it before updating.") from error
+                    if not self.merge_repair(source, current, candidate):
+                        raise UnsupportedRepair("Hermes changed the code the approved repair edits, so it cannot be applied to this update. Ask the installer to review it before updating.") from error
+                    rebased = True
+            actual, patch_hash, candidate_diff = self.snapshot(source)
             if actual != candidate or not self.config.get("approvedPatchFile") and patch_hash != current_patch:
                 raise UnsupportedRepair("The shared Hermes repair changed on the candidate. Ask the installer to review it before updating.")
+            if self.config.get("approvedPatchFile") and patch and repair_changes(candidate_diff or b"") != repair_changes(patch):
+                raise UnsupportedRepair("Re-applying the approved repair to this update changed its edits. Ask the installer to review it before updating.")
+            if rebased:
+                print("Approved repair re-applied over upstream edits beside it; its changed lines are identical.", file=self.log, flush=True)
+            self.repair_rebased = rebased
             return patch_hash
+        self.repair_rebased = False
         candidate_patch = self.check_step("staging", "Disposable target and unchanged OAuth repair", prepare)
+        if self.repair_rebased:
+            checks = self.state["checks"]
+            next(item for item in checks if item["id"] == "staging")["detail"] = "Re-applied over nearby upstream edits. The repair's own changes are identical."
+            self.update(checks=checks)
         if candidate_patch: self.environment["HERMES_UPGRADE_CANDIDATE_PATCH_SHA256"] = candidate_patch
         if managed:
             def prepare_dependencies():
@@ -577,6 +755,8 @@ class Worker:
             raise RuntimeError("The dependency environment changed during qualification")
         receipt = {"schemaVersion": 1, "revision": candidate, "trackedPatchSha256": candidate_patch,
             "integrationDigest": digest, "qualifiedAt": now(), "checks": {"realIntegration": True, "hostRegressions": True}}
+        # Binds the staged repair to the approved artifact it was proven against.
+        if self.config.get("approvedPatchFile") and candidate_patch: receipt["repairArtifactSha256"] = self.config["requiredPatchSha256"]
         atomic(stage / "qualification.json", receipt)
         self.update(phase="ready", message="The Hermes update passed its checks and is ready to install.", checkedAt=now(),
             qualification={"stage": str(stage), "currentRevision": current, "currentPatchSha256": current_patch,

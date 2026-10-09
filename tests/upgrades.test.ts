@@ -62,6 +62,14 @@ it("retains browser CSRF protections and accepts administrator native sessions w
   expect(installation.launch).toHaveBeenCalledTimes(1);
 });
 
+it("labels a check as a check", async () => {
+  const installation = await setup(), headers = await login(installation.app);
+  const checked = await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/check", headers, payload: {} });
+  expect(checked.json()).toMatchObject({ phase: "checking", operation: "check" });
+  installation.save({ ...installation.state(), phase: "blocked", error: "repair_requires_review", message: "Needs review" });
+  expect((await installation.app.inject({ url: "/api/hermes/upgrade", headers })).json().operation).toBe("check");
+});
+
 it("requires exact qualification and idle verified Hermes before admitting an install", async () => {
   const installation = await setup(), headers = await login(installation.app);
   const install = (candidateRevision = revision) => installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/install", headers, payload: { candidateRevision, requestId: randomUUID() } });
@@ -77,7 +85,7 @@ it("persists install idempotency and maintenance before launch, and never replay
   const installation = await setup(), headers = await login(installation.app); installation.ready();
   const requestId = randomUUID(), payload = { candidateRevision: revision, requestId };
   const first = await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/install", headers, payload });
-  expect(first.json()).toMatchObject({ phase: "installing", canInstall: false });
+  expect(first.json()).toMatchObject({ phase: "installing", canInstall: false, operation: "install" });
   expect(first.json()).not.toHaveProperty("qualification");
   expect(installation.upgrades.maintenance()).toBe(true);
   expect(installation.state()).toMatchObject({ maintenance: true, requestId });
@@ -89,6 +97,8 @@ it("persists install idempotency and maintenance before launch, and never replay
   expect((await restarted.status({ id: "local-one", email: "one@localhost.invalid", name: "One" }))).toMatchObject({ phase: "blocked", canCheck: false, canInstall: false });
   expect(restarted.maintenance()).toBe(true);
   expect(restartedLaunch).not.toHaveBeenCalled();
+  // A stopped install stays an install, so the panel keeps its recovery wording.
+  expect((await restarted.status({ id: "local-one", email: "one@localhost.invalid", name: "One" })).operation).toBe("install");
   const conflict = await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/install", headers, payload: { ...payload, candidateRevision: "b".repeat(40) } });
   expect(conflict.statusCode).toBe(409);
 });

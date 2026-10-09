@@ -88,6 +88,55 @@ class UpdateLock:
         if self.acquired and self.path.exists() and self.path.read_text().splitlines()[0]==str(os.getpid()): self.path.unlink()
 '''
 
+class RepairMergeTests(unittest.TestCase):
+    def merge(self, base, ours, theirs):
+        result = worker.merge_lines(*(text.splitlines(True) for text in (base, ours, theirs)))
+        return None if result is None else "".join(result)
+
+    def test_edit_survives_an_upstream_change_on_the_line_beside_it(self):
+        self.assertEqual(self.merge("sig Dict\nimport lock\nbody\n", "sig Dict\nimport transaction\nbody\n", "sig dict\nimport lock\nbody\n"),
+            "sig dict\nimport transaction\nbody\n")
+
+    def test_edit_follows_lines_upstream_moved(self):
+        self.assertEqual(self.merge("a\nlock\nz\n", "a\ntransaction\nz\n", "new\nnew\na\nlock\nz\n"), "new\nnew\na\ntransaction\nz\n")
+
+    def test_refuses_when_upstream_changed_a_line_the_repair_replaces(self):
+        self.assertIsNone(self.merge("a\nlock\nz\n", "a\ntransaction\nz\n", "a\nlock2\nz\n"))
+
+    def test_insertion_needs_both_neighbours_unchanged_and_adjacent(self):
+        self.assertEqual(self.merge("a\nb\n", "a\nadded\nb\n", "a\nb\nc\n"), "a\nadded\nb\nc\n")
+        self.assertIsNone(self.merge("a\nb\n", "a\nadded\nb\n", "a\nupstream\nb\n"))
+        self.assertIsNone(self.merge("a\nb\n", "a\nadded\nb\n", "a2\nb\n"))
+
+    def test_payload_lines_that_look_like_headers_are_still_compared(self):
+        clean = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,2 @@\n keep\n+safe\n"
+        hidden = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,3 @@\n keep\n+safe\n+++ __import__('os').system('id')\n"
+        self.assertNotEqual(worker.repair_changes(clean), worker.repair_changes(hidden))
+        self.assertIsNone(worker.repair_changes(clean.replace(b"+1,2", b"+1,3")))
+
+    def test_refuses_a_duplicate_occurrence_in_another_place(self):
+        base = "def authenticate():\n    check()\n    return allow()\n\ndef other():\n    pass\n"
+        ours = base.replace("return allow()", "return verify()")
+        theirs = "def authenticate():\n    check()\n    return allow_v2()\n\ndef other():\n    pass\n\ndef unused():\n    noise()\n    return allow()\n"
+        self.assertIsNone(self.merge(base, ours, theirs))
+
+    def test_refuses_when_the_replaced_lines_appear_twice_upstream(self):
+        base = "a\nb\nlock\nc\nd\n"
+        self.assertIsNone(self.merge(base, base.replace("lock", "transaction"), "a2\nb\nlock\nc\nd\nx\nlock\ny\n"))
+
+    def test_no_newline_marker_on_unchanged_context_is_ignored(self):
+        with_marker = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-lock\n+transaction\n tail\n\\ No newline at end of file\n"
+        without = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-lock\n+transaction\n tail\n"
+        self.assertEqual(worker.repair_changes(with_marker), worker.repair_changes(without))
+
+    def test_repair_changes_ignore_context_but_not_edits_or_modes(self):
+        one = b"diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n sig Dict\n-lock\n+transaction\n"
+        two = b"diff --git a/f b/f\nindex 3..4 100644\n--- a/f\n+++ b/f\n@@ -9,2 +9,2 @@\n sig dict\n-lock\n+transaction\n"
+        self.assertEqual(worker.repair_changes(one), worker.repair_changes(two))
+        self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(two.replace(b"+transaction", b"+other")))
+        self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(one.replace(b"index 1..2 100644\n", b"old mode 100644\nnew mode 100755\nindex 1..2\n")))
+
+
 class QualificationWorkerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="agent-interface-upgrade-worker-test-")
@@ -319,6 +368,96 @@ print('fixture real candidate patch identity passed')
         self.assertTrue((self.source / 'repair-tool.py').stat().st_mode & 0o111)
         self.assertEqual((self.source / 'shared_oauth_regression.py').read_text(), '# exact approved added regression\n')
 
+    def test_approved_artifact_merges_over_adjacent_upstream_edits_and_next_upgrade(self):
+        approved, path = self.offset_repair()
+        # Upstream lints the line beside the repair, as Hermes did to a function signature.
+        linted = self.root / 'linted-upstream'
+        self.git('worktree', 'add', '--detach', str(linted), self.new)
+        oauth = linted / 'oauth.py'
+        oauth.write_text(oauth.read_text().replace('context-14\n', 'context-14 linted\n'))
+        for argv in (['add', 'oauth.py'], ['commit', '-m', 'upstream lints beside the repair']):
+            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        stage = self.check()
+        staging = next(item for item in self.status()['checks'] if item['id'] == 'staging')
+        self.assertIn('Re-applied over nearby upstream edits', staging['detail'])
+        candidate = (stage / 'source' / 'oauth.py').read_text()
+        self.assertIn('context-14 linted\napproved-shared-source\n', candidate)
+        self.assertEqual(worker.repair_changes(worker.git(stage / 'source', 'diff', 'HEAD', '--binary')), worker.repair_changes(approved))
+        self.install()
+        self.assertEqual(self.status()['phase'], 'succeeded')
+        # The next update proves the installed, merged repair against the original approved artifact.
+        upstream = self.root / 'second-upstream'
+        subprocess.run(['git','clone','--no-hardlinks',str(self.source),str(upstream)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(['git','-C',str(upstream),'reset','--hard',self.new], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        (upstream / 'later.txt').write_text('later upstream change\n')
+        for argv in (['config','user.email','fixture@example.invalid'], ['config','user.name','Fixture'], ['add','.'], ['commit','-m','later upstream change']):
+            subprocess.run(['git','-C',str(upstream),*argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git','-C',str(upstream),'rev-parse','HEAD']).decode().strip()
+        self.git('fetch', upstream.as_uri(), self.new)
+        self.git('update-ref', 'refs/remotes/origin/main', self.new); self.fixture_upstream = upstream
+        self.check()
+        self.install()
+        self.assertEqual(self.status()['phase'], 'succeeded')
+        self.assertIn('context-14 linted\napproved-shared-source\n', (self.source / 'oauth.py').read_text())
+        self.assertEqual(path.read_bytes(), approved)
+
+    def linted_upstream(self):
+        linted = self.root / 'linted-upstream'
+        self.git('worktree', 'add', '--detach', str(linted), self.new)
+        oauth = linted / 'oauth.py'
+        oauth.write_text(oauth.read_text().replace('context-14\n', 'context-14 linted\n'))
+        for argv in (['add', 'oauth.py'], ['commit', '-m', 'upstream lints beside the repair']):
+            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        return linted
+
+    def test_merged_install_proof_requires_the_receipt_binding(self):
+        approved, _ = self.offset_repair(); self.linted_upstream()
+        self.check(); self.install()
+        receipt = json.loads(self.receipt.read_text())
+        self.assertEqual(receipt['repairArtifactSha256'], worker.sha(approved))
+        actual = self.git('diff', 'HEAD', '--binary')
+        # Equal changed lines prove nothing about where they sit; the receipt binds the exact tree.
+        self.assertEqual(worker.repair_changes(actual), worker.repair_changes(approved))
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        instance = worker.Worker(self.config, self.state, 'check', operation)
+        self.assertEqual(instance.approved_repair(self.new, worker.sha(actual), actual), approved)
+        for tampered in ({**receipt, 'repairArtifactSha256': 'f' * 64}, {**receipt, 'trackedPatchSha256': 'e' * 64}, {k: v for k, v in receipt.items() if k != 'repairArtifactSha256'}):
+            worker.atomic(self.receipt, tampered)
+            with self.subTest(receipt=sorted(tampered)), self.assertRaises(worker.UnsupportedRepair):
+                instance.approved_repair(self.new, worker.sha(actual), actual)
+
+    def test_merge_refuses_a_symlinked_directory_in_the_candidate(self):
+        approved, _ = self.offset_repair(); linted = self.linted_upstream()
+        (self.source / 'tests').mkdir(); (self.source / 'tests/repair_test.py').write_text('# approved added test\n')
+        self.git('add', 'tests/repair_test.py')
+        approved = self.git('diff', 'HEAD', '--binary')
+        path = self.root / 'approved-repair.patch'; path.write_bytes(approved)
+        config = json.loads(self.config.read_text()); config['requiredPatchSha256'] = worker.sha(approved); worker.atomic(self.config, config)
+        outside = self.root / 'outside'; outside.mkdir()
+        (linted / 'tests').symlink_to(outside)
+        for argv in (['add', 'tests'], ['commit', '-m', 'upstream symlinks tests']):
+            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_merged_repair_with_different_edits_is_refused(self):
+        approved, _ = self.offset_repair()
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        instance = worker.Worker(self.config, self.state, 'check', operation)
+        oauth = self.source / 'oauth.py'; original = oauth.read_text()
+        # Same context drift, but the repair line itself was altered: not the approved repair.
+        oauth.write_text(original.replace('approved-shared-source', 'approved-shared-source-altered'))
+        actual = self.git('diff', 'HEAD', '--binary')
+        with self.assertRaises(worker.UnsupportedRepair): instance.approved_repair(self.old, worker.sha(actual), actual)
+        oauth.write_text(original)
+
     def test_candidate_hash_rollback_restores_the_distinct_current_repair_hash(self):
         approved, _ = self.offset_repair()
         stage = self.check(); (stage / 'fail-verify').touch()
@@ -374,6 +513,9 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(self.status()['phase'], 'blocked')
         self.assertEqual(self.status()['error'], 'repair_requires_review')
         self.assertIn('cannot be applied', self.status()['message'])
+        staging = next(item for item in self.status()['checks'] if item['id'] == 'staging')
+        self.assertEqual(staging['status'], 'failed')
+        self.assertIn('cannot be applied', staging['detail'])
         self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
         self.assertEqual(self.git('diff', 'HEAD', '--binary'), approved)
         self.assertNotIn('qualification', self.status())

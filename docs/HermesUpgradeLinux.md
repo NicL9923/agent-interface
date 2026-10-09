@@ -175,6 +175,42 @@ the original installed fingerprint. A configuration without `approvedPatchFile`
 keeps the stricter requirement that the current diff's raw SHA match the configured
 repair SHA.
 
+Upstream sometimes edits lines beside the repair, for example a linter rewriting
+a signature directly above a repaired import. Git's patch and three-way merge both
+refuse that. With an approved artifact, the worker then merges line by line from
+the installed upstream file, the installed repaired file and the candidate file:
+
+- A repair edit that replaces lines applies only if those exact lines survive
+  unchanged and contiguous in the candidate.
+- An insertion needs both neighboring lines unchanged and still adjacent.
+- Each edit also needs an unchanged line within three lines on each side at the
+  same relative offset, or the file boundary at the same distance.
+- The edited block with a line of context must be unique in both files, and the
+  replaced lines must appear exactly once upstream.
+- Added repair files may not collide with a different upstream file.
+- Deletions, mode changes, binary edits and conflicting upstream edits still
+  require review.
+
+The merged candidate must have exactly the approved repair's added and removed
+lines, per file and in order. It still runs the full host regression suite before
+it can be installed. The staging check notes when this happened.
+
+The original artifact may no longer apply to a merged tree, so the qualification
+receipt records `repairArtifactSha256`, the approved artifact it was proven
+against. The next update accepts a merged installation only when the deployed
+receipt binds that exact installed revision and repair hash to the configured
+artifact, and its changed lines still match. App release qualification carries
+the binding forward after the same proof. Diffs are parsed by hunk counts, so
+payload lines that look like file headers are still compared. App release
+qualification rebuilds its disposable checkout from the installed, proven repair
+rather than the original artifact.
+
+These rules stop accidental misplacement. They do not defend against a hostile
+upstream that deliberately copies a repaired function and rewrites the original.
+Upstream code already runs with full privileges once installed, so trust in the
+official repository is the boundary. The host regression suite exists to catch a
+repair that no longer takes effect.
+
 ## Cutover and recovery
 
 The quiescence hook takes the persistent native dashboard admission gate and
