@@ -211,6 +211,16 @@ Upstream code already runs with full privileges once installed, so trust in the
 official repository is the boundary. The host regression suite exists to catch a
 repair that no longer takes effect.
 
+## Intermittent integration failures
+
+The real integration suite starts a gateway, provider and many probes, and a
+probe can occasionally fail for timing reasons. When the suite fails, the worker
+reruns it once in fresh isolated homes. A pass on the rerun counts, but the
+integration check says it needed one and both runs stay in the private log. A
+second failure fails the check. The qualified Python helper prints the full
+traceback for any wrapped error, so a one-line failure such as
+`Permission denied: '/'` can be traced from the log.
+
 ## Cutover and recovery
 
 The quiescence hook takes the persistent native dashboard admission gate and
