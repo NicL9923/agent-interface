@@ -170,7 +170,10 @@ export class HermesUpgrades {
     return { available, phase: abandoned ? "blocked" : state.phase, current: state.current, candidate: state.candidate,
       message: controlling && state.phase !== "recovering" ? "Your recovery request is saved. Waiting for the current command to reach a safe boundary." : maintenance && recovery.reason ? recovery.reason : abandoned ? "The update stopped before it finished. Choose a recovery action to continue safely."
         : available && !administrator ? "This installation's administrator manages Hermes updates." : state.message,
-      checks: state.checks, operationId: state.operationId, controlRequestId: controlling ? intent.requestId : undefined, controlAction: controlling ? intent.action : undefined, error: abandoned ? "worker_interrupted" : state.error,
+      checks: state.checks, operationId: state.operationId,
+      // Only an install admission records a request ID; checks and retries never do.
+      operation: state.operationId ? ["installing", "verifying", "recovering", "rolled_back"].includes(state.phase) || state.requestId ? "install" : "check" : undefined,
+      controlRequestId: controlling ? intent.requestId : undefined, controlAction: controlling ? intent.action : undefined, error: abandoned ? "worker_interrupted" : state.error,
       checkedAt: state.checkedAt, updatedAt: state.updatedAt, busyBots,
       canCheck: available && administrator && !maintenance && !held && !controlling && (!active.has(state.phase) || abandoned),
       canRetry: controllable && !starting && !held && (!active.has(state.phase) || abandoned) && ["blocked", "failed", "rolled_back", "cancelled"].includes(abandoned ? "blocked" : state.phase) && (!maintenance || recovery.restore),

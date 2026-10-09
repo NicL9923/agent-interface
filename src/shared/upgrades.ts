@@ -25,6 +25,8 @@ export interface UpgradeStatus {
   controlRequestId?: string;
   controlAction?: UpgradeControlAction;
   operationId?: string;
+  /** Whether the latest operation only checked and tested an update, or installed one. */
+  operation?: "check" | "install";
   error?: string;
   checkedAt?: string;
   updatedAt?: string;

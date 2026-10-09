@@ -52,7 +52,7 @@ describe("Hermes updates", () => {
     expect(container.textContent).toContain("1.0");
     await act(async () => action().click());
     expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/check", {});
-    expect(action().textContent).toBe("Upgrade Hermes");
+    expect(action().textContent).toBe("Install update");
     expect(container.querySelector<HTMLDetailsElement>(".upgrade-checks")!.open).toBe(false);
     await act(async () => action().click());
     expect(write).toHaveBeenLastCalledWith("/hermes/upgrade/install", {
@@ -60,6 +60,48 @@ describe("Hermes updates", () => {
     });
     expect(action().disabled).toBe(true);
     expect(container.textContent).not.toContain("Hermes is up to date");
+  });
+
+  it("keeps controls steady while background polls run, and never drops a click made during one", async () => {
+    await render();
+    let finishPoll!: () => void;
+    vi.mocked(api).mockImplementationOnce(() => new Promise(resolve => { finishPoll = () => resolve({ ...status, message: "Stale poll" } as never); }));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(action().disabled).toBe(false);
+    vi.mocked(write).mockResolvedValue({ ...status, phase: "checking", canCheck: false, canCancel: true, operation: "check", operationId: "check-one", message: "Looking." } as never);
+    await act(async () => action().click());
+    expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/check", {});
+    await act(async () => finishPoll());
+    expect(container.textContent).not.toContain("Stale poll");
+    expect(container.textContent).toContain("Looking for an update");
+  });
+
+  it("explains a blocked check as a check, offers Check again and shows why", async () => {
+    status = { ...status, phase: "blocked", operation: "check", operationId: "blocked-check", canCheck: true, canRetry: true, canCancel: false,
+      candidate: { revision: "candidate", version: "1.1" }, message: "The approved Hermes repair cannot be applied to this update.", error: "repair_requires_review",
+      checks: [{ id: "upstream", label: "Trusted upstream update", status: "passed" },
+        { id: "staging", label: "Disposable target and unchanged OAuth repair", status: "failed", detail: "Hermes changed the code the approved repair edits." }] };
+    await render();
+    expect(container.querySelector("h2")?.textContent).toBe("This update needs a look");
+    expect(action().textContent).toBe("Check again");
+    const buttons = [...container.querySelectorAll("button")].map(button => button.textContent);
+    expect(buttons).not.toContain("Cancel update");
+    expect(buttons).not.toContain("Check and try again");
+    expect(container.querySelector<HTMLDetailsElement>(".upgrade-checks")!.open).toBe(true);
+    expect(container.textContent).toContain("Hermes changed the code the approved repair edits.");
+    expect([...container.querySelectorAll(".upgrade-steps li")].map(item => item.getAttribute("data-step"))).toEqual(["done", "failed", "waiting"]);
+  });
+
+  it("stops a running check directly, without install recovery wording", async () => {
+    status = { ...status, phase: "qualifying", operation: "check", operationId: "running-check", canCheck: false, canCancel: true,
+      candidate: { revision: "candidate", version: "1.1" }, message: "Testing the update in a separate Hermes home." };
+    vi.mocked(write).mockResolvedValue({ ...status, phase: "cancelled", canCancel: false } as never);
+    await render();
+    expect(action().textContent).toBe("Testing…");
+    expect(container.querySelector(".upgrade-recovery")).toBeNull();
+    expect([...container.querySelectorAll(".upgrade-steps li")].map(item => item.getAttribute("data-step"))).toEqual(["done", "active", "waiting"]);
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Stop checking")!.click());
+    expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/control", { action: "cancel", operationId: "running-check", requestId: expect.any(String) });
   });
 
   it("keeps polling during an upgrade after the dialog closes", async () => {

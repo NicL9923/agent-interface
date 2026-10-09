@@ -175,6 +175,24 @@ the original installed fingerprint. A configuration without `approvedPatchFile`
 keeps the stricter requirement that the current diff's raw SHA match the configured
 repair SHA.
 
+Upstream sometimes edits lines beside the repair, for example a linter rewriting
+a signature directly above a repaired import. Git's patch and three-way merge both
+refuse that. With an approved artifact, the worker then merges line by line from
+the installed upstream file, the installed repaired file and the candidate file:
+
+- A repair edit that replaces lines applies only if those exact lines survive
+  unchanged and contiguous in the candidate.
+- An insertion needs both neighboring lines unchanged and still adjacent.
+- Added repair files may not collide with a different upstream file.
+- Deletions, mode changes, binary edits and conflicting upstream edits still
+  require review.
+
+The merged candidate must have exactly the approved repair's added and removed
+lines, per file and in order. It still runs the full host regression suite before
+it can be installed. The staging check notes when this happened. The next update
+proves the installed repair by those same changed lines, because the original
+artifact may no longer apply to the merged tree.
+
 ## Cutover and recovery
 
 The quiescence hook takes the persistent native dashboard admission gate and
