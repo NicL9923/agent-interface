@@ -1,5 +1,19 @@
 # Validation ledger
 
+## October 9 integration rerun and tracebacks
+
+Source fingerprint `sha256:fbaeade217d04e7809d8694e151177b9cc242f8f3c2681c9aed014876a841968`.
+The complete web suite passed 497 tests across 47 files. The worker suite passed
+51 tests with one skip, and the compile and contract checks passed.
+
+The October 9 in-app check for Hermes `73162b0` merged the approved repair, then
+failed one integration probe with a bare `Permission denied: '/'`. The probe
+passed in a full qualification replay in the same disposable stage and in twelve
+standalone runs. The worker now reruns a failed integration suite once in fresh
+isolated homes and records that on the check. The qualified Python helper prints
+tracebacks so a recurrence can be traced. The independent GPT-6.1 Sol review
+found no issues.
+
 ## October 9 app release f92d0a4
 
 PR #51 merged at `f92d0a41eecf9971be17561f17891c05edd917e7`. The release is live at `https://agentui.wildflowersranch.com`,
