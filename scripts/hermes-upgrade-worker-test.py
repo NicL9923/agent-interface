@@ -120,6 +120,15 @@ class RepairMergeTests(unittest.TestCase):
         theirs = "def authenticate():\n    check()\n    return allow_v2()\n\ndef other():\n    pass\n\ndef unused():\n    noise()\n    return allow()\n"
         self.assertIsNone(self.merge(base, ours, theirs))
 
+    def test_refuses_when_the_replaced_lines_appear_twice_upstream(self):
+        base = "a\nb\nlock\nc\nd\n"
+        self.assertIsNone(self.merge(base, base.replace("lock", "transaction"), "a2\nb\nlock\nc\nd\nx\nlock\ny\n"))
+
+    def test_no_newline_marker_on_unchanged_context_is_ignored(self):
+        with_marker = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-lock\n+transaction\n tail\n\\ No newline at end of file\n"
+        without = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n-lock\n+transaction\n tail\n"
+        self.assertEqual(worker.repair_changes(with_marker), worker.repair_changes(without))
+
     def test_repair_changes_ignore_context_but_not_edits_or_modes(self):
         one = b"diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n sig Dict\n-lock\n+transaction\n"
         two = b"diff --git a/f b/f\nindex 3..4 100644\n--- a/f\n+++ b/f\n@@ -9,2 +9,2 @@\n sig dict\n-lock\n+transaction\n"

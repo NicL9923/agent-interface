@@ -184,8 +184,9 @@ the installed upstream file, the installed repaired file and the candidate file:
   unchanged and contiguous in the candidate.
 - An insertion needs both neighboring lines unchanged and still adjacent.
 - Each edit also needs an unchanged line within three lines on each side at the
-  same relative offset, or the file boundary at the same distance. A copy of the
-  repaired line elsewhere in the file cannot attract the repair.
+  same relative offset, or the file boundary at the same distance.
+- The edited block with a line of context must be unique in both files, and the
+  replaced lines must appear exactly once upstream.
 - Added repair files may not collide with a different upstream file.
 - Deletions, mode changes, binary edits and conflicting upstream edits still
   require review.
@@ -200,7 +201,15 @@ against. The next update accepts a merged installation only when the deployed
 receipt binds that exact installed revision and repair hash to the configured
 artifact, and its changed lines still match. App release qualification carries
 the binding forward after the same proof. Diffs are parsed by hunk counts, so
-payload lines that look like file headers are still compared.
+payload lines that look like file headers are still compared. App release
+qualification rebuilds its disposable checkout from the installed, proven repair
+rather than the original artifact.
+
+These rules stop accidental misplacement. They do not defend against a hostile
+upstream that deliberately copies a repaired function and rewrites the original.
+Upstream code already runs with full privileges once installed, so trust in the
+official repository is the boundary. The host regression suite exists to catch a
+repair that no longer takes effect.
 
 ## Cutover and recovery
 

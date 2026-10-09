@@ -95,18 +95,19 @@ def repair_changes(patch):
     Hunk bodies are read by their declared counts, so payload lines that look like
     headers are kept. Binary hunks are kept verbatim; a diff without binary
     content, or a malformed one, returns None."""
-    files, current, binary, old, new = {}, None, False, 0, 0
+    files, current, binary, old, new, changed = {}, None, False, 0, 0, False
     for line in patch.split(b"\n"):
+        # "\ No newline" belongs to the line before it; keep it only after a changed line.
+        if line.startswith(b"\\") and current is not None:
+            if changed: current.append(line)
+            continue
         if old or new:
             marker = line[:1]
-            if marker == b" ": old -= 1; new -= 1
-            elif marker == b"-": old -= 1; current.append(line)
-            elif marker == b"+": new -= 1; current.append(line)
-            elif line.startswith(b"\\"): current.append(line)
+            if marker == b" ": old -= 1; new -= 1; changed = False
+            elif marker == b"-": old -= 1; current.append(line); changed = True
+            elif marker == b"+": new -= 1; current.append(line); changed = True
             else: return None
             if old < 0 or new < 0: return None
-        elif line.startswith(b"\\") and current is not None:
-            current.append(line)
         elif line.startswith(b"diff --git "):
             current, binary = files.setdefault(line, []), False
         elif current is None:
@@ -127,6 +128,12 @@ def repair_changes(patch):
 
 
 ANCHOR_LINES = 3
+
+
+def occurrences(lines, block):
+    """How many times a run of lines appears, so ambiguous placements are refused."""
+    size = len(block)
+    return sum(lines[index:index + size] == block for index in range(len(lines) - size + 1)) if size else 0
 
 
 def merge_lines(base, ours, theirs):
@@ -158,6 +165,12 @@ def merge_lines(base, ours, theirs):
             if before is None or after is None or after != before + 1: return None
             start = end = after
         if not anchored(i1, i2, start, end): return None
+        # The edited block, with a line of context each side, must be unique in both
+        # files, so an identical copy elsewhere cannot be mistaken for it.
+        window = base[max(i1 - 1, 0):min(i2 + 1, len(base))]
+        if occurrences(base, window) != 1 or occurrences(theirs, theirs[max(start - 1, 0):min(end + 1, len(theirs))]) != 1:
+            return None
+        if i2 > i1 and occurrences(theirs, base[i1:i2]) != 1: return None
         edits.append((start, end, ours[j1:j2]))
     merged, boundary = list(theirs), None
     for start, end, replacement in sorted(edits, reverse=True):
