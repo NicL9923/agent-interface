@@ -173,6 +173,9 @@ try:
     assert utility["fingerprint"](qualified) == prepared["fingerprint"]
     receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
         qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
+    # approved_repair proved this tree derives from the approved artifact; keep that binding
+    # so the next in-app update can prove a repair merged over adjacent upstream edits.
+    if baseline[1]: receipt["repairArtifactSha256"] = worker["requiredPatchSha256"]
     receipt_path = stage / "qualification.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     qualification["read_receipt"](receipt_path, release)

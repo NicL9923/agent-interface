@@ -108,9 +108,21 @@ class RepairMergeTests(unittest.TestCase):
         self.assertIsNone(self.merge("a\nb\n", "a\nadded\nb\n", "a\nupstream\nb\n"))
         self.assertIsNone(self.merge("a\nb\n", "a\nadded\nb\n", "a2\nb\n"))
 
+    def test_payload_lines_that_look_like_headers_are_still_compared(self):
+        clean = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,2 @@\n keep\n+safe\n"
+        hidden = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,3 @@\n keep\n+safe\n+++ __import__('os').system('id')\n"
+        self.assertNotEqual(worker.repair_changes(clean), worker.repair_changes(hidden))
+        self.assertIsNone(worker.repair_changes(clean.replace(b"+1,2", b"+1,3")))
+
+    def test_refuses_a_duplicate_occurrence_in_another_place(self):
+        base = "def authenticate():\n    check()\n    return allow()\n\ndef other():\n    pass\n"
+        ours = base.replace("return allow()", "return verify()")
+        theirs = "def authenticate():\n    check()\n    return allow_v2()\n\ndef other():\n    pass\n\ndef unused():\n    noise()\n    return allow()\n"
+        self.assertIsNone(self.merge(base, ours, theirs))
+
     def test_repair_changes_ignore_context_but_not_edits_or_modes(self):
-        one = b"diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n sig Dict\n-lock\n+transaction\n"
-        two = b"diff --git a/f b/f\nindex 3..4 100644\n--- a/f\n+++ b/f\n@@ -9,3 +9,3 @@\n sig dict\n-lock\n+transaction\n"
+        one = b"diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n sig Dict\n-lock\n+transaction\n"
+        two = b"diff --git a/f b/f\nindex 3..4 100644\n--- a/f\n+++ b/f\n@@ -9,2 +9,2 @@\n sig dict\n-lock\n+transaction\n"
         self.assertEqual(worker.repair_changes(one), worker.repair_changes(two))
         self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(two.replace(b"+transaction", b"+other")))
         self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(one.replace(b"index 1..2 100644\n", b"old mode 100644\nnew mode 100755\nindex 1..2\n")))
@@ -381,6 +393,50 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(self.status()['phase'], 'succeeded')
         self.assertIn('context-14 linted\napproved-shared-source\n', (self.source / 'oauth.py').read_text())
         self.assertEqual(path.read_bytes(), approved)
+
+    def linted_upstream(self):
+        linted = self.root / 'linted-upstream'
+        self.git('worktree', 'add', '--detach', str(linted), self.new)
+        oauth = linted / 'oauth.py'
+        oauth.write_text(oauth.read_text().replace('context-14\n', 'context-14 linted\n'))
+        for argv in (['add', 'oauth.py'], ['commit', '-m', 'upstream lints beside the repair']):
+            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        return linted
+
+    def test_merged_install_proof_requires_the_receipt_binding(self):
+        approved, _ = self.offset_repair(); self.linted_upstream()
+        self.check(); self.install()
+        receipt = json.loads(self.receipt.read_text())
+        self.assertEqual(receipt['repairArtifactSha256'], worker.sha(approved))
+        actual = self.git('diff', 'HEAD', '--binary')
+        # Equal changed lines prove nothing about where they sit; the receipt binds the exact tree.
+        self.assertEqual(worker.repair_changes(actual), worker.repair_changes(approved))
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        instance = worker.Worker(self.config, self.state, 'check', operation)
+        self.assertEqual(instance.approved_repair(self.new, worker.sha(actual), actual), approved)
+        for tampered in ({**receipt, 'repairArtifactSha256': 'f' * 64}, {**receipt, 'trackedPatchSha256': 'e' * 64}, {k: v for k, v in receipt.items() if k != 'repairArtifactSha256'}):
+            worker.atomic(self.receipt, tampered)
+            with self.subTest(receipt=sorted(tampered)), self.assertRaises(worker.UnsupportedRepair):
+                instance.approved_repair(self.new, worker.sha(actual), actual)
+
+    def test_merge_refuses_a_symlinked_directory_in_the_candidate(self):
+        approved, _ = self.offset_repair(); linted = self.linted_upstream()
+        (self.source / 'tests').mkdir(); (self.source / 'tests/repair_test.py').write_text('# approved added test\n')
+        self.git('add', 'tests/repair_test.py')
+        approved = self.git('diff', 'HEAD', '--binary')
+        path = self.root / 'approved-repair.patch'; path.write_bytes(approved)
+        config = json.loads(self.config.read_text()); config['requiredPatchSha256'] = worker.sha(approved); worker.atomic(self.config, config)
+        outside = self.root / 'outside'; outside.mkdir()
+        (linted / 'tests').symlink_to(outside)
+        for argv in (['add', 'tests'], ['commit', '-m', 'upstream symlinks tests']):
+            subprocess.run(['git', '-C', str(linted), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.new = subprocess.check_output(['git', '-C', str(linted), 'rev-parse', 'HEAD']).decode().strip()
+        self.git('update-ref', 'refs/remotes/origin/main', self.new)
+        operation = str(uuid.uuid4()); worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking'})
+        with self.assertRaises(worker.UnsupportedRepair): worker.Worker(self.config, self.state, 'check', operation).main()
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_merged_repair_with_different_edits_is_refused(self):
         approved, _ = self.offset_repair()

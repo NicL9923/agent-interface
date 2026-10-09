@@ -86,24 +86,47 @@ REPAIR_FILE_LINES = (b"new file mode ", b"deleted file mode ", b"old mode ", b"n
     b"rename from ", b"rename to ", b"copy from ", b"copy to ")
 
 
+HUNK = re.compile(rb"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
 def repair_changes(patch):
     """The lines a repair adds and removes, per file and in order. Context and hunk
     positions are excluded, so upstream edits beside a repair do not change it.
-    Binary hunks are kept verbatim; a diff without binary content returns None."""
-    files, current, binary = {}, None, False
+    Hunk bodies are read by their declared counts, so payload lines that look like
+    headers are kept. Binary hunks are kept verbatim; a diff without binary
+    content, or a malformed one, returns None."""
+    files, current, binary, old, new = {}, None, False, 0, 0
     for line in patch.split(b"\n"):
-        if line.startswith(b"diff --git "):
+        if old or new:
+            marker = line[:1]
+            if marker == b" ": old -= 1; new -= 1
+            elif marker == b"-": old -= 1; current.append(line)
+            elif marker == b"+": new -= 1; current.append(line)
+            elif line.startswith(b"\\"): current.append(line)
+            else: return None
+            if old < 0 or new < 0: return None
+        elif line.startswith(b"\\") and current is not None:
+            current.append(line)
+        elif line.startswith(b"diff --git "):
             current, binary = files.setdefault(line, []), False
+        elif current is None:
+            if line: return None
+        elif binary:
+            current.append(line)
+        elif line.startswith(b"GIT binary patch"):
+            binary = True; current.append(line)
         elif line.startswith(b"Binary files "):
             return None
-        elif binary or line.startswith(b"GIT binary patch"):
-            binary = True
+        elif (match := HUNK.match(line)):
+            old, new = (int(group) if group is not None else 1 for group in match.groups())
+        elif line.startswith(REPAIR_FILE_LINES):
             current.append(line)
-        elif current is None or line.startswith((b"index ", b"--- ", b"+++ ", b"@@", b"similarity index ", b"dissimilarity index ")):
-            continue
-        elif line.startswith(REPAIR_FILE_LINES) or line[:1] in (b"+", b"-") or line.startswith(b"\\ No newline"):
-            current.append(line)
-    return files
+        elif not line.startswith((b"index ", b"--- ", b"+++ ", b"similarity index ", b"dissimilarity index ")) and line:
+            return None
+    return None if old or new else files
+
+
+ANCHOR_LINES = 3
 
 
 def merge_lines(base, ours, theirs):
@@ -114,18 +137,28 @@ def merge_lines(base, ours, theirs):
     mapping = {}
     for tag, i1, i2, j1, _ in difflib.SequenceMatcher(None, base, theirs, autojunk=False).get_opcodes():
         if tag == "equal": mapping.update((i1 + k, j1 + k) for k in range(i2 - i1))
+    def anchored(i1, i2, start, end):
+        # A nearby unchanged line on each side, at the same relative offset, ties the
+        # edit to its original place. A duplicate of the line elsewhere cannot.
+        # Within the window, the file's start or end anchors at the same distance.
+        before = any(mapping.get(i1 - k) == start - k for k in range(1, ANCHOR_LINES + 1)) or i1 < ANCHOR_LINES and start == i1
+        after = (any(mapping.get(i2 + k) == end + k for k in range(ANCHOR_LINES))
+            or len(base) - i2 < ANCHOR_LINES and len(theirs) - end == len(base) - i2)
+        return before and after
     edits = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base, ours, autojunk=False).get_opcodes():
         if tag == "equal": continue
         if i2 > i1:
             positions = [mapping.get(index) for index in range(i1, i2)]
             if None in positions or positions != list(range(positions[0], positions[0] + len(positions))): return None
-            edits.append((positions[0], positions[-1] + 1, ours[j1:j2]))
+            start, end = positions[0], positions[-1] + 1
         else:
             before = mapping.get(i1 - 1) if i1 else -1
             after = mapping.get(i1) if i1 < len(base) else len(theirs)
             if before is None or after is None or after != before + 1: return None
-            edits.append((after, after, ours[j1:j2]))
+            start = end = after
+        if not anchored(i1, i2, start, end): return None
+        edits.append((start, end, ours[j1:j2]))
     merged, boundary = list(theirs), None
     for start, end, replacement in sorted(edits, reverse=True):
         if boundary is not None and end > boundary: return None
@@ -544,8 +577,14 @@ class Worker:
             if expected != actual or proof_error:
                 # A previous update may have re-applied the repair over upstream edits
                 # beside it. Accept that only when its changed lines are identical.
+                # The deployed receipt must bind this exact installed tree to the same
+                # approved artifact; equal changed lines alone could sit elsewhere.
+                receipt_path = Path(self.config["qualificationReceipt"])
+                receipt = json.loads(private_file(receipt_path).read_text()) if receipt_path.exists() else {}
+                bound = (receipt.get("revision") == revision and receipt.get("trackedPatchSha256") == actual_hash
+                    and receipt.get("repairArtifactSha256") == self.config["requiredPatchSha256"])
                 approved_changes = repair_changes(patch)
-                if approved_changes is None or repair_changes(actual_patch) != approved_changes:
+                if not bound or approved_changes is None or repair_changes(actual_patch) != approved_changes:
                     if proof_error: raise UnsupportedRepair("The approved Hermes repair needs installer review before this version can be updated.") from proof_error
                     raise UnsupportedRepair("The installed Hermes files differ from the approved repair. Ask the installer to review them before updating.")
         self.environment.update({"HERMES_UPGRADE_APPROVED_PATCH_FILE": filename,
@@ -565,7 +604,16 @@ class Worker:
         if not changes: return False
         for status, raw in changes:
             path = raw.decode()
-            ours = (self.source / path).read_bytes()
+            live, destination = self.source / path, target / path
+            # Regular files only, and never through a symlinked directory in either tree.
+            for root, candidate_path in ((self.source, live), (target, destination)):
+                parent = candidate_path.parent
+                while parent != root:
+                    if parent.is_symlink(): return False
+                    parent = parent.parent
+            if live.is_symlink() or not live.is_file() or destination.is_symlink(): return False
+            if not destination.resolve().is_relative_to(target.resolve()): return False
+            ours = live.read_bytes()
             base_mode, base = blob(self.source, current, path)
             their_mode, theirs = blob(target, candidate, path)
             if status == b"A":
@@ -582,10 +630,9 @@ class Worker:
                     merged = b"".join(lines)
             else:
                 return False
-            destination = target / path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(merged)
-            destination.chmod((self.source / path).stat().st_mode & 0o777)
+            destination.chmod(live.stat().st_mode & 0o777)
             self.run(["git", "-C", str(target), "add", "--", path])
         return True
 
@@ -695,6 +742,8 @@ class Worker:
             raise RuntimeError("The dependency environment changed during qualification")
         receipt = {"schemaVersion": 1, "revision": candidate, "trackedPatchSha256": candidate_patch,
             "integrationDigest": digest, "qualifiedAt": now(), "checks": {"realIntegration": True, "hostRegressions": True}}
+        # Binds the staged repair to the approved artifact it was proven against.
+        if self.config.get("approvedPatchFile") and candidate_patch: receipt["repairArtifactSha256"] = self.config["requiredPatchSha256"]
         atomic(stage / "qualification.json", receipt)
         self.update(phase="ready", message="The Hermes update passed its checks and is ready to install.", checkedAt=now(),
             qualification={"stage": str(stage), "currentRevision": current, "currentPatchSha256": current_patch,

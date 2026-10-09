@@ -183,15 +183,24 @@ the installed upstream file, the installed repaired file and the candidate file:
 - A repair edit that replaces lines applies only if those exact lines survive
   unchanged and contiguous in the candidate.
 - An insertion needs both neighboring lines unchanged and still adjacent.
+- Each edit also needs an unchanged line within three lines on each side at the
+  same relative offset, or the file boundary at the same distance. A copy of the
+  repaired line elsewhere in the file cannot attract the repair.
 - Added repair files may not collide with a different upstream file.
 - Deletions, mode changes, binary edits and conflicting upstream edits still
   require review.
 
 The merged candidate must have exactly the approved repair's added and removed
 lines, per file and in order. It still runs the full host regression suite before
-it can be installed. The staging check notes when this happened. The next update
-proves the installed repair by those same changed lines, because the original
-artifact may no longer apply to the merged tree.
+it can be installed. The staging check notes when this happened.
+
+The original artifact may no longer apply to a merged tree, so the qualification
+receipt records `repairArtifactSha256`, the approved artifact it was proven
+against. The next update accepts a merged installation only when the deployed
+receipt binds that exact installed revision and repair hash to the configured
+artifact, and its changed lines still match. App release qualification carries
+the binding forward after the same proof. Diffs are parsed by hunk counts, so
+payload lines that look like file headers are still compared.
 
 ## Cutover and recovery
 
