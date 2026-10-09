@@ -1,5 +1,25 @@
 # Validation ledger
 
+## October 9 app release f92d0a4
+
+PR #51 merged at `f92d0a41eecf9971be17561f17891c05edd917e7`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `3bf323b8eaf4356a`, from the archive with SHA256
+`01f3bb3b9036dd092e4d6b88d1440d94343c64ad169193d4963d299c0d97280b`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-f92d0a41-20261009T123312Z.json) records the result. Hermes remains
+at `1298c8e74baa`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+The [fresh native qualification](evidence/updater-qualification-2026-10-09/manifest.json)
+completed in disposable homes, including private authentication regressions. Its
+receipt carries `repairArtifactSha256`, matching the configured approved artifact.
+No Hermes update was installed.
+
 ## October 9 Hermes updater repair merge and panel
 
 Source fingerprint `sha256:108dafabc13b6baf30186216acbf49240ee70864b307f7ac5c69f4c2802e8394`.
