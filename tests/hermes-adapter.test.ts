@@ -237,6 +237,9 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     // Text the stopped turn never saved still appears, without its saved opening.
     snapshot.inflight = {user:'Plan the week',assistant:'Here is the plan for Tuesday. Then Wednesday',streaming:false};
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'Then Wednesday'});
+    // Saved display text drops the file references the snapshot's prompt still carries.
+    snapshot.inflight = {user:'Plan the week\n@file:"/staging/menu.pdf"',assistant:'Here is the plan for Tuesday.',streaming:false};
+    expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
     // A snapshot for a prompt history has not saved yet keeps its whole text.
     snapshot.inflight = {user:'And next week?',assistant:'Here is the plan for Tuesday. Next week too.',streaming:false};
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Here is the plan for Tuesday. Next week too.'});

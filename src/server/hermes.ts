@@ -687,7 +687,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const lastTurn=rows.slice(lastPrompt+1).filter(row=>row.role==='assistant');
       // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
       // the saved turn too, unless the snapshot names a newer prompt than the last saved one.
-      const savedPrompt=typeof inflight.user!=='string'||!inflight.user.trim()||inflight.user.trim()===rows[lastPrompt]?.text.trim();
+      // The snapshot's prompt keeps file references that the saved display text drops.
+      const prompt=typeof inflight.user==='string'?inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/,'').trim():'';
+      const savedPrompt=!prompt||prompt===rows[lastPrompt]?.text.trim();
       const persisted=run?lastTurn.filter(row=>row.runId===run):!active&&savedPrompt?lastTurn:[];
       const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
       const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
