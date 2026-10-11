@@ -35,7 +35,7 @@ export function App() {
   const mobile = useMobile();
   const session = useSession({
     onIdentityChange: () => {
-      reset(); setUploading(false);
+      reset(); clearUploads();
       closePanels("settings", "preferences", "upgrade", "integrations", "computer"); setError("");
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
@@ -45,7 +45,7 @@ export function App() {
   const userId = boot?.user.id;
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  const { draft, setDraft, draftReady, uploading, setUploading, upload } = useDraft({ botId, userId, identityEpoch, setError });
+  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, persistPosition } = useConversation(botId, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, reset } = useSubmission({
@@ -81,7 +81,7 @@ export function App() {
       setConversation(null);
       setDraft({ text: "", attachments: [] });
       // The signed-out account's in-flight work can never clear these once the identity changes.
-      reset(); setUploading(false);
+      reset(); clearUploads();
       setRailOpen(mobile);
       closePanels("settings", "preferences", "upgrade", "integrations");
     } catch (e) {
@@ -141,7 +141,8 @@ export function App() {
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
-            draftReady={draftReady} uploading={uploading} upload={upload} pending={pending} receipt={receipt}
+            draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={upload}
+            retryUpload={retryUpload} cancelUpload={cancelUpload} pending={pending} receipt={receipt}
             sending={sending} send={send} retry={retry} reviewed={reviewed} setReviewed={setReviewed}
             report={setError}
             refresh={() => void session.refresh()} />}

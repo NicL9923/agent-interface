@@ -120,6 +120,8 @@ device voice.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
+Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include.
+
 An empty web conversation offers a role discussion using the assistant's description and fills an editable draft. iOS starter actions remain available from the **+** menu. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.

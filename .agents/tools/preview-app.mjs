@@ -46,6 +46,7 @@ const modelCatalog = { provider: 'openrouter', model: 'configured-model', provid
   { id: 'openai-codex', name: 'OpenAI subscription', authenticated: true, models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', available: true }] },
   { id: 'xai', name: 'xAI', authenticated: false, warning: 'Connect this provider in Integrations to use its models.', models: [{ id: 'grok-4.6', name: 'Grok 4.6', available: false }] },
 ] };
+const uploadedFiles = new Map();
 const artifactFiles = [
   { id: 'preview-plan', name: 'gate-battery-plan.md', mime: 'text/markdown', url: '/api/files/preview-plan' },
   { id: 'preview-icon', name: 'assistant-icon.png', mime: 'image/png', url: '/api/files/preview-icon' },
@@ -185,7 +186,7 @@ const json = (response, data, status = 200) => { response.writeHead(status, { 'C
 const server = createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
-  let body = {}; if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); try { body = JSON.parse(Buffer.concat(chunks)); } catch {} }
+  let body = {}, raw = Buffer.alloc(0); if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); raw = Buffer.concat(chunks); try { body = JSON.parse(raw); } catch {} }
   if (url.pathname === '/preview-fixture.js') { response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/javascript' }); return response.end(fixtureScript); }
   if (url.pathname.startsWith('/api/')) {
     const path = url.pathname.slice(4);
@@ -338,6 +339,23 @@ const server = createServer(async (request, response) => {
     }
     if (path === '/push/subscriptions/status') return json(response, { registered: pushRegistrations.has(body.endpoint) });
     if (path === '/push/subscriptions') { if (request.method === 'DELETE') pushRegistrations.delete(body.endpoint); else pushRegistrations.add(body.endpoint); return json(response, { ok: true }); }
+    // Attachments wait a moment so progress is visible; a name containing "fail" exercises Retry.
+    if (/^\/bots\/[^/]+\/uploads$/.test(path)) {
+      const header = raw.subarray(0, raw.indexOf('\r\n\r\n')).toString('utf8');
+      const name = /filename="([^"]*)"/.exec(header)?.[1] || 'upload';
+      const mime = /content-type:\s*([^\r\n]+)/i.exec(header)?.[1]?.trim() || 'application/octet-stream';
+      const start = raw.indexOf('\r\n\r\n') + 4, data = raw.subarray(start, raw.lastIndexOf('\r\n--'));
+      await new Promise(done => setTimeout(done, 4000));
+      if (/fail/i.test(name)) return json(response, { error: 'Fixture: Hermes is restarting.' }, 503);
+      const id = `preview-upload-${randomUUID()}`;
+      uploadedFiles.set(id, { name, mime, data });
+      return json(response, { id, name, mime, size: data.length });
+    }
+    if (uploadedFiles.has(decodeURIComponent(path.slice('/files/'.length)))) {
+      const file = uploadedFiles.get(decodeURIComponent(path.slice('/files/'.length)));
+      response.writeHead(200, { 'Content-Type': file.mime, 'X-Content-Type-Options': 'nosniff' });
+      return response.end(file.data);
+    }
     if (path.startsWith('/files/')) {
       const file = artifactFiles.find(item => item.id === decodeURIComponent(path.slice('/files/'.length)));
       if (!file || file.id === 'preview-unavailable') return json(response, { error: 'This archived file is unavailable in the preview fixture.' }, 404);

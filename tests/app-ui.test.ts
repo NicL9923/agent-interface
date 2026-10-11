@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api, clearResponseCache, write } from "../src/client-api";
+import { api, clearResponseCache, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 
@@ -12,6 +12,7 @@ vi.mock("../src/client-api", async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn(),
   write: vi.fn().mockResolvedValue({}),
+  uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
 }));
 const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
@@ -267,6 +268,111 @@ describe("conversation state", () => {
       expect((click.mock.contexts[0] as HTMLInputElement).type).toBe("file");
       expect((click.mock.contexts[0] as HTMLInputElement).hidden).toBe(true);
     } finally { click.mockRestore(); }
+  });
+
+  describe("attachments", () => {
+    type Upload = { file: File; progress(sent: number): void; signal: AbortSignal; finish(value: unknown): void; fail(error: Error): void };
+    let uploads: Upload[];
+    beforeEach(() => {
+      conversation = { ...conversation, activity: { state: "idle" } };
+      uploads = [];
+      vi.mocked(uploadFile).mockImplementation((_path, file, options) => new Promise((resolve, reject) => uploads.push({
+        file, progress: sent => options!.onProgress!(sent), signal: options!.signal!, finish: resolve as (value: unknown) => void, fail: reject,
+      })));
+      Object.assign(URL, { createObjectURL: vi.fn(() => "blob:local-preview"), revokeObjectURL: vi.fn() });
+    });
+    const image = (name = "image.png") => new File(["pixels"], name, { type: "image/png" });
+    const transfer = (files: File[], text = "") => ({ files, types: ["Files"], getData: () => text, dropEffect: "none" });
+    const dispatch = (target: Element, type: string, key: "clipboardData" | "dataTransfer", value: unknown) => act(async () => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, key, { value });
+      target.dispatchEvent(event);
+    });
+    const chips = () => [...container.querySelectorAll<HTMLElement>(".attachment")];
+
+    it("uploads a pasted screenshot with visible progress and keeps it in the saved draft", async () => {
+      await render();
+      await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image()]));
+      expect(container.querySelector("textarea")!.value).toBe(savedDraft.text);
+      expect(uploads[0]!.file.name).toMatch(/^Pasted image \d\d\.\d\d\.\d\d\.png$/);
+      await act(async () => uploads[0]!.progress(0.4));
+      expect(chips()[0]!.className).toContain("attachment-uploading");
+      expect(chips()[0]!.textContent).toContain("Uploading 40%");
+      expect(sendButton().disabled).toBe(true);
+      await act(async () => uploads[0]!.finish({ id: "stored", name: uploads[0]!.file.name, mime: "image/png", size: 6 }));
+      expect(chips()).toHaveLength(1);
+      expect(chips()[0]!.className).not.toContain("attachment-uploading");
+      expect(chips()[0]!.querySelector("img")!.getAttribute("src")).toBe("blob:local-preview");
+      expect(sendButton().disabled).toBe(false);
+      await advance(400);
+      expect(write).toHaveBeenCalledWith("/bots/shared/draft", expect.objectContaining({ attachments: [expect.objectContaining({ id: "stored" })] }), "PUT");
+    });
+
+    it("explains refused drops and offers Retry when an upload fails", async () => {
+      await render();
+      const panel = container.querySelector(".conversation-panel")!;
+      const dropped = transfer([new File(["x"], "letter.docx", { type: "application/msword" }), image("trail.png")]);
+      await dispatch(panel, "dragenter", "dataTransfer", dropped);
+      expect(container.querySelector(".drop-overlay")?.textContent).toContain("Drop to attach for Shared");
+      await dispatch(panel, "drop", "dataTransfer", dropped);
+      expect(container.querySelector(".drop-overlay")).toBeNull();
+      expect(container.querySelector(".attachment-notice")?.textContent).toContain("letter.docx can't be attached");
+      expect(uploads.map(upload => upload.file.name)).toEqual(["trail.png"]);
+      await act(async () => uploads[0]!.fail(new Error("Hermes is restarting.")));
+      expect(chips()[0]!.className).toContain("attachment-failed");
+      expect(container.querySelector(".attachment-error")?.textContent).toContain("trail.png didn't upload. Hermes is restarting. Retry or remove it to send.");
+      expect(sendButton().disabled).toBe(true);
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Retry uploading trail.png"]')!.click());
+      expect(uploads).toHaveLength(2);
+      await act(async () => uploads[1]!.finish({ id: "trail", name: "trail.png", mime: "image/png" }));
+      expect(container.querySelector(".attachment-error")).toBeNull();
+      expect(chips()).toHaveLength(1);
+      expect(sendButton().disabled).toBe(false);
+    });
+
+    it("closes an image preview once its attachment leaves the draft", async () => {
+      await render();
+      await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("map.png")]));
+      await act(async () => uploads[0]!.finish({ id: "map", name: "map.png", mime: "image/png" }));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Preview map.png"]')!.click());
+      expect(container.querySelector(".attachment-preview img")?.getAttribute("src")).toBe("blob:local-preview");
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove map.png"]')!.click());
+      vi.mocked(URL.createObjectURL).mockReturnValue("blob:next-preview");
+      await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("gate.png")]));
+      expect(chips()).toHaveLength(1);
+      expect(container.querySelector(".attachment-preview")).toBeNull();
+    });
+
+    it("adds a finished upload to its own assistant after switching away and back", async () => {
+      bootstrap.bots.push({ ...bootstrap.bots[0]!, id: "other", name: "Other" });
+      const original = vi.mocked(api).getMockImplementation()!;
+      try {
+        await render();
+        await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("map.png")]));
+        const open = (name: string) => act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes(name))!.click());
+        await open("Other");
+        // Without a cached copy, the upload must load the saved draft before adding to it.
+        localStorage.removeItem("agent-interface:draft:one:shared");
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bots/shared/draft" ? gate.then(() => savedDraft as T) : original(path) as Promise<T>);
+        await act(async () => uploads[0]!.finish({ id: "map", name: "map.png", mime: "image/png" }));
+        await open("Shared");
+        await act(async () => release());
+        await advance(300);
+        expect(container.querySelector("textarea")!.value).toBe(savedDraft.text);
+        expect(chips().map(chip => chip.title.split("\n")[0])).toEqual(["map.png"]);
+      } finally { bootstrap.bots.pop(); }
+    });
+
+    it("cancels an upload removed before it finishes", async () => {
+      await render();
+      await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("map.png")]));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Cancel uploading map.png"]')!.click());
+      expect(uploads[0]!.signal.aborted).toBe(true);
+      expect(chips()).toHaveLength(0);
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:local-preview");
+    });
   });
 
   it("pins assistants to the top of home and shows everyone else's latest message", async () => {
