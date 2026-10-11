@@ -66,22 +66,21 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const queue = useRef(Promise.resolve());
   const patch = (id: string, change: Partial<LocalUpload>) =>
     setUploads(current => current.map(item => item.id === id ? { ...item, ...change } : item));
-  // Returns false when the account changed meanwhile, so nothing was written.
-  const attach = async (uploadUser: string, uploadBot: string, result: FileRef, epoch: number) => {
+  // Returns false when the upload was canceled or the account changed meanwhile, so nothing was written.
+  const attach = async (uploadUser: string, uploadBot: string, result: FileRef, live: () => boolean) => {
     const shown = () => latestDraft.current.botId === uploadBot && latestDraft.current.userId === uploadUser;
     // A draft still loading from the server would replace a file added to it now.
     const settle = async () => {
-      for (let waited = 0; shown() && !ready.current && waited < 20_000; waited += 250)
-        await new Promise(resolve => setTimeout(resolve, 250));
-      return epoch === identityEpoch.current;
+      while (live() && shown() && !ready.current) await new Promise(resolve => setTimeout(resolve, 250));
     };
     const visible = () => {
-      if (!shown() || !ready.current) return false;
+      if (!live() || !shown() || !ready.current) return false;
       setDraft(previous => previous.botId === uploadBot && previous.userId === uploadUser
         ? { ...previous, attachments: [...previous.attachments, result], dirty: true } : previous);
       return true;
     };
-    if (!await settle()) return false;
+    await settle();
+    if (!live()) return false;
     if (visible()) return true;
     // The person moved to another assistant; add the file to the draft it was meant for.
     const key = draftKey(uploadUser, uploadBot);
@@ -89,11 +88,13 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     if (!saved) {
       const loaded = await api<Draft | null>(`/bots/${encodeURIComponent(uploadBot)}/draft`);
       // They may have come back while the saved draft loaded.
-      if (!await settle()) return false;
+      await settle();
+      if (!live()) return false;
       if (visible()) return true;
       saved = localRead<Draft>(key) ?? loaded ?? { text: "", attachments: [] };
     }
     const target = { ...saved, attachments: [...saved.attachments, result], dirty: true };
+    if (!live()) return false;
     localSave(key, target);
     void write(`/bots/${encodeURIComponent(uploadBot)}/draft`, target, "PUT").catch(() => {});
     return true;
@@ -107,7 +108,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         onProgress: sent => patch(item.id, sent >= 1 ? { progress: 1, status: "processing" } : { progress: sent }),
       });
       if (controller.signal.aborted || epoch !== identityEpoch.current) return;
-      if (!await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size }, epoch)) return;
+      const live = () => !controller.signal.aborted && epoch === identityEpoch.current;
+      if (!await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size }, live)) return;
       if (item.preview) setPreviews(current => ({ ...current, [result.id]: { url: item.preview!, botId: item.botId } }));
       setUploads(current => current.filter(entry => entry.id !== item.id));
     } catch (e) {
