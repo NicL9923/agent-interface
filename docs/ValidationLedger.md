@@ -1,5 +1,25 @@
 # Validation ledger
 
+## October 11 composer attachments
+
+Source fingerprint `sha256:dd01443a7299be8276cba44dc51bb63899bd02cca8f4952507353bd7674c53a5`.
+The complete web suite passed 509 tests across 48 files on Node 26.10 and Node
+24.21, and the production build and typecheck passed. Python worker files were
+unchanged.
+
+Pasting a screenshot, dropping files on the conversation and choosing files all
+use one ordered upload queue with progress, cancel, Retry and image preview.
+WebKit screenshots against the preview fixture covered pasting, the drop overlay,
+uploading, a refused `.docx`, a failed upload with Retry, and the preview dialog
+at desktop light and phone dark sizes. Headless Chromium and the T3 preview could
+not capture screenshots on the Mac mini during this run.
+
+The independent GPT-6.1 Sol review found late cross-assistant draft writes after
+an account change or cancellation, a lost attachment when switching back during a
+draft load, a stale preview, and missing unmount cleanup. All are fixed, with UI
+regression tests for the switch-back and preview cases; two re-reviews found no
+remaining issue. The native iOS composer is unchanged.
+
 ## October 9 app release 1f1335b
 
 PR #53 merged at `1f1335bf9c92f9394b76dd3d1f84c0ead16d2d70`. The release is live at `https://agentui.wildflowersranch.com`,
