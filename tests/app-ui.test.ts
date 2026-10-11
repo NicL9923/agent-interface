@@ -330,6 +330,41 @@ describe("conversation state", () => {
       expect(sendButton().disabled).toBe(false);
     });
 
+    it("closes an image preview once its attachment leaves the draft", async () => {
+      await render();
+      await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("map.png")]));
+      await act(async () => uploads[0]!.finish({ id: "map", name: "map.png", mime: "image/png" }));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Preview map.png"]')!.click());
+      expect(container.querySelector(".attachment-preview img")?.getAttribute("src")).toBe("blob:local-preview");
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove map.png"]')!.click());
+      vi.mocked(URL.createObjectURL).mockReturnValue("blob:next-preview");
+      await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("gate.png")]));
+      expect(chips()).toHaveLength(1);
+      expect(container.querySelector(".attachment-preview")).toBeNull();
+    });
+
+    it("adds a finished upload to its own assistant after switching away and back", async () => {
+      bootstrap.bots.push({ ...bootstrap.bots[0]!, id: "other", name: "Other" });
+      const original = vi.mocked(api).getMockImplementation()!;
+      try {
+        await render();
+        await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("map.png")]));
+        const open = (name: string) => act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes(name))!.click());
+        await open("Other");
+        // Without a cached copy, the upload must load the saved draft before adding to it.
+        localStorage.removeItem("agent-interface:draft:one:shared");
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bots/shared/draft" ? gate.then(() => savedDraft as T) : original(path) as Promise<T>);
+        await act(async () => uploads[0]!.finish({ id: "map", name: "map.png", mime: "image/png" }));
+        await open("Shared");
+        await act(async () => release());
+        await advance(300);
+        expect(container.querySelector("textarea")!.value).toBe(savedDraft.text);
+        expect(chips().map(chip => chip.title.split("\n")[0])).toEqual(["map.png"]);
+      } finally { bootstrap.bots.pop(); }
+    });
+
     it("cancels an upload removed before it finishes", async () => {
       await render();
       await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("map.png")]));

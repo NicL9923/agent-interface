@@ -57,6 +57,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   }, [botId, userId]);
   const latestDraft = useRef(draft);
   latestDraft.current = draft;
+  const ready = useRef(draftReady);
+  ready.current = draftReady;
   const [uploads, setUploads] = useState<LocalUpload[]>([]);
   // Object URLs for attachments uploaded from this device, so chips show the image without a download.
   const [previews, setPreviews] = useState<Record<string, { url: string; botId: string }>>({});
@@ -64,19 +66,37 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const queue = useRef(Promise.resolve());
   const patch = (id: string, change: Partial<LocalUpload>) =>
     setUploads(current => current.map(item => item.id === id ? { ...item, ...change } : item));
-  const attach = async (uploadUser: string, uploadBot: string, result: FileRef) => {
-    const current = latestDraft.current;
-    if (current.botId === uploadBot && current.userId === uploadUser) {
+  // Returns false when the account changed meanwhile, so nothing was written.
+  const attach = async (uploadUser: string, uploadBot: string, result: FileRef, epoch: number) => {
+    const shown = () => latestDraft.current.botId === uploadBot && latestDraft.current.userId === uploadUser;
+    // A draft still loading from the server would replace a file added to it now.
+    const settle = async () => {
+      for (let waited = 0; shown() && !ready.current && waited < 20_000; waited += 250)
+        await new Promise(resolve => setTimeout(resolve, 250));
+      return epoch === identityEpoch.current;
+    };
+    const visible = () => {
+      if (!shown() || !ready.current) return false;
       setDraft(previous => previous.botId === uploadBot && previous.userId === uploadUser
         ? { ...previous, attachments: [...previous.attachments, result], dirty: true } : previous);
-      return;
-    }
+      return true;
+    };
+    if (!await settle()) return false;
+    if (visible()) return true;
     // The person moved to another assistant; add the file to the draft it was meant for.
     const key = draftKey(uploadUser, uploadBot);
-    const saved = localRead<Draft>(key) ?? await api<Draft | null>(`/bots/${encodeURIComponent(uploadBot)}/draft`) ?? { text: "", attachments: [] };
+    let saved = localRead<Draft>(key);
+    if (!saved) {
+      const loaded = await api<Draft | null>(`/bots/${encodeURIComponent(uploadBot)}/draft`);
+      // They may have come back while the saved draft loaded.
+      if (!await settle()) return false;
+      if (visible()) return true;
+      saved = localRead<Draft>(key) ?? loaded ?? { text: "", attachments: [] };
+    }
     const target = { ...saved, attachments: [...saved.attachments, result], dirty: true };
     localSave(key, target);
     void write(`/bots/${encodeURIComponent(uploadBot)}/draft`, target, "PUT").catch(() => {});
+    return true;
   };
   const run = async (item: LocalUpload, controller: AbortController, epoch: number) => {
     if (controller.signal.aborted || epoch !== identityEpoch.current) return;
@@ -87,7 +107,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         onProgress: sent => patch(item.id, sent >= 1 ? { progress: 1, status: "processing" } : { progress: sent }),
       });
       if (controller.signal.aborted || epoch !== identityEpoch.current) return;
-      await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size });
+      if (!await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size }, epoch)) return;
       if (item.preview) setPreviews(current => ({ ...current, [result.id]: { url: item.preview!, botId: item.botId } }));
       setUploads(current => current.filter(entry => entry.id !== item.id));
     } catch (e) {
@@ -101,7 +121,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     const controller = new AbortController();
     controllers.current.set(item.id, controller);
     const epoch = identityEpoch.current;
-    // One at a time keeps attachments in the order they were added.
+    // One at a time keeps a batch in the order it was added. A retried file joins after those already uploaded.
     queue.current = queue.current.then(() => run(item, controller, epoch));
   };
   const upload = (files: File[], target: string) => {
@@ -133,6 +153,13 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     setUploads(current => { current.forEach(item => item.preview && URL.revokeObjectURL(item.preview)); return []; });
     setPreviews(current => { Object.values(current).forEach(item => URL.revokeObjectURL(item.url)); return {}; });
   };
+  const latest = useRef({ uploads, previews });
+  latest.current = { uploads, previews };
+  useEffect(() => () => {
+    controllers.current.forEach(controller => controller.abort());
+    latest.current.uploads.forEach(item => item.preview && URL.revokeObjectURL(item.preview));
+    Object.values(latest.current.previews).forEach(item => URL.revokeObjectURL(item.url));
+  }, []);
   // Release previews once their attachment leaves this assistant's draft, by removal or by sending.
   useEffect(() => {
     if (!draft.botId) return;

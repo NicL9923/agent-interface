@@ -224,7 +224,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
             }))
           }
           onPaste={(event) => {
-            const files = pastedFiles(event.clipboardData);
+            const files = event.clipboardData ? pastedFiles(event.clipboardData) : [];
             if (!files.length) return;
             event.preventDefault();
             const at = new Date();

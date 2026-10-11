@@ -19,14 +19,18 @@ export function AttachmentTray({ attachments, uploads, previews, canOpen, onRemo
   onCancel(id: string): void;
   onRetry(id: string): void;
 }) {
-  const [preview, setPreview] = useState<Preview | null>(null);
+  const [opened, setPreview] = useState<Preview | null>(null);
+  const urlOf = (file: FileRef) => previews[file.id]?.url ?? (canOpen ? file.url || `/api/files/${encodeURIComponent(file.id)}` : undefined);
+  // A preview closes once its file leaves the tray, by removal or by sending. Its local image survives the upload finishing.
+  const preview = opened && [...attachments.map(urlOf), ...uploads.map(item => item.preview)].includes(opened.url) ? opened : null;
+  useEffect(() => { if (opened && !preview) setPreview(null); }, [opened, preview]);
   if (!attachments.length && !uploads.length) return null;
   const failed = uploads.filter(item => item.status === "failed");
   const busy = uploads.length - failed.length;
   return <div className="attachment-tray">
     <ul className="attachment-list" aria-label="Attachments">
       {attachments.map(file => {
-        const url = previews[file.id]?.url ?? (canOpen ? file.url || `/api/files/${encodeURIComponent(file.id)}` : undefined);
+        const url = urlOf(file);
         return <AttachmentChip key={file.id} name={file.name} mime={file.mime} url={url}
           meta={[kindLabel(file.name, file.mime), file.size !== undefined && formatBytes(file.size)].filter(Boolean).join(" · ")}
           onOpen={url ? () => file.mime.startsWith("image/") ? setPreview({ name: file.name, url, size: file.size }) : window.open(url, "_blank", "noopener") : undefined}
