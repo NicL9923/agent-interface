@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ActivityState, Bootstrap, Bot, SubmissionReceipt } from "../shared/types";
 import type { VoiceState } from "../shared/voice";
 import { Avatar } from "../components/Avatar";
@@ -6,7 +7,9 @@ import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { write } from "../client-api";
-import type { Draft, Pending, SavedConversation } from "./storage";
+import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
+import { AttachmentTray, DropOverlay } from "./AttachmentTray";
+import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
 function useComposerInput(text: string, botId: string) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -36,7 +39,58 @@ function useComposerInput(text: string, botId: string) {
   }, [fitComposer]);
   return { ref };
 }
-export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploading, upload, pending, receipt, sending, send, retry, reviewed, setReviewed, refresh, report }: {
+// The whole conversation accepts dropped files. Drops elsewhere are refused so the browser never navigates away to the file.
+function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files: File[]) => void) {
+  const [panel, setPanel] = useState<HTMLElement | null>(null);
+  const [over, setOver] = useState(false);
+  const dropped = useRef(onDrop);
+  dropped.current = onDrop;
+  useEffect(() => {
+    const target = footer.current?.closest<HTMLElement>(".conversation-panel") ?? null;
+    setPanel(target);
+    if (!target) return;
+    let depth = 0;
+    const carriesFiles = (event: DragEvent) => !!event.dataTransfer?.types.includes("Files");
+    const enter = (event: DragEvent) => { if (!carriesFiles(event)) return; depth++; setOver(true); };
+    const leave = (event: DragEvent) => { if (carriesFiles(event) && --depth <= 0) { depth = 0; setOver(false); } };
+    const overPanel = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer!.dropEffect = "copy";
+    };
+    const drop = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      setOver(false);
+      dropped.current(Array.from(event.dataTransfer!.files));
+    };
+    const refuse = (event: DragEvent) => {
+      if (!carriesFiles(event) || target.contains(event.target as Node)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+    };
+    const reset = () => { depth = 0; setOver(false); };
+    target.addEventListener("dragenter", enter);
+    target.addEventListener("dragleave", leave);
+    target.addEventListener("dragover", overPanel);
+    target.addEventListener("drop", drop);
+    window.addEventListener("dragover", refuse);
+    window.addEventListener("drop", refuse);
+    window.addEventListener("dragend", reset);
+    return () => {
+      target.removeEventListener("dragenter", enter);
+      target.removeEventListener("dragleave", leave);
+      target.removeEventListener("dragover", overPanel);
+      target.removeEventListener("drop", drop);
+      window.removeEventListener("dragover", refuse);
+      window.removeEventListener("drop", refuse);
+      window.removeEventListener("dragend", reset);
+    };
+  }, [footer]);
+  return { panel, over };
+}
+export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, reviewed, setReviewed, refresh, report }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
@@ -47,8 +101,12 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   draft: Draft;
   setDraft(update: (current: Draft) => Draft): void;
   draftReady: boolean;
+  uploads: LocalUpload[];
+  previews: Record<string, { url: string }>;
   uploading: boolean;
-  upload(files: FileList | null): Promise<void>;
+  upload(files: File[], botId: string): void;
+  retryUpload(id: string): void;
+  cancelUpload(id: string): void;
   pending: Pending | null;
   receipt: SubmissionReceipt | null;
   sending: boolean;
@@ -68,10 +126,33 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const input = useComposerInput(draft.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
   const fileInput = useRef<HTMLInputElement>(null);
-  const attachDisabled = !draftReady || !boot.capabilities.uploads.supported || uploading || draft.attachments.length >= 10;
+  const slots = MAX_ATTACHMENTS - draft.attachments.length - uploads.length;
+  const attachUnavailable = !boot.capabilities.uploads.supported
+    ? boot.capabilities.uploads.reason || "Hermes can't receive files right now."
+    : !draftReady || draft.botId !== botId ? "Your draft is still loading."
+    : slots <= 0 ? `A message can carry up to ${MAX_ATTACHMENTS} attachments.` : undefined;
   const submitting = sending || pending !== null;
+  const [attachNotice, setAttachNotice] = useState<string[]>([]);
+  const addFiles = (files: File[]) => {
+    if (!files.length) return;
+    if (attachUnavailable) return setAttachNotice([attachUnavailable]);
+    const problems: string[] = [];
+    const accepted: File[] = [];
+    for (const file of files) {
+      const prepared = prepareUpload(file);
+      if ("error" in prepared) problems.push(prepared.error);
+      else accepted.push(prepared.file);
+    }
+    if (accepted.length > slots)
+      problems.push(`A message can carry up to ${MAX_ATTACHMENTS} attachments, so ${accepted.length - slots} of these ${accepted.length - slots === 1 ? "wasn't" : "weren't"} added.`);
+    setAttachNotice(problems);
+    upload(accepted.slice(0, slots), botId);
+  };
+  const footer = useRef<HTMLElement>(null);
+  const drop = useFileDrop(footer, addFiles);
   return (
-    <footer className="composer-area">
+    <footer className="composer-area" ref={footer}>
+      {drop.over && drop.panel && createPortal(<DropOverlay botName={selected.name} unavailable={attachUnavailable} />, drop.panel)}
       {state === "interrupted" && (
         <label className="interruption-review">
           <input
@@ -114,28 +195,15 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           void send();
         }}
       >
-        <div className="attachment-list">
-          {draft.attachments.map((file) => (
-            <span key={file.id}>
-              {file.name}
-              <button
-                type="button"
-                aria-label={`Remove ${file.name}`}
-                onClick={() =>
-                  setDraft((previous) => ({
-                    ...previous,
-                    dirty: true,
-                    attachments: previous.attachments.filter(
-                      (f) => f.id !== file.id,
-                    ),
-                  }))
-                }
-              >
-                <Icon name="close" size={14} />
-              </button>
-            </span>
-          ))}
-        </div>
+        {!!attachNotice.length && <div className="attachment-notice" role="alert">
+          <Icon name="alert" size={15} />
+          <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
+          <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setAttachNotice([])}><Icon name="close" size={14} /></button>
+        </div>}
+        <AttachmentTray attachments={draft.botId === botId ? draft.attachments : []} uploads={uploads} previews={previews}
+          canOpen={boot.capabilities.generatedFiles.supported}
+          onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
+          onCancel={cancelUpload} onRetry={retryUpload} />
         <label className="sr-only" htmlFor="message">
           Message {selected.name}
         </label>
@@ -155,6 +223,13 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               text: event.target.value,
             }))
           }
+          onPaste={(event) => {
+            const files = pastedFiles(event.clipboardData);
+            if (!files.length) return;
+            event.preventDefault();
+            const at = new Date();
+            addFiles(files.map((file, index) => namePastedFile(file, at, index)));
+          }}
           onKeyDown={(event) => {
             if (
               event.key === "Enter" &&
@@ -187,8 +262,8 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
             type="button"
             className="composer-tool"
             aria-label="Attach images, PDFs, or text"
-            title={boot.capabilities.uploads.reason || "Attach images, PDFs, or text"}
-            disabled={attachDisabled}
+            title={attachUnavailable || "Attach images, PDFs, or text. You can also paste or drop them here."}
+            disabled={!!attachUnavailable}
             onClick={() => fileInput.current?.click()}
           >
             <Icon name="attach" size={18} />
@@ -197,11 +272,11 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
             ref={fileInput}
             hidden
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain"
+            accept={UPLOAD_ACCEPT}
             multiple
-            disabled={attachDisabled}
+            disabled={!!attachUnavailable}
             onChange={(event) => {
-              void upload(event.target.files);
+              addFiles(Array.from(event.target.files ?? []));
               event.target.value = "";
             }}
           />
@@ -215,7 +290,6 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
           </div>
-          {uploading && <span className="composer-hint" role="status">Uploading…</span>}
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
             title={boot.capabilities.stop.reason || "Stop response"}

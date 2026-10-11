@@ -630,29 +630,6 @@ a {
   text-align: center;
   margin: 11px 0 0;
 }
-.attachment-list {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.attachment-list > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 12px;
-  background: var(--accent-soft);
-  border-radius: 8px;
-  padding: 5px 8px;
-  margin-bottom: 10px;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.attachment-list button {
-  border: 0;
-  padding: 3px;
-  margin-left: 2px;
-  border-radius: 6px;
-}
 .notice {
   overflow-wrap: anywhere;
   padding: 12px 25px;

@@ -10,6 +10,17 @@ export type Draft = {
   userId?: string;
   dirty?: boolean;
 };
+// A file still on its way to Hermes. It joins the draft's attachments once uploaded.
+export type LocalUpload = {
+  id: string;
+  botId: string;
+  userId: string;
+  file: File;
+  preview?: string;
+  progress: number;
+  status: "queued" | "uploading" | "processing" | "failed";
+  error?: string;
+};
 export type Pending = {
   requestId: string;
   botId: string;

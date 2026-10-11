@@ -33,6 +33,7 @@ import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
+import { formatBytes, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -99,7 +100,7 @@ const fileRef = z.object({
   size: z.number().optional(),
   url: z.string().optional(),
 });
-const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(10).default([]) });
+const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]) });
 function failure(statusCode: number, message: string) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -127,7 +128,7 @@ export async function createApp(
   await app.register(cookie);
   await app.register(websocket, {options: {maxPayload: 256 * 1024}});
   await app.register(multipart, {
-    limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+    limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
   await installAuth(app, store, config, options.verifyGoogle);
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
@@ -349,7 +350,7 @@ export async function createApp(
       .object({
         requestId: z.string().uuid(),
         text: z.string().max(50000),
-        attachments: z.array(fileRef).max(10).default([]),
+        attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]),
         reviewedInterruption: z.boolean().default(false),
         reviewedUncertain: z.boolean().default(false),
       })
@@ -510,19 +511,10 @@ export async function createApp(
     await requireCapability("uploads");
     const file = await req.file();
     if (!file) throw failure(400, "No file provided");
-    if (
-      ![
-        "image/png",
-        "image/jpeg",
-        "image/webp",
-        "image/gif",
-        "application/pdf",
-        "text/plain",
-      ].includes(file.mimetype)
-    )
-      throw failure(415, "Use an image, PDF, or plain-text file");
+    if (!(UPLOAD_MIME_TYPES as readonly string[]).includes(file.mimetype))
+      throw failure(415, `Use ${UPLOAD_KINDS}.`);
     const data = await file.toBuffer();
-    if (file.file.truncated) throw failure(413, "File exceeds 20 MB");
+    if (file.file.truncated) throw failure(413, `${file.filename || "This file"} is larger than ${formatBytes(MAX_UPLOAD_BYTES)}.`);
     return runtime.upload(params(req).id, {
       name: file.filename,
       mime: file.mimetype,

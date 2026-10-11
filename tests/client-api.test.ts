@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, clearResponseCache, setCsrf } from '../src/client-api.js';
+import { api, clearResponseCache, setCsrf, uploadFile } from '../src/client-api.js';
 
 beforeEach(()=>{vi.useFakeTimers();setCsrf('current-session-csrf');clearResponseCache();});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();setCsrf('');});
@@ -104,5 +104,55 @@ describe('conditional reads',()=>{
     expect([validator(fetch,64),validator(fetch,66),validator(fetch,67)]).toEqual(['W/"0"',null,'W/"0"']);
     await api('/large');await api('/large');
     expect(validator(fetch,69)).toBeNull();
+  });
+});
+
+describe('attachment uploads',()=>{
+  class FakeRequest{
+    static last:FakeRequest;
+    upload:{onprogress?:(event:{loaded:number;total:number;lengthComputable:boolean})=>void}={};
+    headers:Record<string,string>={};status=0;responseText='';sent?:FormData;
+    onload?:()=>void;onerror?:()=>void;onabort?:()=>void;
+    constructor(){FakeRequest.last=this;}
+    open(){}
+    setRequestHeader(name:string,value:string){this.headers[name]=value;}
+    send(body:FormData){this.sent=body;}
+    abort(){this.onabort?.();}
+    respond(status:number,body:unknown){this.status=status;this.responseText=JSON.stringify(body);this.onload?.();}
+  }
+  beforeEach(()=>vi.stubGlobal('XMLHttpRequest',FakeRequest));
+  const photo=()=>new File(['pixels'],'photo.png',{type:'image/png'});
+
+  it('reports progress, sends the session token and returns the stored file',async()=>{
+    const progress:number[]=[];
+    const pending=uploadFile('/bots/b/uploads',photo(),{onProgress:sent=>progress.push(sent)});
+    const request=FakeRequest.last;
+    expect(request.headers['X-CSRF-Token']).toBe('current-session-csrf');
+    expect((request.sent!.get('file') as File).name).toBe('photo.png');
+    request.upload.onprogress!({loaded:3,total:6,lengthComputable:true});
+    request.respond(200,{id:'f1',name:'photo.png',mime:'image/png'});
+    await expect(pending).resolves.toMatchObject({id:'f1'});
+    expect(progress).toEqual([0.5]);
+  });
+
+  it('explains a rejected upload and gives up only after progress stalls',async()=>{
+    const rejected=uploadFile('/bots/b/uploads',photo());
+    FakeRequest.last.respond(415,{error:'Use PNG images.'});
+    await expect(rejected).rejects.toMatchObject({status:415,message:'Use PNG images.'});
+    const stalled=uploadFile('/bots/b/uploads',photo());
+    let settled=false;stalled.catch(()=>{}).finally(()=>{settled=true;});
+    const failure=expect(stalled).rejects.toMatchObject({status:504,message:expect.stringContaining('stopped making progress')});
+    await vi.advanceTimersByTimeAsync(59_000);
+    FakeRequest.last.upload.onprogress!({loaded:1,total:6,lengthComputable:true});
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);await failure;
+  });
+
+  it('treats cancellation as cancellation, not a connection failure',async()=>{
+    const controller=new AbortController();
+    const pending=uploadFile('/bots/b/uploads',photo(),{signal:controller.signal});
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({name:'AbortError'});
   });
 });

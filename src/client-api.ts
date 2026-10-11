@@ -102,3 +102,43 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export function write<T>(path: string, value: unknown, method = "POST") {
   return api<T>(path, { method, body: JSON.stringify(value) });
 }
+// Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
+export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stalled = false;
+    const watch = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { stalled = true; request.abort(); }, 60_000);
+    };
+    const finish = (settle: () => void) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      settle();
+    };
+    const cancel = () => request.abort();
+    request.open("POST", `/api${path}`);
+    request.setRequestHeader("X-CSRF-Token", csrf);
+    request.upload.onprogress = event => { watch(); if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
+    request.onload = () => finish(() => {
+      let data: Record<string, any> = {};
+      try { data = request.responseText ? JSON.parse(request.responseText) : {}; }
+      catch {
+        if (request.status < 300) return reject(new ApiError("The app returned an unreadable response. Try attaching the file again.", 502, "INVALID_RESPONSE"));
+      }
+      if (request.status >= 200 && request.status < 300) resolve(data as T);
+      else reject(new ApiError(data?.detail || data?.error || `Upload failed (${request.status})`, request.status, data?.code));
+    });
+    request.onerror = () => finish(() => reject(new ApiError("Can't reach the app. Check the connection and try again.", 503, "CONNECTION_UNAVAILABLE")));
+    request.onabort = () => finish(() => reject(stalled
+      ? new ApiError("The upload stopped making progress. Try again.", 504, "CONNECTION_UNAVAILABLE")
+      : new DOMException("Upload canceled", "AbortError")));
+    if (signal?.aborted) return reject(new DOMException("Upload canceled", "AbortError"));
+    signal?.addEventListener("abort", cancel, { once: true });
+    const form = new FormData();
+    form.append("file", file);
+    watch();
+    request.send(form);
+  });
+}
