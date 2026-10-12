@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.mocked(api).mockImplementation(async <T>(path: string) => {
     const result = path === "/bootstrap" ? bootstrap
       : path === "/bots/shared/draft" ? savedDraft
-      : path === "/bots/shared/conversation" ? conversation
+      : path.startsWith("/bots/shared/conversation?") ? conversation
       : null;
     return result as T;
   });
@@ -178,7 +178,7 @@ describe("conversation state", () => {
     await act(async () => stop.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
-      if (path === "/bots/shared/conversation") throw new Error("Disconnected");
+      if (path.startsWith("/bots/shared/conversation?")) throw new Error("Disconnected");
       return (path === "/bootstrap" ? bootstrap : savedDraft) as T;
     });
     await advance(1500);
@@ -424,7 +424,7 @@ describe("conversation state", () => {
       conversation = { ...conversation, activity: { state: "idle" }, messages: [{ id: "answer", role: "assistant", text: "Earlier" }] };
       let finish!: () => void;
       const original = vi.mocked(api).getMockImplementation()!;
-      vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bots/other/conversation"
+      vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/bots/other/conversation?")
         ? await new Promise<T>(resolve => { finish = () => resolve({ ...conversation, botId: "other", messages: [{ id: "latest", role: "assistant", text: "Latest" }] } as T); })
         : original(path) as Promise<T>);
       await render(); await advance(20);
@@ -434,14 +434,9 @@ describe("conversation state", () => {
       transcript.scrollTop = 0;
       await act(async () => transcript.dispatchEvent(new Event("scroll")));
       await advance(310);
-      expect(localStorage.getItem("agent-interface:scroll-v2:one:other")).toBeNull();
       expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/other/read-position")).toBe(false);
-      // A clamp event can also arrive after the response but before the restore frame.
+      // The response is placed at the latest message before paint, leaving no gap for a clamp.
       await act(async () => finish());
-      transcript.scrollTop = 0;
-      await act(async () => transcript.dispatchEvent(new Event("scroll")));
-      expect(localStorage.getItem("agent-interface:scroll-v2:one:other")).toBeNull();
-      await advance(20);
       expect(transcript.scrollTop).toBe(2000);
     } finally { bootstrap.bots.pop(); }
   });
@@ -472,7 +467,7 @@ describe("conversation state", () => {
     ] };
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
       ? { ...bootstrap, preferences: { ...defaultPreferences, startPage: "assistant", presentation: "advanced" } }
-      : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
+      : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
     await render();
     const accordions = container.querySelectorAll(".reasoning-calls");
     expect(accordions).toHaveLength(1);
@@ -539,7 +534,7 @@ describe("conversation state", () => {
       conversation = { ...conversation, activity: { state: "working" } };
       const original = vi.mocked(api).getMockImplementation()!;
       vi.mocked(api).mockImplementation(async <T>(path: string) => path.endsWith("/draft") ? { text: "", attachments: [] } as T
-        : path === "/bots/other/conversation" ? { ...conversation, botId: "other" } as T : original(path) as Promise<T>);
+        : path.startsWith("/bots/other/conversation?") ? { ...conversation, botId: "other" } as T : original(path) as Promise<T>);
       let reject!: (error: Error) => void;
       vi.mocked(write).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
       await render(); await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!.click());
@@ -599,7 +594,7 @@ describe("conversation state", () => {
     expect(container.querySelector(".transcript")!.textContent).not.toContain("Checking the working directory.");
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
       ? { ...bootstrap, preferences: {...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
-      : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
+      : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
     await advance(8000);
     expect(container.querySelectorAll('[data-tool-call-id="call-1"]')).toHaveLength(1);
     expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(2);
@@ -618,11 +613,11 @@ describe("conversation state", () => {
       toolCalls: [{ id: "live-call", name: "terminal", status: "running", arguments: "pwd" }] };
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
       ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
-      : path === "/bots/shared/conversation" ? conversation : savedDraft) as T);
+      : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
     await render();
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Running");
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
-      if (path === "/bots/shared/conversation") throw new Error("Disconnected");
+      if (path.startsWith("/bots/shared/conversation?")) throw new Error("Disconnected");
       return (path === "/bootstrap" ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } } : savedDraft) as T;
     });
     await advance(1500);
@@ -633,7 +628,7 @@ describe("conversation state", () => {
     let resolveDraft!: (value: typeof savedDraft) => void;
     const draftResponse = new Promise<typeof savedDraft>((resolve) => { resolveDraft = resolve; });
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
-      if (path === "/bots/shared/conversation") throw new Error("Hermes is unavailable");
+      if (path.startsWith("/bots/shared/conversation?")) throw new Error("Hermes is unavailable");
       return (path === "/bootstrap" ? bootstrap : await draftResponse) as T;
     });
     await render();

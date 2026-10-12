@@ -1,5 +1,5 @@
-import { memo, useMemo, useState } from "react";
-import type { RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, AttentionRequest, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { write } from "../client-api";
 import { Avatar } from "../components/Avatar";
@@ -14,7 +14,8 @@ import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import type { SavedConversation } from "./storage";
-export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, onScroll, onCreate, onDraft }: {
+import type { useConversation } from "./use-conversation";
+export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, content, history, onScroll, onCreate, onDraft }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -32,6 +33,8 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
   workerUpdate: ServiceWorker | null;
   notifications: ReturnType<typeof useDeviceNotifications>;
   scroll: RefObject<HTMLDivElement | null>;
+  content: RefCallback<HTMLDivElement>;
+  history: ReturnType<typeof useConversation>["history"];
   onScroll(): void;
   onCreate(): void;
   onDraft(text: string): void;
@@ -78,6 +81,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
         </div>
       )}
       <NotificationOnboarding notifications={notifications} />
+      <div className="transcript-frame">
       <div
         className="transcript"
         ref={scroll}
@@ -85,6 +89,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
         aria-label="Conversation"
         tabIndex={0}
       >
+      <div className="transcript-content" ref={content}>
         {!selected && connectionLost ? (
           <ConnectionPanel connection={boot.connection} offline={offline}
             appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
@@ -117,9 +122,10 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
             )}
           </div>
         ) : !conversation && !connectionLost ? (
-          <div className="empty-state" role="status"><p>Opening your conversation…</p></div>
+          <HistorySkeleton />
         ) : blocks.length ? (
           <>
+            <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
             <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id} />
           </>
         ) : !showActivity ? (
@@ -165,8 +171,56 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
           .map((approval) => <ApprovalCard key={`${botId}:${approval.id}`} approval={approval} botId={botId}
             supported={boot.capabilities.approvals.supported} report={setError} />)}
       </div>
+      </div>
+      {selected && conversation && !history.atLatest && (
+        <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={() => {
+          history.jumpToLatest();
+          // The button disappears, so keyboard focus continues from the transcript.
+          scroll.current?.focus({ preventScroll: true });
+        }}>
+          <Icon name="latest" size={16} />
+          {history.unseen ? `${history.unseen} new ${history.unseen === 1 ? "message" : "messages"}` : "Jump to latest"}
+        </button>
+      )}
+      </div>
     </>
   );
+}
+function HistorySkeleton() {
+  return <div className="history-skeleton" role="status">
+    <span className="sr-only">Opening your conversation…</span>
+    {["reply", "prompt", "reply long"].map((kind, index) => <div key={index} className={`skeleton-message ${kind}`} aria-hidden="true">
+      <span /><span /><span />
+    </div>)}
+  </div>;
+}
+// Earlier turns load as the reader nears the top. The button serves keyboards and retries.
+function HistoryEdge({ history, scroll, name, disabled }: {
+  history: ReturnType<typeof useConversation>["history"];
+  scroll: RefObject<HTMLDivElement | null>;
+  name: string;
+  disabled: boolean;
+}) {
+  const edge = useRef<HTMLDivElement>(null);
+  const { earlier, loading, failed, loadEarlier } = history;
+  const automatic = earlier && !loading && !failed && !disabled;
+  // A new observer reports at once, so a page that still leaves the edge in view loads the next.
+  useEffect(() => {
+    if (!automatic || !edge.current || !scroll.current || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadEarlier();
+    }, { root: scroll.current, rootMargin: "600px 0px 0px 0px" });
+    observer.observe(edge.current);
+    return () => observer.disconnect();
+  }, [automatic, loadEarlier, scroll]);
+  if (history.complete) return <p className="history-edge history-start">This is the start of your conversation with {name}.</p>;
+  if (!earlier) return null;
+  return <div className="history-edge" ref={edge}>
+    <button type="button" className="with-progress" disabled={loading || disabled} onClick={loadEarlier}>
+      {loading && <Icon name="spinner" className="spin" size={16} />}
+      {loading ? "Loading earlier messages…" : failed ? "Try loading earlier messages again" : "Show earlier messages"}
+    </button>
+  </div>;
 }
 type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[] };
 function turns(conversation: SavedConversation | null, advanced: boolean) {

@@ -34,6 +34,7 @@ import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
+import { historyWindow, MAX_HISTORY_TURNS } from "../shared/history.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -323,6 +324,14 @@ export async function createApp(
   });
   app.get("/api/bots/:id/conversation", async (req) => {
     const result = await runtime.conversation(params(req).id);
+    // Without a window, as for the native app, the whole history is returned.
+    const window = z.object({
+      start: z.string().min(1).max(512).optional(),
+      turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
+    }).parse(req.query);
+    let earlier: number | undefined;
+    if (window.start !== undefined || window.turns !== undefined)
+      ({ messages: result.messages, earlier } = historyWindow(result.messages, window));
     // Attribution augments the canonical Hermes history, never stores a transcript.
     result.messages = result.messages.map((message) => {
       const attribution =
@@ -337,6 +346,7 @@ export async function createApp(
     });
     return {
       ...result,
+      ...(earlier !== undefined ? { earlier } : {}),
       draft: store.personal("drafts", signedIn(req).id, params(req).id),
       readPosition: store.personal(
         "read_positions",
