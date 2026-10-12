@@ -4,10 +4,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
-import { api, clearResponseCache, write } from '../src/client-api';
+import { api, cachedResponse, clearResponseCache, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
+vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 let root:Root,container:HTMLDivElement,boot:Bootstrap,conversation:Conversation;
 let authConfig:{localDevAuth:boolean;googleClientId?:string};
@@ -88,6 +88,65 @@ describe('setup and recovery interface',()=>{
     }finally{size.mockRestore();rects.mockRestore();}
   });
 
+  it('keeps the cached message a reader scrolled to when the first refresh has moved past it',async()=>{
+    const turn=(n:number)=>[{id:`p${n}`,role:'user' as const,text:`Prompt ${n}`},{id:`a${n}`,role:'assistant' as const,text:`Reply ${n}`}];
+    vi.mocked(cachedResponse).mockReturnValue({...conversation,messages:[...turn(0),...turn(1)],earlier:0});
+    let respond!:()=>void;const paths:string[]=[];
+    vi.mocked(api).mockImplementation(async <T>(path:string)=>{
+      if(path==='/bootstrap')return boot as T;
+      if(!path.startsWith('/bots/shared/conversation?'))return null as T;
+      paths.push(path);
+      if(path.includes('start=p0'))return {...conversation,messages:[...turn(0),...turn(1),...turn(2)],earlier:0} as T;
+      return await new Promise<T>(resolve=>{respond=()=>resolve({...conversation,messages:[...turn(1),...turn(2)],earlier:2} as T);});
+    });
+    const size=transcriptSize();
+    try{
+      await renderApp();
+      expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
+      const transcript=container.querySelector<HTMLElement>('.transcript')!;
+      transcript.scrollTop=300;
+      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await act(async()=>respond());
+      expect(paths).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p0']);
+      expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
+      expect(container.querySelector('[data-message-id="a2"]')).not.toBeNull();
+    }finally{size.mockRestore();vi.mocked(cachedResponse).mockReset();}
+  });
+
+  it('holds the reader in place when an image above them finishes loading',async()=>{
+    const resized:(()=>void)[]=[];
+    vi.stubGlobal('ResizeObserver',class{constructor(callback:()=>void){resized.push(callback);}observe(){}disconnect(){}});
+    let readingTop=150;
+    const size=transcriptSize();
+    const rects=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
+      const top=this.classList.contains('transcript')?100:(this as HTMLElement).dataset.messageId==='answer-one'?readingTop:0;
+      return {top,bottom:top+100} as DOMRect;
+    });
+    try{
+      await renderApp();await advance(20);
+      const transcript=container.querySelector<HTMLElement>('.transcript')!;
+      transcript.scrollTop=300;
+      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      readingTop=400;
+      await act(async()=>resized.forEach(callback=>callback()));
+      expect(transcript.scrollTop).toBe(550);
+    }finally{size.mockRestore();rects.mockRestore();}
+  });
+
+  it('counts a reply as new when its text arrives after its reasoning was seen',async()=>{
+    conversation.messages.push({id:'live',role:'assistant',text:'',reasoning:'Checking the pantry'});
+    const size=transcriptSize();
+    try{
+      await renderApp();await advance(20);
+      const transcript=container.querySelector<HTMLElement>('.transcript')!;
+      transcript.scrollTop=300;
+      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      conversation={...conversation,messages:[conversation.messages[0],{id:'live',role:'assistant',text:'Pot roast tonight'}]};
+      await advance(1500);
+      expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
+    }finally{size.mockRestore();}
+  });
+
   it('counts replies that arrive while reading earlier messages and jumps back to them',async()=>{
     const size=transcriptSize();
     try{
@@ -102,6 +161,7 @@ describe('setup and recovery interface',()=>{
       expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
       await act(async()=>container.querySelector<HTMLButtonElement>('.jump-latest')!.click());
       expect(transcript.scrollTop).toBe(2000);
+      expect(document.activeElement).toBe(transcript);
       expect(container.querySelector('.jump-latest')).toBeNull();
       conversation={...conversation,messages:[...conversation.messages,{id:'followed',role:'assistant',text:'Followed reply'}]};
       transcript.scrollTop=1700;

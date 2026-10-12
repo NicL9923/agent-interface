@@ -173,7 +173,11 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
       </div>
       </div>
       {selected && conversation && !history.atLatest && (
-        <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={history.jumpToLatest}>
+        <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={() => {
+          history.jumpToLatest();
+          // The button disappears, so keyboard focus continues from the transcript.
+          scroll.current?.focus({ preventScroll: true });
+        }}>
           <Icon name="latest" size={16} />
           {history.unseen ? `${history.unseen} new ${history.unseen === 1 ? "message" : "messages"}` : "Jump to latest"}
         </button>
