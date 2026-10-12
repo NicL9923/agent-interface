@@ -683,7 +683,14 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       // The run ID proves rows belong to this task, and queued follow-ups share it, so
       // only rows after the latest prompt count. Without a run ID, nothing is removed.
       const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
-      const persisted=run?rows.slice(rows.findLastIndex(row=>row.role==='user')+1).filter(row=>row.role==='assistant'&&row.runId===run):[];
+      const lastPrompt=rows.findLastIndex(row=>row.role==='user');
+      const lastTurn=rows.slice(lastPrompt+1).filter(row=>row.role==='assistant');
+      // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
+      // the saved turn too, unless the snapshot names a newer prompt than the last saved one.
+      // The snapshot's prompt keeps file references that the saved display text drops.
+      const prompt=typeof inflight.user==='string'?inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/,'').trim():'';
+      const savedPrompt=!prompt||prompt===rows[lastPrompt]?.text.trim();
+      const persisted=run?lastTurn.filter(row=>row.runId===run):!active&&savedPrompt?lastTurn:[];
       const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
       const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}

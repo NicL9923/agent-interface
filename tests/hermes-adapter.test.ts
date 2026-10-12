@@ -225,6 +225,25 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     snapshot.inflight = {user:'',assistant:'A brown dog. Sitting in grass.',streaming:true};
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'A brown dog. Sitting in grass.'});
   });
+  it('does not repeat a finished reply that the snapshot still holds after history saved it', async () => {
+    snapshot.messages = [
+      {role:'user',row_id:1,text:'Plan the week',app_run_id:'done-run'},
+      {role:'assistant',row_id:2,text:'',app_run_id:'done-run'},
+      {role:'tool',row_id:3,name:'clarify',tool_call_id:'ask',content:'Tuesday',app_run_id:'done-run'},
+      {role:'assistant',row_id:4,text:'Here is the plan for Tuesday.',app_run_id:'done-run'},
+    ];
+    snapshot.inflight = {user:'Plan the week',assistant:'Here is the plan for Tuesday.',streaming:false};
+    expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
+    // Text the stopped turn never saved still appears, without its saved opening.
+    snapshot.inflight = {user:'Plan the week',assistant:'Here is the plan for Tuesday. Then Wednesday',streaming:false};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'Then Wednesday'});
+    // Saved display text drops the file references the snapshot's prompt still carries.
+    snapshot.inflight = {user:'Plan the week\n@file:"/staging/menu.pdf"',assistant:'Here is the plan for Tuesday.',streaming:false};
+    expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
+    // A snapshot for a prompt history has not saved yet keeps its whole text.
+    snapshot.inflight = {user:'And next week?',assistant:'Here is the plan for Tuesday. Next week too.',streaming:false};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Here is the plan for Tuesday. Next week too.'});
+  });
   it('settles missed streamed completion without adding stale reasoning to canonical history', async () => {
     snapshot.info.running = true;
     await runtime.conversation('shared');
