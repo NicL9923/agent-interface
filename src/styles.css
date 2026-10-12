@@ -365,6 +365,13 @@ a {
 .favorite-toggle.on {
   color: var(--accent);
 }
+.transcript-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .transcript {
   min-height: 0;
   overflow: auto;
@@ -372,6 +379,93 @@ a {
   padding: 30px max(32px, calc((100% - 760px) / 2));
   scrollbar-gutter: stable;
   outline-offset: -4px;
+  /* The app holds the reader's place itself; browser anchoring would move it twice. */
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+.history-edge {
+  display: flex;
+  justify-content: center;
+  margin: 0 0 26px;
+}
+.history-edge button {
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.history-start {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 8px 16px 8px 13px;
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
+  transform: translateX(-50%);
+  animation: jump-latest-in 180ms ease-out;
+}
+.jump-latest:hover:enabled {
+  background: var(--accent-soft);
+}
+.jump-latest.has-new,
+.jump-latest.has-new:hover:enabled {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+.jump-latest:active:enabled {
+  transform: translate(-50%, 1px);
+}
+@keyframes jump-latest-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+}
+.history-skeleton {
+  display: grid;
+  gap: 30px;
+  padding-top: 8px;
+}
+.skeleton-message {
+  display: grid;
+  gap: 10px;
+}
+.skeleton-message.prompt {
+  justify-items: end;
+}
+.skeleton-message span {
+  display: block;
+  height: 12px;
+  width: 72%;
+  border-radius: 6px;
+  background: linear-gradient(100deg, var(--rail) 30%, var(--raised) 50%, var(--rail) 70%);
+  background-size: 300% 100%;
+  animation: skeleton-sweep 1.6s ease-in-out infinite;
+}
+.skeleton-message span:nth-child(2) { width: 88%; }
+.skeleton-message span:nth-child(3) { width: 46%; }
+.skeleton-message.prompt span { width: 52%; height: 40px; border-radius: 18px 18px 4px 18px; }
+.skeleton-message.prompt span + span { display: none; }
+.skeleton-message.long span:nth-child(3) { width: 64%; }
+@keyframes skeleton-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-latest { animation: none; }
+  .skeleton-message span { animation: none; }
 }
 .empty-state {
   max-width: 550px;

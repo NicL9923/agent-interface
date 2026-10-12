@@ -7,6 +7,10 @@ type Cached = { etag: string | null; text: string; data: unknown };
 const responses = new Map<string, Cached>();
 const MAX_RESPONSES = 64, MAX_CACHED_CHARS = 4_000_000;
 let cachedChars = 0, generation = 0;
+/** The last body read for a GET path, to show while it is fetched again. */
+export function cachedResponse<T>(path: string) {
+  return responses.get(path)?.data as T | undefined;
+}
 export function clearResponseCache() {
   responses.clear();
   cachedChars = 0;

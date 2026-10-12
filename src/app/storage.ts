@@ -2,6 +2,8 @@ import type { Conversation, FileRef } from "../shared/types";
 export type SavedConversation = Conversation & {
   draft?: { text: string; attachments: FileRef[] };
   readPosition?: { scrollTop?: number; messageId?: string };
+  /** Messages before the requested window, present only when one was requested. */
+  earlier?: number;
 };
 export type Draft = {
   text: string;
@@ -32,9 +34,6 @@ export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
-// v2 drops offsets that an assistant switch wrongly saved as the top of the conversation.
-export const scrollKey = (user: string, bot: string) =>
-  `agent-interface:scroll-v2:${user}:${bot}`;
 export function localRead<T>(key: string): T | null {
   try {
     return JSON.parse(localStorage.getItem(key) || "null");

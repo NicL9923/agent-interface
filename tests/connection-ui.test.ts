@@ -24,7 +24,7 @@ beforeEach(()=>{
   vi.mocked(api).mockImplementation(async <T>(path:string)=>{
     if(path==='/bootstrap')return await (pendingBootstrap??Promise.resolve(boot)) as T;
     if(path==='/auth/config')return authConfig as T;
-    if(path==='/bots/shared/conversation'){if(hermesDown)throw new Error('Hermes unavailable');return conversation as T;}
+    if(path.startsWith('/bots/shared/conversation?')){if(hermesDown)throw new Error('Hermes unavailable');return conversation as T;}
     if(path==='/bots/shared/draft')return {text:boot.user.id==='one'?'My unsent draft':'Second member draft',attachments:[]} as T;
     return null as T;
   });
@@ -33,19 +33,81 @@ beforeEach(()=>{
 afterEach(async()=>{await act(async()=>root.unmount());container.remove();localStorage.clear();vi.useRealTimers();vi.unstubAllGlobals();Reflect.deleteProperty(window,'google');Reflect.deleteProperty(navigator,'onLine');});
 async function renderApp(){await act(async()=>root.render(createElement(App)));}
 async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync(ms));}
+// jsdom has no layout, so the transcript reports a fixed 2000px history in a 300px view.
+const transcriptSize=()=>{
+  const height=vi.spyOn(Element.prototype,'scrollHeight','get').mockImplementation(function(this:Element){return this.classList.contains('transcript')?2000:0;});
+  const view=vi.spyOn(Element.prototype,'clientHeight','get').mockImplementation(function(this:Element){return this.classList.contains('transcript')?300:0;});
+  return {mockRestore(){height.mockRestore();view.mockRestore();}};
+};
 const googleScript=()=>document.head.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]')!;
 
 describe('setup and recovery interface',()=>{
-  it('restores a native message anchor without a browser pixel offset',async()=>{
+  it('opens at the latest message even when another device saved an earlier position',async()=>{
     conversation.messages.push({id:'later-answer',role:'assistant',text:'Later answer'});
-    Object.assign(conversation,{readPosition:{messageId:'later-answer'}});
-    await renderApp();
-    const transcript=container.querySelector<HTMLElement>('.transcript')!;
-    const anchor=container.querySelector<HTMLElement>('[data-message-id="later-answer"]')!;
-    transcript.getBoundingClientRect=()=>({top:100,bottom:400} as DOMRect);
-    anchor.getBoundingClientRect=()=>({top:700,bottom:800} as DOMRect);
-    await advance(20);
-    expect(transcript.scrollTop).toBe(600);
+    Object.assign(conversation,{readPosition:{messageId:'answer-one',scrollTop:40}});
+    const size=transcriptSize();
+    try{
+      await renderApp();await advance(20);
+      expect(container.querySelector<HTMLElement>('.transcript')!.scrollTop).toBe(2000);
+      expect(container.querySelector('.jump-latest')).toBeNull();
+      expect(api).toHaveBeenCalledWith('/bots/shared/conversation?turns=20');
+    }finally{size.mockRestore();}
+  });
+
+  it('loads recent turns first and holds the reader in place while earlier turns load',async()=>{
+    const turn=(n:number)=>[{id:`p${n}`,role:'user' as const,text:`Prompt ${n}`},{id:`a${n}`,role:'assistant' as const,text:`Reply ${n}`}];
+    const paths:string[]=[];
+    vi.mocked(api).mockImplementation(async <T>(path:string)=>{
+      if(path==='/bootstrap')return boot as T;
+      if(!path.startsWith('/bots/shared/conversation?'))return null as T;
+      paths.push(path);
+      return (path.includes('turns=20')&&path.includes('start=')||path.includes('start=p0')
+        ?{...conversation,messages:[...turn(0),...turn(1)],earlier:0}:{...conversation,messages:turn(1),earlier:2}) as T;
+    });
+    const size=transcriptSize();
+    // The prompt being read sits 50px below the top until two earlier messages arrive above it.
+    const rects=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
+      const top=this.classList.contains('transcript')?100:(this as HTMLElement).dataset.messageId==='p1'
+        ?(document.querySelector('[data-message-id="p0"]')?650:150):0;
+      return {top,bottom:top+100} as DOMRect;
+    });
+    try{
+      await renderApp();await advance(1500);
+      expect(paths.slice(0,2)).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p1']);
+      const transcript=container.querySelector<HTMLElement>('.transcript')!;
+      transcript.scrollTop=300;
+      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      const earlier=[...container.querySelectorAll('button')].find(button=>button.textContent==='Show earlier messages')!;
+      await act(async()=>earlier.click());
+      expect(paths).toContain('/bots/shared/conversation?start=p1&turns=20');
+      expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
+      expect(transcript.scrollTop).toBe(800);
+      expect(container.textContent).toContain('This is the start of your conversation with Shared.');
+      await advance(1500);
+      expect(paths.at(-1)).toBe('/bots/shared/conversation?start=p0');
+    }finally{size.mockRestore();rects.mockRestore();}
+  });
+
+  it('counts replies that arrive while reading earlier messages and jumps back to them',async()=>{
+    const size=transcriptSize();
+    try{
+      await renderApp();await advance(20);
+      const transcript=container.querySelector<HTMLElement>('.transcript')!;
+      transcript.scrollTop=300;
+      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      expect(container.querySelector('.jump-latest')!.textContent).toBe('Jump to latest');
+      conversation={...conversation,messages:[...conversation.messages,{id:'fresh',role:'assistant',text:'Fresh reply'}]};
+      await advance(1500);
+      expect(transcript.scrollTop).toBe(300);
+      expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
+      await act(async()=>container.querySelector<HTMLButtonElement>('.jump-latest')!.click());
+      expect(transcript.scrollTop).toBe(2000);
+      expect(container.querySelector('.jump-latest')).toBeNull();
+      conversation={...conversation,messages:[...conversation.messages,{id:'followed',role:'assistant',text:'Followed reply'}]};
+      transcript.scrollTop=1700;
+      await advance(1500);
+      expect(transcript.scrollTop).toBe(2000);
+    }finally{size.mockRestore();}
   });
 
   it('saves the visible message anchor while reading older messages',async()=>{

@@ -46,7 +46,7 @@ export function App() {
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, persistPosition } = useConversation(botId, userId);
+  const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
@@ -136,14 +136,15 @@ export function App() {
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError} workerUpdate={workerUpdate}
-            notifications={notifications} scroll={scroll} onScroll={persistPosition}
+            notifications={notifications} scroll={scroll} content={content} history={history} onScroll={persistPosition}
             onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={upload}
             retryUpload={retryUpload} cancelUpload={cancelUpload} pending={pending} receipt={receipt}
-            sending={sending} send={send} retry={retry} reviewed={reviewed} setReviewed={setReviewed}
+            sending={sending} retry={retry}
+            send={() => { history.jumpToLatest(); return send(); }} reviewed={reviewed} setReviewed={setReviewed}
             report={setError}
             refresh={() => void session.refresh()} />}
         </>}

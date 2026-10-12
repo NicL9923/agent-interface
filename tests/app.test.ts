@@ -257,6 +257,29 @@ describe("authentication and household state", () => {
     }
     await app.close();
   });
+  it("windows conversation history only when the web client asks", async () => {
+    const fake = runtimeDouble();
+    const conversation = await fake.runtime.conversation("shared");
+    const messages = Array.from({ length: 30 }, (_, turn) => [
+      { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}` },
+      { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}` },
+    ]).flat();
+    fake.runtime.conversation = async () => ({ ...conversation, messages });
+    const { app } = await createApp(config(), fake.runtime, { background: false });
+    const one = await login(app);
+    const read = async (query = "") => (await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json();
+    const native = await read();
+    expect(native.messages).toHaveLength(60);
+    expect(native).not.toHaveProperty("earlier");
+    const page = await read("?turns=20");
+    expect(page.messages[0].id).toBe("p10");
+    expect(page.earlier).toBe(20);
+    const extended = await read("?start=p10&turns=20");
+    expect(extended.messages[0].id).toBe("p0");
+    expect(extended.earlier).toBe(0);
+    expect((await app.inject({ url: "/api/bots/shared/conversation?turns=-1", headers: one })).statusCode).toBe(400);
+    await app.close();
+  });
   it("keeps personal drafts and read positions separate while bots stay shared", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {
       background: false,

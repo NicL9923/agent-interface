@@ -9,6 +9,7 @@ import { tsImport } from 'tsx/esm/api';
 const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
+const { historyWindow } = await tsImport('../../src/shared/history.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
@@ -72,6 +73,16 @@ const conversations = {
   ledger: { messages: [{ id: 'l1', role: 'assistant', text: 'September is reconciled except for one charge I cannot match.', createdAt: at(10) }], activity: { state: 'blocked', detail: 'Waiting for you to identify a $48.20 charge from “TX FEED CO”.' }, attention: [{ id: 'ask', kind: 'clarify', title: 'Which category is the TX FEED CO charge?', detail: 'It does not match a receipt in the shared folder.', questions: [{ id: 'category', prompt: 'Category', options: ['Livestock feed', 'Garden supplies', 'Something else'] }] }] },
   guide: { messages: [{ id: 'g1', role: 'assistant', text: 'I could not reach the trail conditions service. Your request is saved.', createdAt: at(12) }], activity: { state: 'failed', detail: 'The trail conditions service did not respond.' } },
 };
+// A long history pages in earlier turns. PREVIEW_ARRIVALS=1 adds a reply every eight seconds.
+const meals = ['pot roast', 'chili', 'enchiladas', 'brisket tacos', 'chicken spaghetti', 'King Ranch casserole', 'migas', 'gumbo'];
+conversations.kitchen = { activity: { state: 'idle' }, messages: Array.from({ length: 64 }, (_, turn) => [
+  { id: `k${turn}u`, role: 'user', sender: { id: 'preview', name: turn % 3 ? 'Nicolas' : 'Jordan' }, text: `Fixture turn ${turn + 1}: what goes with ${meals[turn % meals.length]} this week?`, createdAt: new Date(Date.UTC(2026, 8, 1 + Math.floor(turn / 3), 17, turn % 60)).toISOString() },
+  { id: `k${turn}a`, role: 'assistant', text: `For **${meals[turn % meals.length]}**, try:\n\n- A crisp slaw with lime\n- Charro beans\n- Skillet cornbread\n\nI added the extras to the shared list. Fixture turn ${turn + 1}.`, createdAt: new Date(Date.UTC(2026, 8, 1 + Math.floor(turn / 3), 17, turn % 60, 30)).toISOString() },
+]).flat() };
+if (process.env.PREVIEW_ARRIVALS === '1') {
+  let arrival = 0;
+  setInterval(() => conversations.kitchen.messages.push({ id: `arrival-${++arrival}`, role: 'assistant', text: `Fixture arrival ${arrival}: the oven is preheated.`, createdAt: new Date().toISOString() }), 8000);
+}
 conversations.ranch.files = artifactFiles;
 ranchMessages[0].files = [artifactFiles[2]];
 ranchMessages.at(-1).files = [artifactFiles[0], artifactFiles[1], artifactFiles[3], artifactFiles[4]];
@@ -370,7 +381,13 @@ const server = createServer(async (request, response) => {
     if (path.startsWith('/integrations/')) { const item = connections.find(item => item.id === path.split('/')[2]); if (path.endsWith('/connect')) { const flow = { flowId: `preview-${item.id}`, status: 'pending', kind: 'device_code', userCode: 'RANCH-42', message: 'Fixture sign-in pending. This preview does not contact account providers.' }; flows.set(flow.flowId, flow); return json(response, flow); } item.status = path.endsWith('/disconnect') ? 'not_connected' : 'connected'; item.detail = path.endsWith('/disconnect') ? 'Connection removed.' : 'Connection checked in the preview fixture.'; item.checkedAt = new Date().toISOString(); return json(response, item); }
     if (path === '/hermes/upgrade/control') { upgrade = { ...upgrade, phase: 'recovering', message: 'Waiting for a safe stopping point, then checking the connection.', canRetry: false, canCancel: false, canRestartService: false }; return json(response, upgrade); }
     if (path === '/hermes/upgrade') return json(response, upgrade);
-    if (path.endsWith('/conversation')) return json(response, conversationFor(decodeURIComponent(path.split('/')[2])));
+    if (path.endsWith('/conversation')) {
+      const conversation = conversationFor(decodeURIComponent(path.split('/')[2]));
+      const start = url.searchParams.get('start') ?? undefined, turns = url.searchParams.get('turns');
+      if (start === undefined && turns === null) return json(response, conversation);
+      const page = historyWindow(conversation.messages, { start, turns: Number(turns ?? 0) });
+      return json(response, { ...conversation, messages: page.messages, earlier: page.earlier });
+    }
     if (path.endsWith('/tools') || path.endsWith('/skills')) return json(response, [{ id: 'web', name: 'Web search', description: 'Search the web when current information matters.', enabled: true }, { id: 'shell', name: 'Terminal', description: "Run commands on the assistant's server.", enabled: false }]);
     if (/^\/routines\/[^/]+\/state$/.test(path)) { const row=routines.find(row=>row.id===path.split('/')[2]);if(row)row.enabled=body.enabled;return json(response,{ok:true}); }
     if (path === '/routines') { if (request.method === 'POST') { const routine = { ...body, id: `fixture-routine-${routines.length + 1}` }; routines.push(routine); return json(response, routine); } return json(response, routines); }
