@@ -97,23 +97,40 @@ MANAGED_WRAPPERS = {
 # What a live checkout holds outside Git: built web assets, install stamps and directories an
 # older revision left behind. A live install keeps them, and the native package manager's
 # workspace snapshot records them, so a staged runtime must see them to match production.
-# Skipped names are those the snapshot itself skips, plus Hermes state and caches.
-MIRROR_SKIP = {".git", ".hermes", "venv", ".venv", "node_modules", "__pycache__", ".pytest_cache", "build", "dist", "release"}
+# Skipped are names the snapshot never takes, at the depth it skips them, plus Hermes state
+# and caches: below a package root, dist/ ships bundled plugin dashboards.
+MIRROR_SKIP = {".git", ".hermes", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
+MIRROR_SKIP_ROOT = MIRROR_SKIP | {"build", "dist", "release"}
+UNQUALIFIED_CODE = (".py", ".pth", ".so", ".pyd", ".pyc", ".pyo")
+
+
+def mirror_skipped(parts):
+    return any(part in (MIRROR_SKIP_ROOT if index == 0 else MIRROR_SKIP) for index, part in enumerate(parts))
+
+
+def candidate_replaces(staged, parts):
+    """Whether the candidate has a file or link at one of these paths. A reset removes the live
+    directory there along with its ignored content, so nothing is mirrored through it."""
+    path = Path(staged)
+    for part in parts:
+        path = path / part
+        if os.path.islink(path) or os.path.lexists(path) and not path.is_dir():
+            return True
+    return False
 
 
 def mirror_untracked(live, staged):
     live, staged = Path(live), Path(staged)
     ignored = [name for name in git(live, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").decode().split("\0") if name]
     for name in ignored:
-        if MIRROR_SKIP.intersection(Path(name).parts):
-            continue
+        parts = Path(name).parts
+        if mirror_skipped(parts) or candidate_replaces(staged, parts[:-1]) or os.path.lexists(staged / name):
+            continue  # Skipped, or the candidate supplies this path and its own version wins, as in a reset.
         origin, target = live / name, staged / name
         if origin.is_symlink() or not origin.is_file():
             raise RuntimeError("Ignored links or special files in the Hermes source require installer review")
-        if origin.suffix in (".py", ".pth", ".so", ".pyd"):
-            raise RuntimeError("Ignored Python in the Hermes source would run unqualified; installer review is required")
-        if os.path.lexists(target):
-            continue  # The candidate tracks this path now; its own version wins, as in a live reset.
+        if origin.suffix in UNQUALIFIED_CODE:
+            raise RuntimeError("Ignored Python or bytecode in the Hermes source would run unqualified; installer review is required")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, target)
     # A reset to the candidate deletes directories whose files were all tracked. Directories that
@@ -121,16 +138,19 @@ def mirror_untracked(live, staged):
     survivors = set()
     for name in git(live, "ls-files", "--others", "-z").decode().split("\0"):
         parts = Path(name).parts[:-1]
-        for index, part in enumerate(parts):
-            if part in MIRROR_SKIP:
+        for index in range(len(parts)):
+            if mirror_skipped(parts[:index + 1]):
                 break
             survivors.add(Path(*parts[:index + 1]))
     for directory, dirs, files in os.walk(live):
-        dirs[:] = [name for name in dirs if name not in MIRROR_SKIP and not (Path(directory) / name).is_symlink()]
+        depth = len(Path(directory).relative_to(live).parts)
+        dirs[:] = [name for name in dirs if not (Path(directory) / name).is_symlink()
+                   and name not in (MIRROR_SKIP_ROOT if depth == 0 else MIRROR_SKIP)]
         if not dirs and not files and Path(directory) != live:
             survivors.add(Path(directory).relative_to(live))
-    for relative in survivors:
-        (staged / relative).mkdir(parents=True, exist_ok=True)
+    for relative in sorted(survivors):
+        if not candidate_replaces(staged, relative.parts):
+            (staged / relative).mkdir(parents=True, exist_ok=True)
 
 
 REPAIR_FILE_LINES = (b"new file mode ", b"deleted file mode ", b"old mode ", b"new mode ",

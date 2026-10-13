@@ -175,15 +175,40 @@ class MirrorTests(unittest.TestCase):
         self.assertFalse((self.staged / "removed").exists())
         self.assertFalse((self.staged / "venv").exists())
 
-    def test_ignored_python_or_links_require_review(self):
-        for make in (lambda: (self.live / "local.py").write_text("unqualified\n"),
-                     lambda: (self.live / "linked").symlink_to(self.live / "pkg/core.py")):
-            with self.subTest(make=make):
-                make()
+    def test_ignored_code_and_links_require_review(self):
+        # Git never lists special files such as FIFOs, so they cannot reach the mirror.
+        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "pkg/stale.pyc\n")
+        cases = (("local.py", lambda path: path.write_text("unqualified\n")),
+                 ("pkg/stale.pyc", lambda path: path.write_bytes(b"\0bytecode")),
+                 ("linked", lambda path: path.symlink_to(self.live / "pkg/core.py")))
+        for name, make in cases:
+            with self.subTest(name):
+                make(self.live / name)
                 with self.assertRaisesRegex(RuntimeError, "installer review"):
                     worker.mirror_untracked(self.live, self.staged)
-                for name in ("local.py", "linked"):
-                    if os.path.lexists(self.live / name): (self.live / name).unlink()
+                (self.live / name).unlink()
+
+    def test_candidate_paths_win_over_ignored_live_content(self):
+        outside = self.staged.parent / "outside"; outside.mkdir()
+        # The candidate tracks a file where live had ignored Python, replaces a directory with a
+        # link, and replaces another directory with a file. A reset discards the live copies.
+        (self.live / "local.py").write_text("ignored here\n"); (self.staged / "local.py").write_text("tracked now\n")
+        (self.live / "web_dist/assets").mkdir(parents=True, exist_ok=True)
+        (self.staged / "web_dist").symlink_to(outside, target_is_directory=True)
+        (self.staged / "cached").write_text("now a file\n")
+        worker.mirror_untracked(self.live, self.staged)
+        self.assertEqual((self.staged / "local.py").read_text(), "tracked now\n")
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual((self.staged / "cached").read_text(), "now a file\n")
+
+    def test_dist_is_skipped_only_at_the_root(self):
+        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "dist/\n")
+        (self.live / "dist").mkdir(); (self.live / "dist/root.txt").write_text("root build\n")
+        (self.live / "plugins/board/dashboard/dist").mkdir(parents=True)
+        (self.live / "plugins/board/dashboard/dist/app.js").write_text("bundled dashboard\n")
+        worker.mirror_untracked(self.live, self.staged)
+        self.assertFalse((self.staged / "dist").exists())
+        self.assertEqual((self.staged / "plugins/board/dashboard/dist/app.js").read_text(), "bundled dashboard\n")
 
 
 class QualificationWorkerTests(unittest.TestCase):
