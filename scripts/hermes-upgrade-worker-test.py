@@ -764,7 +764,13 @@ if __name__=="__main__":
         self.git('update-ref','refs/remotes/origin/main',self.new); self.git('checkout','--detach',self.old)
         config=json.loads(self.config.read_text()); config.update(managedLauncher=str(self.root/'fixture-managed-launcher'),managedHome=str(self.root/'fixture-live-home'))
         worker.atomic(self.config,config)
+        # The disposable home installs only Python; the integration run borrows the live PM Chromium.
+        browser=self.root/'fixture-live-home/tools/chromium-1/chrome'; browser.parent.mkdir(parents=True)
+        browser.write_text('#!/bin/sh\n'); browser.chmod(0o700)
+        (browser.parents[1]/'facts.json').write_text(json.dumps({'packages':{'chromium':{'env':{'AGENT_BROWSER_EXECUTABLE_PATH':'{{store}}/chromium-1/chrome'}}}}))
+        (self.app/'scripts/spike/run.py').write_text(f"import os, pathlib\npathlib.Path({str(self.root/'browser-seen')!r}).write_text(os.environ.get('AGENT_BROWSER_EXECUTABLE_PATH', ''))\n")
         stage=self.check(); qualification=self.status()['qualification']
+        self.assertEqual((self.root/'browser-seen').read_text(),str(browser.resolve()))
         self.assertEqual(qualification['runtimeMode'],'managed'); self.assertEqual(qualification['qualificationPython'],str(stage/'qualified-python'))
         self.assertEqual(qualification['runtimeFingerprint']['dependenciesSha256'],'b'*64)
         self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')

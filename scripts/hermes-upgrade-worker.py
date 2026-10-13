@@ -50,6 +50,17 @@ def atomic(path, value):
     finally: os.close(directory)
 
 
+def native_chromium(home):
+    """The live Hermes PM Chromium, for disposable browser probes. Qualification homes install
+    only Python, so both release qualification and update checks borrow this executable."""
+    tools = (Path(home) / "tools").resolve()
+    template = json.loads((tools / "facts.json").read_text())["packages"]["chromium"]["env"]["AGENT_BROWSER_EXECUTABLE_PATH"]
+    browser = Path(template.replace("{{store}}", str(tools))).resolve()
+    if "{{" in str(browser) or not browser.is_relative_to(tools) or not browser.is_file() or not os.access(browser, os.X_OK):
+        raise RuntimeError("The installed Hermes Chromium is unavailable for browser qualification")
+    return browser
+
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -732,6 +743,9 @@ class Worker:
             prepared = self.check_step("dependencies", "Isolated native managed dependency generation", prepare_dependencies)
             qualified_python, runtime_descriptor, runtime = prepared["python"], prepared["descriptor"], prepared["fingerprint"]
         self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] = qualified_python
+        # Secure-fill acceptance drives a disposable Chromium, which the isolated managed home lacks.
+        if self.config.get("managedHome"):
+            self.environment["AGENT_BROWSER_EXECUTABLE_PATH"] = str(native_chromium(self.config["managedHome"]))
         self.environment["HERMES_UPGRADE_RUNTIME_FINGERPRINT"] = json.dumps(runtime)
         if runtime_descriptor: self.environment["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = runtime_descriptor
         self.update(phase="qualifying", message="Testing the update in a separate Hermes home. Your running Hermes is unchanged.")

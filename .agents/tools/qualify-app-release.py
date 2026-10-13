@@ -106,10 +106,7 @@ repair_owner = types.SimpleNamespace(config=worker, source=live, environment=dic
 repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
     subprocess.check_output(["git", "-C", str(live), "diff", "HEAD", "--binary"]))
 browser_facts = home / "tools/facts.json"
-browser_template = json.loads(browser_facts.read_text())["packages"]["chromium"]["env"]["AGENT_BROWSER_EXECUTABLE_PATH"]
-browser = Path(browser_template.replace("{{store}}", str(home / "tools"))).resolve()
-assert "{{" not in str(browser) and browser.is_relative_to((home / "tools").resolve())
-assert browser.is_file() and os.access(browser, os.X_OK)
+browser = repair_worker["native_chromium"](home)
 host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
 qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
 digest = qualification["integration_digest"](release)
