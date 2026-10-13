@@ -316,6 +316,19 @@ class PlatformTests(unittest.TestCase):
         unpinned = hashlib.sha256(subprocess.check_output(["git", "-C", str(self.source), "diff", "HEAD", "--binary"])).hexdigest()
         self.assertNotEqual(unpinned, pinned)
 
+    def test_failed_verification_names_its_step_and_error_class_but_no_output(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        stderr = "Traceback (most recent call last):\n  ...\nModuleNotFoundError: No module named 'secret-bearing-detail'\n"
+        def google(): raise subprocess.CalledProcessError(1, ["/py", "live-google-check.py"], output="", stderr=stderr)
+        self.platform.google = google
+        with self.assertRaises(RuntimeError) as raised: self.platform.verify()
+        self.assertEqual(str(raised.exception), "original Google sign-in failed: CalledProcessError (exit 1, ModuleNotFoundError)")
+        def status(method):
+            if method == "status": raise subprocess.CalledProcessError(2, ["/py", "-c", "native"], stderr=b"RuntimeError: Native maintenance request rejected\n")
+            return FixturePlatform.rpc(self.platform, method)
+        self.platform.rpc = status
+        with self.assertRaisesRegex(RuntimeError, r"^native maintenance status failed: CalledProcessError \(exit 2, RuntimeError\)$"): self.platform.verify()
+
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()
         before = self.states.read_bytes()
