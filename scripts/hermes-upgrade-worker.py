@@ -94,6 +94,45 @@ MANAGED_WRAPPERS = {
 }
 
 
+# What a live checkout holds outside Git: built web assets, install stamps and directories an
+# older revision left behind. A live install keeps them, and the native package manager's
+# workspace snapshot records them, so a staged runtime must see them to match production.
+# Skipped names are those the snapshot itself skips, plus Hermes state and caches.
+MIRROR_SKIP = {".git", ".hermes", "venv", ".venv", "node_modules", "__pycache__", ".pytest_cache", "build", "dist", "release"}
+
+
+def mirror_untracked(live, staged):
+    live, staged = Path(live), Path(staged)
+    ignored = [name for name in git(live, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").decode().split("\0") if name]
+    for name in ignored:
+        if MIRROR_SKIP.intersection(Path(name).parts):
+            continue
+        origin, target = live / name, staged / name
+        if origin.is_symlink() or not origin.is_file():
+            raise RuntimeError("Ignored links or special files in the Hermes source require installer review")
+        if origin.suffix in (".py", ".pth", ".so", ".pyd"):
+            raise RuntimeError("Ignored Python in the Hermes source would run unqualified; installer review is required")
+        if os.path.lexists(target):
+            continue  # The candidate tracks this path now; its own version wins, as in a live reset.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(origin, target)
+    # A reset to the candidate deletes directories whose files were all tracked. Directories that
+    # still hold untracked content, even only caches, survive it, and so do empty ones.
+    survivors = set()
+    for name in git(live, "ls-files", "--others", "-z").decode().split("\0"):
+        parts = Path(name).parts[:-1]
+        for index, part in enumerate(parts):
+            if part in MIRROR_SKIP:
+                break
+            survivors.add(Path(*parts[:index + 1]))
+    for directory, dirs, files in os.walk(live):
+        dirs[:] = [name for name in dirs if name not in MIRROR_SKIP and not (Path(directory) / name).is_symlink()]
+        if not dirs and not files and Path(directory) != live:
+            survivors.add(Path(directory).relative_to(live))
+    for relative in survivors:
+        (staged / relative).mkdir(parents=True, exist_ok=True)
+
+
 REPAIR_FILE_LINES = (b"new file mode ", b"deleted file mode ", b"old mode ", b"new mode ",
     b"rename from ", b"rename to ", b"copy from ", b"copy to ")
 
@@ -719,6 +758,7 @@ class Worker:
                 raise UnsupportedRepair("Re-applying the approved repair to this update changed its edits. Ask the installer to review it before updating.")
             if rebased:
                 print("Approved repair re-applied over upstream edits beside it; its changed lines are identical.", file=self.log, flush=True)
+            mirror_untracked(self.source, source)
             self.repair_rebased = rebased
             return patch_hash
         self.repair_rebased = False

@@ -137,6 +137,55 @@ class RepairMergeTests(unittest.TestCase):
         self.assertNotEqual(worker.repair_changes(one), worker.repair_changes(one.replace(b"index 1..2 100644\n", b"old mode 100644\nnew mode 100755\nindex 1..2\n")))
 
 
+class MirrorTests(unittest.TestCase):
+    """A staged runtime matches production only if it sees what a live reset keeps outside Git."""
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(); self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name); self.live = root / "live"; self.staged = root / "staged"
+        git = lambda path, *args: subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+        self.live.mkdir()
+        (self.live / ".gitignore").write_text("web_dist/\nvenv/\n__pycache__/\nstamp.json\nlocal.py\nlinked\n")
+        (self.live / "pkg").mkdir(); (self.live / "pkg/core.py").write_text("old\n")
+        (self.live / "removed").mkdir(); (self.live / "removed/data.txt").write_text("tracked, deleted upstream\n")
+        (self.live / "cached").mkdir(); (self.live / "cached/old.py").write_text("tracked, deleted upstream\n")
+        git(self.live, "init", "-q"); git(self.live, "add", ".")
+        git(self.live, "-c", "user.name=F", "-c", "user.email=f@example.test", "commit", "-qm", "base")
+        subprocess.run(["git", "clone", "-q", str(self.live), str(self.staged)], check=True, capture_output=True)
+        for path in ("removed/data.txt", "cached/old.py"):
+            (self.staged / path).unlink()
+        for path in ("removed", "cached"):
+            (self.staged / path).rmdir()
+        # Live keeps build output, caches, an old venv and directories a past revision left behind.
+        (self.live / "web_dist/assets").mkdir(parents=True); (self.live / "web_dist/assets/app.js").write_text("built\n")
+        (self.live / "stamp.json").write_text("{}\n")
+        (self.live / "cached/__pycache__").mkdir(); (self.live / "cached/__pycache__/old.cpython-314.pyc").write_bytes(b"\0")
+        (self.live / "venv/lib").mkdir(parents=True); (self.live / "venv/lib/site.py").write_text("old venv\n")
+        (self.live / "leftover/empty").mkdir(parents=True)
+
+    def test_reset_survivors_are_mirrored_and_the_rest_is_not(self):
+        (self.staged / "stamp.json").write_text("candidate tracks this now\n")
+        worker.mirror_untracked(self.live, self.staged)
+        self.assertEqual((self.staged / "web_dist/assets/app.js").read_text(), "built\n")
+        self.assertEqual((self.staged / "stamp.json").read_text(), "candidate tracks this now\n")
+        self.assertTrue((self.staged / "leftover/empty").is_dir())
+        # A directory kept alive only by caches survives a reset, so it exists without the cache.
+        self.assertTrue((self.staged / "cached").is_dir())
+        self.assertFalse((self.staged / "cached/__pycache__").exists())
+        # A directory whose files were all tracked is deleted by the reset, and venv is never copied.
+        self.assertFalse((self.staged / "removed").exists())
+        self.assertFalse((self.staged / "venv").exists())
+
+    def test_ignored_python_or_links_require_review(self):
+        for make in (lambda: (self.live / "local.py").write_text("unqualified\n"),
+                     lambda: (self.live / "linked").symlink_to(self.live / "pkg/core.py")):
+            with self.subTest(make=make):
+                make()
+                with self.assertRaisesRegex(RuntimeError, "installer review"):
+                    worker.mirror_untracked(self.live, self.staged)
+                for name in ("local.py", "linked"):
+                    if os.path.lexists(self.live / name): (self.live / name).unlink()
+
+
 class QualificationWorkerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="agent-interface-upgrade-worker-test-")
@@ -147,6 +196,7 @@ class QualificationWorkerTests(unittest.TestCase):
         git("init"); git("config", "user.email", "fixture@example.invalid"); git("config", "user.name", "Fixture")
         (self.source / "version").write_text("old")
         (self.source / "hermes_cli").mkdir(); (self.source / "hermes_cli/update_lock.py").write_text(UPDATE_LOCK)
+        (self.source / ".gitignore").write_text("web_dist/\n")
         git("add", "."); git("commit", "-m", "old")
         self.old = git("rev-parse", "HEAD").decode().strip()
         (self.source / "version").write_text("new"); git("add", "."); git("commit", "-m", "new")
@@ -570,6 +620,15 @@ print('fixture real candidate patch identity passed')
                 self.assertNotIn('qualification', self.status())
                 if path.is_symlink(): path.unlink()
                 path.write_bytes(original); path.chmod(0o600)
+
+    def test_staging_mirrors_what_a_live_reset_keeps_outside_git(self):
+        # Built assets and leftover directories change the native workspace snapshot, so the
+        # qualified runtime must be built with them, as the live install will be.
+        (self.source/'web_dist').mkdir(); (self.source/'web_dist/app.js').write_text('built\n')
+        (self.source/'leftover').mkdir()
+        stage = self.check()
+        self.assertEqual((stage/'source/web_dist/app.js').read_text(), 'built\n')
+        self.assertTrue((stage/'source/leftover').is_dir())
 
     def test_staging_is_complete_and_independent_of_installed_partial_clone(self):
         self.git('tag', '-a', 'v0.1.0', self.old, '-m', 'installed release identity')
