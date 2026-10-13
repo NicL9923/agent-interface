@@ -350,6 +350,25 @@ class HostPrograms(unittest.TestCase):
         self.assertNotEqual(run_remote(release_app.REMOTE_WRITE_CONFIG, {"path": str(path), "config": {"a": 2}})[0], 0)
         self.assertEqual(json.loads(path.read_text()), {"a": 1})
 
+    def test_native_chromium_stays_inside_the_hermes_tool_store(self):
+        import runpy
+        worker = runpy.run_path(str(ROOT / "scripts/hermes-upgrade-worker.py"))
+        tools = self.host.home / "tools"
+        browser = tools / "chromium-1/chrome"
+        browser.parent.mkdir(parents=True)
+        browser.write_text("#!/bin/sh\n"); browser.chmod(0o700)
+        facts = lambda template: (tools / "facts.json").write_text(json.dumps(
+            {"packages": {"chromium": {"env": {"AGENT_BROWSER_EXECUTABLE_PATH": template}}}}))
+        facts("{{store}}/chromium-1/chrome")
+        self.assertEqual(worker["native_chromium"](self.host.home), browser.resolve())
+        for template in ("/usr/bin/chromium", "{{store}}/../escape/chrome", "{{store}}/missing/chrome"):
+            facts(template)
+            with self.assertRaises(RuntimeError):
+                worker["native_chromium"](self.host.home)
+        facts("{{store}}/chromium-1/chrome"); browser.chmod(0o600)
+        with self.assertRaises(RuntimeError):
+            worker["native_chromium"](self.host.home)
+
     def test_discard_removes_only_an_unactivated_release(self):
         release = self.host.base / "releases/release-new"
         operation = self.host.base / "operations/release-new"
