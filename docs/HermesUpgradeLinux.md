@@ -331,3 +331,11 @@ pins `core.abbrev=10`, the length all recorded hashes used, so a growing object 
 local Git setting cannot change a hash for identical content. Release preparation points
 the worker's hooks at the new release's platform helper, the same file activation checks
 against `fixedHelperSha256`.
+
+The staged candidate also receives what a live reset keeps outside Git: gitignored build
+output such as the dashboard's `web_dist`, and directories an older revision left behind.
+Hermes's package manager snapshots both into its editable workspace, and setuptools records
+those directories as namespace packages, so without them a qualified runtime never matches the
+installed one. Caches, `.hermes`, `venv` and the names the snapshot itself skips are not
+copied. An ignored Python file or link requires installer review. On Oct 13, 2026 this was
+proven by rebuilding the installed revision this way: its fingerprint equalled the live one.
