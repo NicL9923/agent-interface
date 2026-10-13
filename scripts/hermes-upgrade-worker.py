@@ -743,8 +743,9 @@ class Worker:
             prepared = self.check_step("dependencies", "Isolated native managed dependency generation", prepare_dependencies)
             qualified_python, runtime_descriptor, runtime = prepared["python"], prepared["descriptor"], prepared["fingerprint"]
         self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] = qualified_python
-        # Secure-fill acceptance drives a disposable Chromium, which the isolated home lacks.
-        self.environment["AGENT_BROWSER_EXECUTABLE_PATH"] = str(native_chromium(self.config["managedHome"]))
+        # Secure-fill acceptance drives a disposable Chromium, which the isolated managed home lacks.
+        if self.config.get("managedHome"):
+            self.environment["AGENT_BROWSER_EXECUTABLE_PATH"] = str(native_chromium(self.config["managedHome"]))
         self.environment["HERMES_UPGRADE_RUNTIME_FINGERPRINT"] = json.dumps(runtime)
         if runtime_descriptor: self.environment["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = runtime_descriptor
         self.update(phase="qualifying", message="Testing the update in a separate Hermes home. Your running Hermes is unchanged.")

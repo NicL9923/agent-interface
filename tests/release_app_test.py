@@ -361,7 +361,11 @@ class HostPrograms(unittest.TestCase):
             {"packages": {"chromium": {"env": {"AGENT_BROWSER_EXECUTABLE_PATH": template}}}}))
         facts("{{store}}/chromium-1/chrome")
         self.assertEqual(worker["native_chromium"](self.host.home), browser.resolve())
-        for template in ("/usr/bin/chromium", "{{store}}/../escape/chrome", "{{store}}/missing/chrome"):
+        # Real executables outside the store, so only the containment check can refuse them.
+        outside = self.host.home / "escape/chrome"
+        outside.parent.mkdir(); outside.write_text("#!/bin/sh\n"); outside.chmod(0o700)
+        (tools / "linked").symlink_to(outside.parent)
+        for template in (str(outside), "{{store}}/../escape/chrome", "{{store}}/linked/chrome", "{{store}}/missing/chrome"):
             facts(template)
             with self.assertRaises(RuntimeError):
                 worker["native_chromium"](self.host.home)
