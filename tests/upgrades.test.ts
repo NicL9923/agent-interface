@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import { HermesUpgrades } from "../src/server/upgrades.js";
+import { HermesUpgrades, launchWorker } from "../src/server/upgrades.js";
 import type { ActivityState, Runtime } from "../src/shared/types.js";
 
 const origin = "http://127.0.0.1:3000", revision = "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6";
@@ -217,4 +217,17 @@ worker.Worker(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]).recovery(sys.argv
   expect(status).toMatchObject({ phase, operationId, canCheck: true });
   expect(status.error).toBeUndefined();
   expect(installation.upgrades.maintenance()).toBe(false);
+});
+
+it("keeps a worker's startup failure output instead of discarding it", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
+  try {
+    const python = join(directory, "python");
+    writeFileSync(python, "#!/bin/sh\necho \"Traceback: worker could not start\" >&2\nexit 3\n", { mode: 0o700 });
+    const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py");
+    const code = await new Promise(done => child.on("exit", done));
+    expect(code).toBe(3);
+    expect(readFileSync(join(directory, "worker-launch.log"), "utf8")).toContain("worker could not start");
+    expect(statSync(join(directory, "worker-launch.log")).mode & 0o777).toBe(0o600);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

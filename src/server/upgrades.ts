@@ -7,6 +7,20 @@ import type { Runtime, User } from "../shared/types.js";
 import type { UpgradeControlAction, UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "../shared/upgrades.js";
 import type { Config } from "./config.js";
 
+type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
+// The worker keeps its own log once it runs. Output from a start that fails before then lands in
+// worker-launch.log, replaced on each launch, instead of vanishing.
+export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
+  script = resolve("scripts/hermes-upgrade-worker.py")) {
+  const log = openSync(join(settings.stateDirectory, "worker-launch.log"), "w", 0o600);
+  try {
+    return spawn(settings.python, [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
+      "--action", args.action, "--operation-id", args.operationId],
+    { detached: true, stdio: ["ignore", log, log], env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "C.UTF-8" } });
+  } finally {
+    closeSync(log);
+  }
+}
 const phases = ["idle", "checking", "qualifying", "ready", "installing", "verifying", "succeeded", "blocked", "failed", "rolled_back", "recovering", "cancelled"] as const;
 const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional() });
 const stateSchema = z.object({
@@ -37,10 +51,7 @@ export class HermesUpgrades {
   private serial: Promise<unknown> = Promise.resolve();
   constructor(private config: Config, private runtime: Runtime,
     private launch: (args: { action: "check" | "install" | UpgradeControlAction; operationId: string }) => void = args => {
-      const settings = this.config.hermesUpgrade!;
-      const child = spawn(settings.python, [resolve("scripts/hermes-upgrade-worker.py"), "--config", settings.workerConfig,
-        "--state-dir", settings.stateDirectory, "--action", args.action, "--operation-id", args.operationId],
-      { detached: true, stdio: "ignore", env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "C.UTF-8" } });
+      const child = launchWorker(this.config.hermesUpgrade!, args);
       child.on("error", () => {
         const state = this.read();
         if (state.operationId === args.operationId) this.save({ ...state, phase: "failed", message: "The upgrade worker could not start. Ask the installer to check its configuration.", error: "worker_start_failed" });
