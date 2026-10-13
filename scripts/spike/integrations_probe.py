@@ -160,8 +160,13 @@ folder.mkdir()
 os.environ["HERMES_AGENT_INTERFACE_FILE_BASES"] = str(folder)
 selected = call("connect", id="selected_files", fields=dict(paths=str(folder)))
 assert selected.status_code == 200, selected.text
+(folder / "nested").mkdir()
+(folder / "nested" / "deep.txt").write_text("Synthetic nested note")
+(folder / "linked.txt").symlink_to(folder / "note.txt")
 assert selected_file(home, "0/note.txt")["text"] == "Synthetic selected note"
-for path in ("0/../google_token.json", "0/escape/config.yaml", "/etc/passwd"):
+assert selected_file(home, "0/nested/deep.txt")["text"] == "Synthetic nested note"
+assert {"nested", "note.txt"} <= set(selected_file(home, "0")["entries"])
+for path in ("0/../google_token.json", "0/escape/config.yaml", "0/linked.txt", "/etc/passwd"):
     try:
         selected_file(home, path)
         raise AssertionError("Escaped selected root")
