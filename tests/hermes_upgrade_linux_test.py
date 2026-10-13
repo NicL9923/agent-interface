@@ -328,6 +328,14 @@ class PlatformTests(unittest.TestCase):
             return FixturePlatform.rpc(self.platform, method)
         self.platform.rpc = status
         with self.assertRaisesRegex(RuntimeError, r"^native maintenance status failed: CalledProcessError \(exit 2, RuntimeError\)$"): self.platform.verify()
+        # Text shaped like a class name is still untrusted output.
+        for line in ("MyToken123Error", "tok.en.Secret99Error: x", "ghp_" + "a" * 30, "sk-proj-abcdef0123456789abcdef"):
+            def leaky(method, _line=line):
+                if method == "status": raise subprocess.CalledProcessError(2, ["/py"], stderr=_line + "\n")
+                return FixturePlatform.rpc(self.platform, method)
+            self.platform.rpc = leaky
+            with self.subTest(line=line), self.assertRaises(RuntimeError) as raised: self.platform.verify()
+            self.assertEqual(str(raised.exception), "native maintenance status failed: CalledProcessError (exit 2, unrecognized error)")
 
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()

@@ -597,6 +597,16 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save(dict(record, phase="finished"))
 
 
+# Only these exception class names are logged; any other text from a failed command is untrusted.
+KNOWN_ERRORS = frozenset((
+    "ModuleNotFoundError", "ImportError", "AttributeError", "TypeError", "ValueError", "KeyError", "IndexError",
+    "RuntimeError", "AssertionError", "NotImplementedError", "SystemExit", "KeyboardInterrupt", "RecursionError",
+    "OSError", "FileNotFoundError", "PermissionError", "TimeoutError", "ConnectionError", "ConnectionRefusedError",
+    "ConnectionResetError", "BrokenPipeError", "JSONDecodeError", "UnicodeDecodeError", "HTTPError", "URLError",
+    "SSLError", "InvalidStatus", "InvalidHandshake", "InvalidURI", "ConnectionClosed", "ConnectionClosedError",
+    "ConnectionClosedOK", "HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"))
+
+
 def describe(error):
     """A failure class and, for file errors, the path. Never command output or exception text.
     A failed command reports its exit code and the exception class its last error line names."""
@@ -605,8 +615,9 @@ def describe(error):
     if isinstance(error, subprocess.CalledProcessError):
         stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""
         lines = [line.strip() for line in stderr.splitlines() if line.strip()]
-        named = re.match(r"([A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt))\b", lines[-1]) if lines else None
-        return "CalledProcessError (exit " + str(error.returncode) + (", " + named.group(1) if named else "") + ")"
+        named = re.match(r"([A-Za-z_][\w.]*)\s*(?::|$)", lines[-1]) if lines else None
+        known = named.group(1).rsplit(".", 1)[-1] if named else None
+        return "CalledProcessError (exit " + str(error.returncode) + ", " + (known if known in KNOWN_ERRORS else "unrecognized error") + ")"
     return type(error).__name__
 
 
