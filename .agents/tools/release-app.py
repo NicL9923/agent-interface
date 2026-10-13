@@ -300,6 +300,11 @@ base = Path(PAYLOAD["appBase"]); release = Path(PAYLOAD["release"]); operation =
 assert (base / "current").resolve() != release.resolve(), "The release is live; it cannot be discarded."
 assert release.parent == base / "releases" and operation.parent == base / "operations"
 assert not (base / "operations" / ("continued-" + PAYLOAD["operationId"]) / "result.json").exists(), "The release was activated."
+# A qualified stage's receipt is what the next prepare --qualification needs. Losing it costs a rerun.
+receipts = sorted(str(path) for path in operation.glob("qualification-*/qualification.json"))
+if receipts and not PAYLOAD.get("includeQualification"):
+    raise SystemExit("This stage holds a qualification receipt for prepare --qualification: " + ", ".join(receipts)
+                     + ". Keep it until that release is activated, or pass --include-qualification to discard it too.")
 if PAYLOAD.get("upgradeStateDir"):
     # The guarded tool holds this lock for its whole run, including activation.
     import fcntl
@@ -548,7 +553,8 @@ def discard(args):
         raise SystemExit(f"{args.name} is {manifest['status']}; it cannot be discarded.")
     print(remote(args.host or manifest["host"], REMOTE_DISCARD, {
         "appBase": manifest["appBase"], "release": manifest["release"], "operationDir": manifest["operationDir"],
-        "operationId": manifest.get("operationId", ""), "upgradeStateDir": manifest.get("upgradeStateDir")}))
+        "operationId": manifest.get("operationId", ""), "upgradeStateDir": manifest.get("upgradeStateDir"),
+        "includeQualification": getattr(args, "include_qualification", False)}))
     manifest["status"] = "discarded"
     save_manifest(manifest)
 
@@ -608,6 +614,9 @@ def main(argv=None):
         step = commands.add_parser(name, help=text)
         step.add_argument("name")
         step.add_argument("--host", help="override the SSH alias recorded at preparation")
+        if name == "discard":
+            step.add_argument("--include-qualification", action="store_true",
+                              help="also discard a qualification receipt the stage holds")
         step.set_defaults(run=run)
     step = commands.add_parser("recover", help="restore the add-on after an outside Hermes update")
     step.add_argument("name", help="staged release of the live commit, qualified against the installed Hermes")
