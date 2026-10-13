@@ -391,6 +391,19 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual(run_remote(release_app.REMOTE_DISCARD, dict(payload, upgradeStateDir=str(self.host.base / "shared/upgrade-state")))[0], 0)
         self.assertFalse(release.exists() or operation.exists())
 
+    def test_discard_keeps_a_qualification_receipt_unless_told(self):
+        release = self.host.base / "releases/release-qualified"
+        operation = self.host.base / "operations/release-qualified"
+        receipt = operation / "qualification-one/qualification.json"
+        release.mkdir(); receipt.parent.mkdir(parents=True); receipt.write_text("{}")
+        payload = {"appBase": str(self.host.base), "release": str(release), "operationDir": str(operation), "operationId": "op-10"}
+        code, _, error = run_remote(release_app.REMOTE_DISCARD, payload)
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(receipt), error)
+        self.assertTrue(receipt.exists() and release.exists())
+        self.assertEqual(run_remote(release_app.REMOTE_DISCARD, dict(payload, includeQualification=True))[0], 0)
+        self.assertFalse(release.exists() or operation.exists())
+
     def stage(self, name, state="active", age=0):
         stage = self.host.base / "operations/release-x" / name
         for path in ("source/.git/objects/ab", "pm-home/tools/python/bin", "pm-home/installs/hermes",
