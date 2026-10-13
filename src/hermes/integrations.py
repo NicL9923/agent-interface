@@ -419,21 +419,30 @@ def selected_file(home, relative):
     from agent.file_safety import get_read_block_error
     if get_read_block_error(str(root.joinpath(*parts))):
         raise IntegrationError("Hermes protects this file from direct reads. Use the owning integration instead.")
-    # Walk by descriptors to avoid symlink swapping between check and read.
-    fd = os.open(root.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    # Walk by descriptors to avoid symlink swapping between check and read. Folders on the
+    # way open with O_PATH, which needs only search permission: a service in a user
+    # namespace, such as the updater's qualification, may not read "/" itself. Platforms
+    # without O_PATH, such as macOS, walk with readable descriptors as before.
+    walk = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(root.anchor, walk)
     try:
         for component in root.parts[1:]:
-            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            next_fd = os.open(component, walk, dir_fd=fd)
             os.close(fd)
             fd = next_fd
     except BaseException:
         os.close(fd)
         raise
     try:
-        for part in parts:
+        for index, part in enumerate(parts):
             if part.startswith(".") or re.search(r"(?:credential|secret|token|password)", part, re.I):
                 raise IntegrationError("Credential files cannot be read through selected folders.")
-            next_fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            last = index == len(parts) - 1
+            next_fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK if last else walk, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        if not parts:
+            next_fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
             os.close(fd)
             fd = next_fd
         info = os.fstat(fd)
