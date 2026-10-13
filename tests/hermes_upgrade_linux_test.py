@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -336,6 +337,27 @@ class PlatformTests(unittest.TestCase):
             self.platform.rpc = leaky
             with self.subTest(line=line), self.assertRaises(RuntimeError) as raised: self.platform.verify()
             self.assertEqual(str(raised.exception), "native maintenance status failed: CalledProcessError (exit 2, unrecognized error)")
+
+    def test_too_little_space_refuses_cold_backup_before_service_shutdown(self):
+        self.platform.quiescence()
+        before = self.states.read_bytes()
+        usage = type("Usage", (), {"free": 1024, "total": 72 * 1024 ** 3, "used": 72 * 1024 ** 3})()
+        with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
+            self.platform.backup()
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_failed_backup_restarts_hermes_even_when_logging_fails(self):
+        self.platform.quiescence()
+        def full(path, source, excluded=None): raise OSError(28, "No space left on device", str(path))
+        self.platform.archive = full
+        class FullDisk(io.StringIO):
+            def write(self, text): raise OSError(28, "No space left on device")
+        with contextlib.redirect_stderr(FullDisk()), self.assertRaises(OSError):
+            self.platform.backup()
+        units = json.loads(self.states.read_text())
+        self.assertEqual({units[name]["ActiveState"] for name in ("gateway.service", "dashboard.service")}, {"active"})
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
 
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()

@@ -945,20 +945,37 @@ with w.NativeUpdateClaim(sys.argv[3],sys.argv[4]) as claim:
         (self.source/'agent_interface_gateway.py').symlink_to(target)
         with self.assertRaisesRegex(RuntimeError,'Untracked'): worker.source_state(self.source,target)
 
-    def test_retains_two_completed_probe_stages_and_never_prunes_active_installed_or_unmarked_paths(self):
+    def test_retains_two_probe_stages_and_the_newest_install_but_never_active_needed_or_unmarked_paths(self):
         stage=self.check(); state=self.status(); instance=worker.Worker(self.config,self.state,'check',state['operationId'])
         paths=[]
-        for index in range(5):
+        for index in range(6):
             operation=str(uuid.uuid4()); path=self.root/'stages'/('qualification-'+operation); path.mkdir(mode=0o700)
             marker=path/'.agent-interface-upgrade-stage'; worker.atomic(marker,{'schemaVersion':1,'operationId':operation,'state':'completed'})
             os.utime(marker,ns=(index+1,index+1)); paths.append(path)
-        (paths[0]/'backup').mkdir(); (paths[1]/'.agent-interface-upgrade-install').touch()
+        # Three finished installs, each holding a multi-gigabyte cold backup: only the newest stays.
+        (paths[0]/'backup').mkdir(); (paths[1]/'.agent-interface-upgrade-install').touch(); (paths[2]/'backup').mkdir()
         active=self.root/'stages'/('qualification-'+str(uuid.uuid4())); active.mkdir(mode=0o700)
         worker.atomic(active/'.agent-interface-upgrade-stage',{'schemaVersion':1,'operationId':active.name.removeprefix('qualification-'),'state':'active'})
         unrelated=self.root/'stages'/'qualification-unmarked'; unrelated.mkdir()
         instance.retain_qualification_stages()
-        self.assertTrue(stage.exists()); self.assertTrue(paths[0].exists()); self.assertTrue(paths[1].exists())
-        self.assertFalse(paths[2].exists()); self.assertFalse(paths[3].exists()); self.assertTrue(paths[4].exists())
+        self.assertTrue(stage.exists()); self.assertFalse(paths[0].exists()); self.assertFalse(paths[1].exists()); self.assertTrue(paths[2].exists())
+        self.assertFalse(paths[3].exists()); self.assertFalse(paths[4].exists()); self.assertTrue(paths[5].exists())
         self.assertTrue(active.exists()); self.assertTrue(unrelated.exists())
+        # An open maintenance window keeps its operation's stage even when a newer install exists.
+        (paths[5]/'backup').mkdir(); os.utime(paths[5]/'.agent-interface-upgrade-stage',ns=(0,0))
+        instance.state=dict(instance.state, phase='failed', maintenance=True, qualification={'stage': str(paths[5])})
+        instance.retain_qualification_stages()
+        self.assertTrue(paths[5].exists()); self.assertTrue(paths[2].exists())
+        instance.state=dict(instance.state, maintenance=False)
+        instance.retain_qualification_stages()
+        self.assertFalse(paths[5].exists()); self.assertTrue(paths[2].exists())
+
+    def test_a_check_refuses_to_stage_without_headroom(self):
+        usage=type('Usage',(),{'free':5*1024**3,'total':72*1024**3,'used':67*1024**3})()
+        with patch.object(worker.shutil,'disk_usage',return_value=usage):
+            operation=str(uuid.uuid4()); worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'checking','checks':[],'message':'Checking'})
+            with self.assertRaises(Exception): worker.Worker(self.config,self.state,'check',operation).main()
+        self.assertEqual(self.status()['phase'],'failed')
+        self.assertFalse(list((self.root/'stages').glob('qualification-'+operation)))
 
 if __name__ == '__main__': unittest.main()

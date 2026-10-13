@@ -339,3 +339,12 @@ those directories as namespace packages, so without them a qualified runtime nev
 installed one. Caches, `.hermes`, `venv` and the names the snapshot itself skips are not
 copied. An ignored Python file or link requires installer review. On Oct 13, 2026 this was
 proven by rebuilding the installed revision this way: its fingerprint equalled the live one.
+
+Disk space is checked twice before it can matter. A check refuses to stage without
+`minimumFreeBytes` free (20 GB by default), after removing older stages: the two newest probe
+stages and the newest install stage, the latest recovery point, are kept, along with any stage
+a pending install or open maintenance window needs. The cold backup totals what both archives
+will read and refuses, before stopping Hermes, unless that much plus `backupReserveBytes` (5 GB)
+is free. If a backup still fails, Hermes is restarted before anything is written, because a full
+disk can make even logging fail. On Oct 13, 2026 a backup filled the disk with services stopped
+and the household lost its assistants for 84 minutes.

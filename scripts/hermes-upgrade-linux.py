@@ -6,6 +6,7 @@ managed dependency state, never old rotating OAuth grants from the home archive.
 """
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -350,9 +351,13 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if record["phase"] != "quiescent": raise RuntimeError("Cold backup requires verified quiescence")
         self.gateway(draining=True)
         self.materialize_candidate()
-        # Archives read every file while Hermes is stopped. Find an unreadable one before that.
-        self.readable(self.source)
-        self.readable(self.home, excluded=self.source)
+        # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
+        # room for them, before that: on Oct 13, 2026 a full disk stopped a backup mid-archive.
+        needed = self.readable(self.source) + self.readable(self.home, excluded=self.source)
+        free, reserve = shutil.disk_usage(self.stage).free, self.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        if free < needed + reserve:
+            raise RuntimeError("The cold backup needs about %d GB free and only %d GB is free. Free space on the Hermes host before updating"
+                               % (-(-(needed + reserve) // 1024 ** 3), free // 1024 ** 3))
         self.gateway(draining=True)
         self.control("stop")
         self.save(dict(record, phase="stopped"))
@@ -369,9 +374,11 @@ print(json.dumps({'ok':True,'state':'synced'}))
             hashes["protected.json"] = digest(self.backup_dir / "protected.json")
             self.save(dict(record, phase="backed_up", archives=hashes))
         except Exception as error:
-            # Name the failure before restarting, so a restart problem cannot hide it.
-            print("Cold backup failed: " + describe(error), file=sys.stderr, flush=True)
-            self.control("start")
+            # Restart Hermes before writing anything: a full disk can make even logging fail.
+            # The cause is named either way, so a restart problem cannot hide it.
+            try: self.control("start")
+            finally:
+                with contextlib.suppress(OSError): print("Cold backup failed: " + describe(error), file=sys.stderr, flush=True)
             self.wait_gateway(draining=True, seconds=self.config.get("gatewayStartSeconds", 120))
             self.save(dict(record, phase="quiescent"))
             raise
@@ -380,6 +387,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         def refuse(path):
             raise RuntimeError("The cold backup cannot read " + str(path) + ". Make it readable by this account or move it out of Hermes before updating")
         def failed(error): refuse(error.filename)
+        total = 0
         for directory, names, files in os.walk(root, onerror=failed):
             current = Path(directory)
             if excluded is not None and current == excluded:
@@ -391,7 +399,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
             for name in files:
                 path = current / name
                 # Archives keep links as links; only regular files are read.
-                if not path.is_symlink() and path.is_file() and not os.access(path, os.R_OK): refuse(path)
+                if path.is_symlink() or not path.is_file(): continue
+                if not os.access(path, os.R_OK): refuse(path)
+                total += path.lstat().st_size
+        return total
 
     def materialize_candidate(self):
         # A production promisor clone can have the candidate commit but none of
