@@ -421,8 +421,9 @@ def selected_file(home, relative):
         raise IntegrationError("Hermes protects this file from direct reads. Use the owning integration instead.")
     # Walk by descriptors to avoid symlink swapping between check and read. Folders on the
     # way open with O_PATH, which needs only search permission: a service in a user
-    # namespace, such as the updater's qualification, may not read "/" itself.
-    walk = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW
+    # namespace, such as the updater's qualification, may not read "/" itself. Platforms
+    # without O_PATH, such as macOS, walk with readable descriptors as before.
+    walk = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open(root.anchor, walk)
     try:
         for component in root.parts[1:]:
