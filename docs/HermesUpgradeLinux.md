@@ -55,6 +55,7 @@ The platform configuration can live at
   "dashboardOrigin": "http://127.0.0.1:9119",
   "discordConnections": ["discord", "second-profile:discord"],
   "drainAcknowledgeSeconds": 15,
+  "gatewayStartSeconds": 120,
   "verificationSeconds": 120,
   "regressionPython": "/usr/bin/python3",
   "regressionCommands": {
@@ -229,11 +230,16 @@ acknowledgement from the current systemd process, its exact code SHA and home,
 and zero native chat, cron, API, or deferred work. Active or unknown work blocks
 shutdown. Exit code `75` means the hook proved that its gate and drain were
 released and that source, settings, and service processes stayed unchanged.
-Other failures keep maintenance closed for installer review.
+Other failures keep maintenance closed for installer review. A failed cold backup
+names its cause before restarting the services, and a restarted gateway gets
+`gatewayStartSeconds` to report, so a slow start cannot hide the original failure.
+Verification allows a just-started gateway its whole `verificationSeconds`.
 
 After quiescence, the backup hook stops the gateway and dashboard and creates
 private cold archives of source, Git branch/configuration, and the shared home.
-Before stopping either service, the helper imports the qualified candidate's
+Before stopping either service, the helper checks that it can read every file both
+archives will include, so an unreadable file such as a root-owned operation copy fails
+without downtime. It then imports the qualified candidate's
 reachable Git objects from staging into the installed object store and proves
 they can be read without upstream access. This bounded private pack transfer
 changes no installed branches, tags, Git configuration, index, or working files.
@@ -319,3 +325,9 @@ its original receipt, bound to that source and the current integration digest.
 The worker never manufactures qualification evidence. Missing evidence or an
 ambiguous release requires installer review. Updating the app's qualification
 inputs requires new real integration evidence before enabling host recovery.
+
+Repair hashes cover `git diff HEAD --binary` text. Every helper, worker and release tool
+pins `core.abbrev=10`, the length all recorded hashes used, so a growing object store or a
+local Git setting cannot change a hash for identical content. Release preparation points
+the worker's hooks at the new release's platform helper, the same file activation checks
+against `fixedHelperSha256`.

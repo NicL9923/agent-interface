@@ -32,7 +32,8 @@ def source_identity(source):
     revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], stderr=subprocess.PIPE).decode().strip()
     if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
         raise RuntimeError("Managed source must have an exact Git revision")
-    patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary"], stderr=subprocess.PIPE)
+    # Pin abbreviated object names: repair hashes cover diff text, and every recorded hash used 10.
+    patch = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"], stderr=subprocess.PIPE)
     return {"revision": revision, "patchSha256": sha(patch)}
 
 

@@ -17,6 +17,7 @@ import resource
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.error
@@ -25,6 +26,9 @@ import uuid
 
 ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish", "recover", "restart_service")
 MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
+# Repair hashes cover `git diff` text, whose abbreviated object names grow with the repository
+# unless pinned. Every recorded hash used ten characters.
+GIT_ABBREV = ("-c", "core.abbrev=10")
 
 
 def private(path, directory=False):
@@ -147,7 +151,7 @@ class Platform:
             pass_fds=tuple(int(self.env[key]) for key in ("HERMES_UPGRADE_LOCK_FD", "HERMES_UPGRADE_CLAIM_FD") if self.env.get(key))).stdout
 
     def git(self, path, *args):
-        return self.run(["git", "-C", str(path), *args], capture=True)
+        return self.run(["git", *GIT_ABBREV, "-C", str(path), *args], capture=True)
 
     def source_state(self, path=None):
         path = path or self.source
@@ -292,8 +296,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if json.loads(marker.read_text()).get("principal") != "agent-interface:" + self.operation: raise RuntimeError("Refusing to release another owner's gateway drain")
         marker.unlink()
 
-    def wait_gateway(self, draining=False, after=None):
-        deadline = time.monotonic() + self.config.get("drainAcknowledgeSeconds", 15)
+    def wait_gateway(self, draining=False, after=None, seconds=None):
+        deadline = time.monotonic() + (self.config.get("drainAcknowledgeSeconds", 15) if seconds is None else seconds)
         while True:
             try: return self.gateway(draining=draining, after=after)
             except ActiveWork: raise
@@ -346,6 +350,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if record["phase"] != "quiescent": raise RuntimeError("Cold backup requires verified quiescence")
         self.gateway(draining=True)
         self.materialize_candidate()
+        # Archives read every file while Hermes is stopped. Find an unreadable one before that.
+        self.readable(self.source)
+        self.readable(self.home, excluded=self.source)
         self.gateway(draining=True)
         self.control("stop")
         self.save(dict(record, phase="stopped"))
@@ -361,11 +368,30 @@ print(json.dumps({'ok':True,'state':'synced'}))
             atomic(self.backup_dir / "protected.json", protected)
             hashes["protected.json"] = digest(self.backup_dir / "protected.json")
             self.save(dict(record, phase="backed_up", archives=hashes))
-        except Exception:
+        except Exception as error:
+            # Name the failure before restarting, so a restart problem cannot hide it.
+            print("Cold backup failed: " + describe(error), file=sys.stderr, flush=True)
             self.control("start")
-            self.wait_gateway(draining=True)
+            self.wait_gateway(draining=True, seconds=self.config.get("gatewayStartSeconds", 120))
             self.save(dict(record, phase="quiescent"))
             raise
+
+    def readable(self, root, excluded=None):
+        def refuse(path):
+            raise RuntimeError("The cold backup cannot read " + str(path) + ". Make it readable by this account or move it out of Hermes before updating")
+        def failed(error): refuse(error.filename)
+        for directory, names, files in os.walk(root, onerror=failed):
+            current = Path(directory)
+            if excluded is not None and current == excluded:
+                names[:] = []
+                continue
+            for name in names:
+                path = current / name
+                if not path.is_symlink() and path != excluded and not os.access(path, os.R_OK | os.X_OK): refuse(path)
+            for name in files:
+                path = current / name
+                # Archives keep links as links; only regular files are read.
+                if not path.is_symlink() and path.is_file() and not os.access(path, os.R_OK): refuse(path)
 
     def materialize_candidate(self):
         # A production promisor clone can have the candidate commit but none of
@@ -373,7 +399,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # fetch negotiation would skip objects for that already-present commit.
         offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
         def read_git(*args):
-            return subprocess.check_output(["git", "-C", str(self.source), *args], env=offline, stderr=subprocess.PIPE).decode()
+            return subprocess.check_output(["git", *GIT_ABBREV, "-C", str(self.source), *args], env=offline, stderr=subprocess.PIPE).decode()
         def metadata():
             rows = [read_git("rev-parse", "HEAD"), read_git("diff", "HEAD", "--binary"), read_git("for-each-ref", "--format=%(objectname) %(refname)"),
                 read_git("rev-parse", "--symbolic-full-name", "HEAD"), read_git("config", "--local", "--null", "--list")]
@@ -438,7 +464,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
             if current["FragmentPath"] != original["FragmentPath"] or current["fragmentSha256"] != original["fragmentSha256"]: raise RuntimeError("A native/app unit changed")
         deadline = time.monotonic() + self.config.get("verificationSeconds", 120)
         while True:
-            gateway = self.wait_gateway(draining=True)
+            # A just-started gateway takes a while to report; the whole verification window applies.
+            gateway = self.wait_gateway(draining=True, seconds=max(1, deadline - time.monotonic()))
             if all(gateway.get("platforms", {}).get(key, {}).get("state") == "connected" for key in baseline["discordConnections"]): break
             if time.monotonic() >= deadline: raise RuntimeError("Both original Discord connections were not restored")
             time.sleep(.5)
@@ -569,6 +596,13 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save(dict(record, phase="finished"))
 
 
+def describe(error):
+    """A failure class and, for file errors, the path. Never command output or exception text."""
+    if isinstance(error, RuntimeError): return str(error)
+    if isinstance(error, OSError) and error.filename: return type(error).__name__ + " on " + str(error.filename)
+    return type(error).__name__
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -580,7 +614,7 @@ def main():
     except Exception as error:
         # Private worker logs record only the fixed failure class, never source
         # command output which could contain credentials or native session keys.
-        detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+        detail = describe(error)
         raise SystemExit("Linux upgrade hook failed: " + detail + ". Maintenance remains closed for installer review")
 
 

@@ -40,14 +40,14 @@ elif action=='backup':
     target=pathlib.Path(os.environ['HERMES_UPGRADE_BACKUP_DIR']); target.mkdir()
     revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD']).decode().strip()
     (target/'revision').write_text(revision)
-    (target/'repair.patch').write_bytes(subprocess.check_output(['git','-C',str(source),'diff','HEAD','--binary']))
+    (target/'repair.patch').write_bytes(subprocess.check_output(['git','-c','core.abbrev=10','-C',str(source),'diff','HEAD','--binary']))
 elif action=='install':
     if (stage/'pause-install').exists():
         (stage/'install-entered').touch()
         while not (stage/'resume-install').exists(): time.sleep(.02)
     assert (stage/'gate').exists() and (stage/'backup/revision').exists()
     subprocess.run(['git','-C',str(source),'reset','--hard',os.environ['HERMES_UPGRADE_CANDIDATE']],check=True)
-    repair=subprocess.check_output(['git','-C',str(stage/'source'),'diff','HEAD','--binary'])
+    repair=subprocess.check_output(['git','-c','core.abbrev=10','-C',str(stage/'source'),'diff','HEAD','--binary'])
     if repair: subprocess.run(['git','-C',str(source),'apply','--index','-'],input=repair,check=True)
 elif action=='verify':
     if (stage/'fail-verify').exists() and os.environ.get('HERMES_UPGRADE_ROLLBACK')!='1': raise SystemExit(1)
@@ -142,7 +142,7 @@ class QualificationWorkerTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="agent-interface-upgrade-worker-test-")
         self.root = Path(self.temporary.name).resolve()
         self.source = self.root / "source"; self.source.mkdir()
-        def git(*args): return subprocess.check_output(["git", "-C", str(self.source), *args], stderr=subprocess.DEVNULL)
+        def git(*args): return subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.source), *args], stderr=subprocess.DEVNULL)
         self.git = git
         git("init"); git("config", "user.email", "fixture@example.invalid"); git("config", "user.name", "Fixture")
         (self.source / "version").write_text("old")
@@ -358,7 +358,7 @@ print("fixture integration command complete")
         (self.app / 'scripts/spike/run.py').write_text('''import hashlib, subprocess, sys
 source = sys.argv[sys.argv.index('--source') + 1]
 expected = sys.argv[sys.argv.index('--source-patch-sha256') + 1]
-actual = subprocess.check_output(['git','-C',source,'diff','HEAD','--binary'])
+actual = subprocess.check_output(['git','-c','core.abbrev=10','-C',source,'diff','HEAD','--binary'])
 assert hashlib.sha256(actual).hexdigest() == expected
 print('fixture real candidate patch identity passed')
 ''')

@@ -62,7 +62,7 @@ with log_path.open("wb") as log:
             assert response.status == 200 and "<html" in html.lower() and "<script" in html.lower()
         revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"]).decode().strip()
         import hashlib
-        patch = hashlib.sha256(subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])).hexdigest()
+        patch = hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD"])).hexdigest()
         result = {"revision": revision, "trackedPatchSha256": patch, "checks": {"managed_runtime_bootstrap": True, "original_dashboard_cli_startup": True, "fresh_home_native_profiles": True, "private_service_ticket": True, "dashboard_html_preserved": True}}
     finally:
         if process.poll() is None:

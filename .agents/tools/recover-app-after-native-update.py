@@ -132,7 +132,7 @@ class Recovery:
 
     def source_state(self):
         revision = self.call("run", ["git", "-C", str(self.source), "rev-parse", "HEAD"]).strip()
-        patch = subprocess.check_output(["git", "-C", str(self.source), "diff", "HEAD", "--binary"], timeout=30)
+        patch = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.source), "diff", "HEAD", "--binary"], timeout=30)
         return revision, hashlib.sha256(patch).hexdigest()
 
     def assert_fences(self):
