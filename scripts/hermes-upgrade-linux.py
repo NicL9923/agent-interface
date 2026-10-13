@@ -469,11 +469,12 @@ print(json.dumps({'ok':True,'state':'synced'}))
             if all(gateway.get("platforms", {}).get(key, {}).get("state") == "connected" for key in baseline["discordConnections"]): break
             if time.monotonic() >= deadline: raise RuntimeError("Both original Discord connections were not restored")
             time.sleep(.5)
-        gate = self.rpc("status")
+        gate = verifying("native maintenance status", lambda: self.rpc("status"))
         if gate.get("active") is not True or gate.get("operationId") != self.operation: raise RuntimeError("Native maintenance gate ownership was lost")
-        self.anonymous_rejection(); self.google()
+        verifying("anonymous rejection", self.anonymous_rejection)
+        verifying("original Google sign-in", self.google)
         expected_runtime = baseline["runtime"] if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1" else json.loads(self.env["HERMES_UPGRADE_RUNTIME_FINGERPRINT"])
-        self.runtime(expected_runtime)
+        verifying("managed runtime", lambda: self.runtime(expected_runtime))
         self.save(dict(record, phase="verified", verifiedRevision=expected[0], verifiedSource=expected))
 
     def extract(self, name, destination, prefix=None):
@@ -596,11 +597,38 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save(dict(record, phase="finished"))
 
 
+# Only these exception class names are logged; any other text from a failed command is untrusted.
+KNOWN_ERRORS = frozenset((
+    "ModuleNotFoundError", "ImportError", "AttributeError", "TypeError", "ValueError", "KeyError", "IndexError",
+    "RuntimeError", "AssertionError", "NotImplementedError", "SystemExit", "KeyboardInterrupt", "RecursionError",
+    "OSError", "FileNotFoundError", "PermissionError", "TimeoutError", "ConnectionError", "ConnectionRefusedError",
+    "ConnectionResetError", "BrokenPipeError", "JSONDecodeError", "UnicodeDecodeError", "HTTPError", "URLError",
+    "SSLError", "InvalidStatus", "InvalidHandshake", "InvalidURI", "ConnectionClosed", "ConnectionClosedError",
+    "ConnectionClosedOK", "HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"))
+
+
 def describe(error):
-    """A failure class and, for file errors, the path. Never command output or exception text."""
+    """A failure class and, for file errors, the path. Never command output or exception text.
+    A failed command reports its exit code and the exception class its last error line names."""
     if isinstance(error, RuntimeError): return str(error)
     if isinstance(error, OSError) and error.filename: return type(error).__name__ + " on " + str(error.filename)
+    if isinstance(error, subprocess.CalledProcessError):
+        stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""
+        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        named = re.match(r"([A-Za-z_][\w.]*)\s*(?::|$)", lines[-1]) if lines else None
+        known = named.group(1).rsplit(".", 1)[-1] if named else None
+        return "CalledProcessError (exit " + str(error.returncode) + ", " + (known if known in KNOWN_ERRORS else "unrecognized error") + ")"
     return type(error).__name__
+
+
+def verifying(step, work):
+    """Name the verification step that failed, so a rollback says what to fix."""
+    try:
+        return work()
+    except ActiveWork:
+        raise
+    except Exception as error:
+        raise RuntimeError(step + " failed: " + describe(error)) from None
 
 
 def main():
