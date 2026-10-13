@@ -343,24 +343,33 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     if (value !== undefined && value !== null) return JSON.stringify(value, null, 2);
     return undefined;
   }
-  // Tool search runs deferred and connector tools through one bridge tool. Name the tools it ran.
-  function bridgedName(name: unknown, args: unknown): unknown {
-    if (name !== 'tool_call') return name;
-    let value = args;
-    if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return name; } }
-    const calls = value && typeof value === 'object' && Array.isArray((value as Wire).calls) ? (value as Wire).calls as Wire[] : [];
-    const names = [...new Set(calls.map(call => call?.name).filter((item): item is string => typeof item === 'string' && !!item))];
-    return names.length ? names.join(', ') : name;
+  // Tool search runs deferred and connector tools through one bridge tool, tool_call. Show the tools it
+  // ran, accepting every form Hermes's own normalizer does. One call shows as itself, arguments included.
+  function bridged(name: unknown, args: unknown): {name: unknown; args: unknown} {
+    if (name !== 'tool_call') return {name, args};
+    const parse = (value: unknown) => { if (typeof value !== 'string') return value; try { return JSON.parse(value); } catch { return value; } };
+    const value = parse(args);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {name, args};
+    let calls = (value as Wire).calls === undefined ? (value as Wire).name ? [{name: (value as Wire).name, arguments: (value as Wire).arguments}] : [] : parse((value as Wire).calls);
+    if (calls && typeof calls === 'object' && !Array.isArray(calls)) calls = [calls];
+    const entries = (Array.isArray(calls) ? calls : []).filter((call): call is Wire => !!call && typeof call === 'object' && typeof call.name === 'string' && !!call.name);
+    if (!entries.length) return {name, args};
+    if (entries.length === 1) return {name: entries[0].name, args: parse(entries[0].arguments) ?? {}};
+    return {name: [...new Set(entries.map(call => call.name))].join(', '), args};
+  }
+  function unbridged(call: ToolCall): ToolCall {
+    const shown = bridged(call.name, call.arguments);
+    return shown.name === call.name ? call : {...call, name: shown.name as string, arguments: exposedText(shown.args)};
   }
   function toolDetails(payload: Wire, id: string, status: ToolCall['status'], previous?: ToolCall): ToolCall {
     let result = payload.result;
     if (typeof result === 'string') { try { result = JSON.parse(result); } catch { /* Original text remains inspectable. */ } }
     const failed = result && typeof result === 'object' && (result.success === false || result.ok === false ||
       typeof result.error === 'string' && result.error.length > 0 || typeof result.exit_code === 'number' && result.exit_code !== 0);
-    const name = bridgedName(payload.name, payload.args ?? payload.args_text);
-    return {...previous, id, name: typeof name === 'string' ? name : previous?.name ?? 'Tool',
+    const shown = bridged(payload.name, payload.args ?? payload.args_text);
+    return {...previous, id, name: typeof shown.name === 'string' ? shown.name : previous?.name ?? 'Tool',
       status: status === 'completed' && failed ? 'failed' : status,
-      arguments: exposedText(payload.args) ?? (typeof payload.args_text === 'string' ? payload.args_text : previous?.arguments),
+      arguments: exposedText(shown.args) ?? previous?.arguments,
       ...(status !== 'running' ? {result: exposedText(payload.result) ?? payload.result_text,
         error: failed && typeof result.error === 'string' ? result.error : undefined} : {}),
       ...(status === 'running' ? {startedAt: previous?.startedAt ?? new Date().toISOString()} : {completedAt: new Date().toISOString()})};
@@ -677,14 +686,14 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         const createdAt=typeof row.timestamp==='number'&&Number.isFinite(row.timestamp)?new Date(row.timestamp*1000).toISOString():undefined;
         let toolCall:ToolCall|undefined;
         if(row.role==='tool') {
-          if(row.app_tool_call&&typeof row.app_tool_call.id==='string'&&typeof row.app_tool_call.name==='string') toolCall={...row.app_tool_call,name:bridgedName(row.app_tool_call.name,row.app_tool_call.arguments)};
+          if(row.app_tool_call&&typeof row.app_tool_call.id==='string'&&typeof row.app_tool_call.name==='string') toolCall=unbridged(row.app_tool_call);
           else {
             const result = row.app_tool_result ?? row.content;
             toolCall=toolDetails({name:row.name,args:row.args,...(result!==undefined?{result}:{})},String(row.tool_call_id??row.row_id??`${sid}-${index}`),'completed');
             toolCall.completedAt=createdAt;
           }
         }
-        return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),runId:typeof row.app_run_id==='string'?row.app_run_id:undefined,role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:bridgedName(row.name,row.args),toolCall,files:artifacts(botId,row)};
+        return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),runId:typeof row.app_run_id==='string'?row.app_run_id:undefined,role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:bridged(row.name,row.args).name,toolCall,files:artifacts(botId,row)};
       });
       const state=transient.get(sid);const inflight=value.inflight??{};
       const active=!!value.info?.running||!!value.app_run_id;
@@ -722,7 +731,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           detail:secure?'Enter this value securely. It will go directly to Hermes without becoming a chat message.':x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
           secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
       });
-      const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map((call:ToolCall)=>({...call,name:bridgedName(call.name,call.arguments) as string})):state?.tools??[];
+      const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
       return {botId,sessionId:value.canonical_stored_session_id??value.stored_session_id??value.info?.stored_session_id??sid,messages:rows,activity:{state:value.app_interruption?'interrupted':attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined},toolCalls:active?toolCalls:[],approvals,attention,files:rows.flatMap(x=>x.files??[])};},
