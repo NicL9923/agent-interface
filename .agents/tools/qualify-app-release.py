@@ -93,7 +93,7 @@ assert sha(patch) == worker["requiredPatchSha256"]
 
 def snapshot(path):
     revision = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
-    diff = subprocess.check_output(["git", "-C", str(path), "diff", "HEAD", "--binary"])
+    diff = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(path), "diff", "HEAD", "--binary"])
     return revision, hashlib.sha256(diff).hexdigest()
 
 baseline = snapshot(live)
@@ -104,7 +104,7 @@ assert baseline[0] == PAYLOAD["hermesRevision"]
 repair_worker = runpy.run_path(str(release / "scripts/hermes-upgrade-worker.py"))
 repair_owner = types.SimpleNamespace(config=worker, source=live, environment=dict(os.environ))
 repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
-    subprocess.check_output(["git", "-C", str(live), "diff", "HEAD", "--binary"]))
+    subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(live), "diff", "HEAD", "--binary"]))
 browser_facts = home / "tools/facts.json"
 browser = repair_worker["native_chromium"](home)
 host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
@@ -137,7 +137,7 @@ try:
     # in-app update merged it over adjacent upstream edits, the original artifact no
     # longer applies. The snapshot comparison below still requires the exact tree.
     installed_repair = stage / "installed-repair.patch"
-    installed_repair.write_bytes(subprocess.check_output(["git", "-C", str(live), "diff", "HEAD", "--binary"]))
+    installed_repair.write_bytes(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(live), "diff", "HEAD", "--binary"]))
     installed_repair.chmod(0o600)
     if installed_repair.stat().st_size:
         run(["git", "-C", source, "apply", "--index", installed_repair], "source-repair.log")

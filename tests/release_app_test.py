@@ -107,6 +107,16 @@ class ReleaseRules(unittest.TestCase):
         self.assertEqual(config["newWorkerConfig"], {"appRoot": "/srv/app/releases/new", "qualificationReceipt": "q", "live": True})
         self.assertEqual(config["profileHashes"], {"/home/config.yaml": "now"})
 
+    def test_upgrade_hooks_run_the_new_release_helper(self):
+        helper = "/srv/app/releases/integrations-recovery/scripts/hermes-upgrade-linux.py"
+        hooks = {"backup": ["/py", helper, "--config", "/srv/app/shared/hermes-linux.json", "backup"],
+                 "regressions": [["/py", helper, "regressions"], ["/py", "/srv/app/shared/upgrade-private/regressions.py"]]}
+        config = self.config(worker={"appRoot": "/srv/app/releases/old", "hooks": hooks})
+        new = "/srv/app/releases/new/scripts/hermes-upgrade-linux.py"
+        self.assertEqual(config["newWorkerConfig"]["hooks"], {
+            "backup": ["/py", new, "--config", "/srv/app/shared/hermes-linux.json", "backup"],
+            "regressions": [["/py", new, "regressions"], ["/py", "/srv/app/shared/upgrade-private/regressions.py"]]})
+
     def test_installed_hermes_comes_from_live_state(self):
         config = self.config(hermes_revision="e" * 40, repair_sha="new-repair")
         self.assertEqual((config["hermesRevision"], config["repairSha256"]), ("e" * 40, "new-repair"))
@@ -325,7 +335,7 @@ class HostPrograms(unittest.TestCase):
         self.assertFalse(facts["maintenance"] or facts["leasePresent"] or facts["drainPresent"])
         self.assertEqual(older["node"], "old-node")
         head = subprocess.check_output(["git", "-C", str(self.host.source), "rev-parse", "HEAD"], text=True).strip()
-        repair = subprocess.check_output(["git", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
+        repair = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
         self.assertEqual((facts["hermesRevision"], facts["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
         self.assertEqual(facts["workerSha256"], hashlib.sha256((self.host.base / "shared/hermes-worker.json").read_bytes()).hexdigest())
 
@@ -478,7 +488,7 @@ class HostPrograms(unittest.TestCase):
         config = json.loads(path.read_text())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         head = subprocess.check_output(["git", "-C", str(self.host.source), "rev-parse", "HEAD"], text=True).strip()
-        repair = subprocess.check_output(["git", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
+        repair = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
         release = str((self.host.base / "releases/release-live").resolve())
         self.assertEqual({key for key in config if config[key] != prior.get(key)},
                          {"expectedRelease", "hermesRevision", "repairSha256", "newQualificationReceipt",

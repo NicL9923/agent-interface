@@ -70,7 +70,8 @@ def now():
 
 
 def git(source, *args):
-    return subprocess.check_output(["git", "-C", str(source), *args], stderr=subprocess.PIPE)
+    # Pin abbreviated object names: repair hashes cover diff text, and every recorded hash used 10.
+    return subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), *args], stderr=subprocess.PIPE)
 
 
 def git_tag_refs(source):

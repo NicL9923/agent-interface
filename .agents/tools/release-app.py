@@ -55,6 +55,16 @@ def built_web_version(build_log):
     return found[-1]
 
 
+def helper_hooks(value, release):
+    """Point upgrade hooks at the release's own platform helper, the file activation verifies
+    against fixedHelperSha256. A pinned older copy would silently keep running instead."""
+    if isinstance(value, dict): return {key: helper_hooks(item, release) for key, item in value.items()}
+    if isinstance(value, list): return [helper_hooks(item, release) for item in value]
+    if isinstance(value, str) and value.endswith("/scripts/hermes-upgrade-linux.py"):
+        return str(Path(release) / "scripts/hermes-upgrade-linux.py")
+    return value
+
+
 def derive_config(prior, *, release, current, operation, web_build, worker, profile_hashes,
                   helper_sha, hermes_revision, repair_sha, qualification=None):
     """The next guarded deploy configuration.
@@ -69,7 +79,7 @@ def derive_config(prior, *, release, current, operation, web_build, worker, prof
         expectedRelease=str(current),
         operationId=str(operation),
         webBuild=web_build,
-        newWorkerConfig={**worker, "appRoot": str(release)},
+        newWorkerConfig={**worker, "appRoot": str(release), **({"hooks": helper_hooks(worker["hooks"], release)} if "hooks" in worker else {})},
         profileHashes={path: profile_hashes[path] for path in prior["profileHashes"]},
         fixedHelperSha256=helper_sha,
         hermesRevision=hermes_revision,
@@ -171,7 +181,7 @@ status = json.loads((Path(prior["upgradeStateDir"]) / "status.json").read_text()
 source = prior["source"]
 finish({
     "hermesRevision": subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip(),
-    "repairSha256": hashlib.sha256(subprocess.check_output(["git", "-C", source, "diff", "HEAD", "--binary"])).hexdigest(),
+    "repairSha256": hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", source, "diff", "HEAD", "--binary"])).hexdigest(),
     "workerSha256": sha(base / "shared/hermes-worker.json"),
     "priorPath": str(best[1]), "prior": prior, "current": str((base / "current").resolve()),
     "worker": json.loads((base / "shared/hermes-worker.json").read_text()),
@@ -256,7 +266,7 @@ else:
     config = dict(prior,
         release=str(release), expectedRelease=str(release), operationId=operation,
         hermesRevision=subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
-        repairSha256=hashlib.sha256(subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest(),
+        repairSha256=hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest(),
         newQualificationReceipt=PAYLOAD["receipt"],
         profileHashes={item: fingerprint(item) for item in prior["profileHashes"]},
         preservedFiles={str(item): fingerprint(item) for item in preserved if os.path.lexists(item)},

@@ -59,7 +59,7 @@ opened=False
 with claim:
  os.environ["HERMES_UPDATE_HANDOFF_PID"]=str(claim.owner_pid)
  assert run(["git","-C",str(source),"rev-parse","HEAD"]).strip()==c["hermesRevision"]
- assert hashlib.sha256(subprocess.check_output(["git","-C",str(source),"diff","HEAD","--binary"])).hexdigest()==c["repairSha256"]
+ assert hashlib.sha256(subprocess.check_output(["git","-c","core.abbrev=10","-C",str(source),"diff","HEAD","--binary"])).hexdigest()==c["repairSha256"]
  gate=rpc("status");assert gate["active"] is False and gate["busy"]==[]
  assert ready_gateway("running")
  record=gateway_state();assert type(record.get("active_agents")) is int and record["active_agents"]==0 and "active_work" in record and record["active_work"] in (None,[])

@@ -38,7 +38,8 @@ def source_state():
     import hermes_cli
     source = Path(hermes_cli.__file__).resolve().parents[1]
     actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])
+    # Pin abbreviated object names: repair hashes cover diff text, and every recorded hash used 10.
+    patch = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD"])
     patch_hash = hashlib.sha256(patch).hexdigest() if patch else None
     known = actual in QUALIFIED_REVISIONS and patch_hash in (None, QUALIFIED_OAUTH_PATCH)
     if not known:

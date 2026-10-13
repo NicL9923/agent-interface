@@ -1,12 +1,16 @@
 """Temporary-host tests. No real service, network, or production home is touched."""
+import contextlib
 import datetime as dt
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 import uuid
 
@@ -46,7 +50,13 @@ class FixturePlatform(linux.Platform):
 
     def control(self, verb):
         super().control(verb)
-        if verb == "start": self.write_gateway("draining")
+        if verb == "start":
+            # A real gateway takes a while after starting before it reports its state.
+            if getattr(self, "start_delay", 0):
+                self.write_gateway("starting")
+                timer = threading.Timer(self.start_delay, self.write_gateway, ("draining",)); timer.start()
+                self.timers = [*getattr(self, "timers", []), timer]
+            else: self.write_gateway("draining")
 
     def google(self): return {"authenticatedHttp": True, "freshWebsocket": True}
     def anonymous_rejection(self): pass
@@ -265,6 +275,46 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual((self.source / "app.py").read_text(), "new runtime\n")
         self.assertEqual(self.git("config", "--get", "remote.origin.promisor").strip(), "true")
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
+
+    def test_unreadable_file_refuses_cold_backup_before_service_shutdown(self):
+        self.platform.quiescence()
+        before = self.states.read_bytes()
+        locked = self.home / "operations/old-caddy/Caddyfile"; locked.parent.mkdir(parents=True)
+        locked.write_text("root-only copy"); locked.chmod(0)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "cannot read .*operations/old-caddy/Caddyfile"): self.platform.backup()
+        finally: locked.chmod(0o600)
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_verification_waits_for_a_gateway_that_reports_slowly_after_restart(self):
+        self.platform.config["verificationSeconds"] = 10
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        self.platform.start_delay = 0.6
+        self.platform.control("stop"); self.platform.control("start")
+        self.platform.verify()
+        self.assertEqual(self.platform.load()["phase"], "verified")
+
+    def test_cold_backup_names_its_failure_even_when_restarting_fails(self):
+        self.platform.quiescence()
+        archive = self.platform.archive
+        def failing(path, source, excluded=None):
+            if path.name == "home.tar.gz": raise PermissionError(13, "Permission denied", str(self.home / "locked"))
+            return archive(path, source, excluded)
+        self.platform.archive = failing
+        self.platform.start_delay = 5; self.platform.config["gatewayStartSeconds"] = 0.2
+        self.addCleanup(lambda: [timer.cancel() for timer in getattr(self.platform, "timers", [])])
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaisesRegex(RuntimeError, "Gateway state is not confirmed"):
+            self.platform.backup()
+        self.assertIn("Cold backup failed: PermissionError on " + str(self.home / "locked"), errors.getvalue())
+
+    def test_repair_hash_does_not_depend_on_the_repository_abbreviation(self):
+        pinned = self.platform.source_state()[1]
+        self.git("config", "core.abbrev", "16")
+        self.assertEqual(self.platform.source_state()[1], pinned)
+        unpinned = hashlib.sha256(subprocess.check_output(["git", "-C", str(self.source), "diff", "HEAD", "--binary"])).hexdigest()
+        self.assertNotEqual(unpinned, pinned)
 
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()

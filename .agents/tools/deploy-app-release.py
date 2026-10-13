@@ -147,7 +147,7 @@ def release_lease():
     assert value["active"] is False
 
 revision = run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip()
-patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary"])
+patch = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"])
 assert revision == c["hermesRevision"] and hashlib.sha256(patch).hexdigest() == c["repairSha256"]
 assert c["webBuild"] in (release / "dist/client/sw.js").read_text()
 before = get_status()
@@ -171,7 +171,7 @@ release_started = False
 try:
     # Recheck source under native updater ownership before stopping anything.
     assert run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip() == revision
-    assert hashlib.sha256(subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest() == c["repairSha256"]
+    assert hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest() == c["repairSha256"]
     run([c["node"], str(release / ".agents/tools/backup-app.mjs"), str(base / "shared/app.sqlite"), str(ops / "database")])
     (ops / "baseline.json").write_text(json.dumps({"oldRelease": str(old_release), "source": revision,
         "repairSha256": c["repairSha256"], "profileHashes": baseline}, indent=2) + "\n")
@@ -210,7 +210,7 @@ try:
     assert stopped.get("code_sha") == revision and stopped.get("hermes_home") == str(home)
     assert hashes() == baseline
     assert run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip() == revision
-    assert hashlib.sha256(subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest() == c["repairSha256"]
+    assert hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest() == c["repairSha256"]
     atomic(lease, (json.dumps({"operationId": operation}) + "\n").encode())
     switch(release); changed = True
     journal("release-switched")
