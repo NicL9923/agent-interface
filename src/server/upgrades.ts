@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
@@ -9,10 +9,16 @@ import type { Config } from "./config.js";
 
 type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
 // The worker keeps its own log once it runs. Output from a start that fails before then lands in
-// worker-launch.log, replaced on each launch, instead of vanishing.
+// a new private launch log per attempt, so a retry never erases the failure it follows.
+const LAUNCH_LOGS_KEPT = 10;
 export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
   script = resolve("scripts/hermes-upgrade-worker.py")) {
-  const log = openSync(join(settings.stateDirectory, "worker-launch.log"), "w", 0o600);
+  const directory = settings.stateDirectory;
+  const logs = readdirSync(directory).filter(name => /^worker-launch-.+\.log$/.test(name))
+    .map(name => ({ name, at: lstatSync(join(directory, name)).mtimeMs })).sort((a, b) => b.at - a.at);
+  for (const { name } of logs.slice(LAUNCH_LOGS_KEPT - 1)) rmSync(join(directory, name), { force: true });
+  // Exclusive creation never follows or reuses an existing path.
+  const log = openSync(join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`), "wx", 0o600);
   try {
     return spawn(settings.python, [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
       "--action", args.action, "--operation-id", args.operationId],

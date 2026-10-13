@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createApp } from "../src/server/app.js";
@@ -219,15 +219,23 @@ worker.Worker(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]).recovery(sys.argv
   expect(installation.upgrades.maintenance()).toBe(false);
 });
 
-it("keeps a worker's startup failure output instead of discarding it", async () => {
+it("keeps each worker launch's startup output privately instead of discarding it", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
   try {
     const python = join(directory, "python");
-    writeFileSync(python, "#!/bin/sh\necho \"Traceback: worker could not start\" >&2\nexit 3\n", { mode: 0o700 });
-    const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py");
-    const code = await new Promise(done => child.on("exit", done));
-    expect(code).toBe(3);
-    expect(readFileSync(join(directory, "worker-launch.log"), "utf8")).toContain("worker could not start");
-    expect(statSync(join(directory, "worker-launch.log")).mode & 0o777).toBe(0o600);
+    writeFileSync(python, "#!/bin/sh\necho \"Traceback: worker could not start $7\" >&2\nexit 3\n", { mode: 0o700 });
+    const launch = async (action: string) => {
+      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py");
+      return new Promise(done => child.on("exit", done));
+    };
+    expect(await launch("check")).toBe(3);
+    expect(await launch("install")).toBe(3);
+    const logs = readdirSync(directory).filter(name => name.startsWith("worker-launch-")).map(name => join(directory, name));
+    // A retry keeps the earlier failure; each log is private.
+    expect(logs).toHaveLength(2);
+    expect(logs.map(path => readFileSync(path, "utf8")).sort()).toEqual(["Traceback: worker could not start check\n", "Traceback: worker could not start install\n"]);
+    for (const path of logs) expect(statSync(path).mode & 0o777).toBe(0o600);
+    for (let index = 0; index < 12; index++) await launch("check");
+    expect(readdirSync(directory).filter(name => name.startsWith("worker-launch-"))).toHaveLength(10);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
