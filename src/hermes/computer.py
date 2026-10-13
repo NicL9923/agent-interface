@@ -447,7 +447,9 @@ def install_tools():
     bt._is_camofox_mode = lambda: False
     # Preserve Hermes's default browser_exec interface. Its named sessions get
     # distinct tabs in the SAME externally owned browser and cookie jar.
-    def route_harness(env, session_name, task_id, local):
+    # Newer Hermes passes force_local_sidecar so a private URL avoids a cloud browser. This route
+    # is already the local household browser, so the flag needs no different handling.
+    def route_harness(env, session_name, task_id, local, force_local_sidecar=False):
         browser_use_cli._set_cdp_env(env, endpoint)
         env[browser_use_cli._BOT_DESKTOP_BROWSER_SENTINEL] = "1"
         env["BU_AUTOSPAWN"] = "0"

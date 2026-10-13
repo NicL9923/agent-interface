@@ -33,8 +33,14 @@ class Provider(BaseHTTPRequestHandler):
                 match = re.search(r'@file:(?:"([^"\n]+)"|([^\s<>]+))', user)
                 command = "cat " + shlex.quote(match.group(1) or match.group(2)) if match else "printf missing-attachment-reference"
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-tool", "type": "function", "function": {"name": "terminal", "arguments": json.dumps({"command": command, "timeout": 10})}}]}
-        elif "PROBE_VAULT_LOGIN" in user and not after_tool and "browser_vault_save_login" in tool_names:
-            message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-vault-login", "type": "function", "function": {"name": "browser_vault_save_login", "arguments": json.dumps({"label": "Synthetic browser login"})}}]}
+        elif "PROBE_VAULT_LOGIN" in user and not after_tool and tool_names & {"browser_vault_save_login", "browser_vault", "tool_call"}:
+            # Hermes once exposed one tool per vault action, then one browser_vault tool that
+            # tool search defers behind its tool_call bridge. Use whichever form this Hermes offers.
+            label = {"label": "Synthetic browser login"}
+            name, arguments = ("browser_vault_save_login", label) if "browser_vault_save_login" in tool_names \
+                else ("browser_vault", {"action": "save_login", **label}) if "browser_vault" in tool_names \
+                else ("tool_call", {"calls": [{"name": "browser_vault", "arguments": {"action": "save_login", **label}}]})
+            message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-vault-login", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
         elif "PROBE_CLARIFY" in user and not after_tool and "clarify" in tool_names:
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-clarify", "type": "function", "function": {"name": "clarify", "arguments": json.dumps({"questions": [{"qid": "spike-question", "question": "Which synthetic option?", "choices": ["First", "Second"]}]})}}]}
         elif "markdown formatting example" in user.lower():

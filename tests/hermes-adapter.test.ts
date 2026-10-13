@@ -272,6 +272,25 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(current.toolCalls).toEqual([]);
     expect(current.activity.state).toBe('thinking');
   });
+  it('names the tools that tool search ran through its bridge', async () => {
+    const bridged = {calls:[{name:'browser_vault',arguments:{action:'list'}},{name:'mcp_calendar_list_events',arguments:{}},{name:'browser_vault',arguments:{action:'fill'}}]};
+    snapshot.info.running = true;
+    await runtime.conversation('shared');
+    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'bridge-live',name:'tool_call',args:bridged}}});
+    const live = await runtime.conversation('shared');
+    expect(live.activity.detail).toBe('Using browser_vault, mcp_calendar_list_events');
+    expect(live.toolCalls).toMatchObject([{id:'bridge-live',name:'browser_vault, mcp_calendar_list_events'}]);
+    snapshot.app_tool_calls = [{id:'run:bridge',name:'tool_call',arguments:JSON.stringify(bridged),status:'running'},
+      {id:'run:broken',name:'tool_call',arguments:'not json',status:'running'}];
+    expect((await runtime.conversation('shared')).toolCalls?.map(call => call.name)).toEqual(['browser_vault, mcp_calendar_list_events','tool_call']);
+    snapshot.info.running = false; delete snapshot.app_tool_calls;
+    snapshot.messages = [{role:'tool',row_id:9,name:'tool_call',tool_call_id:'bridge-saved',args:{calls:[{name:'session_search',arguments:{query:'gate'}}]},content:'{"results":[]}'},
+      {role:'tool',row_id:10,name:'tool_call',tool_call_id:'bridge-receipt',args:bridged,
+        app_tool_call:{id:'run:bridge-receipt',name:'tool_call',arguments:JSON.stringify(bridged),status:'completed'}}];
+    const saved = await runtime.conversation('shared');
+    expect(saved.messages.map(message => [message.toolName, message.toolCall?.name])).toEqual([
+      ['session_search','session_search'],['browser_vault, mcp_calendar_list_events','browser_vault, mcp_calendar_list_events']]);
+  });
   it('preserves durable actual tool input/output and does not keep an idle bot working', async () => {
     snapshot.messages = [{role:'tool',row_id:7,name:'terminal',tool_call_id:'call-one',args:{command:'synthetic'},
       app_tool_result:{output:'completed',exit_code:0},app_tool_call:{id:'run-one:call-one',name:'terminal',arguments:'{"command":"synthetic"}',status:'completed',result:'actual result',startedAt:'2026-09-30T00:00:00Z',completedAt:'2026-09-30T00:00:01Z'}}];
