@@ -80,7 +80,7 @@ def main():
             subprocess.run([str(python), "-m", "pip", "install", "--constraint", str(REPO / "scripts/spike/requirements.lock.txt"), "-e", str(source)], check=True)
     if subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() != args.revision:
         raise SystemExit("Unexpected source revision")
-    patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])
+    patch = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD"])
     patch_hash = hashlib.sha256(patch).hexdigest() if patch else None
     if patch_hash != args.source_patch_sha256:
         raise SystemExit("Qualification checkout repair hash differs from --source-patch-sha256")
