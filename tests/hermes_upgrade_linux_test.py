@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 import uuid
@@ -60,6 +61,7 @@ class FixturePlatform(linux.Platform):
             else: self.write_gateway("draining")
 
     def google(self): return {"authenticatedHttp": True, "freshWebsocket": True}
+    def wait_dashboard(self): self.rpc_calls.append("dashboard-ready")
     def anonymous_rejection(self): pass
     def runtime(self, expected=None):
         value = {"interpreterSha256": "fixed-python", "dependenciesSha256": "fixed-generation"}
@@ -422,6 +424,45 @@ class PlatformTests(unittest.TestCase):
         self.platform.finish()
         self.assertEqual(self.platform.load()["phase"], "finished")
         self.assertIn("release", self.platform.rpc_calls)
+
+    def test_verification_waits_for_the_dashboard_before_asking_it_anything(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        self.platform.rpc_calls.clear(); self.platform.verify()
+        self.assertEqual(self.platform.rpc_calls[:2], ["dashboard-ready", "status"])
+
+    def test_verification_checks_discord_after_the_dashboard_wait(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        def disconnect():
+            state = json.loads((self.platform.home / "gateway_state.json").read_text())
+            state["platforms"] = {key: {"state": "disconnected"} for key in state["platforms"]}
+            linux.atomic(self.platform.home / "gateway_state.json", state)
+        self.platform.wait_dashboard = disconnect
+        self.platform.config.update(verificationSeconds=1)
+        with self.assertRaisesRegex(RuntimeError, "Discord connections were not restored"): self.platform.verify()
+
+    def test_dashboard_wait_tolerates_a_slow_first_start_and_gives_up_at_its_limit(self):
+        import http.server, socket
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+        self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(port), dashboardStartSeconds=10)
+        class Status(http.server.BaseHTTPRequestHandler):
+            def do_GET(self): self.send_response(401); self.end_headers()
+            def log_message(self, *args): pass
+        servers = []
+        def start():
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Status); servers.append(server); server.serve_forever()
+        later = threading.Timer(1.5, start); later.start()
+        try:
+            started = time.monotonic()
+            linux.Platform.wait_dashboard(self.platform)
+            self.assertGreaterEqual(time.monotonic() - started, 1)
+        finally:
+            later.cancel()
+            while later.is_alive() and not servers: time.sleep(.05)
+            if servers: servers[0].shutdown(); servers[0].server_close()
+            later.join()
+        self.platform.config.update(dashboardStartSeconds=0.5)
+        with self.assertRaisesRegex(RuntimeError, "did not start listening"): linux.Platform.wait_dashboard(self.platform)
 
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()
