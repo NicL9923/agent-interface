@@ -48,8 +48,10 @@ Use the existing application API for all chat, bot, avatar, upload, file downloa
 draft, preference, routine, approval, clarification, and connection operations.
 Send `Authorization: Bearer OPAQUE_SESSION` without cookies or an Origin header.
 Native bearer sessions do not need CSRF tokens. Every request rechecks the current
-household allowlist. Expired and revoked native sessions return 401; clear the
-Keychain session and require sign-in.
+household allowlist. Expired and revoked native sessions return 401 with
+`"code": "session_expired"`; clear the Keychain session and require sign-in only
+for that code. Any other 401 is an ordinary error, and failures forwarded from
+Hermes arrive as 502.
 
 Browser APIs continue to require their HttpOnly session cookie, exact app Origin
 for writes, and CSRF token for authenticated writes. A bearer request carrying

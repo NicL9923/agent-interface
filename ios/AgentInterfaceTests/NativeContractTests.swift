@@ -17,6 +17,7 @@ private final class NativeMockProtocol: URLProtocol, @unchecked Sendable {
         server.receive(self)
     }
     override func stopLoading() {}
+    func fail(_ error: URLError) { client?.urlProtocol(self, didFailWithError: error) }
     func respond(status: Int, data: Data, headers: [String: String] = [:]) {
         guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "application/json"]) { value, _ in value }) else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -35,6 +36,11 @@ private final class NativeMockServer: @unchecked Sendable {
     private var run = "run-one"
     private var state = "idle"
     private var logoutStatus = 200
+    private var logoutCode: String?
+    private var authConfigStatus = 200
+    private var bootstrapStatus = 200
+    private var bootstrapCode: String?
+    private var offline = false
     private var connected = true
     private var conversationStatus = 200
     private var upgradeResponseStatus = 200
@@ -46,7 +52,13 @@ private final class NativeMockServer: @unchecked Sendable {
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
     var requests: [URLRequest] { lock.withLock { recorded } }
     func interrupt(runId: String) { lock.withLock { run = runId; state = "interrupted" } }
-    func failLogout() { lock.withLock { logoutStatus = 503 } }
+    func failLogout(status: Int = 503, code: String? = nil) { lock.withLock { logoutStatus = status; logoutCode = code } }
+    func failAuthConfig(_ fail: Bool = true) { lock.withLock { authConfigStatus = fail ? 503 : 200 } }
+    /// Answers bootstrap with an error, like the app server's "sign in required" 401.
+    func failBootstrap(status: Int, code: String? = nil) { lock.withLock { bootstrapStatus = status; bootstrapCode = code } }
+    /// Drops every request as if the phone had no network.
+    func setOffline(_ value: Bool) { lock.withLock { offline = value } }
+    func requestCount(_ path: String) -> Int { requests.filter { $0.url?.path == path }.count }
     func disconnect() { lock.withLock { connected = false } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
@@ -63,6 +75,7 @@ private final class NativeMockServer: @unchecked Sendable {
             if heldPaths.contains(path) { held[path] = protocolInstance; return true }
             return false
         }
+        if lock.withLock({ offline }) { protocolInstance.fail(URLError(.notConnectedToInternet)); return }
         if !delay { finish(protocolInstance) }
     }
     func release(_ path: String) {
@@ -95,9 +108,16 @@ private final class NativeMockServer: @unchecked Sendable {
     private func finish(_ protocolInstance: NativeMockProtocol) {
         let request = protocolInstance.request, path = request.url!.path
         var status = 200, data = Self.json(["ok": true])
-        if path == "/api/auth/config" { data = Self.json(["googleClientId": "google", "localDevAuth": false, "nativeAuthVersion": 1]) }
+        if path == "/api/auth/config" {
+            status = lock.withLock { authConfigStatus }
+            data = status == 200 ? Self.json(["googleClientId": "google", "localDevAuth": false, "nativeAuthVersion": 1]) : Self.json(["error": "Synthetic config outage"])
+        }
         else if path == "/api/auth/native/exchange" { data = Self.json(["token": "replacement-session", "expiresAt": "2026-10-07T09:08:21.125Z", "user": ["id": "one", "name": "One", "email": "one@example.test"]]) }
-        else if path == "/api/bootstrap" { data = bootstrapData() }
+        else if path == "/api/bootstrap" {
+            let failure = lock.withLock { (status: bootstrapStatus, code: bootstrapCode) }
+            status = failure.status
+            data = status == 200 ? bootstrapData() : Self.errorBody("Sign in required", code: failure.code)
+        }
         else if path.hasSuffix("/conversation") {
             status = lock.withLock { conversationStatus }
             data = status == 200 ? conversationData() : Self.json(["error": "Synthetic conversation outage"])
@@ -109,7 +129,11 @@ private final class NativeMockServer: @unchecked Sendable {
             data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"]) : Self.json(["error": "Synthetic admission failure"])
         } else if path.hasSuffix("/uploads") { data = Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
-        else if path == "/api/auth/logout" { status = lock.withLock { logoutStatus } }
+        else if path == "/api/auth/logout" {
+            let failure = lock.withLock { (status: logoutStatus, code: logoutCode) }
+            status = failure.status
+            if status != 200 { data = Self.errorBody("Sign in required", code: failure.code) }
+        }
         else if path.hasPrefix("/api/hermes/upgrade") {
             status = lock.withLock { upgradeResponseStatus }
             data = status == 200 ? Self.json(["available": true, "phase": "ready", "current": ["revision": "current"], "candidate": ["revision": "candidate"], "message": "Update checked", "checks": [["id": "compatibility", "label": "Compatibility", "status": "passed"]], "canCheck": true, "canInstall": true, "canRetry": true, "canCancel": false, "canRestartService": true, "operationId": "failed-update", "busyBots": []]) : Self.json(["error": "Synthetic update failure"])
@@ -126,6 +150,9 @@ private final class NativeMockServer: @unchecked Sendable {
             return
         }
         protocolInstance.respond(status: status, data: data)
+    }
+    static func errorBody(_ message: String, code: String?) -> Data {
+        json(code.map { ["error": message, "code": $0] } ?? ["error": message])
     }
     static func json(_ object: Any) -> Data { try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) }
     static func body(_ request: URLRequest) -> Data? {
@@ -269,6 +296,23 @@ private final class NativeMockServer: @unchecked Sendable {
             server.release(path); await operation.value
             XCTAssertEqual(value.draft.text, "server draft for two"); XCTAssertNil(value.pending); XCTAssertNil(value.receipt)
         }
+    }
+
+    func testOnlyTheServersSessionExpiredCodeSignsThePersonOut() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.failBootstrap(status: 401)
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.api?.token, "synthetic-native-session")
+        XCTAssertFalse(value.sessionExpired); XCTAssertEqual(value.error, "Sign in required")
+        server.failBootstrap(status: 401, code: "other_failure")
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.api?.token, "synthetic-native-session"); XCTAssertFalse(value.sessionExpired)
+        server.failBootstrap(status: 403, code: "session_expired")
+        await value.refreshBootstrap()
+        XCTAssertFalse(value.sessionExpired, "The code only counts on a 401")
+        server.failBootstrap(status: 401, code: "session_expired")
+        await value.refreshBootstrap()
+        XCTAssertNil(value.api?.token); XCTAssertTrue(value.sessionExpired)
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {

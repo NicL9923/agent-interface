@@ -673,7 +673,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func report(_ error: Error) {
     if error is CancellationError { return }
     self.error = error.localizedDescription
-    if let apiError = error as? APIError, apiError.status == 401 {
+    if let apiError = error as? APIError, apiError.isSessionExpired {
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
       pollTask?.cancel()
