@@ -476,15 +476,15 @@ class Worker:
         return runtime_fingerprint(qualification["qualificationPython"])
 
     def retain_qualification_stages(self):
-        """Keep the two newest completed probe stages and the newest completed install stage, whose
-        cold backup is the latest recovery point. Older installs' multi-gigabyte backups are only
-        history once a later operation has finished; on Oct 13, 2026 they filled the host's disk.
-        A stage a pending install or an open maintenance window still needs is never removed."""
+        """Keep the two newest completed probe stages and the newest stage whose cold backup
+        finished, the latest recovery point. Older backups and incomplete install attempts are only
+        history once their operations end; on Oct 13, 2026 they filled the host's disk. A stage a
+        pending install or an open maintenance window still needs is never removed."""
         root = Path(self.config["stageRoot"])
         if not root.exists(): return
         info = root.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077: return
-        completed, installs = [], []
+        completed, recoverable, attempts = [], [], []
         needed = self.state.get("phase") == "ready" or self.state.get("maintenance")
         protected = self.state.get("qualification", {}).get("stage") if needed else None
         for stage in root.glob("qualification-*"):
@@ -498,12 +498,14 @@ class Worker:
                 marker = private_file(stage / ".agent-interface-upgrade-stage")
                 record = json.loads(marker.read_text())
                 if record.get("schemaVersion") != 1 or record.get("operationId") != identifier or record.get("state") != "completed": continue
-                (installs if install else completed).append((marker.stat().st_mtime_ns, stage))
+                # protected.json is the backup's last write, so only then is it a recovery point.
+                bucket = (recoverable if (stage / "backup/protected.json").is_file() else attempts) if install else completed
+                bucket.append((marker.stat().st_mtime_ns, stage))
             except (OSError, ValueError, RuntimeError): continue
-        completed.sort(reverse=True); installs.sort(reverse=True)
-        keep = {stage for _, stage in completed[:2] + installs[:1]}
+        completed.sort(reverse=True); recoverable.sort(reverse=True)
+        keep = {stage for _, stage in completed[:2] + recoverable[:1]}
         if protected: keep.add(Path(protected))
-        for _, stage in completed + installs:
+        for _, stage in completed + recoverable + attempts:
             if stage not in keep: shutil.rmtree(stage)
 
     def validate_config(self):

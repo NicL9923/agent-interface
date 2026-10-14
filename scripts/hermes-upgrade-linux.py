@@ -350,18 +350,23 @@ print(json.dumps({'ok':True,'state':'synced'}))
         record = self.load()
         if record["phase"] != "quiescent": raise RuntimeError("Cold backup requires verified quiescence")
         self.gateway(draining=True)
-        self.materialize_candidate()
         # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
-        # room for them, before that: on Oct 13, 2026 a full disk stopped a backup mid-archive.
-        needed = self.readable(self.source) + self.readable(self.home, excluded=self.source)
-        free, reserve = shutil.disk_usage(self.stage).free, self.config.get("backupReserveBytes", 5 * 1024 ** 3)
-        if free < needed + reserve:
-            raise RuntimeError("The cold backup needs about %d GB free and only %d GB is free. Free space on the Hermes host before updating"
-                               % (-(-(needed + reserve) // 1024 ** 3), free // 1024 ** 3))
+        # room, before anything is written: on Oct 13, 2026 a full disk stopped a backup mid-archive.
+        # The budget covers both archives, the candidate's objects, its checkout and dependency
+        # generation as built in staging, plus a reserve for Hermes's own writes. It errs high.
+        archives = self.readable(self.source) + self.readable(self.home, excluded=self.source)
+        objects = tree_bytes(self.target / ".git")
+        install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
+        needed = archives + objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        free = shutil.disk_usage(self.stage).free
+        if free < needed:
+            raise RuntimeError("The update needs about %d GB free and only %d GB is free. Free space on the Hermes host before updating"
+                               % (-(-needed // 1024 ** 3), free // 1024 ** 3))
+        self.materialize_candidate()
         self.gateway(draining=True)
-        self.control("stop")
-        self.save(dict(record, phase="stopped"))
         try:
+            self.control("stop")
+            self.save(dict(record, phase="stopped"))
             self.backup_dir.mkdir(mode=0o700)
             hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source),
                 "home.tar.gz": self.archive(self.backup_dir / "home.tar.gz", self.home, str(self.source.relative_to(self.home.parent)))}
@@ -596,7 +601,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
         record = self.load()
         # Backup failures can leave the old source untouched; verify its live
         # gate, service identity and auth before allowing admission again.
-        if record["phase"] == "quiescent":
+        # Backup failures leave the old source untouched. If the phase write failed after Hermes
+        # was restarted, the record still says stopped; verification proves the actual state.
+        if record["phase"] in ("quiescent", "stopped"):
             self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
             self.verify(); record = self.load()
         if record["phase"] != "verified" or tuple(record.get("verifiedSource", ())) != self.source_state(): raise RuntimeError("Release requires verified live source repair and services")
@@ -616,6 +623,18 @@ KNOWN_ERRORS = frozenset((
     "ConnectionResetError", "BrokenPipeError", "JSONDecodeError", "UnicodeDecodeError", "HTTPError", "URLError",
     "SSLError", "InvalidStatus", "InvalidHandshake", "InvalidURI", "ConnectionClosed", "ConnectionClosedError",
     "ConnectionClosedOK", "HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"))
+
+
+def tree_bytes(root, excluded=None):
+    """Regular-file bytes under root, without following links."""
+    total = 0
+    for directory, names, files in os.walk(root):
+        if excluded is not None:
+            names[:] = [name for name in names if Path(directory) / name != excluded]
+        for name in files:
+            path = Path(directory) / name
+            if not path.is_symlink() and path.is_file(): total += path.lstat().st_size
+    return total
 
 
 def describe(error):

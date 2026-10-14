@@ -341,8 +341,16 @@ class PlatformTests(unittest.TestCase):
     def test_too_little_space_refuses_cold_backup_before_service_shutdown(self):
         self.platform.quiescence()
         before = self.states.read_bytes()
-        usage = type("Usage", (), {"free": 1024, "total": 72 * 1024 ** 3, "used": 72 * 1024 ** 3})()
+        # Only the reserve free: the archives, candidate objects and install still need room.
+        reserve = self.platform.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        usage = type("Usage", (), {"free": reserve + 1, "total": 72 * 1024 ** 3, "used": 60 * 1024 ** 3})()
         with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
+            self.platform.backup()
+        self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
+        # Room for the archives alone is not enough: the candidate's objects and install count too.
+        archives = self.platform.readable(self.source) + self.platform.readable(self.home, excluded=self.source)
+        usage.free = reserve + archives + 1
+        with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about"):
             self.platform.backup()
         self.assertEqual(self.states.read_bytes(), before)
         self.assertEqual(self.platform.load()["phase"], "quiescent")
@@ -358,6 +366,37 @@ class PlatformTests(unittest.TestCase):
         units = json.loads(self.states.read_text())
         self.assertEqual({units[name]["ActiveState"] for name in ("gateway.service", "dashboard.service")}, {"active"})
         self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_a_failed_phase_write_right_after_stopping_still_restarts_hermes(self):
+        self.platform.quiescence()
+        save = self.platform.save
+        def full(record):
+            if record.get("phase") == "stopped": raise OSError(28, "No space left on device")
+            save(record)
+        self.platform.save = full
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(OSError): self.platform.backup()
+        units = json.loads(self.states.read_text())
+        self.assertEqual({units[name]["ActiveState"] for name in ("gateway.service", "dashboard.service")}, {"active"})
+
+    def test_a_failed_restart_still_names_the_backup_failure(self):
+        self.platform.quiescence()
+        def full(path, source, excluded=None): raise OSError(28, "No space left on device", str(path))
+        self.platform.archive = full
+        control = self.platform.control
+        def refuse_start(verb):
+            if verb == "start": raise RuntimeError("systemd refused to start")
+            control(verb)
+        self.platform.control = refuse_start
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaisesRegex(RuntimeError, "systemd refused"): self.platform.backup()
+        self.assertIn("Cold backup failed: OSError on ", errors.getvalue())
+
+    def test_finish_releases_a_stopped_record_once_hermes_is_verified_running(self):
+        self.platform.quiescence()
+        self.platform.save(dict(self.platform.load(), phase="stopped"))
+        self.platform.finish()
+        self.assertEqual(self.platform.load()["phase"], "finished")
+        self.assertIn("release", self.platform.rpc_calls)
 
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()
