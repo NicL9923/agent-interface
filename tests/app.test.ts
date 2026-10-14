@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -628,6 +628,26 @@ it("streams downloads under the shared cap and explains a file that is too large
   expect(tooLarge.statusCode).toBe(502);
   expect(tooLarge.json()).toMatchObject({ code: "file_too_large", error: "huge.zip is larger than 100 MB, the most this app opens." });
   expect(limits).toEqual([MAX_DOWNLOAD_BYTES, MAX_DOWNLOAD_BYTES]);
+  await app.close();
+});
+it("answers HEAD without reading the file and reports a stream that fails before its first byte", async () => {
+  const fake = runtimeDouble();
+  const cancel = vi.fn();
+  let fail = false;
+  fake.runtime.download = async () => ({ name: "notes.txt", mime: "text/plain", size: 5, body: new ReadableStream({
+    pull: controller => fail ? controller.error(Object.assign(new Error("notes.txt is larger than 100 MB, the most this app opens."), { statusCode: 502, code: "file_too_large", expose: true })) : new Promise(() => {}),
+    cancel,
+  }) });
+  const { app } = await createApp(config(), fake.runtime, { background: false });
+  const headers = await login(app);
+  // The response returns either way; the stalled Hermes read must also be cancelled.
+  const head = await app.inject({ method: "HEAD", url: "/api/files/a.b", headers });
+  expect([head.statusCode, head.headers["content-length"], head.body]).toEqual([200, "5", ""]);
+  expect(cancel.mock.calls).toEqual([[undefined]]);
+  fail = true;
+  const failed = await app.inject({ url: "/api/files/a.b", headers });
+  expect([failed.statusCode, failed.headers["content-type"], failed.headers["content-disposition"]]).toEqual([502, "application/json; charset=utf-8", undefined]);
+  expect(failed.json()).toMatchObject({ code: "file_too_large", error: "notes.txt is larger than 100 MB, the most this app opens." });
   await app.close();
 });
 it("preserves a native model confirmation request until the user explicitly confirms", async () => {

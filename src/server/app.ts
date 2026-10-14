@@ -174,6 +174,10 @@ export async function createApp(
       if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");
       else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
     }
+    // A stream can fail after a route set file headers; the error is always JSON.
+    reply.removeHeader("Content-Disposition");
+    reply.removeHeader("Content-Length");
+    reply.type("application/json; charset=utf-8");
     reply.code(status).send({
       error:
         err.statusCode && (err.statusCode < 500 || err.expose)
@@ -564,6 +568,12 @@ export async function createApp(
           ? file.mime
           : "application/octet-stream",
       );
+    // Fastify drains a HEAD response's stream, so a stalled Hermes read would outlive it.
+    if (req.method === "HEAD") {
+      await file.body.cancel();
+      // An empty stream keeps the file's length; an empty payload would report zero.
+      return reply.send(Readable.from([]));
+    }
     // Stream so one large artifact never sits in this process's memory.
     // Fastify destroys this when the person disconnects, which cancels the Hermes read.
     return reply.send(Readable.fromWeb(file.body as import("node:stream/web").ReadableStream<Uint8Array>));
