@@ -3,6 +3,8 @@
 The real native path is proven by scripts/spike/routine_probe.py in qualification.
 """
 import contextlib
+import os
+import sys
 import importlib.util
 import json
 import re
@@ -79,18 +81,22 @@ class Store:
 
 class Server:
     """The dashboard's native turn seams the consumer drives."""
-    def __init__(self, session, started=True, outcome=None):
+    def __init__(self, session, started=True, outcome=None, owners=()):
         self._sessions = {"sid": session}
         self.turns, self.released = [], []
         self.started, self.outcome = started, outcome or {"status": "settled", "text": "Done with the routine."}
+        self.owners = list(owners)  # refusals while another CLI or Desktop process owns the chat
+    def _ensure_active_session_slot(self, sid, session):
+        return self.owners.pop(0) if self.owners else None
     @contextlib.contextmanager
     def _session_turn_admission(self, session):
         yield True
     def _run_prompt_submit(self, rid, sid, session, text, **kwargs):
         self.turns.append((rid, sid, text, kwargs))
-        if self.started:
+        started = self.started.pop(0) if isinstance(self.started, list) else self.started
+        if started:
             kwargs["terminal_callback"](self.outcome)
-        return self.started
+        return started
     def _notif_release_turn(self, session):
         self.released.append(session); session["running"] = False
 
@@ -106,12 +112,12 @@ class BotDeliveryTests(unittest.TestCase):
     def record(self, key=KEY):
         return json.loads((self.home / "runtime/bot_live_delivery" / f"{key}.json").read_text())
 
-    def consumer(self, server, store, allowed=True):
+    def consumer(self, server, store, allowed=True, native_records=True):
         @contextlib.contextmanager
         def admission(sid):
             yield allowed
         return delivery.Consumer(server, self.box, lambda: [("penny", self.home)], lambda profile: "sid", admission,
-                                 open_db=store, classify=lambda error: "provider")
+                                 open_db=store, classify=lambda error: "provider", native_records=native_records)
 
     def test_native_owner_mailbox_hermes_keeps_native_delivery(self):
         box = mailbox(authority=False)
@@ -177,17 +183,51 @@ class BotDeliveryTests(unittest.TestCase):
             self.assertFalse(self.consumer(server, Store(), allowed).deliver_once("penny", self.home))
             self.assertEqual((server.turns, self.record()["status"]), ([], "queued"))
 
-    def test_turn_that_cannot_start_fails_without_replay(self):
+    def test_turn_native_refuses_before_starting_is_queued_again_and_runs_once(self):
         self.box = mailbox()
         delivery.install_producer(self.box, Store())
         self.box.deliver_to_live_owner(self.home, self.box.find_canonical_live_owner(self.home), "result", delivery_id=KEY)
         session = {"session_key": "stored", "agent": object()}
-        server = Server(session, started=False)
+        server = Server(session, started=[False, True])
         consumer = self.consumer(server, Store())
         self.assertFalse(consumer.deliver_once("penny", self.home))
-        self.assertEqual((self.record()["status"], self.record()["reason"], server.released), ("failed", "provider", [session]))
+        self.assertEqual((self.record()["status"], "claimed_at" in self.record(), server.released), ("queued", False, [session]))
+        self.assertTrue(consumer.deliver_once("penny", self.home))
+        session["running"] = False
         self.assertFalse(consumer.deliver_once("penny", self.home))
-        self.assertEqual(len(server.turns), 1)
+        self.assertEqual((len(server.turns), self.record()["status"]), (2, "settled"))
+
+    def test_owner_contention_keeps_delivery_queued_until_released_then_runs_once(self):
+        self.box = mailbox()
+        delivery.install_producer(self.box, Store())
+        self.box.deliver_to_live_owner(self.home, self.box.find_canonical_live_owner(self.home), "result", delivery_id=KEY)
+        session = {"session_key": "stored", "agent": object()}
+        server = Server(session, owners=["Session already has a live owner", "Session already has a live owner"])
+        consumer = self.consumer(server, Store())
+        for _ in range(2):
+            self.assertFalse(consumer.deliver_once("penny", self.home))
+            self.assertEqual((self.record()["status"], server.turns), ("queued", []))
+        self.assertTrue(consumer.deliver_once("penny", self.home))
+        session["running"] = False
+        self.assertFalse(consumer.deliver_once("penny", self.home))
+        self.assertEqual((len(server.turns), self.record()["status"]), (1, "settled"))
+
+    def test_legacy_runtime_consumer_runs_only_addon_receipts(self):
+        # After a rollback the native consumer owns its records; the add-on owes only its own.
+        self.box = mailbox()
+        delivery.install_producer(self.box, Store())
+        self.box.deliver_to_live_owner(self.home, self.box.find_canonical_live_owner(self.home), "add-on", delivery_id=KEY)
+        native = {"profile_home": str(self.home), "session_id": "stored", "lease_id": "lease", "live_session_id": "live"}
+        (self.box._root(self.home) / f"{OTHER}.json").write_text(json.dumps(dict(
+            id=OTHER, delivery_id=OTHER, owner=native, **native, message="native", status="queued", created_at=0, sequence=0)))
+        session = {"session_key": "stored", "agent": object()}
+        server = Server(session)
+        consumer = self.consumer(server, Store(), native_records=False)
+        self.assertTrue(consumer.deliver_once("penny", self.home))
+        session["running"] = False
+        self.assertFalse(consumer.deliver_once("penny", self.home))
+        self.assertEqual([turn[2] for turn in server.turns], ["add-on"])
+        self.assertEqual((self.record()["status"], self.record(OTHER)["status"]), ("settled", "queued"))
 
     def test_compressed_chat_receives_input_but_replaced_chat_does_not(self):
         self.box = mailbox()
@@ -231,6 +271,59 @@ class BotDeliveryTests(unittest.TestCase):
         root = Path(self.temp.name).resolve()
         (root / "profiles" / "kimberly").mkdir()
         self.assertEqual(list(delivery.profile_homes(root)()), [("default", root), ("kimberly", root / "profiles/kimberly"), ("penny", self.home)])
+
+
+class LegacyRuntimeHandoffTests(unittest.TestCase):
+    """A rollback to Hermes 6ebd92d, against its real live-owner mailbox and consumer claim."""
+
+    def setUp(self):
+        source = Path(os.environ.get("HERMES_NATIVE_DELIVERY_SOURCE", "/nonexistent"))
+        if not (source / "tools/bot_live_delivery.py").is_file() or (source / "gateway/session_bot.py").exists():
+            self.skipTest("Set HERMES_NATIVE_DELIVERY_SOURCE to a Hermes 6ebd92d source (ruamel.yaml importable)")
+        saved = {name: module for name, module in sys.modules.items() if name.split(".")[0] in ("tools", "utils", "hermes_cli", "hermes_yaml")}
+        for name in saved:
+            del sys.modules[name]
+        sys.path.insert(0, str(source))
+        try:
+            self.native = importlib.import_module("tools.bot_live_delivery")
+        finally:
+            sys.path.remove(str(source))
+            for name in [name for name in sys.modules if name.split(".")[0] in ("tools", "utils", "hermes_cli", "hermes_yaml")]:
+                del sys.modules[name]
+            sys.modules.update(saved)
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name).resolve()
+        (self.home / "state.db").write_text("written store")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_queued_bridge_receipt_is_delivered_once_after_rollback(self):
+        native = self.native
+        self.assertFalse(delivery.bridge_required(native) or delivery.install_producer(native, Store()))
+        # The unified runtime's bridge queued this, then Hermes rolled back before it ran.
+        owner = delivery.owned_owner(self.home, Store())
+        delivery.admit(native, self.home, owner, "[Cronjob] queued before rollback", delivery_id=KEY)
+        # The native consumer's claim, with its real lease, never matches an add-on pin.
+        lease = {"profile_home": str(self.home), "session_id": "stored", "lease_id": "dashboard-lease", "live_session_id": "live"}
+        self.assertIsNone(native.claim_pending_delivery(self.home, lease))
+        native_record = native.deliver_to_live_owner(self.home, lease, "native delivery", delivery_id=OTHER)
+        session = {"session_key": "stored", "agent": object()}
+        server = Server(session)
+        @contextlib.contextmanager
+        def admission(sid):
+            yield True
+        consumer = delivery.Consumer(server, native, lambda: [("default", self.home)], lambda profile: "sid", admission,
+                                     open_db=Store(), native_records=False)
+        self.assertTrue(consumer.deliver_once("default", self.home))
+        session["running"] = False
+        self.assertFalse(consumer.deliver_once("default", self.home))
+        self.assertEqual([turn[2] for turn in server.turns], ["[Cronjob] queued before rollback"])
+        self.assertEqual(native.read_delivery_result(self.home, KEY)["status"], "settled")
+        # The native record stays the native consumer's, and only it claims it.
+        self.assertEqual(native.read_delivery_result(self.home, OTHER)["status"], "queued")
+        self.assertEqual(native.claim_pending_delivery(self.home, lease)["delivery_id"], native_record["delivery_id"])
+        self.assertIsNone(native.claim_pending_delivery(self.home, lease))
 
 
 if __name__ == "__main__":

@@ -70,6 +70,8 @@ class FakeHermes:
                      "find_canonical_live_owner", "deliver_to_live_owner"):
             setattr(self.mailbox, name, native)
         self.mailbox.has_mailbox = lambda home: False
+        for name in ("_ensure_active_session_slot", "_session_turn_admission", "_run_prompt_submit", "_notif_release_turn"):
+            setattr(server, name, native)
         if bridge:
             self.mailbox.authority_delivery = native
         else:
@@ -246,10 +248,14 @@ class CanonicalOpenTests(unittest.TestCase):
 
 
 class BotDeliveryInstallTests(unittest.TestCase):
-    def test_native_consumer_hermes_gets_no_addon_delivery(self):
+    def test_native_consumer_hermes_keeps_native_delivery_and_owes_only_addon_receipts(self):
         with FakeHermes([]) as hermes:
-            self.assertFalse(hasattr(hermes.journal, "bot_delivery"))
             self.assertFalse(getattr(hermes.mailbox, "_agent_interface_bridge", False))
+            self.assertFalse(hermes.journal.bot_delivery.native_records)
+
+    def test_authority_hermes_also_runs_receipts_its_retired_consumer_left(self):
+        with FakeHermes([], bridge=True) as hermes:
+            self.assertTrue(hermes.journal.bot_delivery.native_records)
 
     def test_authority_only_hermes_delivers_only_beside_a_settled_chat_outside_maintenance(self):
         with tempfile.TemporaryDirectory() as directory:

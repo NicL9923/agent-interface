@@ -16,6 +16,10 @@ dashboard). The consumer half runs in the dashboard beside agent-interface.open.
 Records keep the native receipt format, so native readers and waiters still see
 queued, claimed and terminal states. A claim is never replayed: a crash leaves it
 claimed for review, exactly like the native consumer.
+
+The consumer also runs on Hermes with the native consumer, for its own records
+only. A rollback to such a Hermes leaves add-on receipts pinned to no native lease,
+which native claims can never match, so the add-on still delivers each once.
 """
 import contextlib
 import logging
@@ -32,6 +36,8 @@ _OWNER_KEYS = ("profile_home", "session_id", "lease_id", "live_session_id")
 _BUSY = ("running", "_closing", "_finalized", "queued_prompt", "queued_prompts", "_auto_continue_scheduled")
 _MAILBOX_SEAMS = ("_root", "_locked", "_read", "_write", "_scan_read", "_next_sequence", "_delivery_id",
                   "has_mailbox", "complete_delivery", "find_canonical_live_owner", "deliver_to_live_owner")
+_CONSUMER_MAILBOX = ("_root", "_locked", "_read", "_write", "_scan_read", "has_mailbox", "complete_delivery")
+_CONSUMER_SERVER = ("_ensure_active_session_slot", "_session_turn_admission", "_run_prompt_submit", "_notif_release_turn")
 log = logging.getLogger("agent_interface.bot_delivery")
 
 
@@ -139,20 +145,20 @@ def install_producer(mailbox, open_db=open_session_db):
     return True
 
 
-def runnable(record):
-    """A never-started delivery the add-on may run: its own, or a live-owner record
-    Hermes 6ebd92d queued before an update retired that consumer. Authority
-    admissions belong to the gateway."""
+def runnable(record, native_records=True):
+    """A never-started delivery the add-on may run: its own, or, once the native
+    consumer is gone, a live-owner record Hermes 6ebd92d queued before an update.
+    Authority admissions belong to the gateway."""
     return (record is not None and record.get("status") == "queued" and not record.get("admission_id")
-            and (record.get("consumer") == CONSUMER or isinstance(record.get("owner"), dict)))
+            and (record.get("consumer") == CONSUMER or native_records and isinstance(record.get("owner"), dict)))
 
 
-def _pending(mailbox, root, stored, open_db, home):
+def _pending(mailbox, root, stored, open_db, home, native_records=True):
     """Queued records this canonical session may run, oldest first."""
     found, tips = [], {}
     for path in root.glob("*.json"):
         record = mailbox._scan_read(path)
-        if not runnable(record):
+        if not runnable(record, native_records):
             continue
         pinned = record["owner"]["session_id"]
         if pinned not in (UNOPENED, stored):
@@ -169,12 +175,12 @@ def _pending(mailbox, root, stored, open_db, home):
     return sorted(found, key=lambda item: (item.get("sequence", item["created_at"]), item["delivery_id"]))
 
 
-def claim(mailbox, home, stored, open_db=open_session_db):
+def claim(mailbox, home, stored, open_db=open_session_db, native_records=True):
     """Claim the oldest runnable record exactly once, or return None."""
     if not mailbox.has_mailbox(home):
         return None
     with mailbox._locked(home) as root:
-        pending = _pending(mailbox, root, stored, open_db, home)
+        pending = _pending(mailbox, root, stored, open_db, home, native_records)
         if not pending:
             return None
         record = pending[0]
@@ -183,13 +189,33 @@ def claim(mailbox, home, stored, open_db=open_session_db):
         return record
 
 
-class Consumer:
-    """Run queued deliveries as turns in the dashboard's canonical sessions."""
+def unclaim(mailbox, home, claimed):
+    """Return a claim whose turn provably never started to the queue."""
+    with mailbox._locked(home) as root:
+        path = root / f"{claimed['delivery_id']}.json"
+        record = mailbox._read(path)
+        if record is None or record.get("status") != "claimed" or record.get("claimed_at") != claimed["claimed_at"]:
+            return False
+        record["status"] = "queued"
+        record.pop("claimed_at", None)
+        mailbox._write(path, record)
+        return True
 
-    def __init__(self, server, mailbox, homes, open_canonical, admission, open_db=open_session_db, classify=None):
+
+class Consumer:
+    """Run queued deliveries as turns in the dashboard's canonical sessions.
+
+    ``native_records`` also runs live-owner records, only where Hermes has no native consumer.
+    """
+
+    def __init__(self, server, mailbox, homes, open_canonical, admission, open_db=open_session_db, classify=None,
+                 native_records=True):
+        if not all(callable(getattr(mailbox, name, None)) for name in _CONSUMER_MAILBOX) or not all(
+                callable(getattr(server, name, None)) for name in _CONSUMER_SERVER):
+            raise RuntimeError("Native Bot Chat delivery turn seams require qualification")
         self.server, self.mailbox, self.homes = server, mailbox, homes
         self.open_canonical, self.admission, self.open_db = open_canonical, admission, open_db
-        self.classify = classify
+        self.classify, self.native_records = classify, native_records
         self.idle = {}
         self.warned = 0.0
 
@@ -205,7 +231,7 @@ class Consumer:
         if self.idle.get(home) == stamp:
             return False
         for path in root.glob("*.json"):
-            if runnable(self.mailbox._scan_read(path)):
+            if runnable(self.mailbox._scan_read(path), self.native_records):
                 return True
         self.idle[home] = stamp
         return False
@@ -219,12 +245,16 @@ class Consumer:
         if session is None:
             return False
         with self.admission(sid) as allowed:
-            if not allowed:
+            if not allowed or any(session.get(key) for key in _BUSY) or session.get("agent") is None:
+                return False
+            # Own the session before claiming. Another CLI or Desktop owner refuses
+            # here, and the delivery stays queued until that owner lets go.
+            if self.server._ensure_active_session_slot(sid, session) is not None:
                 return False
             with self.server._session_turn_admission(session) as admitted:
                 if not admitted or any(session.get(key) for key in _BUSY) or session.get("agent") is None:
                     return False
-                claimed = claim(self.mailbox, home, session.get("session_key"), self.open_db)
+                claimed = claim(self.mailbox, home, session.get("session_key"), self.open_db, self.native_records)
                 if claimed is None:
                     return False
                 session["running"] = True
@@ -254,8 +284,10 @@ class Consumer:
             terminal_receipt({"status": "failed", "error": str(exc)})
             raise
         if not started:
+            # Native refused before its turn thread existed (ownership, liveness or closing),
+            # so nothing ran: queue the delivery again rather than failing it.
             self.server._notif_release_turn(session)
-            terminal_receipt({"status": "failed", "error": "The bot's conversation could not start this delivery turn."})
+            unclaim(self.mailbox, home, claimed)
         return bool(started)
 
     def poll(self):

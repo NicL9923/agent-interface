@@ -750,33 +750,36 @@ def install(path=None):
         server.register_method("agent-interface." + name, handler)
 
     # Routines and bot messages arrive as turns in the canonical chat. A Hermes whose
-    # native delivery only reaches the gateway authority gets the add-on consumer.
+    # native delivery only reaches the gateway authority gets the add-on producer.
+    # The consumer always runs: after a rollback it still owes queued add-on receipts.
     import tools.bot_live_delivery as mailbox
     bot_delivery = sibling_module("bot_delivery")
-    if bot_delivery.bridge_required(mailbox, server):
+    bridge = bot_delivery.bridge_required(mailbox, server)
+    if bridge:
         bot_delivery.install_producer(mailbox)
 
-        def open_canonical(profile):
-            with canonical_lock:
-                if canonical.get(profile) in server._sessions:
-                    return canonical[profile]
-                response = open_bot("agent-interface-delivery", {"profile": profile})
-            return None if "error" in response else response["result"]["session_id"]
+    def open_canonical(profile):
+        with canonical_lock:
+            if canonical.get(profile) in server._sessions:
+                return canonical[profile]
+            response = open_bot("agent-interface-delivery", {"profile": profile})
+        return None if "error" in response else response["result"]["session_id"]
 
-        @contextlib.contextmanager
-        def delivery_admission(sid):
-            # Same order as submit: no delivery starts beside an unsettled app task or maintenance.
-            with submission_lock:
-                with maintenance_lock:
-                    closed = bool(maintenance_state())
-                with journal.lock:
-                    unsettled = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1", (sid,)).fetchone()
-                yield not closed and unsettled is None
+    @contextlib.contextmanager
+    def delivery_admission(sid):
+        # Same order as submit: no delivery starts beside an unsettled app task or maintenance.
+        with submission_lock:
+            with maintenance_lock:
+                closed = bool(maintenance_state())
+            with journal.lock:
+                unsettled = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1", (sid,)).fetchone()
+            yield not closed and unsettled is None
 
-        from tools.bot_failure_reasons import classify_agent_error
-        journal.bot_delivery = bot_delivery.Consumer(server, mailbox, bot_delivery.profile_homes(get_hermes_home()),
-                                                     open_canonical, delivery_admission, classify=classify_agent_error)
-        journal.bot_delivery.start()
+    from tools.bot_failure_reasons import classify_agent_error
+    journal.bot_delivery = bot_delivery.Consumer(server, mailbox, bot_delivery.profile_homes(get_hermes_home()),
+                                                 open_canonical, delivery_admission, classify=classify_agent_error,
+                                                 native_records=bridge)
+    journal.bot_delivery.start()
     return journal
 
 
