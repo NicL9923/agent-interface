@@ -10,7 +10,12 @@ export type Draft = {
   attachments: FileRef[];
   botId?: string;
   userId?: string;
+  /** Unsaved edits, or a cleared copy whose clear the server has not confirmed. */
   dirty?: boolean;
+  /** The server revision this copy was loaded from or last saved as. Missing means 0. */
+  baseRevision?: number;
+  /** This device sent a message from this copy since its base, so a newer send clear may be its own. */
+  sentHere?: boolean;
 };
 // A file still on its way to Hermes. It joins the draft's attachments once uploaded.
 export type LocalUpload = {
@@ -55,18 +60,14 @@ export function localSave(key: string, value: unknown) {
 }
 export const sameDraft = (a: Pick<Draft, "text" | "attachments">, b: Pick<Draft, "text" | "attachments">) =>
   a.text === b.text && JSON.stringify(a.attachments) === JSON.stringify(b.attachments);
+/** This device's copy once its send was accepted: emptied if it still holds the sent text. */
+export function sentCopy(draft: Draft, submission: Pick<Pending, "text" | "attachments">): Draft {
+  return sameDraft(draft, submission)
+    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, sentHere: true }
+    : { ...draft, sentHere: true };
+}
 export function clearSavedDraft(user: string, submission: Pending) {
   const key = draftKey(user, submission.botId);
   const saved = localRead<Draft>(key);
-  if (saved && sameDraft(saved, submission)) {
-    const cleared = {
-      text: "",
-      attachments: [],
-      botId: submission.botId,
-      userId: user,
-    };
-    localSave(key, cleared);
-    return cleared;
-  }
-  return null;
+  if (saved) localSave(key, sentCopy(saved, submission));
 }

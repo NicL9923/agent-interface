@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { SubmissionReceipt } from "../shared/types";
 import { api, ApiError, write } from "../client-api";
-import { clearSavedDraft, localRead, localRemove, localSave, sameDraft, submissionKey } from "./storage";
+import { clearSavedDraft, localRead, localRemove, localSave, sentCopy, submissionKey } from "./storage";
 import type { Draft, Pending } from "./storage";
 // A submission whose outcome is unknown stays pending (and blocks sending) until Hermes confirms it.
 export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError }: {
@@ -23,15 +23,8 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
   activeBotRef.current = botId;
   const clearSent = (user: string, request: Pending) =>
     setDraft((current) =>
-      current.botId === request.botId &&
-      current.userId === user &&
-      sameDraft(current, request)
-        ? {
-            text: "",
-            attachments: [],
-            botId: current.botId,
-            userId: current.userId,
-          }
+      current.botId === request.botId && current.userId === user
+        ? sentCopy(current, request)
         : current,
     );
   useEffect(() => {
