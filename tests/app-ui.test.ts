@@ -741,6 +741,25 @@ describe("reply announcements", () => {
     expect(container.querySelector('.transcript-frame > [role="status"] > span')).toBe(first);
   });
 
+  it("reads an identical reply in the next turn even as the previous one is being replaced", async () => {
+    hold(settled);
+    await render();
+    const first = message("u2", "user", "Status?");
+    hold([...settled, first, message("session-inflight", "assistant", "Done.")], "done");
+    await advance(1500);
+    const node = container.querySelector('.transcript-frame > [role="status"] > span');
+    const saved = [...settled, first, message("row-41", "assistant", "Done.")];
+    const second = message("u3", "user", "And now?");
+    hold([...saved, second, message("session-inflight", "assistant", "Done.")], "done");
+    await advance(1500);
+    const next = container.querySelector('.transcript-frame > [role="status"] > span');
+    expect(announcement()).toBe("Shared replied: Done.");
+    expect(next).not.toBe(node);
+    hold([...saved, second, message("row-50", "assistant", "Done.")], "done");
+    await advance(1500);
+    expect(container.querySelector('.transcript-frame > [role="status"] > span')).toBe(next);
+  });
+
   it("stays quiet for a finished unsaved reply on load, and for the rows that later save it", async () => {
     const prompt = message("u2", "user", "Status?");
     hold([...settled, prompt, message("session-inflight", "assistant", "Old news.")], "done");

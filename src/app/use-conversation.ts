@@ -65,6 +65,7 @@ export function useConversation(botId: string, userId?: string) {
     let loading = false, again = false, more = false;
     let firstConversation = true;
     let watch: ReplyWatch = {};
+    let announced = 0;
     let secureRequestIds = new Set<string>();
     const load = async () => {
       if (loading) { again = true; return; }
@@ -94,7 +95,8 @@ export function useConversation(botId: string, userId?: string) {
         if (newSecureRequest && (firstConversation || following.current)) reveal.current = newSecureRequest.id;
         const heard = watchReplies(watch, result, firstConversation);
         watch = heard.watch;
-        if (heard.reply) setReply({ botId, id: heard.reply.id, text: replySnippet(heard.reply.text) });
+        // An unsaved reply keeps one ID across turns, so each announcement is numbered instead.
+        if (heard.reply) setReply({ botId, id: String(++announced), text: replySnippet(heard.reply.text) });
         firstConversation = false;
         if (result !== current.current) holdPlace();
         setConversation(result);
