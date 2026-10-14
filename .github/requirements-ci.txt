@@ -1,0 +1,5 @@
+# Tools the CI Python job and the scheduled audit install. Dependabot keeps
+# these current; the application's Python dependencies are in
+# scripts/spike/requirements.lock.txt.
+pip-audit==2.10.1
+ruff==0.17.0
