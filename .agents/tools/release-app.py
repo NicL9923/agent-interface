@@ -444,7 +444,7 @@ def build_locally(commit, work):
             raise SystemExit("The local build failed:\n" + (log.stdout + log.stderr)[-3000:])
         return archive["sha256"], built_web_version(log.stdout)
     finally:
-        git("worktree", "remove", "--force", str(checkout))
+        git("worktree", "remove", "--force", "--force", str(checkout))
 
 
 def prepare(args):
@@ -633,7 +633,8 @@ def open_docs_pull_request(manifest):
                     git("commit", "--quiet", "-m", title, cwd=checkout)
                     git("push", "--quiet", "origin", "HEAD:refs/heads/" + branch, cwd=checkout)
                 finally:
-                    git("worktree", "remove", "--force", str(checkout))
+                    # A second --force also removes a worktree git left locked by an interrupted add.
+                    git("worktree", "remove", "--force", "--force", str(checkout))
         url = gh("pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body)
         print(f"Opened the docs PR: {url.splitlines()[-1]}")
     except Exception as error:

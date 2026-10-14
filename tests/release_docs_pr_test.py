@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -165,6 +166,17 @@ class DocsPullRequest(unittest.TestCase):
         # Rerunning finds the PR instead of pushing or opening another.
         self.assertIn("already exists: https://github.com/owner/repo/pull/99", self.run_tool("record", NAME))
         self.assertEqual(len(self.creates()), 1)
+
+    def test_a_locked_docs_worktree_is_still_removed(self):
+        write_records = release_app.write_records
+        def lock_then_write(checkout, manifest):
+            # As if git left the docs worktree locked, e.g. after an interrupted add.
+            if "docs-pr-worktrees" in str(checkout):
+                self.git("-C", str(checkout), "worktree", "lock", str(checkout))
+            return write_records(checkout, manifest)
+        with unittest.mock.patch.object(release_app, "write_records", lock_then_write):
+            self.assertIn("Opened the docs PR", self.run_tool("activate", NAME))
+        self.assert_checkout_untouched()
 
     def test_a_failed_push_warns_keeps_the_release_recorded_and_can_be_retried(self):
         (self.bin / "fail-push").touch()
