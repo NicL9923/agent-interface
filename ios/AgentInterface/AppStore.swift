@@ -50,9 +50,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Tests substitute a clock they advance by hand.
   var now: () -> ContinuousClock.Instant = { .now }
   private var bootstrapRefreshedAt: ContinuousClock.Instant?
-  /// Oldest loaded message per assistant whose earlier history was opened. Polls then ask for
-  /// everything from there on, so the window grows with new turns instead of sliding past it.
+  /// Oldest loaded message per assistant. Polls ask for everything from there on, so the window
+  /// grows with new turns instead of sliding past the turn being read, as on the web.
   private var historyStarts: [String: String] = [:]
+  /// Bumped when earlier history is added, so a poll that asked for the narrower window earlier
+  /// cannot replace it when its response arrives late.
+  private var windowGeneration = 0
   @Published var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
@@ -345,12 +348,15 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func refreshConversation() async {
     guard let id = selectedBotId, let api, bootstrap != nil else { return }
     let selectedGeneration = selectionGeneration
-    // Once earlier history is open, the window stays pinned to its oldest message.
+    let requestedWindow = windowGeneration
     let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
       ?? "turns=\(Self.historyPageTurns)"
     do {
       let value: Conversation = try await api.get(conversationPath(id, query: query))
-      guard selectedGeneration == selectionGeneration else { return }
+      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration else {
+        return
+      }
+      historyStarts[id] = value.messages.first?.id
       apply(value, botId: id)
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration {
@@ -373,6 +379,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration else { return }
+      windowGeneration += 1
       historyStarts[id] = value.messages.first?.id
       apply(value, botId: id)
     } catch is CancellationError {} catch {
