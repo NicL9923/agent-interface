@@ -237,6 +237,8 @@ struct Draft: Codable, Equatable {
   var seq: Int? = nil
   /// Fingerprint of the text this device sent from this copy, until the server shows the send.
   var sentHash: String? = nil
+  /// The revision that send was written on; a `sentRevision` past it shows the send completed.
+  var sentBase: Int? = nil
 
   /// A fingerprint of draft content, kept with a cached copy.
   static func contentHash(_ text: String, _ attachments: [FileRef]) -> String {
@@ -271,25 +273,32 @@ struct Draft: Codable, Equatable {
     if !authoritative && revision < base { return (local, false) }
     let hash = contentHash(server.text, server.attachments)
     let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash)
+    // The guard for this device's send lasts until the server shows that send completed.
+    let sendShown = local.sentHash != nil && (server.sentRevision ?? 0) > (local.sentBase ?? 0)
     if local.dirty != true {
-      if local.sentHash == hash && server.reason != "sent" { return (local, false) }
+      if local.sentHash == hash && !sendShown { return (local, false) }
       return (adopt, false)
     }
     let mine = contentHash(local.text, local.attachments)
-    if (server.sentRevision ?? 0) > base && (mine == local.baseHash || mine == local.sentHash) { return (adopt, false) }
-    var kept = local
+    if (server.sentRevision ?? 0) > base && (mine == local.baseHash || sendShown && mine == local.sentHash) { return (adopt, false) }
+    var current = local
+    if sendShown {
+      current.sentHash = nil
+      current.sentBase = nil
+    }
+    var kept = current
     kept.baseRevision = revision
     kept.baseHash = hash
     if local.text == server.text && local.attachments == server.attachments {
       return settled ? (adopt, false) : (kept, false)
     }
-    if revision == base { return (local, false) }
+    if revision == base { return (current, false) }
     return (kept, true)
   }
   /// This copy once its send was accepted: emptied if it still holds the sent text.
   func sent(_ submission: PendingSubmission) -> Draft {
     guard text == submission.text && attachments == submission.attachments else { return self }
-    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash)
+    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash, sentBase: sentBase)
   }
 }
 /// The server's copy of a draft. Older servers omit the revision fields, which read as 0.

@@ -124,7 +124,9 @@ into the copy as it is now, never applied as the request's snapshot:
 1. A read older than the copy's base is ignored, unless it is the 409 answering
    the copy's latest edit with no other save in flight, as after a database restore.
 2. A copy without unsaved edits adopts the server draft. While the text this device
-   sent is still on the server and not yet cleared, it waits for that clear.
+   sent is still on the server and `sentRevision` does not yet show that send, it
+   waits for the clear. Once it does, the guard ends, so a later draft with the
+   same text is adopted.
 3. If `sentRevision` is newer than the copy's base, and the copy still holds its
    base content or the text this device sent, that text was sent: adopt the
    server draft. A retry after a 409 goes through the same rule.
@@ -134,7 +136,10 @@ into the copy as it is now, never applied as the request's snapshot:
    while another device sent the shared draft. Keep them and save again on the
    server's revision.
 
-A save in flight is never cancelled; its response is merged like any other.
+A save in flight is never cancelled; its response is merged like any other. Saves
+of one draft go one at a time, except that leaving sends the latest edit at once.
+After every response or merge, a copy left unsaved with no save in flight or
+waiting saves again.
 Fingerprints use a fixed attachment field order.
 
 The web client implements this in `src/app/draft-merge.ts` and iOS in

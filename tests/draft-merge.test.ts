@@ -75,6 +75,17 @@ describe("draft merge", () => {
     expect(mergeDraft(saved, server("Older", 2)).draft).toBe(saved);
   });
 
+  it("adopts a later draft with the same text as the last send once the server shows that send", () => {
+    // This device sent "Continue" on revision 5 and missed the empty revision 6.
+    const cleared = { ...local, text: "", baseRevision: 5, sentHash: hashOf("Continue"), sentBase: 5 };
+    expect(mergeDraft(cleared, server("Continue", 7, 6)).draft).toMatchObject({ text: "Continue", baseRevision: 7, dirty: false });
+    expect(mergeDraft(cleared, server("Continue", 7, 6)).draft.sentHash).toBeUndefined();
+    // Typing on: the guard ends with the send, so later typing of the same text is kept.
+    const typing = { ...local, text: "Continue", dirty: true, baseRevision: 5, baseHash: hashOf("Earlier"), sentHash: hashOf("Continue"), sentBase: 8 };
+    expect(mergeDraft(typing, server("", 9, 9)).draft.text).toBe("");
+    expect(mergeDraft({ ...typing, sentBase: 9 }, server("Other", 10, 9)).draft).toMatchObject({ text: "Continue", baseRevision: 10 });
+  });
+
   it("drops a copy holding the text this device sent once the server shows the send", () => {
     const sending = { ...local, dirty: true, baseRevision: 0, baseHash: hashOf(""), sentHash: hashOf("Typed here") };
     expect(mergeDraft(sending, server("", 1, 1))).toMatchObject({ draft: { text: "", dirty: false, baseRevision: 1 }, push: false });

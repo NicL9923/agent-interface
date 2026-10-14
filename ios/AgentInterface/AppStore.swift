@@ -534,12 +534,15 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
     let hash = sent ? Draft.contentHash(submission.text, submission.attachments) : nil
+    let base = sent ? submission.draftBaseRevision ?? 0 : nil
     if let localKey = key("draft", submission.botId), var cached: Draft = read(localKey) {
       cached.sentHash = hash
+      cached.sentBase = base
       save(cached, localKey)
     }
     if selectedBotId == submission.botId {
       draft.sentHash = hash
+      draft.sentBase = base
       persistDraft()
     }
   }

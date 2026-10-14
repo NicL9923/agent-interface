@@ -52,21 +52,24 @@ export function mergeDraft(local: Draft, server: SavedDraft, { authoritative = f
     draft: { text: server.text, attachments: server.attachments, botId: local.botId, userId: local.userId, baseRevision: server.revision, baseHash: hash, dirty: false },
     push: false,
   };
+  // The guard for this device's send lasts until the server shows that send completed.
+  const sendShown = local.sentHash !== undefined && server.sentRevision > (local.sentBase ?? 0);
   if (!local.dirty) {
-    if (local.sentHash === hash && server.reason !== "sent") return { draft: local, push: false };
+    if (local.sentHash === hash && !sendShown) return { draft: local, push: false };
     // Nothing changed: the same object lets a refresh skip rendering.
     if (local.baseRevision === server.revision && local.baseHash === hash && !local.sentHash && sameDraft(local, server))
       return { draft: local, push: false };
     return adopt;
   }
   const mine = contentHash(local);
-  if (server.sentRevision > base && (mine === local.baseHash || mine === local.sentHash)) return adopt;
+  if (server.sentRevision > base && (mine === local.baseHash || sendShown && mine === local.sentHash)) return adopt;
+  const current = sendShown ? { ...local, sentHash: undefined, sentBase: undefined } : local;
   if (sameDraft(local, server)) {
     if (settled) return adopt;
-    return { draft: server.revision === base ? local : { ...local, baseRevision: server.revision, baseHash: hash }, push: false };
+    return { draft: server.revision === base ? current : { ...current, baseRevision: server.revision, baseHash: hash }, push: false };
   }
-  if (server.revision === base) return { draft: local, push: false };
-  return { draft: { ...local, baseRevision: server.revision, baseHash: hash }, push: true };
+  if (server.revision === base) return { draft: current, push: false };
+  return { draft: { ...current, baseRevision: server.revision, baseHash: hash }, push: true };
 }
 
 /** A sequence for a local edit, increasing across reloads, so responses can tell the newest edit. */

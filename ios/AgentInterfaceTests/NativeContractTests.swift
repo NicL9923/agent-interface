@@ -899,6 +899,14 @@ final class DraftMergeTests: XCTestCase {
         XCTAssertEqual(Draft.merge(cleared, with: server("", 2, sent: 2)).draft.baseRevision, 2)
     }
 
+    func testALaterDraftWithTheLastSentTextIsAdoptedOnceTheServerShowsThatSend() {
+        // Sent "Continue" on revision 5 and missed the empty revision 6.
+        var cleared = copy("", dirty: false, base: 5, sentHash: hash("Continue")); cleared.sentBase = 5
+        let merged = Draft.merge(cleared, with: server("Continue", 7, sent: 6)).draft
+        XCTAssertEqual(merged.text, "Continue"); XCTAssertNil(merged.sentHash)
+        XCTAssertEqual(Draft.merge(cleared, with: server("Continue", 6, sent: 0)).draft, cleared, "Before the send shows, the guard holds")
+    }
+
     func testEditsHereWinOverANewerEditAndSaveOnItsRevision() {
         let merged = Draft.merge(copy(), with: server("Phone edit", 5, sent: 1))
         XCTAssertEqual(merged.draft, copy(base: 5, baseHash: hash("Phone edit"))); XCTAssertTrue(merged.push)

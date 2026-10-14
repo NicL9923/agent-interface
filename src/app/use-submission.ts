@@ -30,11 +30,11 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     );
   // Until the server shows the send, a save of the sent text from this copy is not new work.
   const markSent = (user: string, request: Pending, sent: boolean) => {
-    const sentHash = sent ? contentHash(request) : undefined;
+    const mark = sent ? { sentHash: contentHash(request), sentBase: request.draftBaseRevision ?? 0 } : { sentHash: undefined, sentBase: undefined };
     const key = draftKey(user, request.botId);
     const saved = localRead<Draft>(key);
-    if (saved) localSave(key, { ...saved, sentHash });
-    setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, sentHash } : current);
+    if (saved) localSave(key, { ...saved, ...mark });
+    setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, ...mark } : current);
   };
   useEffect(() => {
     if (!botId || !userId) return;
