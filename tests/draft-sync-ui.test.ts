@@ -170,6 +170,19 @@ describe('draft sync across devices',()=>{
     expect(textarea().value).toBe('');
   });
 
+  it('refreshes the open draft when the page is shown again and while it stays open',async()=>{
+    phone.edit('shared','Buy feed');
+    await renderApp();
+    expect(textarea().value).toBe('Buy feed');
+    phone.send('shared','Buy feed');
+    await act(async()=>document.dispatchEvent(new Event('visibilitychange')));await advance(0);
+    expect(textarea().value).toBe('');
+    phone.edit('shared','Fix the gate');
+    await advance(1600);
+    expect(textarea().value).toBe('Fix the gate');
+    expect(draftPuts('shared')).toEqual([]);
+  });
+
   it('saves a pending edit when the page is hidden or closed',async()=>{
     await renderApp();
     await type('Before closing');

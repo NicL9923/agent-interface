@@ -65,15 +65,15 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     let live = true;
     setDraftReady(false);
     const cached = localRead<Draft>(draftKey(userId, botId));
-    // A dirty cached copy is shown at once, but the server's copy is still read: it may have
-    // been sent from another device since.
+    // A cached copy is shown at once, but the server's copy is still read, and read again while
+    // the page is shown: it may have been edited or sent from another device since.
     let draftLoaded = false;
     let loadingDraft = false;
     setDraft({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
-      if (draftLoaded || loadingDraft) return;
+      if (loadingDraft) return;
       loadingDraft = true;
       try {
         const saved = savedDraft(await api<SavedDraft | null>(draftPath(botId)));
@@ -83,8 +83,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         setDraftReady(true);
         setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
       } catch (e) {
-        // Unsaved text on screen is already the person's draft; keep retrying quietly.
-        if (live && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
+        // Unsaved text on screen is already the person's draft, and a loaded draft stays usable;
+        // keep retrying quietly.
+        if (live && !draftLoaded && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
         loadingDraft = false;
       }
