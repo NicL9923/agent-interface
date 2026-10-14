@@ -231,8 +231,11 @@ class Platform:
         descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
         if descriptor:
             utility = Path(__file__).with_name("hermes-qualified-python.py")
-            argv = [self.store_python(), "-I", str(utility), "fingerprint", "--source", str(self.source), "--home", str(self.home)]
-            value = json.loads(self.run(argv, capture=True, timeout=180))
+            # The inspection keeps its hashed rows (package and file hashes only) to diff against the
+            # stage's on a mismatch. Every faithful copy of the Oct 14 install matched; only the
+            # real hook's rows could show why.
+            dump = self.stage / ("runtime-rows-" + uuid.uuid4().hex[:8] + ".json")
+            value = json.loads(self.run([self.store_python(), "-I", str(utility), "fingerprint", "--source", str(self.source), "--home", str(self.home), "--dump", str(dump)], capture=True, timeout=180))
         else:
             tested = self.env.get("HERMES_UPGRADE_QUALIFICATION_PYTHON")
             if not tested or not Path(tested).is_absolute(): raise RuntimeError("The tested managed interpreter must be fixed")
@@ -243,14 +246,8 @@ class Platform:
             value = worker.runtime_fingerprint(selected)
         if expected is not None and value != expected:
             if value.get("interpreterSha256") != expected.get("interpreterSha256"): raise RuntimeError("The managed interpreter differs from the qualified runtime")
-            saved = ""
-            if descriptor:
-                # Package and file hashes only, to diff against the stage's rows. Every faithful
-                # copy of the Oct 14 install matched; only the real hook's rows can show why.
-                dump = self.stage / ("runtime-mismatch-" + uuid.uuid4().hex[:8] + ".json")
-                with contextlib.suppress(subprocess.SubprocessError, OSError):
-                    self.run(argv + ["--dump", str(dump)], capture=True, timeout=180); saved = ". Its package rows are in the stage as " + dump.name
-            raise RuntimeError("Managed dependencies differ from the qualified runtime" + saved)
+            raise RuntimeError("Managed dependencies differ from the qualified runtime" + (". Its package rows are in the stage as " + dump.name if descriptor else ""))
+        if descriptor: dump.unlink(missing_ok=True)
         return value
 
     def sync(self):
