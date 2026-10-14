@@ -228,6 +228,14 @@ struct Draft: Codable, Equatable {
   var attachments: [FileRef] = []
   var dirty: Bool? = nil
 }
+/// The files of the history before a window, from `GET /bots/:id/files?before=`.
+struct EarlierFiles: Decodable {
+  struct Entry: Decodable {
+    var id: String
+    var files: [FileRef]?
+  }
+  var messages: [Entry]
+}
 struct Conversation: Codable {
   var attention: [Attention]?
   var botId: String
@@ -235,6 +243,8 @@ struct Conversation: Codable {
   var messages: [Message]
   /// Turns before the first loaded message, present when the server windowed the history.
   var earlier: Int?
+  /// Files only the unloaded earlier turns carry, present when the server windowed the history.
+  var earlierFiles: Int?
   var activity: Activity
   var approvals: [Approval]
   var files: [FileRef]

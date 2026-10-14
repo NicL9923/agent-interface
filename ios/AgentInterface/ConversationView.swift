@@ -14,6 +14,7 @@ struct ConversationView: View {
   @State private var actionBusy = false
   @State private var visibleMessage: String?
   @State private var restoredBot: String?
+  @State private var filesOpen = false
   @State private var readSaveTask: Task<Void, Never>?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
@@ -171,11 +172,16 @@ struct ConversationView: View {
               }
             }
           }
-          if !(store.conversation?.files.isEmpty ?? true) {
-            DisclosureGroup("Conversation files") {
-              ForEach(store.conversation?.files ?? []) {
+          if store.hasConversationFiles {
+            DisclosureGroup("Conversation files", isExpanded: $filesOpen) {
+              if store.loadingEarlierFiles {
+                ProgressView("Loading files from earlier in the conversation").font(.caption)
+              }
+              ForEach(store.conversationFiles) {
                 FileAttachmentView(file: $0).padding(.vertical, 6)
               }
+            }.onChange(of: filesOpen) { _, open in
+              if open { Task { await store.loadEarlierFiles() } }
             }
           }
           Color.clear.frame(height: 1).id("latest").onGeometryChange(for: CGFloat.self) {
@@ -197,6 +203,7 @@ struct ConversationView: View {
       .onChange(of: store.conversation?.botId, initial: true) { _, id in
         guard let id, id != restoredBot else { return }
         restoredBot = id
+        filesOpen = false
         nearBottom = true
         visibleMessage = nil
         if let message = store.conversation?.restorableReadAnchor(store.readMessageId()) {
