@@ -46,6 +46,9 @@ beforeEach(async () => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true, value: vi.fn(),
   });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true, value: vi.fn(),
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -92,6 +95,7 @@ afterEach(async () => {
   container.remove();
   vi.restoreAllMocks();
   Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
   vi.unstubAllGlobals();
 });
 
@@ -139,6 +143,108 @@ it("clears expensive-model confirmation when a different model is selected", asy
   expect(container.textContent).not.toContain("This model has a higher price");
   await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({ provider: "provider", model: "other", shared: true, confirmModel: false }), "PATCH");
+});
+
+describe("closing with unsaved edits", () => {
+  const dialog = () => container.querySelector("dialog")!;
+  const instructions = () => container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const escape = async () => {
+    const event = new Event("cancel", { cancelable: true });
+    await act(async () => dialog().dispatchEvent(event));
+    return event;
+  };
+  const edit = async (value = "Rewritten from scratch") => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(instructions(), value);
+    instructions().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  it("closes on Escape without asking when nothing changed", async () => {
+    const event = await escape();
+    expect(event.defaultPrevented).toBe(false);
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks on Escape after an edit and keeps the edit when told to keep editing", async () => {
+    await edit();
+    const event = await escape();
+    expect(event.defaultPrevented).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Discard your unsaved changes?");
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await click("Keep editing");
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(instructions().value).toBe("Rewritten from scratch");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("discards only after confirmation, from either way of closing", async () => {
+    await edit();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!.click());
+    expect(onClose).not.toHaveBeenCalled();
+    await click("Discard changes");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops asking once an edit is reverted", async () => {
+    await edit();
+    await edit("");
+    await escape();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats saved details as the new baseline", async () => {
+    await edit();
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(write).toHaveBeenCalledWith("/bots/shared", expect.objectContaining({ instructions: "Rewritten from scratch" }), "PATCH");
+    await escape();
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the baseline when a save fails", async () => {
+    await edit();
+    vi.mocked(write).mockRejectedValueOnce(new Error("Gateway unavailable"));
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    await escape();
+    expect(container.textContent).toContain("Discard your unsaved changes?");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("treats an unsaved avatar change as an edit until it is saved", async () => {
+    await click("avatar");
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="radio"]:not(:checked)')!.click());
+    await escape();
+    expect(container.textContent).toContain("Discard your unsaved changes?");
+    await click("Keep editing");
+    await click("Save avatar");
+    expect(write).toHaveBeenCalledWith("/bots/shared/avatar", expect.anything(), "PUT");
+    await escape();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens the dialog when the browser closes it without a cancelable Escape", async () => {
+    await edit();
+    vi.mocked(HTMLDialogElement.prototype.showModal).mockClear();
+    await act(async () => dialog().dispatchEvent(new Event("close")));
+    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Discard your unsaved changes?");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the control that opened it", async () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    await act(async () => root.unmount());
+    opener.focus();
+    root = createRoot(container);
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
+    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalled();
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => root.unmount());
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
 });
 
 describe("compact settings navigation", () => {

@@ -53,18 +53,28 @@ export function BotSettings({
   const overflowMenu = useRef<HTMLDetailsElement>(null);
   const overflowTrigger = useRef<HTMLElement>(null);
   const overflowMenuId = useId();
-  const [form, setForm] = useState<BotInput>({
-    name: existing?.name || "",
-    description: existing?.description || "",
-    instructions: existing?.instructions || "",
-    model: existing?.model || bootstrap.bots[0]?.model || "",
-    provider: existing?.provider || bootstrap.bots[0]?.provider || "",
-    shared: existing?.shared ?? true,
-    enabledMcpServers: existing?.enabledMcpServers || [],
-  });
-  const [avatar, setAvatar] = useState<AvatarConfig>(
-    existing?.avatar || defaultAvatar,
-  );
+  // What the form and avatar last matched on the server; saves move it forward.
+  const [baseline, setBaseline] = useState<{ form: BotInput; avatar: AvatarConfig }>(() => ({
+    form: {
+      name: existing?.name || "",
+      description: existing?.description || "",
+      instructions: existing?.instructions || "",
+      model: existing?.model || bootstrap.bots[0]?.model || "",
+      provider: existing?.provider || bootstrap.bots[0]?.provider || "",
+      shared: existing?.shared ?? true,
+      enabledMcpServers: existing?.enabledMcpServers || [],
+    },
+    avatar: existing?.avatar || defaultAvatar,
+  }));
+  const [form, setForm] = useState<BotInput>(baseline.form);
+  const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
+  const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar]);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const keepEditing = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (confirmDiscard) keepEditing.current?.focus(); }, [confirmDiscard]);
+  useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
+  // Escape and the close button both land here, so nothing is discarded without asking.
+  const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
   const [tools, setTools] = useState<Tool[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [catalog, setCatalog] = useState<{
@@ -90,8 +100,19 @@ export function BotSettings({
   const errorBanner = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (error) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [error]);
   const dialog = useRef<HTMLDialogElement>(null);
+  const mounted = useRef(false);
   useEffect(() => {
-    dialog.current?.showModal();
+    const element = dialog.current;
+    const previous = document.activeElement as HTMLElement | null;
+    mounted.current = true;
+    element?.showModal();
+    return () => {
+      mounted.current = false;
+      element?.close();
+      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
+      else (document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
+        ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
+    };
   }, []);
   useEffect(() => {
     if (!existing) return;
@@ -142,15 +163,17 @@ export function BotSettings({
       if (key) setSaving(null);
     }
   };
-  const saveBot = (confirmed = false) =>
-    run(
+  const saveBot = (confirmed = false) => {
+    const submitted = form;
+    return run(
       async () => {
         await write(
           existing ? `/bots/${encodeURIComponent(existing.id)}` : "/bots",
-          { ...form, confirmModel: confirmed },
+          { ...submitted, confirmModel: confirmed },
           existing ? "PATCH" : "POST",
         );
         setConfirmModel(false);
+        setBaseline((current) => ({ ...current, form: submitted }));
         if (!existing) onClose();
       },
       existing?.shared
@@ -158,6 +181,7 @@ export function BotSettings({
         : "Assistant saved.",
       "details",
     );
+  };
   const uploadPortrait = async (file: File | undefined) => {
     if (!file || !existing) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2_000_000) {
@@ -205,8 +229,18 @@ export function BotSettings({
       ref={dialog}
       className="settings-dialog"
       aria-labelledby="assistant-settings-title"
-      onCancel={onClose}
-      onClose={onClose}
+      onCancel={(event) => {
+        if (!unsaved) return onClose();
+        event.preventDefault();
+        setConfirmDiscard(true);
+      }}
+      onClose={() => {
+        // A second Escape can close the dialog without a cancelable event, so put it back.
+        if (!mounted.current) return;
+        if (!unsaved) return onClose();
+        dialog.current?.showModal();
+        setConfirmDiscard(true);
+      }}
     >
       <header>
         <div>
@@ -216,7 +250,7 @@ export function BotSettings({
         <button
           className="icon-button"
           aria-label="Close assistant settings"
-          onClick={onClose}
+          onClick={requestClose}
         >
           <Icon name="close" />
         </button>
@@ -261,6 +295,15 @@ export function BotSettings({
           <p className="form-notice" role="status">
             {notice}
           </p>
+        )}
+        {confirmDiscard && (
+          <div className="capability-note" role="alert">
+            <p>Discard your unsaved changes?</p>
+            <div className="actions">
+              <button type="button" className="danger" onClick={onClose}>Discard changes</button>
+              <button type="button" ref={keepEditing} onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+            </div>
+          </div>
         )}
         {confirmModel && (
           <div className="capability-note">
@@ -472,12 +515,15 @@ export function BotSettings({
                 }
                 onClick={() =>
                   void run(
-                    () =>
-                      write(
+                    async () => {
+                      const submitted = avatar;
+                      await write(
                         `/bots/${encodeURIComponent(existing!.id)}/avatar`,
-                        avatar,
+                        submitted,
                         "PUT",
-                      ),
+                      );
+                      setBaseline((current) => ({ ...current, avatar: submitted }));
+                    },
                     "Avatar saved",
                     "avatar",
                   )
