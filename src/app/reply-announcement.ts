@@ -5,11 +5,13 @@ import type { SavedConversation } from "./storage";
 const replying = new Set(["thinking", "working"]);
 const SNIPPET_LENGTH = 200;
 export interface ReplyWatch {
-  /** The newest message already accounted for. Pages of older history never move it. */
+  /** The newest saved message already accounted for. Pages of older history never move it. */
   lastId?: string;
   /** A reply that arrived while the assistant was still working. */
   waiting?: Message;
 }
+// Hermes shows the unsaved tail of a reply as a message that is replaced by saved rows with new IDs.
+const saved = (message: Message) => !message.id.endsWith("-inflight");
 const speakable = (message: Message) =>
   message.role === "assistant" && !!message.text.trim() && !isAgentExchange(message);
 /** Markdown read aloud as written would spell out its symbols, so keep only the words. */
@@ -31,7 +33,7 @@ export function replySnippet(text: string) {
  */
 export function watchReplies(watch: ReplyWatch, conversation: SavedConversation, baseline: boolean): { watch: ReplyWatch; reply?: Message } {
   const { messages } = conversation;
-  const lastId = messages.at(-1)?.id;
+  const lastId = messages.findLast(saved)?.id;
   const known = watch.lastId === undefined ? -1 : messages.findIndex(message => message.id === watch.lastId);
   // A conversation that no longer contains the last message seen was replaced, not extended.
   if (baseline || watch.lastId !== undefined && known < 0) return { watch: { lastId } };

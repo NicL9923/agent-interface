@@ -716,6 +716,58 @@ describe("reply announcements", () => {
     expect(announcement()).toBe("Shared replied: Checking. All clear.");
   });
 
+  it("reads the finished reply when Hermes swaps its in-flight row for saved rows with new IDs", async () => {
+    hold(settled);
+    await render();
+    const prompt = message("u2", "user", "Status?");
+    hold([...settled, prompt, message("session-inflight", "assistant", "Checking")], "working");
+    await advance(1500);
+    expect(announcement()).toBe("");
+    hold([...settled, prompt, message("row-41", "assistant", "Checking. All clear.")], "done");
+    await advance(1500);
+    expect(announcement()).toBe("Shared replied: Checking. All clear.");
+  });
+
+  it("reads a second identical reply as a new announcement", async () => {
+    hold(settled);
+    await render();
+    hold([...settled, message("a2", "assistant", "Done.")]);
+    await advance(1500);
+    const first = container.querySelector('.transcript-frame > [role="status"] > span');
+    expect(announcement()).toBe("Shared replied: Done.");
+    hold([...settled, message("a2", "assistant", "Done."), message("a3", "assistant", "Done.")]);
+    await advance(1500);
+    expect(announcement()).toBe("Shared replied: Done.");
+    expect(container.querySelector('.transcript-frame > [role="status"] > span')).not.toBe(first);
+  });
+
+  it("never pairs the previous assistant's reply with the newly opened assistant's name", async () => {
+    const other = { ...bootstrap.bots[0], id: "other", name: "Other" };
+    bootstrap.bots.push(other);
+    const written: string[] = [];
+    const nodeValue = Object.getOwnPropertyDescriptor(Node.prototype, "nodeValue")!;
+    Object.defineProperty(Node.prototype, "nodeValue", { configurable: true, get: nodeValue.get, set(value: string) {
+      if (this.parentElement?.closest('.transcript-frame > [role="status"]')) written.push(String(value));
+      nodeValue.set!.call(this, value);
+    } });
+    try {
+      const original = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/bots/other/conversation?")
+        ? { ...conversation, botId: "other", messages: [] } as T : original(path) as Promise<T>);
+      hold(settled);
+      await render();
+      hold([...settled, message("a2", "assistant", "Done.")]);
+      await advance(1500);
+      expect(announcement()).toBe("Shared replied: Done.");
+      await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes("Other"))!.click());
+      expect(written.filter(text => text.startsWith("Other"))).toEqual([]);
+      expect(announcement()).toBe("");
+    } finally {
+      Object.defineProperty(Node.prototype, "nodeValue", nodeValue);
+      bootstrap.bots.pop();
+    }
+  });
+
   it("keeps the first 200 characters of a long reply", async () => {
     hold(settled);
     await render();

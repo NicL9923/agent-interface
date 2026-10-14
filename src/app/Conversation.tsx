@@ -84,7 +84,10 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
       <NotificationOnboarding notifications={notifications} />
       <div className="transcript-frame">
       {/* Always mounted, so a screen reader is already watching when a reply lands. */}
-      <span className="sr-only" role="status">{selected && reply ? `${selected.name} replied: ${reply.text}` : ""}</span>
+      {/* Each reply is its own node, so a repeat of the same words still reads out. */}
+      <span className="sr-only" role="status">
+        {selected && reply?.botId === botId && <span key={reply.id}>{`${selected.name} replied: ${reply.text}`}</span>}
+      </span>
       <div
         className="transcript"
         ref={scroll}

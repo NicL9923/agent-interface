@@ -22,7 +22,7 @@ export function useConversation(botId: string, userId?: string) {
   const [unseen, setUnseen] = useState(0);
   const [earlier, setEarlier] = useState({ loading: false, failed: false });
   // The latest settled reply, worded for a screen reader's live region.
-  const [reply, setReply] = useState<{ id: string; text: string } | null>(null);
+  const [reply, setReply] = useState<{ botId: string; id: string; text: string } | null>(null);
   const positionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (positionTimer.current) clearTimeout(positionTimer.current);
@@ -94,7 +94,7 @@ export function useConversation(botId: string, userId?: string) {
         if (newSecureRequest && (firstConversation || following.current)) reveal.current = newSecureRequest.id;
         const heard = watchReplies(watch, result, firstConversation);
         watch = heard.watch;
-        if (heard.reply) setReply({ id: heard.reply.id, text: replySnippet(heard.reply.text) });
+        if (heard.reply) setReply({ botId, id: heard.reply.id, text: replySnippet(heard.reply.text) });
         firstConversation = false;
         if (result !== current.current) holdPlace();
         setConversation(result);
