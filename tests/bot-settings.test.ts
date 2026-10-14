@@ -43,8 +43,10 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(api).mockReset().mockResolvedValue({ providers: [], provider: "", model: "" });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // jsdom has no showModal. Open the dialog like a browser does, because jsdom 30.1.2+
+  // refuses to focus elements inside a closed (display: none) dialog.
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true, value: vi.fn(),
+    configurable: true, value: vi.fn(function (this: HTMLDialogElement) { this.setAttribute("open", ""); }),
   });
   container = document.createElement("div");
   document.body.append(container);
