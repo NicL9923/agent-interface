@@ -427,6 +427,12 @@ private final class NativeMockServer: @unchecked Sendable {
         server.release(path); await reopen.value
         XCTAssertEqual(value.draft.text, "Lost message"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
         XCTAssertTrue(value.draftReady); XCTAssertTrue(value.canSend)
+        try await Task.sleep(for: .milliseconds(900))
+        let sync = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == path }
+        XCTAssertEqual(sync.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, "Lost message", "The recovered draft is synced to the server")
+        XCTAssertEqual(value.draft.dirty, false, "A successful sync clears dirty so newer web drafts can load again")
+        let synced = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(synced?.dirty, false)
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {

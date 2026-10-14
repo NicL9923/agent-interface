@@ -303,6 +303,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       guard selectionGeneration == selectedGeneration else { return }
       draft = loadedDraft(remote, botId: id)
       draftReady = true
+      // Unsent local edits, such as a recovered send, sync now so they stop shadowing the server.
+      if draft.dirty == true { updateDraft(draft) }
       await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
@@ -326,6 +328,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if !draftReady {
         draft = loadedDraft(value.draft, botId: id)
         draftReady = true
+        if draft.dirty == true { updateDraft(draft) }
       }
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration {
