@@ -156,18 +156,23 @@ maintenance was clear. A signed-in household session was not exercised.
 LEDGER_HEADING = "# Validation ledger\n"
 
 
-def insert_ledger_entry(ledger, entry):
-    """Add a release entry under the ledger heading, once. False when its heading exists."""
+def insert_ledger_entry(ledger, entry, receipt_name):
+    """Add a release entry under the ledger heading, once per release.
+
+    Keyed by the release's receipt, not its heading: two releases of one commit on one
+    day share a heading but each has its own receipt and entry.
+    """
     text = ledger.read_text()
     fence(text.startswith(LEDGER_HEADING), "validation ledger starts with its heading")
-    if entry.splitlines()[0] in text.splitlines():
+    if f"(evidence/{receipt_name})" in text:
         return False
     ledger.write_text(LEDGER_HEADING + "\n" + entry + text[len(LEDGER_HEADING):])
     return True
 
 
 def docs_branch(manifest):
-    return f"docs/record-{manifest['commit'][:7]}-release"
+    # One branch per release, so a second release of the same commit gets its own PR.
+    return f"docs/record-{manifest['name']}"
 
 
 def docs_pull_request(manifest):
@@ -180,7 +185,8 @@ def docs_pull_request(manifest):
               if manifest.get("helperChanged") else "")
     body = (f"Records the production release of {pull} (`{manifest['name']}`). It is the activation receipt "
             f"and validation ledger entry written by `release-app.py activate`.\n\n"
-            f"{qualification}{helper} Hermes stayed at `{manifest['hermesRevision'][:8]}`.\n")
+            f"{qualification}{helper} Hermes stayed at `{manifest['hermesRevision'][:8]}`.\n\n"
+            "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n")
     return title, body
 
 
@@ -565,7 +571,7 @@ def activate(args):
 def write_records(root, manifest):
     """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing."""
     (root / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
-    insert_ledger_entry(root / "docs/ValidationLedger.md", manifest["ledgerEntry"])
+    insert_ledger_entry(root / "docs/ValidationLedger.md", manifest["ledgerEntry"], manifest["receiptName"])
 
 
 def record_release(manifest, docs_pr=True):

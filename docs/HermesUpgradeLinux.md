@@ -379,7 +379,8 @@ guards, and the shared refusal that starts each one exits before any work when a
 disabled. Native one-line calls run with `-I`, which already ignores `PYTHONOPTIMIZE`.
 
 After a successful activation, `release-app.py` records the release itself. It writes the
-production receipt and ledger entry, then commits them on `docs/record-SHORTSHA-release` from
-the latest `origin/main` in a temporary worktree, pushes and opens the docs PR for review.
-Reruns reuse an existing PR, pushed branch or recorded entry. A git or gh failure leaves the
-release recorded and prints the manual steps.
+production receipt and ledger entry, then commits them on `docs/record-NAME` from the latest
+`origin/main` in a temporary worktree, pushes and opens
+the docs PR for review. The branch and the ledger check are keyed by the release, so a second
+release of the same commit is recorded separately. Reruns reuse an existing PR, pushed branch or
+recorded entry. A git or gh failure leaves the release recorded and prints the manual steps.
