@@ -90,6 +90,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       text: draft.text,
       attachments: draft.attachments,
       reviewedInterruption: reviewed,
+      draftBaseRevision: draft.baseRevision ?? 0,
     };
     localSave(submissionKey(userId, botId), request);
     setPending(request);

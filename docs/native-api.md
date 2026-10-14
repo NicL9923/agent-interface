@@ -104,9 +104,14 @@ and the current draft as `draft`, and saves nothing. Without `baseRevision`, as 
 older app builds, the edit always applies. Content the server already has is not a
 conflict and does not advance the revision, so a retried save is harmless.
 
-When Hermes accepts a message, the server clears the sender's draft for that
-assistant if it still holds exactly the sent text and attachments. The clear
-advances the revision with reason `sent`.
+A message submission may carry `draftBaseRevision`, the revision of the draft the
+message was written on. When Hermes accepts the message, the server clears the
+sender's draft for that assistant if it still holds exactly the sent text and
+attachments, or if its revision is at or below `draftBaseRevision`. The second
+rule clears a draft whose final edits were never saved because the person sent
+first. An edit saved from another device after that base keeps the draft.
+Without `draftBaseRevision`, as from older app builds, only the exact-text rule
+applies. Either clear advances the revision with reason `sent`.
 
 Clients keep a local copy with its base revision and an unsaved-edits flag, and
 reconcile it the same way after a 409 or a load that shows a different revision:

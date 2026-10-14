@@ -268,6 +268,8 @@ export interface Submission {
   text: string;
   attachments: FileRef[];
   senderId: string;
+  /** The draft revision this message was written on. Older clients omit it. */
+  draftBaseRevision?: number;
 }
 export interface SubmissionReceipt {
   requestId: string;

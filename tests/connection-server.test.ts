@@ -135,6 +135,30 @@ describe('connection recovery API',()=>{
     expect((await put('Next message',2)).json()).toEqual({text:'Next message',attachments:[],revision:3,reason:'edit',sentRevision:2});
   });
 
+  it('clears a draft whose last save is no newer than the revision a message was written on, even with unsaved final edits',async()=>{
+    const {app}=await installation({
+      conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]}),
+      submit:async input=>({requestId:input.requestId,status:'accepted',runId:input.requestId}),
+    });
+    const one=await identity(app);
+    const put=(text:string,baseRevision:number)=>app.inject({method:'PUT',url:'/api/bots/shared/draft',headers:one,payload:{text,attachments:[],baseRevision}});
+    const read=async()=>(await app.inject({url:'/api/bots/shared/draft',headers:one})).json();
+    const submit=(text:string,draftBaseRevision?:number)=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers:one,payload:{requestId:randomUUID(),text,attachments:[],draftBaseRevision}});
+    // Sent before the last keystrokes were saved: the server holds a partial draft.
+    await put('Pick up fe',0);
+    expect((await submit('Pick up feed',1)).json().status).toBe('accepted');
+    expect(await read()).toEqual({text:'',attachments:[],revision:2,reason:'sent',sentRevision:2});
+    // Another device edited after the message's base revision: its draft survives.
+    await put('Phone draft',2);
+    expect((await submit('Something else',2)).json().status).toBe('accepted');
+    expect(await read()).toMatchObject({text:'Phone draft',revision:3,reason:'edit'});
+    // Without a base, as from older clients, only the exact sent text clears.
+    expect((await submit('Something else')).json().status).toBe('accepted');
+    expect(await read()).toMatchObject({text:'Phone draft',revision:3});
+    expect((await submit('Phone draft')).json().status).toBe('accepted');
+    expect(await read()).toMatchObject({text:'',revision:4,reason:'sent'});
+  });
+
   it('clears a matching draft only on first accepted receipt, preserving newer phone edits and a retyped identical draft',async()=>{
     const {app}=await installation({
       conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]}),

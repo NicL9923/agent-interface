@@ -341,12 +341,20 @@ export class Store {
       return { saved: true, draft: this.draft(userId, botId)! };
     });
   }
-  /** Runs inside the receipt transaction. */
-  clearSubmittedDraft(userId: string, botId: string, expected: unknown) {
-    const cleared = this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=? AND value=?")
-      .run(JSON.stringify({text: "", attachments: []}), userId, botId, JSON.stringify(expected)).changes > 0;
-    if (cleared) this.advanceDraft(userId, botId, "sent");
-    return cleared;
+  /**
+   * Clears the sender's draft once their message is accepted, if it still holds the sent text, or
+   * if nothing changed it after the revision the message was written on. The second catches a
+   * send made before the last edits were saved. Runs inside the receipt transaction.
+   */
+  clearSubmittedDraft(userId: string, botId: string, expected: Pick<SavedDraft, "text" | "attachments">, baseRevision?: number) {
+    const current = this.draft(userId, botId);
+    const empty = JSON.stringify({ text: "", attachments: [] });
+    if (!current || JSON.stringify({ text: current.text, attachments: current.attachments }) === empty) return false;
+    const sent = JSON.stringify({ text: current.text, attachments: current.attachments }) === JSON.stringify(expected);
+    if (!sent && (baseRevision === undefined || current.revision > baseRevision)) return false;
+    this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=?").run(empty, userId, botId);
+    this.advanceDraft(userId, botId, "sent");
+    return true;
   }
   private advanceDraft(userId: string, botId: string, reason: SavedDraft["reason"]) {
     const previous = this.db.prepare("SELECT revision,sent_revision AS sentRevision FROM draft_revisions WHERE user_id=? AND bot_id=?")
@@ -467,7 +475,7 @@ export class Store {
       if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
         this.clearSubmittedDraft(row.input.senderId, row.input.botId, {
           text: row.input.text, attachments: row.input.attachments ?? [],
-        });
+        }, row.input.draftBaseRevision);
       if (row && receipt.runId)
         this.participate(receipt.runId, row.input.senderId);
     });

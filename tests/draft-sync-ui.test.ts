@@ -18,7 +18,10 @@ const advanceDraft=(bot:string,text:string,reason:'edit'|'sent')=>{
 };
 const phone={
   edit:(bot:string,text:string)=>advanceDraft(bot,text,'edit'),
-  send:(bot:string,text:string)=>{if(draft(bot).text===text)advanceDraft(bot,'','sent');},
+  send:(bot:string,text:string,base?:number)=>{
+    const current=draft(bot);
+    if(current.text&&(current.text===text||base!==undefined&&current.revision<=base))advanceDraft(bot,'','sent');
+  },
 };
 let root:Root,container:HTMLDivElement,boot:Bootstrap;
 const key=(bot:string)=>`agent-interface:draft:one:${bot}`;
@@ -40,7 +43,7 @@ beforeEach(()=>{
   });
   vi.mocked(write).mockImplementation(async <T>(path:string,value:unknown,method?:string)=>{
     const bot=/^\/bots\/(\w+)\/(draft|messages)$/.exec(path)?.[1];
-    const body=value as {text:string;baseRevision?:number;requestId?:string};
+    const body=value as {text:string;baseRevision?:number;requestId?:string;draftBaseRevision?:number};
     if(bot&&method==='PUT'){
       const current=draft(bot);
       if(current.text===body.text)return current as T;
@@ -48,7 +51,7 @@ beforeEach(()=>{
         throw new ApiError('This draft changed on another device.',409,'draft_conflict',undefined,{draft:current});
       advanceDraft(bot,body.text,'edit');return draft(bot) as T;
     }
-    if(bot){phone.send(bot,body.text);return {requestId:body.requestId,status:'accepted'} as T;}
+    if(bot){phone.send(bot,body.text,body.draftBaseRevision);return {requestId:body.requestId,status:'accepted'} as T;}
     return {} as T;
   });
   container=document.createElement('div');document.body.append(container);root=createRoot(container);
@@ -125,6 +128,18 @@ describe('draft sync across devices',()=>{
     await type('Second message');await advance(400);await advance(400);
     expect(draft('shared')).toMatchObject({text:'Second message',revision:3});
     expect(textarea().value).toBe('Second message');
+  });
+
+  it('clears the server draft when a message is sent before its last edits were saved',async()=>{
+    phone.edit('shared','Pick up fe');
+    await renderApp();
+    await type('Pick up feed');
+    await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+    expect(vi.mocked(write).mock.calls.find(([path])=>path==='/bots/shared/messages')![1]).toMatchObject({text:'Pick up feed',draftBaseRevision:1});
+    expect(draftPuts('shared')).toEqual([]);
+    expect(draft('shared')).toMatchObject({text:'',reason:'sent',revision:2});
+    await act(async()=>root.unmount());root=createRoot(container);await renderApp();await advance(400);
+    expect(textarea().value).toBe('');
   });
 
   it('saves a pending edit when the page is hidden or closed',async()=>{

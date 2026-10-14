@@ -441,6 +441,9 @@ struct PendingSubmission: Codable, Equatable {
   var attachments: [FileRef]
   var reviewedInterruption: Bool
   var reviewedUncertain = false
+  /// The draft revision this message was written on, so the server clears a draft whose final
+  /// edits were never saved.
+  var draftBaseRevision: Int? = nil
   var draft: Draft { Draft(text: text, attachments: attachments) }
 }
 struct AuthConfig: Codable {

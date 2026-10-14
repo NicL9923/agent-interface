@@ -378,6 +378,7 @@ export async function createApp(
         attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]),
         reviewedInterruption: z.boolean().default(false),
         reviewedUncertain: z.boolean().default(false),
+        draftBaseRevision: z.number().int().min(0).optional(),
       })
       .refine((v) => !!v.text.trim() || !!v.attachments.length, {
         message: "Message cannot be empty",

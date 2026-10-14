@@ -442,7 +442,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       guard canSend else { return }
       submission = PendingSubmission(
         requestId: UUID().uuidString.lowercased(), botId: id, text: draft.text,
-        attachments: draft.attachments, reviewedInterruption: interruptionReviewed)
+        attachments: draft.attachments, reviewedInterruption: interruptionReviewed,
+        draftBaseRevision: draft.baseRevision ?? 0)
     }
     pending = submission
     save(submission, key("pending"))

@@ -81,9 +81,11 @@ private final class NativeMockServer: @unchecked Sendable {
     /// Another device saves an edit, or sends the draft and the server clears it.
     func otherDevice(_ bot: String = "bot", edits text: String) { changeDraft(bot, text: text, reason: "edit") }
     func otherDevice(_ bot: String = "bot", sends text: String) { clearDraft(bot, sent: text) }
-    /// Accepting a message clears the sender's draft only while it still holds that text.
-    private func clearDraft(_ bot: String, sent text: String) {
-        if draftRecord(bot)?["text"] as? String == text { changeDraft(bot, text: "", reason: "sent") }
+    /// Accepting a message clears the sender's draft while it still holds that text, or while
+    /// nothing changed it after the revision the message was written on.
+    private func clearDraft(_ bot: String, sent text: String, base: Int? = nil) {
+        guard let record = draftRecord(bot), let current = record["text"] as? String, !current.isEmpty else { return }
+        if current == text || base.map({ (record["revision"] as? Int ?? 0) <= $0 }) == true { changeDraft(bot, text: "", reason: "sent") }
     }
     func draftRecord(_ bot: String = "bot") -> [String: Any]? { lock.withLock { draftRecords?[bot] } }
     func draftSaves(_ bot: String = "bot") -> [DraftSaveBody] {
@@ -174,7 +176,9 @@ private final class NativeMockServer: @unchecked Sendable {
         else if path.hasSuffix("/messages") {
             status = sendStatus
             let payload = Self.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            if status == 200, let text = payload?["text"] as? String { clearDraft(request.url!.pathComponents.dropLast().last ?? "", sent: text) }
+            if status == 200, let text = payload?["text"] as? String {
+                clearDraft(request.url!.pathComponents.dropLast().last ?? "", sent: text, base: payload?["draftBaseRevision"] as? Int)
+            }
             data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"]) : Self.json(["error": "Synthetic admission failure"])
         } else if path.hasSuffix("/uploads") { data = Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
@@ -558,6 +562,18 @@ private final class NativeMockServer: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(900))
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "Second message")
         XCTAssertEqual(value.draft.text, "Second message"); XCTAssertEqual(value.draft.dirty, false)
+    }
+
+    func testASendBeforeTheLastEditsSavedStillClearsTheServerDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Pick up fe", revision: 1)
+        value.draft = Draft(text: "Pick up fe", attachments: [], dirty: false, baseRevision: 1)
+        value.updateDraft(Draft(text: "Pick up feed", attachments: []))
+        await value.send()
+        XCTAssertEqual(server.draftSaves(), [], "The send went out before the edit was saved")
+        XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent")
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, "")
     }
 
     func testARecoveredDraftSyncsOnItsBaseEvenAfterItsOwnSendCleared() async throws {

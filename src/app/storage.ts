@@ -34,6 +34,8 @@ export type Pending = {
   text: string;
   attachments: FileRef[];
   reviewedInterruption: boolean;
+  /** The draft revision this message was written on, so the server clears a draft whose final edits were never saved. */
+  draftBaseRevision?: number;
 };
 export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
