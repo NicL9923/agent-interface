@@ -1,38 +1,103 @@
-import { z } from "zod";
-
-const id = z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/);
-const title = z.string().trim().min(1).max(200);
-const itemIds = <T extends { id: string }>(items: T[]) => new Set(items.map(item => item.id)).size === items.length;
-const checklist = z.object({
-  id, type: z.literal("checklist"), title,
-  items: z.array(z.object({ id, text: z.string().trim().min(1).max(500) }).strict()).min(1).max(60)
-    .refine(itemIds, "Item IDs must be unique"),
-}).strict();
-const itinerary = z.object({
-  id, type: z.literal("itinerary"), title,
-  items: z.array(z.object({
-    id, title, time: z.string().max(100).optional(), detail: z.string().max(2000).optional(),
-    url: z.string().url().max(2000).refine(url => /^https?:\/\//i.test(url)).optional(),
-  }).strict()).min(1).max(60).refine(itemIds, "Item IDs must be unique"),
-}).strict();
-const event = z.object({
-  id, type: z.literal("event"), title,
-  start: z.string().datetime({ offset: true }), end: z.string().datetime({ offset: true }).optional(),
-  location: z.string().max(500).optional(), description: z.string().max(4000).optional(),
-}).strict().refine(card => !card.end || Date.parse(card.end) > Date.parse(card.start), "The event must end after it starts");
-export const replyCardSchema = z.union([checklist, itinerary, event]);
-export const replyDocumentSchema = z.object({
-  version: z.literal(1), cards: z.array(replyCardSchema).min(1).max(8).refine(itemIds, "Card IDs must be unique"),
-}).strict();
-export type ReplyCard = z.infer<typeof replyCardSchema>;
-export type EventCard = Extract<ReplyCard, { type: "event" }>;
-export type ReplyDocument = z.infer<typeof replyDocumentSchema>;
+// Hand-written guards rather than a schema library: this module reaches the browser, and a
+// schema library would ship to every phone for these few shapes. They accept exactly what the
+// schemas they replace did, including trimmed text and strict objects with no extra keys.
+export interface ChecklistCard { id: string; type: "checklist"; title: string; items: { id: string; text: string }[] }
+export interface ItineraryCard {
+  id: string; type: "itinerary"; title: string;
+  items: { id: string; title: string; time?: string; detail?: string; url?: string }[];
+}
+export interface EventCard { id: string; type: "event"; title: string; start: string; end?: string; location?: string; description?: string }
+export type ReplyCard = ChecklistCard | ItineraryCard | EventCard;
+export interface ReplyDocument { version: 1; cards: ReplyCard[] }
 export interface ReplyCardState { checkedIds: string[]; notes: Record<string, string> }
+
+type Fields = Record<string, unknown>;
+const isFields = (value: unknown): value is Fields => typeof value === "object" && value !== null && !Array.isArray(value);
+/** Whether the object holds only the named keys. */
+const only = (value: Fields, keys: string[]) => Object.keys(value).every(name => keys.includes(name));
+const text = (value: unknown, max: number, min = 0, trim = false) => {
+  if (typeof value !== "string") return null;
+  const result = trim ? value.trim() : value;
+  return result.length >= min && result.length <= max ? result : null;
+};
+/** An optional text field: absent is fine (undefined), present must be valid (null if not). */
+const optional = (value: Fields, name: string, max: number) => Object.hasOwn(value, name) ? text(value[name], max) : undefined;
+const identifier = (value: unknown) => {
+  const result = text(value, 80, 1);
+  return result !== null && /^[a-zA-Z0-9_-]+$/.test(result) ? result : null;
+};
+const title = (value: unknown) => text(value, 200, 1, true);
+// The URL parser ignores tabs and line breaks, so the stored link must not contain them either.
+function link(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  try { new URL(trimmed); } catch { return null; }
+  const result = trimmed.replace(/[\t\n\r]/g, "");
+  return result.length <= 2000 && /^https?:\/\//i.test(result) ? result : null;
+}
+// Month lengths and leap days, so "2026-02-30" is not a date.
+const date = /(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|02-(?:0[1-9]|1\d|2[0-8])))/;
+// A real calendar date and clock time with seconds and an explicit Z or offset: no floating times.
+const timestamp = new RegExp(`^${date.source}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$`);
+const instant = (value: unknown) => typeof value === "string" && timestamp.test(value) ? value : null;
+/** Entries that all parse and carry distinct IDs, or null. */
+function entries<T extends { id: string }>(value: unknown, max: number, parse: (entry: unknown) => T | null) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > max) return null;
+  const parsed: T[] = [];
+  for (const entry of value) {
+    const result = parse(entry);
+    if (!result) return null;
+    parsed.push(result);
+  }
+  return new Set(parsed.map(item => item.id)).size === parsed.length ? parsed : null;
+}
+
+function checklist(card: Fields): ChecklistCard | null {
+  const id = identifier(card.id), name = title(card.title);
+  const items = entries(card.items, 60, entry => {
+    if (!isFields(entry) || !only(entry, ["id", "text"])) return null;
+    const itemId = identifier(entry.id), itemText = text(entry.text, 500, 1, true);
+    return itemId !== null && itemText !== null ? { id: itemId, text: itemText } : null;
+  });
+  return only(card, ["id", "type", "title", "items"]) && id !== null && name !== null && items
+    ? { id, type: "checklist", title: name, items } : null;
+}
+function itinerary(card: Fields): ItineraryCard | null {
+  const id = identifier(card.id), name = title(card.title);
+  const items = entries(card.items, 60, entry => {
+    if (!isFields(entry) || !only(entry, ["id", "title", "time", "detail", "url"])) return null;
+    const itemId = identifier(entry.id), itemTitle = title(entry.title);
+    const time = optional(entry, "time", 100), detail = optional(entry, "detail", 2000);
+    const url = Object.hasOwn(entry, "url") ? link(entry.url) : undefined;
+    if (itemId === null || itemTitle === null || time === null || detail === null || url === null) return null;
+    return { id: itemId, title: itemTitle, ...(time !== undefined && { time }), ...(detail !== undefined && { detail }), ...(url !== undefined && { url }) };
+  });
+  return only(card, ["id", "type", "title", "items"]) && id !== null && name !== null && items
+    ? { id, type: "itinerary", title: name, items } : null;
+}
+function event(card: Fields): EventCard | null {
+  const id = identifier(card.id), name = title(card.title), start = instant(card.start);
+  const end = Object.hasOwn(card, "end") ? instant(card.end) : undefined;
+  const location = optional(card, "location", 500), description = optional(card, "description", 4000);
+  if (!only(card, ["id", "type", "title", "start", "end", "location", "description"]) ||
+    id === null || name === null || start === null || end === null || location === null || description === null) return null;
+  if (end !== undefined && !(Date.parse(end) > Date.parse(start))) return null; // The event must end after it starts.
+  return { id, type: "event", title: name, start, ...(end !== undefined && { end }), ...(location !== undefined && { location }), ...(description !== undefined && { description }) };
+}
+function replyCard(value: unknown): ReplyCard | null {
+  if (!isFields(value)) return null;
+  return value.type === "checklist" ? checklist(value) : value.type === "itinerary" ? itinerary(value) : value.type === "event" ? event(value) : null;
+}
+function replyDocument(value: unknown): ReplyDocument | null {
+  if (!isFields(value) || !only(value, ["version", "cards"]) || value.version !== 1) return null;
+  const cards = entries(value.cards, 8, replyCard); // Card IDs must be unique.
+  return cards ? { version: 1, cards } : null;
+}
 
 /** Invalid or oversized card blocks remain readable code rather than actionable UI. */
 export function parseReplyDocument(code: string): ReplyDocument | null {
   if (code.length > 100_000) return null;
-  try { const parsed = replyDocumentSchema.safeParse(JSON.parse(code)); return parsed.success ? parsed.data : null; }
+  try { return replyDocument(JSON.parse(code)); }
   catch { return null; }
 }
 export function replyCardsFromText(text: string): ReplyCard[] {
