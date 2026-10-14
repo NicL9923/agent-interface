@@ -278,6 +278,9 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("submission", "GET", `/api/submissions/${ids.submission}`);
     await record("bot-draft-save", "PUT", "/api/bots/household/draft", { text: "Add basil", attachments: [attached], baseRevision: 0 });
     await record("bot-draft", "GET", "/api/bots/household/draft");
+    const conflict = await app.inject({ method: "PUT", url: "/api/bots/household/draft", payload: { text: "Edited on an old copy", attachments: [], baseRevision: 0 }, headers: { authorization } });
+    expect(conflict.statusCode).toBe(409);
+    fixtures.set("bot-draft-conflict", { request: "PUT /api/bots/household/draft", response: conflict.json() });
     await record("bot-read-position", "PUT", "/api/bots/household/read-position", { messageId: "message-assistant", scrollTop: 240.5 });
     await record("conversation", "GET", "/api/bots/household/conversation");
     const card = "/api/bots/household/messages/message-assistant/cards/groceries/state";

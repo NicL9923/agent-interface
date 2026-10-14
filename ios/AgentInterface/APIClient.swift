@@ -10,6 +10,8 @@ struct APIError: Error, LocalizedError {
   var confirmRequired = false
   /// Short technical context, such as the JSON coding path an unreadable response failed at.
   var detail: String? = nil
+  /// The error response body, such as the current draft with a draft conflict.
+  var body: Data? = nil
   var errorDescription: String? { message }
   /// The code the app server puts on a genuine "sign in required" 401. Other 401s, such as a
   /// rejected upstream call, are ordinary failures and must not sign the person out.
@@ -206,7 +208,7 @@ extension Data {
         message: object?["detail"] as? String ?? object?["error"] as? String
           ?? "Request failed (\(response.statusCode)).", status: response.statusCode,
         code: object?["code"] as? String,
-        confirmRequired: object?["confirmRequired"] as? Bool ?? false)
+        confirmRequired: object?["confirmRequired"] as? Bool ?? false, body: data)
     }
     if method == "GET", generation == validatedGeneration {
       // Only JSON is kept; file downloads can be large and are never polled.

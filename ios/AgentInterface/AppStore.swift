@@ -37,6 +37,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
   private var draftTask: Task<Void, Never>?
+  /// Set while an edit waits for its save, so leaving can send it now instead of dropping it.
+  private var scheduledDraftSave: UUID?
+  private var draftBackgroundTask = UIBackgroundTaskIdentifier.invalid
   private var conversationCache: [String: Conversation] = [:]
   private var generation = UUID()
   private var selectionGeneration = UUID()
@@ -232,7 +235,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pollTask?.cancel()
     pollTask = nil
     persistDraft()
-    draftTask?.cancel()
+    flushDraft(inBackground: true)
   }
   func refreshBootstrap() async {
     guard let api, api.token != nil else { return }
@@ -246,6 +249,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if let previous = bootstrap, previous.user.id != value.user.id {
         persistDraft()
         draftTask?.cancel()
+        scheduledDraftSave = nil
         selectionGeneration = UUID()
         generation = UUID()
         selectedBotId = nil
@@ -282,7 +286,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   func select(_ id: String?) async {
     persistDraft()
-    draftTask?.cancel()
+    flushDraft()
     selectionGeneration = UUID()
     selectedBotId = id
     conversation = id.flatMap { conversationCache[$0] }
@@ -299,11 +303,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if cached?.dirty == true { draftReady = true }
     let selectedGeneration = selectionGeneration
     do {
-      let remote: Draft? = try await api.get("/bots/\(APIClient.component(id))/draft")
+      let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(id))/draft")
       guard selectionGeneration == selectedGeneration else { return }
-      draft = loadedDraft(remote, botId: id)
-      draftReady = true
-      syncRecoveredDraft(botId: id)
+      loadDraft(remote, botId: id)
       await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
@@ -324,10 +326,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
       conversation = value
       conversationCache[id] = value
-      if !draftReady {
-        draft = loadedDraft(value.draft, botId: id)
-        draftReady = true
-        syncRecoveredDraft(botId: id)
+      // Polling also brings in a draft changed on another device, or a send made there.
+      if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) {
+        loadDraft(value.draft, botId: id)
       }
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration {
@@ -338,39 +339,94 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   func updateDraft(_ value: Draft) {
-    draft = value
+    // Callers change the words and files. The revision bookkeeping stays this copy's.
+    draft.text = value.text
+    draft.attachments = value.attachments
     draft.dirty = true
     persistDraft()
     draftTask?.cancel()
-    guard draftReady, let api, let botId = selectedBotId, let localKey = key("draft", botId) else {
-      return
-    }
-    let snapshot = draft
+    scheduledDraftSave = nil
+    guard draftReady, let botId = selectedBotId else { return }
+    scheduleDraftSave(draft, botId: botId, after: .milliseconds(600))
+  }
+  /// Saves the open draft after `delay`, unless a newer edit or a send of the same text replaces it.
+  private func scheduleDraftSave(_ snapshot: Draft, botId: String, after delay: Duration) {
+    let token = UUID()
     let currentGeneration = generation
+    scheduledDraftSave = token
     draftTask = Task {
+      defer {
+        if self.scheduledDraftSave == token { self.scheduledDraftSave = nil }
+        self.endDraftBackgroundTask(ifToken: token)
+      }
       do {
-        try await Task.sleep(for: .milliseconds(600))
+        if delay > .zero { try await Task.sleep(for: delay) }
         guard !Task.isCancelled,
           self.pending?.botId != botId || self.pending?.text != snapshot.text
             || self.pending?.attachments != snapshot.attachments
         else { return }
-        let _: Draft = try await api.write(
-          "/bots/\(APIClient.component(botId))/draft", snapshot, method: "PUT")
-        guard currentGeneration == self.generation else { return }
-        self.save(Optional<Bool>.none, self.key("recovered", botId))
-        if self.draft == snapshot && self.selectedBotId == botId {
-          self.draft.dirty = false
-          self.persistDraft()
-        } else {
-          var cached: Draft? = self.read(localKey)
-          if cached == snapshot {
-            cached?.dirty = false
-            self.save(cached, localKey)
-          }
-        }
+        try await self.saveDraft(snapshot, botId: botId)
       } catch is CancellationError {} catch {
         if currentGeneration == self.generation { self.report(error) }
       }
+    }
+  }
+  /// Sends a waiting edit now, when switching assistants or leaving the app, instead of
+  /// cancelling it. Leaving gets a short background task to finish the request.
+  private func flushDraft(inBackground: Bool = false) {
+    draftTask?.cancel()
+    guard scheduledDraftSave != nil, draftReady, let botId = selectedBotId else {
+      scheduledDraftSave = nil
+      return
+    }
+    scheduleDraftSave(draft, botId: botId, after: .zero)
+    guard inBackground, let token = scheduledDraftSave else { return }
+    endDraftBackgroundTask(ifToken: nil)
+    draftBackgroundToken = token
+    draftBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save draft") { [weak self] in
+      self?.endDraftBackgroundTask(ifToken: nil)
+    }
+  }
+  private var draftBackgroundToken: UUID?
+  /// Ends the background task, if it belongs to this save, or any one when `token` is nil.
+  private func endDraftBackgroundTask(ifToken token: UUID?) {
+    guard draftBackgroundTask != .invalid, token == nil || token == draftBackgroundToken else { return }
+    UIApplication.shared.endBackgroundTask(draftBackgroundTask)
+    draftBackgroundTask = .invalid
+    draftBackgroundToken = nil
+  }
+  /// Saves a draft on its base revision, then updates the open copy and the cached copy. A
+  /// conflict merges the server's copy in and saves kept edits again on the new base.
+  private func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 2) async throws {
+    guard let api, let localKey = key("draft", botId) else { return }
+    let currentGeneration = generation
+    let update: (Draft) -> Draft
+    var conflict = false
+    do {
+      let server: SavedDraft = try await api.write(
+        "/bots/\(APIClient.component(botId))/draft", DraftSave(snapshot), method: "PUT")
+      update = { $0.saved(snapshot, as: server) }
+    } catch let error as APIError where error.code == DraftConflict.code {
+      guard let body = error.body, let refused = try? JSONDecoder().decode(DraftConflict.self, from: body)
+      else { throw error }
+      update = { Draft.merge($0, with: refused.draft, conflict: true).draft }
+      conflict = true
+    }
+    guard currentGeneration == generation else { return }
+    var next: Draft?
+    if let cached: Draft = read(localKey) {
+      next = update(cached)
+      save(next, localKey)
+    }
+    if selectedBotId == botId {
+      draft = update(draft)
+      persistDraft()
+      if draftReady { next = draft }
+    }
+    // The server now has this text, or a send made it obsolete.
+    if !conflict || next?.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
+    if conflict, let next, next.dirty == true, retries > 0 {
+      try await saveDraft(next, botId: botId, retries: retries - 1)
     }
   }
   private func persistDraft() {
@@ -433,18 +489,18 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     guard let original = pending, value.requestId == original.requestId else { return }
     guard value.status != "uncertain" else { return }
     if value.status == "accepted" {
-      if selectedBotId == original.botId && draft.text == original.text
-        && draft.attachments == original.attachments
-      {
-        draftTask?.cancel()
-        draft = Draft(dirty: false)
+      // The server clears its copy for this send, which a later save here must not mistake
+      // for a send from another device.
+      if selectedBotId == original.botId && draftReady {
+        if draft.text == original.text && draft.attachments == original.attachments {
+          draftTask?.cancel()
+          scheduledDraftSave = nil
+        }
+        draft = draft.sent(original)
         persistDraft()
       } else {
         let draftKey = key("draft", original.botId)
-        let cached: Draft? = read(draftKey)
-        if cached?.text == original.text && cached?.attachments == original.attachments {
-          save(Draft(dirty: false), draftKey)
-        }
+        if let cached: Draft = read(draftKey) { save(cached.sent(original), draftKey) }
       }
     }
     pending = nil
@@ -460,6 +516,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     var target = Self.draft(
       restoring: old, into: open && draftReady ? draft : read(localKey) ?? Draft())
     target.dirty = true
+    // The message may still have arrived; its send clear must not drop the restored text.
+    target.sentHere = true
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
     save(true, key("recovered", old.botId))
@@ -467,28 +525,28 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
     if open {
-      if draftReady { updateDraft(target) } else { draft = target }
-    } else if let api {
+      if draftReady {
+        draft.sentHere = true
+        updateDraft(target)
+      } else { draft = target }
+    } else {
       // Best effort: the dirty local draft already wins the next time that assistant opens.
-      let recoveredKey = key("recovered", old.botId)
-      Task {
-        let saved: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", target, method: "PUT")
-        if saved != nil { self.save(Optional<Bool>.none, recoveredKey) }
-      }
+      Task { try? await self.saveDraft(target, botId: old.botId) }
     }
   }
-  /// A draft recovered by Discard is unsent work that may not have reached the server. Sync it
-  /// once loaded. Any other leftover dirty draft is shown but never pushed on its own, because
-  /// the server's copy may be newer, for example emptied by a send from another device.
-  private func syncRecoveredDraft(botId: String) {
-    let marked: Bool? = read(key("recovered", botId))
-    if marked == true, draft.dirty == true { updateDraft(draft) }
-  }
-  /// The draft to show once a read returns: unsent local edits win over the server's copy.
-  private func loadedDraft(_ remote: Draft?, botId: String) -> Draft {
-    let local: Draft? = read(key("draft", botId))
-    if let local, local.dirty == true { return local }
-    return remote ?? local ?? Draft()
+  /// Shows the draft once a read returns, merged with this device's copy. Kept edits save again
+  /// when the server moved on. A draft recovered by Discard is unsent work that may not have
+  /// reached the server, so it syncs once loaded. Any other leftover edit on an unchanged
+  /// server copy is shown, and saves with the next change.
+  private func loadDraft(_ remote: SavedDraft?, botId: String) {
+    let merged = Draft.merge(draftReady ? draft : read(key("draft", botId)) ?? draft, with: remote)
+    let changed = merged.draft != draft
+    draft = merged.draft
+    draftReady = true
+    if changed { persistDraft() }
+    let recovered: Bool? = read(key("recovered", botId))
+    if merged.push || recovered == true && draft.dirty == true { updateDraft(draft) }
+    else if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
   }
   /// Puts a pending message back in front of whatever the person has typed since.
   static func draft(restoring old: PendingSubmission, into current: Draft) -> Draft {
@@ -580,8 +638,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           target.attachments.append(file)
           target.dirty = true
           save(target, localKey)
-          let _: Draft = try await api.write(
-            "/bots/\(APIClient.component(id))/draft", target, method: "PUT")
+          try await saveDraft(target, botId: id)
         }
       } catch { if currentGeneration == generation { report(error) } }
     }
@@ -597,9 +654,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       guard draftReady else { throw APIError(message: "Wait for this assistant's draft to finish loading.", status: 409) }
       target = draft
     } else {
-      let remote: Draft? = try await api.get("/bots/\(APIClient.component(botId))/draft")
+      let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(botId))/draft")
       let cached: Draft? = read(localKey)
-      target = cached?.dirty == true ? cached! : remote ?? cached ?? Draft()
+      target = Draft.merge(cached ?? Draft(), with: remote).draft
     }
     guard target.attachments.count < 10 else { throw APIError(message: "This draft already has 10 attachments. Send or remove one first.", status: 400) }
     uploading = true
@@ -616,7 +673,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if selectedBotId == botId { updateDraft(target) }
     else {
       save(target, localKey)
-      let _: Draft = try await api.write("/bots/\(APIClient.component(botId))/draft", target, method: "PUT")
+      try await saveDraft(target, botId: botId)
     }
   }
   func open(_ file: FileRef) {
@@ -666,6 +723,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     pollTask?.cancel()
     draftTask?.cancel()
+    scheduledDraftSave = nil
     fileTask?.cancel()
     generation = UUID()
     selectionGeneration = UUID()

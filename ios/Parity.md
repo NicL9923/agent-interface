@@ -5,7 +5,7 @@ The native implementation uses the web client's settled scope in
 means the native control and authenticated request path exist. The validation
 ledger remains the repository's single source for tested code-state hashes.
 
-The native unit run passed 79 tests on Xcode 27 and iOS 27. The subsequent Today
+The native unit run passed 93 tests on Xcode 27 and iOS 27. The subsequent Today
 frontier update passed eight focused unit tests and two phone UI flows. October 1 focused
 simulator UI checks covered account health, the real Calendar permission prompt
 and denial, confirmed service recovery, and disconnect followed by a refreshed
@@ -47,7 +47,7 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Steering and stop | Active-work guidance default, explicit stop confirmation | Same tested server admission/steering/stop routes; native controls implemented |
 | Approvals and clarification | Household approve/deny, stale-server errors, answer options and text, official-interface fallback | Native controls implemented; server enforcement and clarification integration in main ledger |
 | Interrupted/uncertain work | Per-run review, durable request IDs, lookup, reviewed same-ID retry, definitive-rejection recovery. An unconfirmed send can always be discarded: its text and attachments return to that assistant's draft, with a warning that the message may still arrive | Native unit tests for rejection vs uncertainty, new interruptions, identity changes, accepted-draft clearing, and discarding into the same, an edited, an emptied and another assistant's draft |
-| Offline recovery | Loaded roster/transcript cache in memory, scoped local drafts/read positions, backoff, manual reconnect, no automatic message replay | Native disconnect, canonical-read outage, read-anchor and identity-race tests |
+| Offline recovery | Loaded roster/transcript cache in memory, scoped local drafts/read positions, backoff, manual reconnect, no automatic message replay. Drafts save on their base revision and merge by the shared rule in the native API contract; a pending edit saves at once on assistant switch or backgrounding | Native disconnect, canonical-read outage, read-anchor and identity-race tests; draft merge unit tests and stale-sent, switch and background flush, concurrent edit, typed-after-send and recovered-draft revision tests |
 | Uploads and delivery | Images, PDFs and text, ten attachments, 20 MB bound, authenticated image/Quick Look preview and share | Native multipart transport and identity-race tests; server upload/download integration in main ledger |
 | Model/provider/instructions/MCP | Shared-model confirmation, existing model choices/identifiers, instructions, existing MCP identifiers | Native forms implemented; server configuration integration in main ledger |
 | Tools and skills | Catalog reads, required-skill locking, explicit save, save disabled until successful catalog read, retry | Native catalog-failure simulator test; real-Hermes native tool-catalog read; server catalog integration in main ledger |

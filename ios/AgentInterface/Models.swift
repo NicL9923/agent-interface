@@ -223,10 +223,88 @@ struct ReadPosition: Codable {
   var messageId: String?
   var scrollTop: Double? = nil
 }
+/// This device's copy of a draft, as cached on the device.
 struct Draft: Codable, Equatable {
   var text = ""
   var attachments: [FileRef] = []
   var dirty: Bool? = nil
+  /// The server revision this copy was loaded from or last saved as. Missing means 0.
+  var baseRevision: Int? = nil
+  /// This device sent, or tried to send, a message from this copy since its base, so a newer
+  /// send clear on the server may be its own.
+  var sentHere: Bool? = nil
+
+  /// Reconciles this copy with the server's after a load, or after a save the server refused
+  /// because the base revision was stale. `conflict` marks the server's current copy from a 409;
+  /// a load may be an older read than this copy, and is then ignored. The web client's
+  /// `mergeDraft` in src/app/draft-merge.ts applies the same rule.
+  ///
+  /// - A clean copy adopts the server draft.
+  /// - A send cleared the server draft after this copy's base: the text was sent, so drop it.
+  ///   A copy this device sent from keeps its edits, because that clear may be its own.
+  /// - Otherwise unsaved edits here win. `push` asks the caller to save them on the new base.
+  static func merge(_ local: Draft, with server: SavedDraft?, conflict: Bool = false) -> (draft: Draft, push: Bool) {
+    let server = server ?? SavedDraft()
+    let base = local.baseRevision ?? 0
+    let revision = server.revision ?? 0
+    if !conflict && revision < base { return (local, false) }
+    if local.dirty != true || local.text == server.text && local.attachments == server.attachments
+      || (server.sentRevision ?? 0) > base && local.sentHere != true
+    {
+      return (Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision), false)
+    }
+    if revision == base { return (local, false) }
+    var kept = local
+    kept.baseRevision = revision
+    kept.sentHere = nil
+    return (kept, true)
+  }
+  /// This copy after the server saved `sent` as `server`. Edits typed since stay unsaved.
+  func saved(_ sent: Draft, as server: SavedDraft) -> Draft {
+    let revision = server.revision ?? 0
+    // A newer copy already came back, for example from a later save.
+    guard revision >= baseRevision ?? 0 else { return self }
+    var next = self
+    next.baseRevision = revision
+    next.sentHere = nil
+    if text == sent.text && attachments == sent.attachments { next.dirty = false }
+    return next
+  }
+  /// This copy once its send was accepted: emptied if it still holds the sent text.
+  func sent(_ submission: PendingSubmission) -> Draft {
+    guard text == submission.text && attachments == submission.attachments else {
+      var next = self
+      next.sentHere = true
+      return next
+    }
+    return Draft(dirty: false, baseRevision: baseRevision, sentHere: true)
+  }
+}
+/// The server's copy of a draft. Older servers omit the revision fields, which read as 0.
+struct SavedDraft: Codable, Equatable {
+  var text = ""
+  var attachments: [FileRef] = []
+  var revision: Int? = nil
+  /// `edit`, or `sent` when the latest change was the clear after an accepted message.
+  var reason: String? = nil
+  /// The revision of the latest send clear, or 0.
+  var sentRevision: Int? = nil
+}
+/// A draft save. Sending the base revision lets the server refuse an edit made on a stale copy.
+struct DraftSave: Encodable {
+  var text: String
+  var attachments: [FileRef]
+  var baseRevision: Int
+  init(_ draft: Draft) {
+    text = draft.text
+    attachments = draft.attachments
+    baseRevision = draft.baseRevision ?? 0
+  }
+}
+/// The 409 body for a stale draft save, carrying the server's current copy.
+struct DraftConflict: Decodable {
+  static let code = "draft_conflict"
+  var draft: SavedDraft
 }
 struct Conversation: Codable {
   var attention: [Attention]?
@@ -236,7 +314,7 @@ struct Conversation: Codable {
   var activity: Activity
   var approvals: [Approval]
   var files: [FileRef]
-  var draft: Draft?
+  var draft: SavedDraft?
   var readPosition: ReadPosition?
   var toolCalls: [ToolCall]?
   var activityMessages: [Message] {
