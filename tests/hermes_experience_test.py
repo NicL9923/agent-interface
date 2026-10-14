@@ -134,8 +134,10 @@ class RoutineOutputTests(unittest.TestCase):
                 _reconcile_cron_runs=lambda sessions, docs, limit: sessions + docs,
                 _cron_output_runs_dir=lambda *a: self.directory),
             'hermes_cli.web_routers.sessions': types.SimpleNamespace(_project_for_display=lambda rows, **kw: rows),
+            'hermes_cli.web_server_sessions': types.SimpleNamespace(_session_db_path_for_profile=lambda profile: self.home / 'state.db'),
             'hermes_constants': types.SimpleNamespace(get_hermes_home=lambda: self.home),
         }
+        (self.home / 'state.db').write_text('written store')
         self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
         self.data = dict(operation='routine_output', profile='private', routineId='routine', resultId=self.rows[0]['id'])
     @contextlib.contextmanager
@@ -179,6 +181,15 @@ class RoutineOutputTests(unittest.TestCase):
         text = experience.routine_results(self.data)['messages'][0]['text']
         self.assertTrue(text.startswith('x' * 500000)); self.assertIn('Output truncated', text)
 
+    def test_unwritten_profile_store_has_no_runs_instead_of_failing(self):
+        # The unified runtime refuses to open a store no session has written yet.
+        (self.home / 'state.db').write_text('')
+        self.db = None
+        self.assertEqual(experience.routine_results({**self.data, 'operation': 'routine_results'}), [])
+        with self.assertRaises(experience.ExperienceError) as missing:
+            experience.routine_results(self.data)
+        self.assertEqual(missing.exception.status, 404)
+
 
 
 class HistoryAttributionTests(unittest.TestCase):
@@ -187,10 +198,14 @@ class HistoryAttributionTests(unittest.TestCase):
         self.journal.db.execute('CREATE TABLE receipts(request_id TEXT,actor TEXT,run_id TEXT,attachments TEXT,input_text TEXT,stored_session TEXT,profile TEXT,row_id INTEGER,created REAL)')
         self.journal.db.execute("INSERT INTO receipts VALUES('run','one',NULL,'[]','Original ask','session','spike',1,1)")
         self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1},{'id':300}],close=lambda:None)
-        self.patch = patch.dict(sys.modules, {'hermes_cli.web_server_sessions':types.SimpleNamespace(_open_session_db_for_profile=lambda *a,**kw:self.db)})
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = Path(self.temp.name) / 'state.db'
+        self.store.write_text('written store')
+        self.patch = patch.dict(sys.modules, {'hermes_cli.web_server_sessions':types.SimpleNamespace(
+            _open_session_db_for_profile=lambda *a,**kw:self.db, _session_db_path_for_profile=lambda profile:self.store)})
         self.patch.start()
     def tearDown(self):
-        self.patch.stop();self.journal.db.close()
+        self.patch.stop();self.journal.db.close();self.temp.cleanup()
     def test_exact_occurrence_does_not_adopt_an_older_receipt_for_native_user(self):
         self.assertIsNone(experience.history_receipt(self.journal,'spike',['session'],{'id':2,'role':'user'}))
         self.assertIsNone(experience.history_receipt(self.journal,'spike',['session'],{'id':3,'role':'tool'}))
@@ -233,5 +248,19 @@ class HistoryDiscoveryTests(unittest.TestCase):
     def test_page_boundary_clone_resolves_exact_old_run_in_display_order(self):
         result=self.history(False)
         self.assertEqual(result['messages'][0]['app_artifacts'],[{'path':'/fixture/old.pdf'}])
+    def test_unwritten_profile_store_reads_as_empty_history(self):
+        # A new bot's store stays empty until its first session; Hermes no longer creates it on read.
+        self.store.write_text('')
+        self.db = None
+        with patch.dict(sys.modules, {'hermes_cli.web_routers':types.SimpleNamespace(sessions=None,analytics=None)}):
+            self.assertEqual(experience.discovery({'operation':'search','profile':'new','query':'synthetic'},self.journal,None),[])
+            usage = experience.discovery({'operation':'usage','profile':'new','days':7},self.journal,None)
+            self.assertEqual((usage['sessions'],usage['inputTokens'],usage['actualCost']),(0,0,None))
+            with self.assertRaises(experience.ExperienceError) as missing:
+                experience.discovery({'operation':'history','profile':'new','sessionId':'elsewhere','offset':0},self.journal,None)
+            self.assertEqual(missing.exception.status,404)
+            with self.assertRaises(experience.ExperienceError) as invalid:
+                experience.discovery({'operation':'usage','profile':'new','days':5},self.journal,None)
+            self.assertEqual(invalid.exception.status,400)
 
 if __name__ == '__main__': unittest.main()

@@ -70,6 +70,7 @@ const scopeFiles = [
   "src/hermes/service_auth.py",
   "src/hermes/qualification.py",
   "src/hermes/gateway_guard.py",
+  "src/hermes/bot_delivery.py",
   "src/shared/types.ts",
   "src/shared/upgrades.ts",
   "src/shared/integrations.ts",

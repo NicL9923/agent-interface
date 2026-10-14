@@ -39,7 +39,12 @@ async def main():
             if delivered:
                 break
             await asyncio.sleep(0.25)
-        assert delivered, 'Scheduler completed but no canonical bot delivery was observed'
+        if not delivered:
+            # Name the native delivery outcome, so a failed check shows where delivery stopped.
+            runs=urllib.request.Request(os.environ['HERMES_SPIKE_URL']+'/api/cron/jobs/'+job_id+'/runs?profile=spike',headers={'X-Hermes-Session-Token':os.environ['HERMES_SPIKE_TOKEN']})
+            try: detail=urllib.request.urlopen(runs,timeout=10).read().decode()[:2000]
+            except Exception as error: detail=repr(error)
+            raise AssertionError('Scheduler completed but no canonical bot delivery was observed. Native runs: '+detail)
         evidence={'revision':os.environ.get('HERMES_SPIKE_REVISION','b9cb268deffc97946ec11645aa622a7353dd0591'),'provider':'deterministic fixture; real scheduler provider/AIAgent','checks':{'native_scheduler_provider_execution':True,'canonical_bot_delivery':True,'durable_routine_discovery':True,'explicit_routine_identity':True},'scheduler_owner':'Official in-process scheduler provider fired through authenticated dashboard trigger. Automatic timer scheduling requires a separately supervised native gateway/scheduler; application never executes jobs.'}
         (Path(os.environ.get('HERMES_SPIKE_EVIDENCE_DIR', 'docs/evidence')) / 'hermes-routine-probe.json').write_text(json.dumps(evidence,indent=2)+'\n')
         print('Real routine execution, canonical bot delivery, and durable discovery passed')

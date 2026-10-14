@@ -125,6 +125,18 @@ def preview_schedule(profile, schedule):
     return dict(botId=profile, schedule=schedule, timezone=str(zone), nextRuns=values, kind=parsed["kind"])
 
 
+def store_unwritten(profile):
+    """Whether no conversation or run has written this profile's store yet.
+
+    Hermes writes a profile's store with its first session. Since the unified
+    runtime, a read no longer creates it and refuses instead, so callers answer
+    "no history" themselves.
+    """
+    from hermes_cli.web_server_sessions import _session_db_path_for_profile
+    store = Path(_session_db_path_for_profile(profile))
+    return not store.is_file() or store.stat().st_size == 0
+
+
 def routine_results(data):
     """Read only this profile's native run sessions and cron output documents.
 
@@ -139,6 +151,10 @@ def routine_results(data):
     profile, job_id = data["profile"], data.get("routineId")
     if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", job_id):
         raise ExperienceError("Invalid routine ID.")
+    if store_unwritten(profile):
+        if data["operation"] == "routine_results":
+            return []
+        raise ExperienceError("This run is no longer in the routine history. Refresh the results.", 404)
     with _owner_home_scope(profile):
         db = _open_session_db_for_profile(profile, read_only=True)
         try:
@@ -373,10 +389,13 @@ def discovery(data, journal, projector):
     from hermes_cli.web_server_sessions import _open_session_db_for_profile
     profile = data["profile"]
     operation = data["operation"]
+    unwritten = store_unwritten(profile)
     if operation == "search":
         query = data.get("query")
         if not isinstance(query, str) or not 1 <= len(query.strip()) <= 200:
             raise ExperienceError("Enter a search of up to 200 characters.")
+        if unwritten:
+            return []
         value = asyncio.run(sessions.search_sessions(q=query, limit=20, profile=profile, source=None, sources=None, exclude_sources=None))
         hits = [{"botId": profile, "botName": profile, "sessionId": row.get("session_id") or row["id"], "title": row.get("title") or "Conversation", "snippet": row.get("snippet") or row.get("preview") or ""} for row in value["results"]]
         # Attachment names belong to the existing admission/artifact journal;
@@ -398,20 +417,25 @@ def discovery(data, journal, projector):
         finally:
             db.close()
         return hits
+    usage_notice = "Recorded main-session usage. Auxiliary calls and provider invoices may differ. Costs are unknown where Hermes did not record them."
+    if operation == "usage" and data.get("days", 30) not in (7, 30, 90):
+        raise ExperienceError("Choose a 7, 30 or 90 day period.")
+    sid = data.get("sessionId")
+    offset = data.get("offset", 0)
+    if operation != "usage" and (not isinstance(sid, str) or not 1 <= len(sid) <= 200 or not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= 100000):
+        raise ExperienceError("Invalid history page.")
+    if unwritten:
+        if operation == "usage":
+            return {"botId": profile, "days": data.get("days", 30), "sessions": 0, "inputTokens": 0, "outputTokens": 0, "actualCost": None, "estimatedCost": None, "partial": False, "notice": usage_notice}
+        raise ExperienceError("History not found.", 404)
     db = _open_session_db_for_profile(profile, read_only=True)
     try:
         if operation == "usage":
             days = data.get("days", 30)
-            if days not in (7, 30, 90):
-                raise ExperienceError("Choose a 7, 30 or 90 day period.")
             import time
             counts = db._read_one("SELECT COUNT(*) AS sessions, COUNT(actual_cost_usd) AS actual, COUNT(estimated_cost_usd) AS estimated FROM sessions WHERE started_at >= ?", (time.time() - days * 86400,))
             totals = analytics._get_usage_analytics(days=days, profile=profile)["totals"]
-            return {"botId": profile, "days": days, "sessions": counts["sessions"], "inputTokens": (totals.get("total_input") or 0), "outputTokens": (totals.get("total_output") or 0), "actualCost": totals.get("total_actual_cost", 0) if counts["actual"] else None, "estimatedCost": totals.get("total_estimated_cost", 0) if counts["estimated"] else None, "partial": counts["actual"] < counts["sessions"], "notice": "Recorded main-session usage. Auxiliary calls and provider invoices may differ. Costs are unknown where Hermes did not record them."}
-        sid = data.get("sessionId")
-        offset = data.get("offset", 0)
-        if not isinstance(sid, str) or not 1 <= len(sid) <= 200 or not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= 100000:
-            raise ExperienceError("Invalid history page.")
+            return {"botId": profile, "days": days, "sessions": counts["sessions"], "inputTokens": (totals.get("total_input") or 0), "outputTokens": (totals.get("total_output") or 0), "actualCost": totals.get("total_actual_cost", 0) if counts["actual"] else None, "estimatedCost": totals.get("total_estimated_cost", 0) if counts["estimated"] else None, "partial": counts["actual"] < counts["sessions"], "notice": usage_notice}
         sessions._timeline_session_id(db, sid, profile)
     finally:
         db.close()
