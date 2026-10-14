@@ -70,18 +70,29 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
   bot: Bot; conversation?: ConversationWindow | null; unavailable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  // Files of history before the loaded window, fetched when the list first opens.
-  const [earlier, setEarlier] = useState<{ messages?: EarlierFiles["messages"]; loading?: boolean; failed?: boolean }>({});
+  // Files of history before the loaded window, fetched while the list is open. They belong
+  // to one session and window start, so history that replaces either fetches them again.
+  const [earlier, setEarlier] = useState<{ session?: string; before?: string; messages?: EarlierFiles["messages"]; loading?: boolean; failed?: boolean }>({});
+  const request = useRef(0);
   const current = conversation?.botId === bot.id ? conversation : undefined;
-  const artifacts = useMemo(() => artifactsFor(current, earlier.messages), [current, earlier.messages]);
-  const count = artifacts.length + (earlier.messages ? 0 : current?.earlierFiles ?? 0);
-  const show = () => {
-    setOpen(true);
-    if (!current?.earlierFiles || earlier.messages || earlier.loading) return;
-    setEarlier({ loading: true });
-    const before = current.messages[0]?.id;
+  const session = current?.sessionId ?? "", before = current?.messages[0]?.id;
+  const fetched = !!current && earlier.session === session
+    && (!earlier.before || current.messages.some(message => message.id === earlier.before));
+  const older = fetched ? earlier.messages : undefined;
+  const artifacts = useMemo(() => artifactsFor(current, older), [current, older]);
+  const count = artifacts.length + (older ? 0 : current?.earlierFiles ?? 0);
+  useEffect(() => {
+    if (!open || !current?.earlierFiles || fetched) return;
+    const id = ++request.current;
+    const settle = (value: typeof earlier) => { if (request.current === id) setEarlier({ session, before, ...value }); };
+    settle({ loading: true });
     api<EarlierFiles>(`/bots/${encodeURIComponent(bot.id)}/files${before ? `?before=${encodeURIComponent(before)}` : ""}`)
-      .then(value => setEarlier({ messages: value.messages }), () => setEarlier({ failed: true }));
+      .then(value => settle({ messages: value.messages }), () => settle({ failed: true }));
+  }, [open, bot.id, session, before, !!current?.earlierFiles, fetched]);
+  const show = () => {
+    // Reopening retries a failed fetch.
+    if (earlier.failed) setEarlier({});
+    setOpen(true);
   };
   return <>
     <button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
@@ -91,7 +102,7 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
       {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
     </button>
     {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
-      earlier={earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
+      earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
       unavailable={unavailable} onClose={() => setOpen(false)} />}
   </>;
 }

@@ -132,8 +132,8 @@ export function pollWhileVisible(refresh: () => void, intervalMs: number) {
 /** Server pings keep a stream this fresh; a quieter one may be a dead connection. */
 const STREAM_SILENCE = 60_000;
 /**
- * Calls onChange for each change notice on a server event stream, and after a dropped
- * stream reconnects, since notices sent meanwhile are lost. EventSource retries a drop
+ * Calls onChange for each change notice on a server event stream, and each time it
+ * connects, since notices sent before the subscription are lost. EventSource retries a drop
  * itself but never a refusal, so `open` replaces a closed or silent stream.
  */
 export function changeStream(path: string, onChange: () => void) {
@@ -146,13 +146,11 @@ export function changeStream(path: string, onChange: () => void) {
     if (typeof EventSource === "undefined") return;
     if (source && source.readyState !== EventSource.CLOSED && Date.now() - heard < STREAM_SILENCE) return;
     close();
-    let opened = false;
     const current = source = new EventSource(`/api${path}`);
     heard = Date.now();
     current.onopen = () => {
       heard = Date.now();
-      if (opened) onChange();
-      opened = true;
+      onChange();
     };
     current.addEventListener("ping", () => { heard = Date.now(); });
     current.onmessage = () => {

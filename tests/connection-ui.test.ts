@@ -407,7 +407,10 @@ describe('pushed conversation updates',()=>{
     await renderApp();await advance(20);
     expect(FakeEventSource.created).toEqual(['/api/bots/shared/events']);
     const [stream]=FakeEventSource.streams;
-    await act(async()=>stream.connect());
+    // A change between the first read and the subscription would be lost, so connecting reloads.
+    const before=reads();
+    await act(async()=>stream.connect());await advance(0);
+    expect(reads()).toBe(before+1);
     return stream;
   };
   it('refetches on each change notice and otherwise polls only every 30 seconds',async()=>{
@@ -436,7 +439,9 @@ describe('pushed conversation updates',()=>{
     await advance(30_000);
     expect(FakeEventSource.created).toHaveLength(2);
     const [replacement]=FakeEventSource.streams;
-    await act(async()=>replacement.connect());
+    const replaced=reads();
+    await act(async()=>replacement.connect());await advance(0);
+    expect(reads()).toBe(replaced+1);
     // A minute without a ping looks like a dead connection; the next poll after that replaces it.
     await advance(59_000);expect(FakeEventSource.created).toHaveLength(2);await advance(31_000);
     expect(FakeEventSource.created).toHaveLength(3);
