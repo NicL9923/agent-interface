@@ -20,6 +20,7 @@ import { VaultPanel } from "./components/VaultPanel";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
+const enabledKey = (items: Skill[]) => items.filter((item) => item.enabled).map((item) => item.id).sort().join("\n");
 const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "memory", "logins"];
 function useCompactSettings() {
   const query = "(max-width: 620px)";
@@ -53,20 +54,49 @@ export function BotSettings({
   const overflowMenu = useRef<HTMLDetailsElement>(null);
   const overflowTrigger = useRef<HTMLElement>(null);
   const overflowMenuId = useId();
-  const [form, setForm] = useState<BotInput>({
-    name: existing?.name || "",
-    description: existing?.description || "",
-    instructions: existing?.instructions || "",
-    model: existing?.model || bootstrap.bots[0]?.model || "",
-    provider: existing?.provider || bootstrap.bots[0]?.provider || "",
-    shared: existing?.shared ?? true,
-    enabledMcpServers: existing?.enabledMcpServers || [],
-  });
-  const [avatar, setAvatar] = useState<AvatarConfig>(
-    existing?.avatar || defaultAvatar,
-  );
+  // What the form and avatar last matched on the server; saves move it forward.
+  const [baseline, setBaseline] = useState<{ form: BotInput; avatar: AvatarConfig }>(() => ({
+    form: {
+      name: existing?.name || "",
+      description: existing?.description || "",
+      instructions: existing?.instructions || "",
+      model: existing?.model || bootstrap.bots[0]?.model || "",
+      provider: existing?.provider || bootstrap.bots[0]?.provider || "",
+      shared: existing?.shared ?? true,
+      enabledMcpServers: existing?.enabledMcpServers || [],
+    },
+    avatar: existing?.avatar || defaultAvatar,
+  }));
+  const [form, setForm] = useState<BotInput>(baseline.form);
+  const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
   const [tools, setTools] = useState<Tool[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  // Tool and skill choices wait for their own Save button, so the loaded or saved choice is their baseline.
+  const [catalogBaseline, setCatalogBaseline] = useState<{ tools?: string; skills?: string }>({});
+  const stagedCatalog = {
+    tools: catalogBaseline.tools !== undefined && enabledKey(tools) !== catalogBaseline.tools,
+    skills: catalogBaseline.skills !== undefined && enabledKey(skills) !== catalogBaseline.skills,
+  };
+  const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar])
+    || stagedCatalog.tools || stagedCatalog.skills;
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const keepEditing = useRef<HTMLButtonElement>(null);
+  const beforePrompt = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!confirmDiscard) return;
+    beforePrompt.current = document.activeElement as HTMLElement | null;
+    keepEditing.current?.focus();
+  }, [confirmDiscard]);
+  // The prompt unmounts its own focused button, so focus goes back to where the reader was.
+  const resumeEditing = () => {
+    const target = beforePrompt.current;
+    setConfirmDiscard(false);
+    (target?.isConnected && dialog.current?.contains(target) ? target
+      : dialog.current?.querySelector<HTMLElement>("#assistant-settings-title"))?.focus();
+  };
+  useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
+  // Escape and the close button both land here, so nothing is discarded without asking.
+  const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
   const [catalog, setCatalog] = useState<{
     tab: string;
     botId: string;
@@ -90,20 +120,37 @@ export function BotSettings({
   const errorBanner = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (error) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [error]);
   const dialog = useRef<HTMLDialogElement>(null);
+  const mounted = useRef(false);
   useEffect(() => {
-    dialog.current?.showModal();
+    const element = dialog.current;
+    const previous = document.activeElement as HTMLElement | null;
+    mounted.current = true;
+    element?.showModal();
+    return () => {
+      mounted.current = false;
+      element?.close();
+      // WebKit does not focus a clicked button, so the opener can be the page itself.
+      if (previous && previous !== document.body && previous.isConnected && !previous.closest("[inert]")) previous.focus();
+      // A phone keeps only one screen live, so a candidate on the hidden one cannot take focus.
+      else ["[aria-label='Edit assistant']", ".bot-rail [aria-label='Settings']", "[aria-label='Back to assistants']"]
+        .map(selector => document.querySelector<HTMLElement>(selector))
+        .find(control => control && !control.closest("[inert]"))?.focus();
+    };
   }, []);
   useEffect(() => {
     if (!existing) return;
     let current = true;
     const id = encodeURIComponent(existing.id);
-    if ((tab === "tools" || tab === "skills") && bootstrap.capabilities[tab].supported) {
+    // Reloading would replace choices that are still waiting for their Save button.
+    if ((tab === "tools" || tab === "skills") && stagedCatalog[tab]) setCatalog({ tab, botId: existing.id, status: "ready" });
+    else if ((tab === "tools" || tab === "skills") && bootstrap.capabilities[tab].supported) {
       setCatalog({ tab, botId: existing.id, status: "loading" });
       void api<Skill[]>(`/bots/${id}/${tab}`)
         .then((items) => {
           if (!current) return;
           if (tab === "tools") setTools(items);
           else setSkills(items);
+          setCatalogBaseline((current) => ({ ...current, [tab]: enabledKey(items) }));
           setCatalog({ tab, botId: existing.id, status: "ready" });
         })
         .catch((e) => {
@@ -142,15 +189,17 @@ export function BotSettings({
       if (key) setSaving(null);
     }
   };
-  const saveBot = (confirmed = false) =>
-    run(
+  const saveBot = (confirmed = false) => {
+    const submitted = form;
+    return run(
       async () => {
         await write(
           existing ? `/bots/${encodeURIComponent(existing.id)}` : "/bots",
-          { ...form, confirmModel: confirmed },
+          { ...submitted, confirmModel: confirmed },
           existing ? "PATCH" : "POST",
         );
         setConfirmModel(false);
+        setBaseline((current) => ({ ...current, form: submitted }));
         if (!existing) onClose();
       },
       existing?.shared
@@ -158,6 +207,7 @@ export function BotSettings({
         : "Assistant saved.",
       "details",
     );
+  };
   const uploadPortrait = async (file: File | undefined) => {
     if (!file || !existing) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2_000_000) {
@@ -205,18 +255,29 @@ export function BotSettings({
       ref={dialog}
       className="settings-dialog"
       aria-labelledby="assistant-settings-title"
-      onCancel={onClose}
-      onClose={onClose}
+      onCancel={(event) => {
+        if (!unsaved) return onClose();
+        event.preventDefault();
+        setConfirmDiscard(true);
+      }}
+      onClose={() => {
+        // Closing and reopening in one pass, as Strict Mode does, queues an event for a dialog that is open.
+        if (!mounted.current || dialog.current?.open) return;
+        // A second Escape can close the dialog without a cancelable event, so put it back.
+        if (!unsaved) return onClose();
+        dialog.current?.showModal();
+        setConfirmDiscard(true);
+      }}
     >
       <header>
         <div>
           <p className="eyebrow">Assistant settings</p>
-          <h2 id="assistant-settings-title">{existing?.name || "New assistant"}</h2>
+          <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || "New assistant"}</h2>
         </div>
         <button
           className="icon-button"
           aria-label="Close assistant settings"
-          onClick={onClose}
+          onClick={requestClose}
         >
           <Icon name="close" />
         </button>
@@ -261,6 +322,15 @@ export function BotSettings({
           <p className="form-notice" role="status">
             {notice}
           </p>
+        )}
+        {confirmDiscard && (
+          <div className="capability-note" role="alert">
+            <p>Discard your unsaved changes?</p>
+            <div className="actions">
+              <button type="button" className="danger" onClick={onClose}>Discard changes</button>
+              <button type="button" ref={keepEditing} onClick={resumeEditing}>Keep editing</button>
+            </div>
+          </div>
         )}
         {confirmModel && (
           <div className="capability-note">
@@ -472,12 +542,15 @@ export function BotSettings({
                 }
                 onClick={() =>
                   void run(
-                    () =>
-                      write(
+                    async () => {
+                      const submitted = avatar;
+                      await write(
                         `/bots/${encodeURIComponent(existing!.id)}/avatar`,
-                        avatar,
+                        submitted,
                         "PUT",
-                      ),
+                      );
+                      setBaseline((current) => ({ ...current, avatar: submitted }));
+                    },
                     "Avatar saved",
                     "avatar",
                   )
@@ -546,16 +619,19 @@ export function BotSettings({
                   className="primary with-progress"
                   disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported}
                   onClick={() =>
-                    void run(() =>
-                      write(
+                    void run(async () => {
+                      const submitted = tab === "tools" ? tools : skills;
+                      await write(
                         `/bots/${encodeURIComponent(existing.id)}/${tab}`,
                         {
-                          ids: (tab === "tools" ? tools : skills)
+                          ids: submitted
                             .filter((item) => item.enabled)
                             .map((item) => item.id),
                         },
                         "PUT",
-                      ), "Saved", tab,
+                      );
+                      setCatalogBaseline((current) => ({ ...current, [tab]: enabledKey(submitted) }));
+                    }, "Saved", tab,
                     )
                   }
                 >

@@ -85,7 +85,9 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     return { routines, usage, unavailableBots } satisfies AutomationOverview;
   });
   app.get('/api/bots/:id/starters', async req => {
-    const botId = z.object({ id }).parse(req.params).id; await bot(signedIn(req).id, botId);
+    // Opening any listed assistant offers starters, including another member's personal one.
+    const botId = z.object({ id }).parse(req.params).id;
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw fail(404, 'Assistant not found');
     const tools = await runtime.tools(botId);
     const enabled = new Set(tools.filter(tool => tool.enabled).map(tool => tool.id));
     const starters: Starter[] = [{ id: 'meals', title: 'Plan dinners', prompt: 'Help me plan five easy dinners. Ask about our preferences, budget and what we already have before making the plan.' }];

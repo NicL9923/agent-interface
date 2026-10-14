@@ -26,6 +26,13 @@ the assistant's model from the same catalog without opening settings. The web di
 also controls reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. Hermes validates support for the selected model.
 
+An assistant is either shared with the household or personal. A personal assistant
+is personalized, not private: everyone can open it, chat with it and use its memory
+and logins. Only its owner can change its details, model, visibility, tools, skills,
+reasoning, speed, avatar or routines, or delete it. Home previews, Today,
+notifications, search, automations, routines and group chats show it only to its
+owner.
+
 Web Settings > Notifications, or the same section in iOS Preferences, shows whether this account has notifications enabled
 on the current device. Turn the switch on or off there. A new browser asks once
 whether to enable notifications and explains where to change the setting later.
@@ -87,7 +94,8 @@ rollback instructions before using that extension. The app does not directly
 edit Hermes databases or take over execution from an existing Hermes owner.
 Setup connects to an existing compatible owner; it does not install Hermes or
 change its supervisor. A missing add-on, incompatible revision, rejected token,
-or unreachable gateway gets a distinct diagnostic.
+or unreachable gateway gets a distinct diagnostic. When Hermes rejects the server's
+token, requests fail with 502 and keep people signed in to the app.
 
 For a Google-protected Hermes dashboard, run this app on the same host and use
 the private service connection described in the capability matrix. This keeps
@@ -210,9 +218,22 @@ External file sources open only when you choose their link.
 
 ```sh
 npm test
+npm run test:py
+npm run lint:py
 npm run build
 python3 .agents/tools/source-state.py
 ```
+
+`npm test` runs the application tests with Vitest. `npm run test:py` runs every
+Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
+`scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file
+sits outside those paths. Pass file paths to run a subset, for example
+`npm run test:py -- tests/hermes_vault_test.py`. Use Python 3.14, which the
+Hermes host runs. Test files use `unittest`, and a file passes only if at least
+one test ran. A file whose tests all skip, such as the system terminal test
+without `tmux`, shows SKIP locally and fails when `CI=true`.
+`npm run lint:py` runs ruff for undefined names and likely bugs. Install the
+version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
 The [validation ledger](docs/ValidationLedger.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and

@@ -5,6 +5,7 @@ import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
+import { Readable } from "node:stream";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type {
@@ -19,6 +20,7 @@ import type {
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
+import { canChange, installBotAccess } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
@@ -33,7 +35,8 @@ import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
-import { formatBytes, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
+import { isApiRequest, routePattern } from "./route-path.js";
+import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { historyWindow, MAX_HISTORY_TURNS } from "../shared/history.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
@@ -124,6 +127,11 @@ export async function createApp(
     trustProxy: false,
     routerOptions: { maxParamLength: 8192 },
   });
+  // Every registered route, so tests can prove each one is gated rather than sample a few.
+  const routes: { method: string; url: string }[] = [];
+  app.addHook("onRoute", (route) => {
+    for (const method of [route.method].flat()) routes.push({ method, url: route.url });
+  });
   installSecurityHeaders(app, config.origin);
   installEtags(app);
   await app.register(cookie);
@@ -132,11 +140,12 @@ export async function createApp(
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
   await installAuth(app, store, config, options.verifyGoogle);
+  installBotAccess(app, store, runtime);
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
-    const path = req.url.split("?")[0];
-    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
+    const path = routePattern(req);
+    if ((path.startsWith("/api/bots") && !/\/(draft|read-position)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
       return reply.code(409).send({ error: path.startsWith("/api/integrations")
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
@@ -155,6 +164,8 @@ export async function createApp(
       statusCode?: number;
       code?: string;
       confirmRequired?: boolean;
+      // A 5xx whose fixed message tells the person what to do next.
+      expose?: boolean;
     };
     const status = err.statusCode ?? 502;
     if (status >= 500) {
@@ -163,9 +174,13 @@ export async function createApp(
       if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");
       else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
     }
+    // A stream can fail after a route set file headers; the error is always JSON.
+    reply.removeHeader("Content-Disposition");
+    reply.removeHeader("Content-Length");
+    reply.type("application/json; charset=utf-8");
     reply.code(status).send({
       error:
-        err.statusCode && err.statusCode < 500
+        err.statusCode && (err.statusCode < 500 || err.expose)
           ? err.message
           : "The Hermes operation could not be completed",
       detail: config.production ? undefined : err.message,
@@ -533,7 +548,8 @@ export async function createApp(
   });
   app.get("/api/files/:id", async (req, reply) => {
     await requireCapability("generatedFiles");
-    const file = await runtime.download(params(req).id);
+    const file = await runtime.download(params(req).id, MAX_DOWNLOAD_BYTES);
+    if (file.size !== undefined) reply.header("Content-Length", file.size);
     reply
       .header("X-Content-Type-Options", "nosniff")
       .header(
@@ -552,7 +568,15 @@ export async function createApp(
           ? file.mime
           : "application/octet-stream",
       );
-    return reply.send(file.data);
+    // Fastify drains a HEAD response's stream, so a stalled Hermes read would outlive it.
+    if (req.method === "HEAD") {
+      await file.body.cancel();
+      // An empty stream keeps the file's length; an empty payload would report zero.
+      return reply.send(Readable.from([]));
+    }
+    // Stream so one large artifact never sits in this process's memory.
+    // Fastify destroys this when the person disconnects, which cancels the Hermes read.
+    return reply.send(Readable.fromWeb(file.body as import("node:stream/web").ReadableStream<Uint8Array>));
   });
   for (const kind of ["tools", "skills"] as const) {
     app.get(`/api/bots/:id/${kind}`, async (req) => {
@@ -568,9 +592,10 @@ export async function createApp(
       return { ok: true };
     });
   }
-  app.get("/api/routines", async () => {
+  app.get("/api/routines", async (req) => {
     await requireCapability("routines");
-    return (await runtime.routines()).map((r) => ({
+    const userId = signedIn(req).id;
+    return (await runtime.routines()).filter(r => canChange(store, r.botId, userId)).map((r) => ({
       ...r,
       recipientIds: store.getRoutineRecipients(r.id),
     }));
@@ -698,7 +723,7 @@ export async function createApp(
       },
     });
     app.setNotFoundHandler((req, reply) =>
-      req.url.startsWith("/api/")
+      isApiRequest(req)
         ? reply.code(404).send({ error: "API endpoint not found" })
         : reply.type("text/html").sendFile("index.html"),
     );
@@ -717,5 +742,5 @@ export async function createApp(
     await stopped;
     store.close();
   });
-  return { app, store, worker, health };
+  return { app, store, worker, health, routes };
 }

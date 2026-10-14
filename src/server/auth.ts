@@ -7,6 +7,10 @@ import { allowedIdentity, loopback } from "./config.js";
 import type { Store } from "./store.js";
 import type { User } from "../shared/types.js";
 import { installNativeAuth } from "./native-auth.js";
+import { isApiRequest, routePattern } from "./route-path.js";
+// The only 401 that means this person's session is gone. Clients clear a stored
+// credential on this code alone, never on a bare 401.
+const signInRequired = { error: "Sign in required", code: "session_expired" };
 export const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 declare module "fastify" {
@@ -16,6 +20,17 @@ declare module "fastify" {
     nativeSessionHash: string | null;
   }
 }
+// Route patterns reachable without a session. Every other /api/ route requires one.
+export const publicApiRoutes = [
+  "/api/auth/google",
+  "/api/auth/local",
+  "/api/auth/config",
+  "/api/health",
+  "/api/health/ready",
+  "/api/auth/native/complete",
+  "/api/auth/native/exchange",
+  "/api/csp-report",
+];
 export async function installAuth(
   app: FastifyInstance,
   store: Store,
@@ -37,7 +52,8 @@ export async function installAuth(
   app.decorateRequest("csrfToken", null);
   app.decorateRequest("nativeSessionHash", null);
   app.addHook("onRequest", async (req, reply) => {
-    if (!req.url.startsWith("/api/")) return;
+    if (!isApiRequest(req)) return;
+    const route = routePattern(req);
     reply.header("Cache-Control", "no-store");
     const authorization = req.headers.authorization;
     if (authorization !== undefined) {
@@ -50,7 +66,7 @@ export async function installAuth(
       const user = session ? store.getUser(session.userId) : undefined;
       if (!user || !allowedIdentity(config, user)) {
         if (session) store.deleteNativeSession(sessionHash);
-        return reply.code(401).send({ error: "Sign in required" });
+        return reply.code(401).send(signInRequired);
       }
       req.user = user;
       req.nativeSessionHash = sessionHash;
@@ -67,27 +83,18 @@ export async function installAuth(
         } else store.deleteSession(hash(cookie));
       }
     }
-    const publicRoute = [
-      "/api/auth/google",
-      "/api/auth/local",
-      "/api/auth/config",
-      "/api/health",
-      "/api/health/ready",
-      "/api/auth/native/complete",
-      "/api/auth/native/exchange",
-      "/api/csp-report",
-    ].includes(req.url.split("?")[0]);
+    const publicRoute = publicApiRoutes.includes(route);
     if (!publicRoute && !req.user)
-      return reply.code(401).send({ error: "Sign in required" });
+      return reply.code(401).send(signInRequired);
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-      if (req.url.split("?")[0] === "/api/auth/native/exchange") {
+      if (route === "/api/auth/native/exchange") {
         if (req.headers.origin !== undefined || req.headers.cookie !== undefined)
           return reply.code(403).send({ error: "Native code exchange requires a native client" });
         return;
       }
       // Browsers send violation reports without an Origin or CSRF token.
-      if (req.url.split("?")[0] === "/api/csp-report") return;
-      if (req.nativeSessionHash && (!req.url.startsWith("/api/auth/") || req.url.split("?")[0] === "/api/auth/logout")) return;
+      if (route === "/api/csp-report") return;
+      if (req.nativeSessionHash && (!route.startsWith("/api/auth/") || route === "/api/auth/logout")) return;
       if (req.headers.origin !== config.origin)
         return reply
           .code(403)

@@ -36,8 +36,10 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
     try { return await runtime.vaultRequest(input); }
     catch (error) {
       // Secret-bearing operations never forward exception text, even in development.
-      const status = (error as { statusCode?: number }).statusCode;
-      throw failure(status && [400, 401, 403, 404, 409, 429].includes(status) ? status : 502,
+      const { statusCode: status, code } = error as { statusCode?: number; code?: string };
+      // This fixed explanation carries no secret; Hermes's own 401 and 403 never reach clients.
+      if (code === 'hermes_unauthorized') throw error;
+      throw failure(status && [400, 404, 409, 429].includes(status) ? status : 502,
         status === 409 ? 'This credential request changed or is unavailable. Refresh and review it before continuing.' : 'Hermes could not confirm this credential operation. Refresh its status before trying again.');
     } finally { if (input.operation !== 'overview') busy.delete(key); }
   }
