@@ -35,6 +35,7 @@ import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
+import { isApiRequest, routePattern } from "./route-path.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { historyWindow, MAX_HISTORY_TURNS } from "../shared/history.js";
 const id = z.string().min(1).max(200);
@@ -126,6 +127,11 @@ export async function createApp(
     trustProxy: false,
     routerOptions: { maxParamLength: 8192 },
   });
+  // Every registered route, so tests can prove each one is gated rather than sample a few.
+  const routes: { method: string; url: string }[] = [];
+  app.addHook("onRoute", (route) => {
+    for (const method of [route.method].flat()) routes.push({ method, url: route.url });
+  });
   installSecurityHeaders(app, config.origin);
   installEtags(app);
   await app.register(cookie);
@@ -138,8 +144,8 @@ export async function createApp(
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
-    const path = req.url.split("?")[0];
-    if ((path.startsWith("/api/bots") && !/\/(draft|read)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
+    const path = routePattern(req);
+    if ((path.startsWith("/api/bots") && !/\/(draft|read-position)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
       return reply.code(409).send({ error: path.startsWith("/api/integrations")
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
@@ -705,7 +711,7 @@ export async function createApp(
       },
     });
     app.setNotFoundHandler((req, reply) =>
-      req.url.startsWith("/api/")
+      isApiRequest(req)
         ? reply.code(404).send({ error: "API endpoint not found" })
         : reply.type("text/html").sendFile("index.html"),
     );
@@ -724,5 +730,5 @@ export async function createApp(
     await stopped;
     store.close();
   });
-  return { app, store, worker, health };
+  return { app, store, worker, health, routes };
 }

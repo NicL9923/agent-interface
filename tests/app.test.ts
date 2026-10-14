@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/server/app.js";
+import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import type { Avatar, Capabilities, Runtime, Submission } from "../src/shared/types.js";
@@ -170,6 +171,29 @@ describe("authentication and household state", () => {
     expect(() =>
       loadConfig({ HOST: "0.0.0.0", LOCAL_DEV_AUTH: "true" }),
     ).toThrow("loopback");
+  });
+  it("requires a session on every non-public API route, including percent-encoded paths", async () => {
+    const { app, routes } = await createApp(config(), runtimeDouble().runtime, { background: false });
+    try {
+      const gated = routes.filter(({ method, url }) => url.startsWith("/api/") && method !== "HEAD" && !publicApiRoutes.includes(url));
+      expect(gated.length).toBeGreaterThan(50);
+      for (const { method, url } of gated) {
+        const concrete = url.replace(/:[^/]+/g, "x").replace("*", "x");
+        // Fastify decodes "%61" before routing, so the encoded form must reach the same gate.
+        for (const path of [concrete, concrete.replace("/api/", "/%61pi/"), concrete.replace("/api/", "/%61%70%69/")]) {
+          const response = await app.inject({ method: method as "GET", url: path, headers: { origin: "https://attacker.invalid" } });
+          expect({ method, path, status: response.statusCode }).toEqual({ method, path, status: 401 });
+        }
+      }
+      // The built client's static wildcard also matches unknown API paths.
+      for (const path of ["/api/no-such-route", "/%61pi/no-such-route"])
+        expect((await app.inject(path)).statusCode).toBe(401);
+      // A signed-in browser still needs its CSRF token and Origin on an encoded write.
+      const { "x-csrf-token": csrf, ...cookieOnly } = await login(app);
+      expect(csrf).toBeTruthy();
+      for (const headers of [cookieOnly, { ...cookieOnly, "x-csrf-token": csrf, origin: "https://attacker.invalid" }])
+        expect((await app.inject({ method: "POST", url: "/%61pi/bots/shared/stop", headers })).statusCode).toBe(403);
+    } finally { await app.close(); }
   });
   it("requires login and rejects foreign-origin or missing-CSRF writes", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {

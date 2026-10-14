@@ -86,6 +86,10 @@ describe("assistant ownership", () => {
     expect(s.calls).toContain("conversation");
     // The percent-encoded path reaches the same route pattern and is refused the same way.
     expect((await s.app.inject({ method: "DELETE", url: "/%61pi/bots/mine", headers: s.member })).statusCode).toBe(403);
+    // Without a session the sign-in hook refuses it first, even for a shared assistant.
+    const anonymous = await s.app.inject({ method: "DELETE", url: "/%61pi/bots/family" });
+    expect([anonymous.statusCode, anonymous.json().code]).toEqual([401, "session_expired"]);
+    expect(s.calls).not.toContain("deleteBot");
   });
 
   it("refuses to start when an assistant route has no access decision", async () => {

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { routePattern } from "./route-path.js";
 import type { Store } from "./store.js";
 
 // A personal assistant is personalized, not private: both clients tell people that
@@ -67,10 +68,9 @@ export function installBotAccess(app: FastifyInstance, store: Store) {
       if (!botRoutes[key(method, route.url)])
         throw new Error(`Classify ${method} ${route.url} as household or owner access in src/server/bot-access.ts`);
   });
-  // Decide by the matched route pattern. Fastify decodes the raw URL before matching.
   app.addHook("onRequest", async (req, reply) => {
-    const url = req.routeOptions.url;
-    const param = url && scoped.exec(url)?.[1];
+    const url = routePattern(req);
+    const param = scoped.exec(url)?.[1];
     if (!param || botRoutes[key(req.method, url)] !== "owner") return;
     const bot = store.presentation((req.params as Record<string, string>)[param]);
     // Without a signed-in person, as for a path the sign-in hook missed, nobody is the owner.
