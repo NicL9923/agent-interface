@@ -605,7 +605,7 @@ def gh(*args):
 def open_docs_pull_request(manifest):
     """Commit the records on a branch from the latest origin/main and open, never merge, its PR.
 
-    Works in a temporary worktree, so the operator's checkout is untouched. Safe to rerun: an
+    Works in a temporary worktree under .private, so the operator's checkout is untouched. Safe to rerun: an
     existing PR, pushed branch or recorded entry on main is reused. Failure only warns; the
     release stays recorded.
     """
@@ -618,7 +618,10 @@ def open_docs_pull_request(manifest):
             return
         git("fetch", "--quiet", "origin", "main")
         if not git("ls-remote", "--heads", "origin", branch):
-            with tempfile.TemporaryDirectory() as temporary:
+            # Inside the checkout's ignored .private, so it lands on the checkout's own disk.
+            worktrees = ROOT / ".private/docs-pr-worktrees"
+            worktrees.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=worktrees) as temporary:
                 checkout = Path(temporary) / "records"
                 git("worktree", "add", "--quiet", "--detach", str(checkout), "origin/main")
                 try:

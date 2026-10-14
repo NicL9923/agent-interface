@@ -156,6 +156,12 @@ class DocsPullRequest(unittest.TestCase):
         self.assertEqual(ledger.count("app release 7fac68e"), 1)
         self.assertEqual(json.loads(self.branch_files(f"docs/evidence/production-{NAME}.json"))["release"], NAME)
         self.assert_checkout_untouched()
+        # The worktree lived in the checkout's ignored .private, and is gone.
+        worktrees = self.checkout / ".private/docs-pr-worktrees"
+        [path] = self.worktree_paths()
+        self.assertEqual(path.parent.parent, worktrees)
+        self.assertEqual(list(worktrees.iterdir()), [])
+        self.assertNotIn(".private", self.git("-C", str(self.checkout), "status", "--porcelain", "--untracked-files=all"))
         # Rerunning finds the PR instead of pushing or opening another.
         self.assertIn("already exists: https://github.com/owner/repo/pull/99", self.run_tool("record", NAME))
         self.assertEqual(len(self.creates()), 1)
