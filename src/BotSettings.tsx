@@ -128,7 +128,8 @@ export function BotSettings({
       element?.close();
       // WebKit does not focus a clicked button, so the opener can be the page itself.
       if (previous && previous !== document.body && previous.isConnected && !previous.closest("[inert]")) previous.focus();
-      else (document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
+      else (document.querySelector<HTMLButtonElement>("[aria-label='Edit assistant']")
+        ?? document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
         ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
     };
   }, []);

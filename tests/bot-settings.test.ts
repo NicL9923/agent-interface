@@ -300,6 +300,22 @@ describe("closing with unsaved edits", () => {
     rail.remove();
   });
 
+  it("prefers the conversation's settings button when the opener was never focused", async () => {
+    const rail = document.createElement("nav");
+    rail.className = "bot-rail";
+    rail.innerHTML = '<button aria-label="Settings"></button>';
+    const header = document.createElement("header");
+    header.innerHTML = '<button aria-label="Edit assistant"></button>';
+    document.body.append(rail, header);
+    await act(async () => root.unmount());
+    (document.activeElement as HTMLElement).blur();
+    root = createRoot(container);
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
+    await act(async () => root.unmount());
+    expect(document.activeElement).toBe(header.querySelector("button"));
+    rail.remove(); header.remove();
+  });
+
   it("returns focus to the control that opened it", async () => {
     const opener = document.createElement("button");
     document.body.append(opener);
