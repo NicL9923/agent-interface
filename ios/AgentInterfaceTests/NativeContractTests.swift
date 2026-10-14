@@ -433,6 +433,18 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft.dirty, false, "A successful sync clears dirty so newer web drafts can load again")
         let synced = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(synced?.dirty, false)
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!), "The recovery mark clears once the server has the draft")
+    }
+
+    func testALeftoverDirtyDraftIsShownOnLoadButNeverPushedOverTheServersCopy() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let stale = Draft(text: "Old unsent text", attachments: [], dirty: true)
+        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key("draft", "bot")!)
+        value.draftReady = false
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, "Old unsent text"); XCTAssertTrue(value.draftReady)
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }.isEmpty)
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {

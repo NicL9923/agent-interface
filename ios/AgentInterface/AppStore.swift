@@ -303,8 +303,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       guard selectionGeneration == selectedGeneration else { return }
       draft = loadedDraft(remote, botId: id)
       draftReady = true
-      // Unsent local edits, such as a recovered send, sync now so they stop shadowing the server.
-      if draft.dirty == true { updateDraft(draft) }
+      syncRecoveredDraft(botId: id)
       await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
@@ -328,7 +327,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if !draftReady {
         draft = loadedDraft(value.draft, botId: id)
         draftReady = true
-        if draft.dirty == true { updateDraft(draft) }
+        syncRecoveredDraft(botId: id)
       }
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration {
@@ -358,6 +357,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         let _: Draft = try await api.write(
           "/bots/\(APIClient.component(botId))/draft", snapshot, method: "PUT")
         guard currentGeneration == self.generation else { return }
+        self.save(Optional<Bool>.none, self.key("recovered", botId))
         if self.draft == snapshot && self.selectedBotId == botId {
           self.draft.dirty = false
           self.persistDraft()
@@ -462,6 +462,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     target.dirty = true
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
+    save(true, key("recovered", old.botId))
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
@@ -469,8 +470,19 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if draftReady { updateDraft(target) } else { draft = target }
     } else if let api {
       // Best effort: the dirty local draft already wins the next time that assistant opens.
-      Task { let _: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", target, method: "PUT") }
+      let recoveredKey = key("recovered", old.botId)
+      Task {
+        let saved: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", target, method: "PUT")
+        if saved != nil { self.save(Optional<Bool>.none, recoveredKey) }
+      }
     }
+  }
+  /// A draft recovered by Discard is unsent work that may not have reached the server. Sync it
+  /// once loaded. Any other leftover dirty draft is shown but never pushed on its own, because
+  /// the server's copy may be newer, for example emptied by a send from another device.
+  private func syncRecoveredDraft(botId: String) {
+    let marked: Bool? = read(key("recovered", botId))
+    if marked == true, draft.dirty == true { updateDraft(draft) }
   }
   /// The draft to show once a read returns: unsent local edits win over the server's copy.
   private func loadedDraft(_ remote: Draft?, botId: String) -> Draft {
