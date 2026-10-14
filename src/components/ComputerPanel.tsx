@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
+import { isChunkFailure, useRaise } from "../app/chunk-failure";
 import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
 import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
 import { Icon } from "./Icon";
@@ -236,6 +237,7 @@ function DesktopView({ status, onStatus, viewerId }: {
   const [connection, setConnection] = useState<Connection>("connecting");
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const raise = useRaise();
   const [controlling, setControlling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
@@ -285,6 +287,8 @@ function DesktopView({ status, onStatus, viewerId }: {
         client.addEventListener("securityfailure", () => retry("The desktop connection was rejected. Reconnecting in watch mode."));
       } catch (cause) {
         if (controller.signal.aborted) return;
+        // A retired chunk never comes back for this page, so surface it rather than reconnect forever.
+        if (isChunkFailure(cause)) { raise(cause); return; }
         const message = failure(cause, "Can't connect to the desktop. We'll keep trying.");
         if (retryable(cause)) retry(message);
         else { setConnection("failed"); setError(message); }
@@ -384,6 +388,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   const [connection, setConnection] = useState<Connection>("connecting");
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const raise = useRaise();
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [confirmEnd, setConfirmEnd] = useState(false);
@@ -473,6 +478,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
       } catch (cause) {
         if (controller.signal.aborted) return;
         if (reauthenticate(cause)) { onReauthenticate(); return; }
+        if (isChunkFailure(cause)) { raise(cause); return; }
         const message = failure(cause, "Can't connect to the terminal. We'll keep trying.");
         if (retryable(cause)) retry(message);
         else { setConnection("failed"); setError(message); }
