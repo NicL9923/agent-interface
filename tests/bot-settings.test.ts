@@ -316,6 +316,38 @@ describe("closing with unsaved edits", () => {
     rail.remove(); header.remove();
   });
 
+  it("skips a fallback control on a screen the phone has made inert", async () => {
+    const rail = document.createElement("nav");
+    rail.className = "bot-rail";
+    rail.innerHTML = '<button aria-label="Settings"></button>';
+    const main = document.createElement("main");
+    main.setAttribute("inert", "");
+    main.innerHTML = '<button aria-label="Edit assistant"></button>';
+    document.body.append(rail, main);
+    await act(async () => root.unmount());
+    (document.activeElement as HTMLElement).blur();
+    root = createRoot(container);
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
+    await act(async () => root.unmount());
+    expect(document.activeElement).toBe(rail.querySelector("button"));
+    rail.remove(); main.remove();
+  });
+
+  it("keeps staged tool choices, and the prompt that protects them, across a visit to another section", async () => {
+    vi.mocked(api).mockResolvedValueOnce([{ id: "one", name: "One", description: "", enabled: true }]);
+    await click("tools");
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    vi.mocked(api).mockResolvedValueOnce([]);
+    await click("skills");
+    vi.mocked(api).mockClear();
+    await click("tools");
+    expect(api).not.toHaveBeenCalledWith("/bots/shared/tools");
+    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
+    await escape();
+    expect(container.textContent).toContain("Discard your unsaved changes?");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("returns focus to the control that opened it", async () => {
     const opener = document.createElement("button");
     document.body.append(opener);

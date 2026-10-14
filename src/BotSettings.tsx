@@ -73,9 +73,12 @@ export function BotSettings({
   const [skills, setSkills] = useState<Skill[]>([]);
   // Tool and skill choices wait for their own Save button, so the loaded or saved choice is their baseline.
   const [catalogBaseline, setCatalogBaseline] = useState<{ tools?: string; skills?: string }>({});
+  const stagedCatalog = {
+    tools: catalogBaseline.tools !== undefined && enabledKey(tools) !== catalogBaseline.tools,
+    skills: catalogBaseline.skills !== undefined && enabledKey(skills) !== catalogBaseline.skills,
+  };
   const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar])
-    || (catalogBaseline.tools !== undefined && enabledKey(tools) !== catalogBaseline.tools)
-    || (catalogBaseline.skills !== undefined && enabledKey(skills) !== catalogBaseline.skills);
+    || stagedCatalog.tools || stagedCatalog.skills;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const keepEditing = useRef<HTMLButtonElement>(null);
   const beforePrompt = useRef<HTMLElement | null>(null);
@@ -128,16 +131,19 @@ export function BotSettings({
       element?.close();
       // WebKit does not focus a clicked button, so the opener can be the page itself.
       if (previous && previous !== document.body && previous.isConnected && !previous.closest("[inert]")) previous.focus();
-      else (document.querySelector<HTMLButtonElement>("[aria-label='Edit assistant']")
-        ?? document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
-        ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
+      // A phone keeps only one screen live, so a candidate on the hidden one cannot take focus.
+      else ["[aria-label='Edit assistant']", ".bot-rail [aria-label='Settings']", "[aria-label='Back to assistants']"]
+        .map(selector => document.querySelector<HTMLElement>(selector))
+        .find(control => control && !control.closest("[inert]"))?.focus();
     };
   }, []);
   useEffect(() => {
     if (!existing) return;
     let current = true;
     const id = encodeURIComponent(existing.id);
-    if ((tab === "tools" || tab === "skills") && bootstrap.capabilities[tab].supported) {
+    // Reloading would replace choices that are still waiting for their Save button.
+    if ((tab === "tools" || tab === "skills") && stagedCatalog[tab]) setCatalog({ tab, botId: existing.id, status: "ready" });
+    else if ((tab === "tools" || tab === "skills") && bootstrap.capabilities[tab].supported) {
       setCatalog({ tab, botId: existing.id, status: "loading" });
       void api<Skill[]>(`/bots/${id}/${tab}`)
         .then((items) => {
