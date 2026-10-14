@@ -17,11 +17,6 @@ ignore = [
 [lint.per-file-ignores]
 # Baseline of existing findings so CI starts green. This list should only
 # shrink: fix a file, then delete its line. New files get no exemptions.
-# F821 is a false positive: the file exec()s functions parsed out of
-# deploy-app-release.py, so names such as system, pid, atomic and journal exist
-# only at run time.
-".agents/tools/deploy-guarded-app-release.py" = ["F821"]
-".agents/tools/release-app.py" = ["F401"]
 "scripts/hermes-qualified-python-test.py" = ["F841"]
 "scripts/hermes-qualified-python.py" = ["F401"]
 "scripts/hermes-upgrade-worker-test.py" = ["F401", "F841"]
@@ -33,4 +28,3 @@ ignore = [
 "src/hermes/extension.py" = ["F401", "F841"]
 "src/hermes/integrations.py" = ["F401", "F841"]
 "tests/hermes_computer_test.py" = ["F401"]
-"tests/recovery_app_test.py" = ["B023"]

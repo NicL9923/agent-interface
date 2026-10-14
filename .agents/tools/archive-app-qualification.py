@@ -27,7 +27,7 @@ if result.get("qualificationComplete") is not True:
 receipt = Path(result["receipt"])
 if receipt.name != "qualification.json" or receipt.parent.parent != Path(manifest["operationDir"]):
     parser.error("Qualification receipt does not belong to this release operation")
-program = r'''
+REMOTE = r'''
 stage = Path(PAYLOAD["stage"])
 assert json.loads((stage / "qualification.json").read_text())["checks"] == {"realIntegration": True, "hostRegressions": True}
 assert (stage / ".agent-interface-isolated").read_text() == "agent-interface-disposable-spike"
@@ -35,7 +35,7 @@ matches = list(stage.glob("pm-home/cache/scratch/agent-interface-spike-*/evidenc
 assert len(matches) == 1 and (matches[0] / "app-probe.json").is_file()
 finish({"evidence": str(matches[0])})
 '''
-found = release_app.remote(manifest["host"], program, {"stage": str(receipt.parent)})
+found = release_app.remote(manifest["host"], REMOTE, {"stage": str(receipt.parent)})
 os.umask(0o077)
 parent = root / ".private/qualification-archives" / args.name / receipt.parent.name
 parent.mkdir(parents=True, exist_ok=True)
