@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -458,11 +459,21 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate: raise RuntimeError("Qualified candidate changed before object preparation")
         # Copy exactly what the installed store lacks: a full copy each time grew it by 1 GB per
         # update, and a partial clone can lack old objects the candidate's history still reaches.
-        listed = subprocess.run(["git", "-C", str(self.target), "rev-list", "--objects", self.candidate],
-            capture_output=True, env=offline, check=True, timeout=180).stdout.splitlines()
-        found = subprocess.run(["git", "-C", str(self.source), "cat-file", "--batch-check=%(objectname)"],
-            input=b"".join(line.split()[0] + b"\n" for line in listed), capture_output=True, env=offline, check=True, timeout=180).stdout.splitlines()
-        missing = [line.split()[0] + b"\n" for line in found if line.endswith(b" missing")]
+        # Streamed, so only the missing names are held: the full list is about a million objects.
+        lister = subprocess.Popen(["git", "-C", str(self.target), "rev-list", "--objects", "--no-object-names", self.candidate],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+        checker = subprocess.Popen(["git", "-C", str(self.source), "cat-file", "--batch-check=%(objectname)"],
+            stdin=lister.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+        lister.stdout.close()
+        timer = threading.Timer(180, lambda: [process.kill() for process in (lister, checker)]); timer.start()
+        try:
+            missing = [line.split()[0] + b"\n" for line in checker.stdout if line.endswith(b" missing\n")]
+            if checker.wait(timeout=30) or lister.wait(timeout=30): raise RuntimeError("Listing the qualified candidate's objects failed")
+        finally:
+            timer.cancel()
+            for process in (lister, checker):
+                if process.poll() is None: process.kill(); process.wait(timeout=10)
+            checker.stdout.close()
         if missing:
             pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
             try:
