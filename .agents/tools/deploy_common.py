@@ -14,6 +14,33 @@ import urllib.error
 import urllib.request
 
 
+class Fence(AssertionError):
+    """A cutover guard refused to continue. It subclasses AssertionError, so every
+    handler and test written for the former asserts treats it the same way."""
+
+
+def fence(condition, why):
+    """Stop unless condition holds, naming the guard. Unlike assert, survives python -O."""
+    if not condition:
+        raise Fence(why)
+
+
+# Host programs sent as source keep their assert guards; any that can be stripped refuse to run.
+OPTIMIZED_REFUSAL = """
+if not __debug__:
+    raise SystemExit("Host programs need their assert guards. Run python3 without -O or PYTHONOPTIMIZE.")
+"""
+
+
+def tripped(error):
+    """Operator-facing name of the fence behind an error, or an empty string."""
+    while error is not None:
+        if isinstance(error, Fence):
+            return " Stopped at fence: " + str(error) + "."
+        error = error.__cause__ or error.__context__
+    return ""
+
+
 class Deployment:
     """One operation's host context. Every command revalidates the held update claim."""
 
@@ -80,7 +107,7 @@ class Deployment:
         return self.run([self.c["managedPython"], "-I", "-c", prefix + code])
 
     def google(self):
-        assert json.loads(self.run(self.c["googleVerificationCommand"], timeout=90)) == {"authenticatedHttp": True, "freshWebsocket": True}
+        fence(json.loads(self.run(self.c["googleVerificationCommand"], timeout=90)) == {"authenticatedHttp": True, "freshWebsocket": True}, "Google session reaches authenticated HTTP and a fresh WebSocket")
 
     def app_ready(self):
         def request(path, body=None):

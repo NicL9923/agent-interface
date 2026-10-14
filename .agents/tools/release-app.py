@@ -33,6 +33,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from deploy_common import OPTIMIZED_REFUSAL, fence
+
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = ROOT / ".private/releases"
 GUARDED_TOOL = ".agents/tools/deploy-guarded-app-release.py"
@@ -153,7 +155,7 @@ maintenance was clear. A signed-in household session was not exercised.
 
 # Host and repository steps.
 
-REMOTE_PRELUDE = """
+REMOTE_PRELUDE = OPTIMIZED_REFUSAL + """
 import hashlib, json, os, runpy, shutil, subprocess, sys
 from pathlib import Path
 os.umask(0o077)
@@ -542,7 +544,7 @@ def record_release(manifest):
     ledger = ROOT / "docs/ValidationLedger.md"
     text = ledger.read_text()
     heading = "# Validation ledger\n"
-    assert text.startswith(heading)
+    fence(text.startswith(heading), "validation ledger starts with its heading")
     ledger.write_text(heading + "\n" + ledger_entry(manifest, receipt_name, day) + text[len(heading):])
     manifest["status"] = "recorded"
     save_manifest(manifest)

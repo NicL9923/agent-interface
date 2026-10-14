@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
@@ -164,6 +165,46 @@ class DeploymentTests(unittest.TestCase):
                 replies[path] = reply
                 self.assertFalse(self.d.app_ready())
                 replies[path] = saved
+
+
+class FenceTests(unittest.TestCase):
+    def test_fence_names_the_guard_and_still_counts_as_an_assertion(self):
+        deploy_common.fence(True, "unused")
+        with self.assertRaisesRegex(deploy_common.Fence, "^gateway exited cleanly$") as caught:
+            deploy_common.fence(0, "gateway exited cleanly")
+        self.assertIsInstance(caught.exception, AssertionError)
+
+    def test_operator_output_names_the_fence_behind_a_later_failure(self):
+        self.assertEqual(deploy_common.tripped(RuntimeError("command failed")), "")
+        try:
+            try:
+                deploy_common.fence(False, "drain request names this operation")
+            except AssertionError:
+                raise RuntimeError("rollback failed")
+        except RuntimeError as error:
+            self.assertEqual(deploy_common.tripped(error), " Stopped at fence: drain request names this operation.")
+
+    def test_cutover_tool_refuses_under_python_optimize_and_names_the_fence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.json"
+            config.write_text("{}")
+            config.chmod(0o644)
+            done = subprocess.run([sys.executable, "-O", str(TOOLS / "deploy-guarded-app-release.py"), "--config", str(config)],
+                                  capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("Fence: config file is private and owned by this user", done.stderr)
+
+    def test_tools_guard_with_named_unique_fences_instead_of_assert(self):
+        # python -O strips assert. Host program strings are covered by their own refusal.
+        for path in sorted(TOOLS.glob("*.py")):
+            with self.subTest(tool=path.name):
+                tree = ast.parse(path.read_text())
+                self.assertEqual([node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assert)], [])
+                names = [node.args[1] for node in ast.walk(tree)
+                         if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "fence"]
+                self.assertTrue(all(isinstance(name, ast.Constant) and isinstance(name.value, str) for name in names))
+                values = [name.value for name in names]
+                self.assertEqual(sorted(value for value in set(values) if values.count(value) > 1), [])
 
 
 class ToolWiringTests(unittest.TestCase):

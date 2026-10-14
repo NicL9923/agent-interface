@@ -7,7 +7,9 @@ checks it with the standard library. Tool scripts get the same undefined-name ch
 import ast
 import builtins
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
 import symtable
 import sys
 import unittest
@@ -15,6 +17,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / ".agents/tools"
 sys.path.insert(0, str(TOOLS))
+import deploy_common  # noqa: E402
 MODULE_NAMES = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__spec__", "__loader__",
                                      "__package__", "__builtins__", "__cached__"}
 
@@ -104,6 +107,21 @@ class HostProgramTests(unittest.TestCase):
             with self.subTest(program=label):
                 compile(source, label, "exec")
                 self.assertEqual(undefined_globals(source, label), [])
+
+
+    def test_every_program_refuses_to_run_with_assert_guards_stripped(self):
+        refusal = ast.dump(ast.parse(deploy_common.OPTIMIZED_REFUSAL).body[0])
+        for label, source in host_programs():
+            with self.subTest(program=label):
+                self.assertEqual(ast.dump(ast.parse(source).body[0]), refusal, "The -O refusal must run first")
+        live = release_app.remote_source(release_app.REMOTE_LIVE, {"appBase": "/nonexistent"})
+        for argv, environment in ((["-O", "-"], {}), (["-"], {"PYTHONOPTIMIZE": "1"})):
+            with self.subTest(argv=argv, environment=environment):
+                done = subprocess.run([sys.executable, *argv], input=live, capture_output=True, text=True,
+                                      env={**os.environ, **environment})
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("need their assert guards", done.stderr)
+                self.assertEqual(done.stdout, "")
 
 
 class ToolScriptTests(unittest.TestCase):

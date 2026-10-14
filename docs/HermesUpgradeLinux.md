@@ -370,3 +370,10 @@ cannot see. `tests/host_programs_test.py` finds every such constant, composes it
 it is sent, including `release-app.py`'s prelude and payload line, compiles it and refuses a
 name that is read but never bound. A program sent to `remote()` under any other name fails
 that test, and every tool script gets the same undefined-name check.
+
+Cutover guards in the release tools are `fence(condition, why)` calls, not `assert`, which
+`python -O` or `PYTHONOPTIMIZE` would remove. A tripped fence raises `Fence`, a subclass of
+`AssertionError`, so existing review paths treat it as before, and the operator's failure
+line ends with `Stopped at fence: why`. Host programs sent as source keep their `assert`
+guards, and the shared refusal that starts each one exits before any work when assertions are
+disabled. Native one-line calls run with `-I`, which already ignores `PYTHONOPTIMIZE`.

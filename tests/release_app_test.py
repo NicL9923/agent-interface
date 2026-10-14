@@ -6,11 +6,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".agents/tools"))
 spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
 release_app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_app)
