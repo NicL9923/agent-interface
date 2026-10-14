@@ -51,6 +51,12 @@ Native bearer sessions do not need CSRF tokens. Every request rechecks the curre
 household allowlist. Expired and revoked native sessions return 401; clear the
 Keychain session and require sign-in.
 
+Only the owner of a personal assistant can change, delete or re-avatar it, change
+its tools, skills or inference settings, or read its search history and routine
+results. Anyone else receives 403 with `code: "owner_only"` and an explanation to
+show. Shared assistants and personal assistants without a recorded owner accept
+every household member.
+
 Browser APIs continue to require their HttpOnly session cookie, exact app Origin
 for writes, and CSRF token for authenticated writes. A bearer request carrying
 any Origin is rejected. Invalid bearer credentials never fall back to cookies.

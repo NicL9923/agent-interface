@@ -19,6 +19,7 @@ import type {
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
+import { installBotAccess } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
@@ -132,6 +133,7 @@ export async function createApp(
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
   await installAuth(app, store, config, options.verifyGoogle);
+  installBotAccess(app, store);
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;

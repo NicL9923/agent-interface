@@ -26,6 +26,12 @@ the assistant's model from the same catalog without opening settings. The web di
 also controls reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. Hermes validates support for the selected model.
 
+An assistant is either shared with the household or personal. A personal assistant
+is personalized, not private: everyone can open it, chat with it and use its memory
+and logins. Only its owner can change its details, model, visibility, tools, skills,
+reasoning, speed or avatar, or delete it. Home previews, Today, notifications,
+search, automations and group chats show it only to its owner.
+
 Web Settings > Notifications, or the same section in iOS Preferences, shows whether this account has notifications enabled
 on the current device. Turn the switch on or off there. A new browser asks once
 whether to enable notifications and explains where to change the setting later.
