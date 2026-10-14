@@ -187,6 +187,11 @@ describe("authentication and household state", () => {
       // The built client's static wildcard also matches unknown API paths.
       for (const path of ["/api/no-such-route", "/%61pi/no-such-route"])
         expect((await app.inject(path)).statusCode).toBe(401);
+      // A signed-in browser still needs its CSRF token and Origin on an encoded write.
+      const { "x-csrf-token": csrf, ...cookieOnly } = await login(app);
+      expect(csrf).toBeTruthy();
+      for (const headers of [cookieOnly, { ...cookieOnly, "x-csrf-token": csrf, origin: "https://attacker.invalid" }])
+        expect((await app.inject({ method: "POST", url: "/%61pi/bots/shared/stop", headers })).statusCode).toBe(403);
     } finally { await app.close(); }
   });
   it("requires login and rejects foreign-origin or missing-CSRF writes", async () => {
