@@ -7,6 +7,7 @@ import type {
   Avatar,
   Preferences,
   RuntimeEvent,
+  SavedDraft,
   Submission,
   SubmissionReceipt,
   User,
@@ -66,6 +67,13 @@ const migrations: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX outbox_ready ON outbox(state,next_attempt);
       CREATE INDEX notification_events_created ON notification_events(created_at);
       CREATE INDEX notification_batch_items_batch ON notification_batch_items(batch_id);
+    `);
+  },
+  // 3: draft revisions. A separate table, because the previous release writes drafts positionally.
+  // A draft without a row here is at revision 0.
+  db => {
+    db.exec(`
+      CREATE TABLE draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
     `);
   },
 ];
@@ -285,14 +293,15 @@ export class Store {
       )
       .run(id, JSON.stringify(value));
   }
-  personal(table: "drafts" | "read_positions", userId: string, botId: string) {
+  // Drafts go through draft() and saveDraft() so every change advances the revision.
+  personal(table: "read_positions", userId: string, botId: string) {
     const row = this.db
       .prepare(`SELECT value FROM ${table} WHERE user_id=? AND bot_id=?`)
       .get(userId, botId) as { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
   }
   savePersonal(
-    table: "drafts" | "read_positions",
+    table: "read_positions",
     userId: string,
     botId: string,
     value: unknown,
@@ -303,9 +312,49 @@ export class Store {
       )
       .run(userId, botId, JSON.stringify(value));
   }
+  /** The person's saved draft, or null if they never saved one for this assistant. */
+  draft(userId: string, botId: string): SavedDraft | null {
+    const row = this.db
+      .prepare("SELECT d.value,r.revision,r.reason,r.sent_revision AS sentRevision FROM drafts d LEFT JOIN draft_revisions r ON r.user_id=d.user_id AND r.bot_id=d.bot_id WHERE d.user_id=? AND d.bot_id=?")
+      .get(userId, botId) as { value: string; revision: number | null; reason: SavedDraft["reason"] | null; sentRevision: number | null } | undefined;
+    if (!row) return null;
+    const { text, attachments } = JSON.parse(row.value) as Pick<SavedDraft, "text" | "attachments">;
+    return { text, attachments, revision: row.revision ?? 0, reason: row.reason ?? "edit", sentRevision: row.sentRevision ?? 0 };
+  }
+  /**
+   * Saves a draft edit. With `baseRevision`, the edit applies only to that revision; otherwise the
+   * current draft comes back unsaved. Without it, as from older clients, the edit always applies.
+   * Content the server already has is never a conflict and does not advance the revision.
+   */
+  saveDraft(userId: string, botId: string, value: Pick<SavedDraft, "text" | "attachments">, baseRevision?: number) {
+    return this.transaction((): { saved: boolean; draft: SavedDraft } => {
+      const current = this.draft(userId, botId);
+      const content = JSON.stringify({ text: value.text, attachments: value.attachments });
+      if (current && JSON.stringify({ text: current.text, attachments: current.attachments }) === content)
+        return { saved: true, draft: current };
+      if (baseRevision !== undefined && baseRevision !== (current?.revision ?? 0))
+        return { saved: false, draft: current ?? { text: "", attachments: [], revision: 0, reason: "edit", sentRevision: 0 } };
+      this.db
+        .prepare("INSERT INTO drafts(user_id,bot_id,value) VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value")
+        .run(userId, botId, content);
+      this.advanceDraft(userId, botId, "edit");
+      return { saved: true, draft: this.draft(userId, botId)! };
+    });
+  }
+  /** Runs inside the receipt transaction. */
   clearSubmittedDraft(userId: string, botId: string, expected: unknown) {
-    return this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=? AND value=?")
+    const cleared = this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=? AND value=?")
       .run(JSON.stringify({text: "", attachments: []}), userId, botId, JSON.stringify(expected)).changes > 0;
+    if (cleared) this.advanceDraft(userId, botId, "sent");
+    return cleared;
+  }
+  private advanceDraft(userId: string, botId: string, reason: SavedDraft["reason"]) {
+    const previous = this.db.prepare("SELECT revision,sent_revision AS sentRevision FROM draft_revisions WHERE user_id=? AND bot_id=?")
+      .get(userId, botId) as { revision: number; sentRevision: number } | undefined;
+    const revision = (previous?.revision ?? 0) + 1;
+    this.db
+      .prepare("INSERT INTO draft_revisions(user_id,bot_id,revision,reason,sent_revision) VALUES(?,?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET revision=excluded.revision,reason=excluded.reason,sent_revision=excluded.sent_revision")
+      .run(userId, botId, revision, reason, reason === "sent" ? revision : previous?.sentRevision ?? 0);
   }
   presentation(botId: string | undefined) {
     // Alerts and test pushes have no assistant; node:sqlite on Node 24 refuses to bind undefined.

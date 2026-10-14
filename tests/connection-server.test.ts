@@ -100,6 +100,41 @@ describe('connection recovery API',()=>{
     expect((await app.inject({url:'/api/bootstrap',headers})).json().bots[0].avatar).toEqual(avatar);
   });
 
+  it('versions drafts and refuses an edit made on a stale revision, while older clients still save',async()=>{
+    const {app}=await installation({conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]})});
+    const one=await identity(app);
+    const put=(payload:object)=>app.inject({method:'PUT',url:'/api/bots/shared/draft',headers:one,payload:{attachments:[],...payload}});
+    const first=await put({text:'Laptop draft',baseRevision:0});
+    expect(first.statusCode).toBe(200);expect(first.json()).toEqual({text:'Laptop draft',attachments:[],revision:1,reason:'edit',sentRevision:0});
+    expect((await put({text:'Phone edit',baseRevision:1})).json()).toMatchObject({text:'Phone edit',revision:2});
+    const stale=await put({text:'Laptop edit on the old copy',baseRevision:1});
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({code:'draft_conflict',draft:{text:'Phone edit',attachments:[],revision:2,reason:'edit',sentRevision:0}});
+    // A retried save whose first attempt landed is not a conflict and does not advance the revision.
+    expect((await put({text:'Phone edit',baseRevision:1})).json()).toMatchObject({text:'Phone edit',revision:2});
+    const legacy=await put({text:'Older app build'});
+    expect(legacy.statusCode).toBe(200);expect(legacy.json()).toMatchObject({text:'Older app build',revision:3});
+    expect((await app.inject({url:'/api/bots/shared/draft',headers:one})).json()).toMatchObject({text:'Older app build',revision:3,reason:'edit'});
+    expect((await app.inject({url:'/api/bots/shared/conversation',headers:one})).json().draft).toMatchObject({text:'Older app build',revision:3});
+    const fresh=await app.inject({method:'PUT',url:'/api/bots/other/draft',headers:one,payload:{text:'Elsewhere',attachments:[],baseRevision:4}});
+    expect(fresh.statusCode).toBe(409);expect(fresh.json().draft).toEqual({text:'',attachments:[],revision:0,reason:'edit',sentRevision:0});
+  });
+
+  it('advances the revision with reason sent when an accepted message clears the draft',async()=>{
+    const {app}=await installation({
+      conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]}),
+      submit:async input=>({requestId:input.requestId,status:'accepted',runId:input.requestId}),
+    });
+    const one=await identity(app);
+    const put=(text:string,baseRevision:number)=>app.inject({method:'PUT',url:'/api/bots/shared/draft',headers:one,payload:{text,attachments:[],baseRevision}});
+    await put('Send me',0);
+    await app.inject({method:'POST',url:'/api/bots/shared/messages',headers:one,payload:{requestId:randomUUID(),text:'Send me',attachments:[]}});
+    expect((await app.inject({url:'/api/bots/shared/draft',headers:one})).json()).toEqual({text:'',attachments:[],revision:2,reason:'sent',sentRevision:2});
+    // The device that typed on revision 1 learns that its text was sent.
+    expect((await put('Send me, edited late',1)).json()).toMatchObject({code:'draft_conflict',draft:{reason:'sent',sentRevision:2}});
+    expect((await put('Next message',2)).json()).toEqual({text:'Next message',attachments:[],revision:3,reason:'edit',sentRevision:2});
+  });
+
   it('clears a matching draft only on first accepted receipt, preserving newer phone edits and a retyped identical draft',async()=>{
     const {app}=await installation({
       conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]}),
@@ -112,20 +147,20 @@ describe('connection recovery API',()=>{
     const submit=(text:string,attachments:FileRef[]=[])=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers:one,payload:{requestId:randomUUID(),text,attachments}});
     await put(one,'Original submitted draft');await put(two,'Other member draft');
     const accepted=await submit('Original submitted draft');expect(accepted.statusCode).toBe(200);expect(accepted.json().status).toBe('accepted');
-    expect((await read(one)).json()).toEqual({text:'',attachments:[]});
-    expect((await read(two)).json()).toEqual({text:'Other member draft',attachments:[]});
+    expect((await read(one)).json()).toEqual({text:'',attachments:[],revision:2,reason:'sent',sentRevision:2});
+    expect((await read(two)).json()).toEqual({text:'Other member draft',attachments:[],revision:1,reason:'edit',sentRevision:0});
     await put(one,'Original submitted draft');
     const repeated=await app.inject({url:`/api/submissions/${accepted.json().requestId}`,headers:one});
     expect(repeated.statusCode).toBe(200);expect(repeated.json().status).toBe('accepted');
-    expect((await read(one)).json()).toEqual({text:'Original submitted draft',attachments:[]});
+    expect((await read(one)).json()).toEqual({text:'Original submitted draft',attachments:[],revision:3,reason:'edit',sentRevision:2});
     await put(one,'New phone draft');
     const second=await submit('Older snapshot submitted from another device');
     expect(second.json().status).toBe('accepted');
-    expect((await read(one)).json()).toEqual({text:'New phone draft',attachments:[]});
-    expect((await read(two)).json()).toEqual({text:'Other member draft',attachments:[]});
+    expect((await read(one)).json()).toMatchObject({text:'New phone draft',attachments:[],revision:4,reason:'edit'});
+    expect((await read(two)).json()).toMatchObject({text:'Other member draft',revision:1});
     const oldFile={id:'old.signature',name:'note.txt',mime:'text/plain'},newFile={...oldFile,id:'new.signature'};
     await put(one,'Same text, newer attachment',[newFile]);
     expect((await submit('Same text, newer attachment',[oldFile])).json().status).toBe('accepted');
-    expect((await read(one)).json()).toEqual({text:'Same text, newer attachment',attachments:[newFile]});
+    expect((await read(one)).json()).toMatchObject({text:'Same text, newer attachment',attachments:[newFile],revision:5,reason:'edit'});
   });
 });

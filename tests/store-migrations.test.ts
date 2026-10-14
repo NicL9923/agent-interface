@@ -29,6 +29,7 @@ function legacyDatabase() {
       .run(id, "ranch", "one", JSON.stringify({ requestId: id, botId: "ranch", senderId: "one", text: id }), JSON.stringify({ requestId: id, ...receipt }), 1);
   submission("accepted-request", { status: "accepted", messageId: "message-1" });
   submission("uncertain-request", { status: "uncertain" });
+  db.prepare("INSERT INTO drafts VALUES(?,?,?)").run("one", "ranch", JSON.stringify({ text: "Unsent before the upgrade", attachments: [] }));
   db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-1", "event-1", "one", JSON.stringify({ queuedAt: 1234 }));
   db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-untimed", "event-untimed", "one", "{}");
   db.close();
@@ -57,6 +58,9 @@ describe("store migrations", () => {
     const created = Object.fromEntries((store.db.prepare("SELECT id,created_at FROM outbox").all() as { id: string; created_at: number }[]).map(row => [row.id, row.created_at]));
     expect(created["outbox-1"]).toBe(1234);
     expect(created["outbox-untimed"]).toBeGreaterThan(Date.now() - 60_000);
+    // Drafts saved before revisions start at revision 0, so a client's first base matches.
+    expect(store.draft("one", "ranch")).toEqual({ text: "Unsent before the upgrade", attachments: [], revision: 0, reason: "edit", sentRevision: 0 });
+    expect(store.saveDraft("one", "ranch", { text: "Edited after", attachments: [] }, 0)).toMatchObject({ saved: true, draft: { revision: 1 } });
   });
 
   it("serves polling lookups from indexes", () => {
@@ -95,6 +99,7 @@ describe("store migrations", () => {
       expect({ table, columns: columns(store.db, table) }).toEqual({ table, columns: columns(legacy, table) });
     legacy.close();
     expect(() => store.db.prepare("INSERT INTO sessions VALUES(?,?,?,?)").run("rollback-session", "one", "csrf", Date.now())).not.toThrow();
+    expect(() => store.db.prepare("INSERT INTO drafts VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value").run("one", "ranch", "{}")).not.toThrow();
     expect(() => store.db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-2", "event-2", "one", "{}")).not.toThrow();
   });
 });

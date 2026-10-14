@@ -104,7 +104,7 @@ const fileRef = z.object({
   size: z.number().optional(),
   url: z.string().optional(),
 });
-const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]) });
+const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
 function failure(statusCode: number, message: string) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -362,7 +362,7 @@ export async function createApp(
     return {
       ...result,
       ...(earlier !== undefined ? { earlier } : {}),
-      draft: store.personal("drafts", signedIn(req).id, params(req).id),
+      draft: store.draft(signedIn(req).id, params(req).id),
       readPosition: store.personal(
         "read_positions",
         signedIn(req).id,
@@ -511,27 +511,27 @@ export async function createApp(
       store.participate(conversation.activity.runId, signedIn(req).id);
     return { ok: true };
   });
-  for (const [route, table] of [
-    ["draft", "drafts"],
-    ["read-position", "read_positions"],
-  ] as const) {
-    app.get(`/api/bots/:id/${route}`, async (req) =>
-      store.personal(table, signedIn(req).id, params(req).id),
-    );
-    app.put(`/api/bots/:id/${route}`, async (req) => {
-      const value =
-        route === "draft"
-          ? draftInput.parse(req.body)
-          : z
-              .object({
-                messageId: z.string().max(200).optional(),
-                scrollTop: z.number().min(0).optional(),
-              })
-              .parse(req.body);
-      store.savePersonal(table, signedIn(req).id, params(req).id, value);
-      return value;
-    });
-  }
+  app.get("/api/bots/:id/draft", async (req) => store.draft(signedIn(req).id, params(req).id));
+  app.put("/api/bots/:id/draft", async (req, reply) => {
+    const { baseRevision, ...value } = draftInput.parse(req.body);
+    const result = store.saveDraft(signedIn(req).id, params(req).id, value, baseRevision);
+    if (!result.saved)
+      return reply.code(409).send({ error: "This draft changed on another device.", code: "draft_conflict", draft: result.draft });
+    return result.draft;
+  });
+  app.get("/api/bots/:id/read-position", async (req) =>
+    store.personal("read_positions", signedIn(req).id, params(req).id),
+  );
+  app.put("/api/bots/:id/read-position", async (req) => {
+    const value = z
+      .object({
+        messageId: z.string().max(200).optional(),
+        scrollTop: z.number().min(0).optional(),
+      })
+      .parse(req.body);
+    store.savePersonal("read_positions", signedIn(req).id, params(req).id, value);
+    return value;
+  });
   app.post("/api/bots/:id/uploads", async (req) => {
     await requireCapability("uploads");
     const file = await req.file();

@@ -159,6 +159,18 @@ export interface FileRef {
   size?: number;
   url?: string;
 }
+/**
+ * A person's saved draft for one assistant. `revision` grows with every change, `reason` says
+ * whether the latest change was an edit or the clear after a send, and `sentRevision` is the
+ * revision of the latest such clear, or 0.
+ */
+export interface SavedDraft {
+  text: string;
+  attachments: FileRef[];
+  revision: number;
+  reason: "edit" | "sent";
+  sentRevision: number;
+}
 export interface Message {
   id: string;
   runId?: string;

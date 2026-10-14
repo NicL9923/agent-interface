@@ -276,7 +276,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
 
     await record("message-submit", "POST", "/api/bots/household/messages", { requestId: ids.submission, text: "Plan five dinners", attachments: [attached] });
     await record("submission", "GET", `/api/submissions/${ids.submission}`);
-    await record("bot-draft-save", "PUT", "/api/bots/household/draft", { text: "Add basil", attachments: [attached] });
+    await record("bot-draft-save", "PUT", "/api/bots/household/draft", { text: "Add basil", attachments: [attached], baseRevision: 0 });
     await record("bot-draft", "GET", "/api/bots/household/draft");
     await record("bot-read-position", "PUT", "/api/bots/household/read-position", { messageId: "message-assistant", scrollTop: 240.5 });
     await record("conversation", "GET", "/api/bots/household/conversation");
