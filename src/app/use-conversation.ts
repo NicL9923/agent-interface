@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, cachedResponse, write } from "../client-api";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import type { Message } from "../shared/types";
+import { replySnippet, watchReplies } from "./reply-announcement";
+import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
 /** Within this distance of the end, the reader is following the latest message. */
 const LATEST_DISTANCE = 100;
@@ -19,6 +21,8 @@ export function useConversation(botId: string, userId?: string) {
   const [atLatest, setAtLatest] = useState(true);
   const [unseen, setUnseen] = useState(0);
   const [earlier, setEarlier] = useState({ loading: false, failed: false });
+  // The latest settled reply, worded for a screen reader's live region.
+  const [reply, setReply] = useState<{ id: string; text: string } | null>(null);
   const positionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (positionTimer.current) clearTimeout(positionTimer.current);
@@ -48,6 +52,7 @@ export function useConversation(botId: string, userId?: string) {
     setAtLatest(true);
     setUnseen(0);
     setEarlier({ loading: false, failed: false });
+    setReply(null);
     // A conversation opened before shows at once while it is checked again.
     const cached = cachedResponse<SavedConversation>(firstPage(botId));
     setConversation(cached?.botId === botId ? cached : null);
@@ -59,6 +64,7 @@ export function useConversation(botId: string, userId?: string) {
     const cachedStart = cached?.botId === botId ? cached.messages[0]?.id : undefined;
     let loading = false, again = false, more = false;
     let firstConversation = true;
+    let watch: ReplyWatch = {};
     let secureRequestIds = new Set<string>();
     const load = async () => {
       if (loading) { again = true; return; }
@@ -86,6 +92,9 @@ export function useConversation(botId: string, userId?: string) {
         const newSecureRequest = secureRequests.find(request => !secureRequestIds.has(request.id));
         secureRequestIds = new Set(secureRequests.map(request => request.id));
         if (newSecureRequest && (firstConversation || following.current)) reveal.current = newSecureRequest.id;
+        const heard = watchReplies(watch, result, firstConversation);
+        watch = heard.watch;
+        if (heard.reply) setReply({ id: heard.reply.id, text: replySnippet(heard.reply.text) });
         firstConversation = false;
         if (result !== current.current) holdPlace();
         setConversation(result);
@@ -242,5 +251,5 @@ export function useConversation(botId: string, userId?: string) {
     loadEarlier,
     jumpToLatest,
   };
-  return { conversation, setConversation, disconnected, reviewed, setReviewed, scroll, content, history, persistPosition };
+  return { conversation, setConversation, disconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition };
 }

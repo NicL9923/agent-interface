@@ -669,3 +669,74 @@ describe("conversation state", () => {
     expect(sendButton().disabled).toBe(true);
   });
 });
+
+describe("reply announcements", () => {
+  const message = (id: string, role: "user" | "assistant", text: string) => ({ id, role, text });
+  const settled = [message("u1", "user", "Hello"), message("a1", "assistant", "Hi, I'm here.")];
+  const announcement = () => container.querySelector('.transcript-frame > [role="status"]')!.textContent;
+  const hold = (messages: typeof settled, state: Conversation["activity"]["state"] = "done") => {
+    conversation = { ...conversation, messages, activity: { state, runId: "run" } };
+  };
+
+  it("labels the transcript as a region without making it announce everything", async () => {
+    await render();
+    const transcript = container.querySelector(".transcript")!;
+    expect(transcript.getAttribute("role")).toBe("region");
+    expect(transcript.getAttribute("aria-label")).toBe("Conversation");
+    expect(transcript.hasAttribute("aria-live")).toBe(false);
+  });
+
+  it("stays quiet for the reply already in the conversation when it opens", async () => {
+    hold(settled);
+    await render();
+    await advance(1500);
+    expect(announcement()).toBe("");
+  });
+
+  it("reads a new reply once, as plain words", async () => {
+    hold(settled);
+    await render();
+    hold([...settled, message("u2", "user", "Status?"),
+      message("a2", "assistant", "## Done\n**The report** is [ready](https://example.invalid).\n```\nnpm test\n```")]);
+    await advance(1500);
+    expect(announcement()).toBe("Shared replied: Done The report is ready.");
+  });
+
+  it("waits for the assistant to stop working and reads the finished text, not each stage", async () => {
+    hold(settled);
+    await render();
+    hold([...settled, message("u2", "user", "Status?"), message("a2", "assistant", "Checking")], "working");
+    await advance(1500);
+    expect(announcement()).toBe("");
+    hold([...settled, message("u2", "user", "Status?"), message("a2", "assistant", "Checking. All clear.")], "working");
+    await advance(1500);
+    expect(announcement()).toBe("");
+    hold([...settled, message("u2", "user", "Status?"), message("a2", "assistant", "Checking. All clear.")], "done");
+    await advance(1500);
+    expect(announcement()).toBe("Shared replied: Checking. All clear.");
+  });
+
+  it("keeps the first 200 characters of a long reply", async () => {
+    hold(settled);
+    await render();
+    hold([...settled, message("a2", "assistant", "word ".repeat(100))]);
+    await advance(1500);
+    expect(announcement()).toBe(`Shared replied: ${"word ".repeat(40).trim()}…`);
+  });
+
+  it("stays quiet when older history is loaded above the conversation", async () => {
+    hold(settled);
+    await render();
+    hold([message("u0", "user", "Earlier"), message("a0", "assistant", "An older answer"), ...settled]);
+    await advance(1500);
+    expect(announcement()).toBe("");
+  });
+
+  it("ignores a new user message", async () => {
+    hold(settled);
+    await render();
+    hold([...settled, message("u2", "user", "More please")]);
+    await advance(1500);
+    expect(announcement()).toBe("");
+  });
+});

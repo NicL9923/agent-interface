@@ -15,7 +15,7 @@ import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import type { SavedConversation } from "./storage";
 import type { useConversation } from "./use-conversation";
-export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, content, history, onScroll, onCreate, onDraft }: {
+export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -35,6 +35,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
   scroll: RefObject<HTMLDivElement | null>;
   content: RefCallback<HTMLDivElement>;
   history: ReturnType<typeof useConversation>["history"];
+  reply: ReturnType<typeof useConversation>["reply"];
   onScroll(): void;
   onCreate(): void;
   onDraft(text: string): void;
@@ -82,10 +83,13 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
       )}
       <NotificationOnboarding notifications={notifications} />
       <div className="transcript-frame">
+      {/* Always mounted, so a screen reader is already watching when a reply lands. */}
+      <span className="sr-only" role="status">{selected && reply ? `${selected.name} replied: ${reply.text}` : ""}</span>
       <div
         className="transcript"
         ref={scroll}
         onScroll={onScroll}
+        role="region"
         aria-label="Conversation"
         tabIndex={0}
       >
