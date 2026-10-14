@@ -157,7 +157,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
             <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy" role="status">
-              <span className="activity-shimmer">{selected.name} is {action}...</span>
+              <Shimmer text={`${selected.name} is ${action}...`} />
             </div>
           </div>
         )}
@@ -192,6 +192,10 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
       </div>
     </>
   );
+}
+// The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
+function Shimmer({ text }: { text: string }) {
+  return <span className="activity-shimmer">{text}<span className="shimmer-band" aria-hidden="true"><span>{text}</span></span></span>;
 }
 function HistorySkeleton() {
   return <div className="history-skeleton" role="status">
@@ -357,7 +361,10 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }
+// Natural sizes of images already shown, so one that scrolls back into the transcript reserves its space before it reloads.
+const imageSizes = new Map<string, { width: number; height: number }>();
 function FileLink({ file }: { file: FileRef }) {
+  const size = imageSizes.get(file.id);
   return (
     <a
       className="file-link"
@@ -369,7 +376,11 @@ function FileLink({ file }: { file: FileRef }) {
         <img
           src={file.url || `/api/files/${encodeURIComponent(file.id)}`}
           alt={file.name}
+          width={size?.width}
+          height={size?.height}
           loading="lazy"
+          decoding="async"
+          onLoad={event => imageSizes.set(file.id, { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
         />
       )}
       <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>

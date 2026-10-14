@@ -653,6 +653,8 @@ it("streams downloads under the shared cap and explains a file that is too large
   const headers = await login(app);
   const file = await app.inject({ url: "/api/files/a.b", headers });
   expect([file.statusCode, file.body, file.headers["content-length"]]).toEqual([200, "hello world", "11"]);
+  // A file id is signed over a path, so one overwritten later must never come from a browser cache.
+  expect(file.headers["cache-control"]).toBe("no-store");
   const tooLarge = await app.inject({ url: "/api/files/a.b", headers });
   expect(tooLarge.statusCode).toBe(502);
   expect(tooLarge.json()).toMatchObject({ code: "file_too_large", error: "huge.zip is larger than 100 MB, the most this app opens." });

@@ -37,6 +37,8 @@ async function renderApp(){await act(async()=>root.render(createElement(App)));}
 async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync(ms));}
 // The server reports a change, as Hermes frames or a write would.
 async function changed(){await act(async()=>FakeEventSource.notifyAll());await advance(1500);}
+// Screens such as preferences load on first use.
+async function loaded(){await act(async()=>{await vi.dynamicImportSettled();});}
 // jsdom has no layout, so the transcript reports a fixed 2000px history in a 300px view.
 const transcriptSize=()=>{
   const height=vi.spyOn(Element.prototype,'scrollHeight','get').mockImplementation(function(this:Element){return this.classList.contains('transcript')?2000:0;});
@@ -379,6 +381,7 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+  await loaded();
   await act(async()=>button('Sign out').click());
   expect(container.querySelector('.sign-in')).not.toBeNull();
   await act(async()=>button('Enter local workspace').click());

@@ -67,7 +67,7 @@ function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemo
   const image = mime.startsWith("image/") && !!url;
   const state = upload?.status ?? "ready";
   const thumb = <>
-    {image ? <img src={url} alt="" draggable={false} /> : <span className="attachment-badge"><Icon name="file" size={20} /><small>{kindLabel(name, mime)}</small></span>}
+    {image ? <img src={url} alt="" draggable={false} decoding="async" /> : <span className="attachment-badge"><Icon name="file" size={20} /><small>{kindLabel(name, mime)}</small></span>}
     {upload && upload.status !== "failed" && <span className="attachment-progress" aria-hidden="true">
       {upload.status === "processing" ? <Icon name="spinner" className="spin" size={22} />
         : <svg viewBox="0 0 36 36" width={30} height={30}>

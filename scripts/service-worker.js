@@ -2,6 +2,8 @@
 const CACHE = 'agent-interface-__BUILD_ID__';
 const STATIC_FILES = __PRECACHE__;
 const STATIC_PATHS = new Set(STATIC_FILES);
+// Admin-only chunks (terminal and remote desktop) that cost every phone nothing until first use.
+const ON_DEMAND_PATHS = new Set(__ON_DEMAND__);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC_FILES)));
@@ -31,6 +33,19 @@ self.addEventListener('fetch', (event) => {
       const shell = await (await caches.open(CACHE)).match('/index.html');
       return shell || Response.error();
     }));
+    return;
+  }
+  if (ON_DEMAND_PATHS.has(url.pathname)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      const cached = await cache.match(url.pathname);
+      if (cached) return cached;
+      const response = await fetch(request);
+      // A retired chunk falls through to the app shell with a 200, which must never be kept as code.
+      if (response.ok && !(response.headers.get('content-type') || '').startsWith('text/html'))
+        event.waitUntil(cache.put(url.pathname, response.clone()));
+      return response;
+    })());
     return;
   }
   if (!STATIC_PATHS.has(url.pathname) || url.pathname === '/index.html') return;
