@@ -35,6 +35,7 @@ import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
+import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
 import { isApiRequest, routePattern } from "./route-path.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { historyWindow, MAX_HISTORY_TURNS } from "../shared/history.js";
@@ -118,6 +119,7 @@ export async function createApp(
     sendApns?: ApnsSender;
     upgrades?: HermesUpgrades;
     logStream?: { write(line: string): void };
+    clientRoot?: string;
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -711,7 +713,7 @@ export async function createApp(
     store.queueNotification(eventId, signedIn(req).id, { title: "WildBots test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId });
     return { ok: true, detail: "Queued for this person. Confirm delivery on the signed-in physical device." };
   });
-  const clientRoot = resolve("dist/client");
+  const clientRoot = options.clientRoot ?? resolve("dist/client");
   if (existsSync(clientRoot)) {
     await app.register(staticFiles, {
       root: clientRoot,
@@ -720,6 +722,8 @@ export async function createApp(
       setHeaders: (reply, path) => {
         if (path.endsWith("index.html") || path.endsWith("sw.js"))
           reply.header("Cache-Control", "no-cache");
+        else if (isHashedAsset(clientRoot, path))
+          reply.header("Cache-Control", immutableCacheControl);
       },
     });
     app.setNotFoundHandler((req, reply) =>
