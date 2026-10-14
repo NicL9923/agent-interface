@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { ActivityState, Avatar as AvatarConfig } from "../shared/types";
 import {
   animatesAt,
@@ -283,8 +284,8 @@ export function Avatar({
       return;
     }
     let frame = 0;
+    let wake: ReturnType<typeof setTimeout> | undefined;
     let last = performance.now();
-    let painted = 0;
     const tick = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
@@ -299,15 +300,16 @@ export function Avatar({
         bang: morph.current.bang + (targets.bang - morph.current.bang) * k,
       };
       const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
-      // Small sidebar avatars repaint at about 30 fps to spare battery.
-      if (size >= 56 || now - painted > 32) {
-        painted = now;
-        setFrame((f) => f + 1);
-      }
-      if (animatesAt(state, t) || settling) frame = requestAnimationFrame(tick);
+      // Committed inside this frame's callback; scheduled React work would land in a second frame, and each costs a restyle.
+      flushSync(() => setFrame((f) => f + 1));
+      if (!animatesAt(state, t) && !settling) return;
+      // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
+      // asking for every display refresh makes the page restyle on each one even when nothing paints.
+      if (size >= 56) frame = requestAnimationFrame(tick);
+      else wake = setTimeout(() => { frame = requestAnimationFrame(tick); }, 24);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => { cancelAnimationFrame(frame); clearTimeout(wake); };
   }, [state, still, size]);
 
   // A state that has not committed yet renders from its first frame.
@@ -549,6 +551,10 @@ export function Avatar({
             className="avatar-portrait"
             src={avatar.src || undefined}
             alt=""
+            width={size}
+            height={size}
+            loading="lazy"
+            decoding="async"
             onError={(e) => {
               e.currentTarget.style.display = "none";
             }}
