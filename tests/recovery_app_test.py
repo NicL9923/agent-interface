@@ -7,11 +7,14 @@ import os
 from pathlib import Path
 import tempfile
 import subprocess
+import sys
 import time
+import types
 import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".agents/tools"))
 spec = importlib.util.spec_from_file_location("recover_app", ROOT / ".agents/tools/recover-app-after-native-update.py")
 recover = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recover)
@@ -128,11 +131,11 @@ class FakeRecovery(recover.Recovery):
         self.target.write_bytes(b"old-receipt")
         self.receipt_input.write_bytes(b"new-receipt")
         self.native_record = record(hermes_home=str(self.home), gateway_state="running")
-        self.f = {"wait": lambda fn, *args: self.wait_once(fn), "journal": lambda phase: self.note(phase),
-                  "gateway_state": lambda: self.native_record,
-                  "ready_gateway": lambda state: self.ready(state), "google": lambda: self.note("google"),
-                  "app_ready": lambda: True, "run": lambda *a, **k: self.note("doctor"),
-                  "native": lambda code: self.clear_drain(code)}
+        self.f = types.SimpleNamespace(wait=lambda fn, *args: self.wait_once(fn), journal=lambda phase: self.note(phase),
+                  gateway_state=lambda: self.native_record,
+                  ready_gateway=lambda state: self.ready(state), google=lambda: self.note("google"),
+                  app_ready=lambda: True, run=lambda *a, **k: self.note("doctor"),
+                  native=lambda code: self.clear_drain(code))
 
     def note(self, event):
         self.events.append(event)
@@ -475,11 +478,11 @@ class GuardedFinishTests(unittest.TestCase):
 
     def test_pid_replacement_during_doctor_refuses_release_before_marker(self):
         host = self.running()
-        original = host.f["run"]
+        original = host.f.run
         def run(*args, **kwargs):
             original(*args, **kwargs)
             host.pids[recover.UNITS[1]] = 999
-        host.f["run"] = run
+        host.f.run = run
         with self.assertRaises(AssertionError):
             self.finish(host)
         self.assertFalse((host.ops / "finish-attempt.json").exists())

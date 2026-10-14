@@ -9,11 +9,13 @@ from pathlib import Path
 import runpy
 import stat
 import subprocess
+import sys
 import time
-import urllib.error
-import urllib.request
 import uuid
 from urllib.parse import urlsplit
+
+sys.dont_write_bytecode = True  # Keep the release tree exactly as archived.
+from deploy_common import Deployment
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--config", type=Path, required=True)
@@ -51,89 +53,15 @@ hashes = lambda: {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for p
 baseline = hashes()
 log = (ops / "commands.log").open("a")
 claim = None
-
-def journal(phase):
-    atomic(ops / "phase.json", (json.dumps({"operationId": operation, "phase": phase,
-        "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}) + "\n").encode())
-
-def run(argv, *, cwd=None, input=None, timeout=120):
-    if claim: claim.validate()
-    result = subprocess.run(argv, cwd=cwd, input=input, text=True, capture_output=True, timeout=timeout)
-    log.write(result.stdout + result.stderr); log.flush()
-    if result.returncode: raise RuntimeError("A deployment command failed; private log retained")
-    return result.stdout
-
-def system(action, *names):
-    return run(["/usr/bin/systemctl", "--user", action, *names])
-
-def pid(unit):
-    return system("show", unit, "-p", "MainPID", "--value").strip()
-
-def get_status():
-    with urllib.request.urlopen("http://127.0.0.1:9119/api/status", timeout=10) as response:
-        return json.load(response)
-
-def wait(predicate, seconds=90):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        try:
-            if predicate(): return
-        except (OSError, ValueError, urllib.error.URLError): pass
-        time.sleep(1)
-    raise RuntimeError("Deployment readiness was not confirmed")
-
-def atomic(path, data):
-    temporary = path.with_name(path.name + "." + operation)
-    with temporary.open("xb") as output: output.write(data); output.flush(); os.fsync(output.fileno())
-    temporary.replace(path)
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try: os.fsync(directory)
-    finally: os.close(directory)
+d = Deployment(c, operation=operation, ops=ops, log=log)
+journal, run, system, pid, wait, atomic = d.journal, d.run, d.system, d.pid, d.wait, d.atomic
+get_status, native, google, app_ready, retire = d.get_status, d.native, d.google, d.app_ready, d.retire
+switch, gateway_state, ready_gateway = d.switch, d.gateway_state, d.ready_gateway
 
 def change_environment(path, values):
     lines = path.read_text().splitlines()
     lines = [line for line in lines if line.split("=", 1)[0] not in values]
     atomic(path, ("\n".join(lines + [key + "=" + value for key, value in values.items()]) + "\n").encode())
-
-def native(code):
-    prefix = "import sys; sys.path.insert(0," + repr(str(source)) + "); import hermes_bootstrap; "
-    return run([c["managedPython"], "-I", "-c", prefix + code])
-
-def google():
-    assert json.loads(run(c["googleVerificationCommand"], timeout=90)) == {"authenticatedHttp": True, "freshWebsocket": True}
-
-def app_ready():
-    def request(path, body=None):
-        req = urllib.request.Request(origin + path,
-            data=body, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response: return response.status, response.read()
-        except urllib.error.HTTPError as error: return error.code, error.read()
-    code, body = request("/api/health")
-    return code == 200 and json.loads(body).get("ok") is True and request("/api/bootstrap")[0] == 401 and request("/api/auth/local", b"{}")[0] == 403
-
-def retire(action, token=None):
-    credentials = json.loads(Path(c["googleSessionFile"]).read_text())
-    body = {"action": action}
-    if token: body["token"] = token
-    request = urllib.request.Request("http://127.0.0.1:9119/api/health/retirement", data=json.dumps(body).encode(),
-        headers={"Authorization": "Bearer " + credentials["access_token"], "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=15) as response: return json.load(response)
-
-def switch(target):
-    temporary = current.with_name("current." + operation)
-    temporary.symlink_to(target); temporary.replace(current)
-
-def gateway_state():
-    return json.loads((home / "gateway_state.json").read_text())
-
-def ready_gateway(state):
-    record = gateway_state()
-    stamp = record.get("agent_interface_gateway_guard", {})
-    return (record.get("pid") == int(pid("hermes-gateway.service")) and record.get("gateway_state") == state
-        and record.get("code_sha") == c["hermesRevision"] and record.get("hermes_home") == str(home)
-        and stamp == {"schemaVersion": 1, "maintenanceFile": str(lease), "pendingIngress": 0}
-        and all(record.get("platforms", {}).get(key, {}).get("state") == "connected" for key in c["discordConnections"]))
 
 def release_lease():
     # Use the native private maintenance authority; never remove another owner's gate.
@@ -161,6 +89,7 @@ if args.check:
     log.close()
     raise SystemExit(0)
 claim = runpy.run_path(str(release / "scripts/hermes-upgrade-worker.py"))["NativeUpdateClaim"](source, home)
+d.claim = claim
 claim.__enter__()
 os.environ["HERMES_UPDATE_HANDOFF_PID"] = str(os.getpid())
 changed = False

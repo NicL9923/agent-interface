@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Activate a built app release under the existing native upgrade guards."""
-import argparse,ast,fcntl,hashlib,json,os,runpy,stat,subprocess,sys,time,uuid
+import argparse,datetime,fcntl,hashlib,json,os,runpy,stat,subprocess,sys,time,uuid
 from pathlib import Path
+from urllib.parse import urlsplit
+sys.dont_write_bytecode=True  # Keep the release tree exactly as archived.
+from deploy_common import Deployment
 os.umask(0o077)
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--config",type=Path,required=True)
@@ -11,7 +14,10 @@ info=args.config.lstat()
 assert args.config.is_absolute() and stat.S_ISREG(info.st_mode) and info.st_uid==os.getuid() and not info.st_mode&0o077
 c=json.loads(args.config.read_text());base=Path(c["appBase"]);release=Path(c["release"]);source=Path(c["source"]);home=Path(c["hermesHome"]);current=base/"current";operation=c["operationId"];lease=Path(c["maintenanceFile"]);drain=home/".drain_request.json";service_env=base/"shared/hermes-service.env";app_env=base/"shared/app.env";origin=c["appOrigin"]
 ops=base/"operations"/("continued-"+operation);ops.mkdir(mode=0o700,exist_ok=True);log=(ops/"commands.log").open("a");claim=None
-module=ast.parse(Path(__file__).with_name("deploy-app-release.py").read_text());module.body=[x for x in module.body if isinstance(x,(ast.Import,ast.ImportFrom,ast.FunctionDef))];exec(compile(module,"verified-deployment-functions","exec"))
+d=Deployment(c,operation=operation,ops=ops,log=log)
+journal,run,system,pid,wait,atomic=d.journal,d.run,d.system,d.pid,d.wait,d.atomic
+get_status,native,google,app_ready,switch=d.get_status,d.native,d.google,d.app_ready,d.switch
+gateway_state,ready_gateway=d.gateway_state,d.ready_gateway
 parsed_origin=urlsplit(origin)
 assert parsed_origin.scheme=="https" and parsed_origin.netloc and not parsed_origin.username
 assert not parsed_origin.path and not parsed_origin.query and not parsed_origin.fragment
@@ -54,7 +60,7 @@ def gateway_idle(after=None):
  record=gateway_state();updated=datetime.datetime.fromisoformat(record["updated_at"]).timestamp()
  return (type(record.get("active_agents")) is int and record["active_agents"]==0 and "active_work" in record
   and record["active_work"] in (None,[]) and 0<=time.time()-updated<=10 and (after is None or updated>after))
-claim=runpy.run_path(str(release/"scripts/hermes-upgrade-worker.py"))["NativeUpdateClaim"](source,home)
+claim=runpy.run_path(str(release/"scripts/hermes-upgrade-worker.py"))["NativeUpdateClaim"](source,home);d.claim=claim
 opened=False
 with claim:
  os.environ["HERMES_UPDATE_HANDOFF_PID"]=str(claim.owner_pid)

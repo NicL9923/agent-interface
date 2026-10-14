@@ -354,3 +354,13 @@ answer at all. The first start after an update builds the web UI before listenin
 70 seconds on Oct 14, 2026; verification that asked sooner got a refused connection and rolled
 back an update that was working. The Discord connection check runs after this wait, so a
 long build cannot leave it stale.
+
+## App release tooling
+
+App releases and native recovery run from `.agents/tools`. The bootstrap, guarded deploy
+and recovery tools share one module, `deploy_common.py`, for commands under the held update
+claim, user systemd, readiness, Google and gateway checks. Each tool imports it from its own
+directory. Recovery refuses unless its SHA256 matches the `deployFunctionsSha256` that its
+read-only check pinned. Every native call sets `HERMES_HOME` to the configured home before
+Hermes bootstrap pins the process identity, as the gateway wrapper does, so an inherited value
+cannot send a drain request to another home.

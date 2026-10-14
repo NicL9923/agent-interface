@@ -502,11 +502,26 @@ class HostPrograms(unittest.TestCase):
             str(self.host.base / "shared/hermes-service.env"): "file:hermes-service.env",
             str(self.host.base / "shared/hermes-worker.json"): "file:hermes-worker.json",
             str(self.host.source / "agent_interface_gateway.py"): "link:" + release + "/gateway_guard.py"})
+        # A live helper from before deploy_common.py names no shared module and runs these.
+        self.assertEqual(config["deployFunctionsSha256"], "file:deploy-app-release.py")
         self.heartbeat()
         code, output, error = self.recover(check=False)
         self.assertEqual((code, json.loads(output or "null")), (0, {"checked": False}), error)
         self.assertEqual(json.loads((tools / "calls.json").read_text()),
                          [["--config", str(path), "--check"], ["--config", str(path)]])
+
+    def test_recovery_check_pins_the_shared_module_the_live_helper_imports(self):
+        tools, _ = self.recovery_host()
+        for name in ("recover-app-after-native-update.py", "deploy_common.py"):
+            (tools / name).write_bytes((ROOT / ".agents/tools" / name).read_bytes())
+        self.heartbeat()
+        # The real helper then refuses this incomplete release; only its configuration matters here.
+        code, _, error = self.recover(check=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("Recovery check stopped", error)
+        config = json.loads((self.host.base / "operations/native-recovery-config-op-new/config.json").read_text())
+        self.assertEqual(config["deployFunctionsSha256"], hashlib.sha256((tools / "deploy_common.py").read_bytes()).hexdigest())
+        self.assertFalse((tools / "__pycache__").exists(), "Loading the helper must not write into the live release")
 
     def test_recovery_needs_a_passed_check_and_a_fresh_heartbeat_before_the_helper_runs(self):
         tools, _ = self.recovery_host()

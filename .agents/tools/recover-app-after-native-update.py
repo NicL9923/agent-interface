@@ -6,7 +6,6 @@ only its qualification receipt, an owned maintenance lease, and update status.
 Interrupted recovery is held for review; this command never retries a cutover.
 """
 import argparse
-import ast
 import datetime
 import fcntl
 import hashlib
@@ -17,12 +16,18 @@ import re
 import runpy
 import stat
 import subprocess
+import sys
 import time
 import uuid
 from urllib.parse import urlsplit
 
+sys.dont_write_bytecode = True  # Keep the release tree exactly as archived.
+import deploy_common
+
 UNITS = ("agent-interface.service", "hermes-dashboard.service", "hermes-gateway.service")
 UNTOUCHED_UNITS = ("hermes-computer.service", "agent-interface-terminal.service")
+# The shared host steps this helper runs; its checked configuration pins their SHA256.
+SHARED_FUNCTIONS = "deploy_common.py"
 QUALIFIED_DOCTOR = """
 let runtime, ready = false;
 try {
@@ -115,7 +120,7 @@ class Recovery:
         self.opened = False
 
     def call(self, name, *args, **kwargs):
-        return self.f[name](*args, **kwargs)
+        return getattr(self.f, name)(*args, **kwargs)
 
     def pid(self, unit):
         return int(self.call("pid", unit))
@@ -337,7 +342,7 @@ class Recovery:
             home=self.home, maintenance=self.lease, now=time.time()))
         self.call("google")
         same_owners()
-        self.call("wait", self.f["app_ready"])
+        self.call("wait", self.f.app_ready)
         gate = self.rpc("status")
         assert gate["active"] is True and gate["operationId"] == self.operation and gate["busy"] == []
         same_owners()
@@ -498,7 +503,8 @@ def main(argv=None):
     private_file(base / "shared/hermes-service.env")
     validate_environment_paths(base, target, lease, Path(c["upgradeStateDir"]))
     assert isinstance(c["discordConnections"], list) and len(set(c["discordConnections"])) == 2
-    functions_path = Path(__file__).with_name("deploy-app-release.py")
+    functions_path = Path(deploy_common.__file__)
+    assert functions_path.resolve() == Path(__file__).resolve().with_name(SHARED_FUNCTIONS)
     assert fingerprint(functions_path) == c["deployFunctionsSha256"]
     operation = c["operationId"]
     audit_name = "native-recovery-check-" + operation + "-" + str(uuid.uuid4()) if args.check else "native-recovery-" + operation
@@ -517,17 +523,7 @@ def main(argv=None):
             claim_type = runpy.run_path(str(release / "scripts/hermes-upgrade-worker.py"))["NativeUpdateClaim"]
             with claim_type(source, home) as claim:
                 os.environ["HERMES_UPDATE_HANDOFF_PID"] = str(claim.owner_pid)
-                functions = dict(c=c, base=base, release=release, current=current, source=source, home=home,
-                    lease=lease, operation=operation, ops=ops, log=log, claim=claim, origin=c["appOrigin"],
-                    service_env=base / "shared/hermes-service.env")
-                module = ast.parse(functions_path.read_text())
-                module.body = [x for x in module.body if isinstance(x, (ast.Import, ast.ImportFrom, ast.FunctionDef))]
-                exec(compile(module, "reviewed-deployment-functions", "exec"), functions)
-                def native(code):
-                    # Set the native root before bootstrap can latch process identity.
-                    prefix = "import os; os.environ['HERMES_HOME']=" + repr(str(home)) + "; import sys; sys.path.insert(0," + repr(str(source)) + "); import hermes_bootstrap; "
-                    return functions["run"]([c["managedPython"], "-I", "-c", prefix + code])
-                functions["native"] = native
+                functions = deploy_common.Deployment(c, operation=operation, ops=ops, log=log, claim=claim)
                 recovery = Recovery(c, functions, claim, ops)
                 try:
                     result = recovery.finish_guarded() if args.finish_guarded else recovery.resume_stopped() if args.resume_stopped else recovery.execute(args.check)

@@ -10,7 +10,7 @@ import shlex
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = ("recover-app-after-native-update.py", "deploy-app-release.py")
+FILES = ("recover-app-after-native-update.py", "deploy_common.py")
 REMOTE = """
 import base64, hashlib, json, os, pathlib, stat, sys, uuid
 request = json.load(sys.stdin)
@@ -23,7 +23,7 @@ assert stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st
 destination = operations / ('reviewed-native-recovery-' + request['commit'][:8] + '-' + str(uuid.uuid4()))
 destination.mkdir(mode=0o700)
 for name, item in request['files'].items():
-    assert name in ('recover-app-after-native-update.py', 'deploy-app-release.py')
+    assert name in ('recover-app-after-native-update.py', 'deploy_common.py')
     data = base64.b64decode(item['data'], validate=True)
     assert hashlib.sha256(data).hexdigest() == item['sha256']
     with (destination / name).open('xb') as output:

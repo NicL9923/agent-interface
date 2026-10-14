@@ -247,7 +247,12 @@ base = Path(PAYLOAD["appBase"]); operations = base / "operations"
 release = (base / "current").resolve(strict=True)
 tools = release / ".agents/tools"
 helper = tools / "recover-app-after-native-update.py"
-fingerprint = runpy.run_path(str(helper))["fingerprint"]
+# The helper imports its shared host steps from its own directory.
+sys.path.insert(0, str(tools))
+helper_globals = runpy.run_path(str(helper))
+fingerprint = helper_globals["fingerprint"]
+# Pin the shared steps the live helper runs; releases before deploy_common.py exec'd these.
+shared_functions = helper_globals.get("SHARED_FUNCTIONS", "deploy-app-release.py")
 # The live release's own deploy configuration carries every installer setting.
 prior = json.loads((operations / release.name / "deploy-config.json").read_text())
 assert prior["release"] == str(release), "The live release has no deploy configuration of its own."
@@ -270,7 +275,7 @@ else:
         newQualificationReceipt=PAYLOAD["receipt"],
         profileHashes={item: fingerprint(item) for item in prior["profileHashes"]},
         preservedFiles={str(item): fingerprint(item) for item in preserved if os.path.lexists(item)},
-        deployFunctionsSha256=fingerprint(tools / "deploy-app-release.py"))
+        deployFunctionsSha256=fingerprint(tools / shared_functions))
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps(config, indent=2) + "\\n"); path.chmod(0o600)
 
