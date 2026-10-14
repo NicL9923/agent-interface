@@ -522,6 +522,13 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("new approved regression", self.git("diff", "--cached"))
         self.git("fsck", "--no-dangling", "--no-reflogs")
 
+    def test_partially_staged_repair_refuses_backup_before_shutdown(self):
+        self.platform.quiescence()
+        before = self.states.read_bytes()
+        with (self.source / "staged-repair.py").open("a") as output: output.write("unstaged edit\n")
+        with self.assertRaisesRegex(RuntimeError, "staged-repair.py"): self.platform.backup()
+        self.assertEqual(self.states.read_bytes(), before)
+
     def test_dependency_change_blocks_before_source_cutover(self):
         self.platform.quiescence(); self.platform.backup()
         (self.target / "uv.lock").write_text("new dependencies")

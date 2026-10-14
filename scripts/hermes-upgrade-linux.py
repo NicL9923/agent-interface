@@ -376,6 +376,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # dependency generation, as built in staging, land in the live home; a reserve covers
         # Hermes's own writes. Archives and the temporary object pack use the staging filesystem,
         # which may differ from the live one.
+        # Rollback can rebuild a staged repair blob from its working file only if they match.
+        staged = set(self.git(self.source, "diff", "--cached", "--name-only", "-z").split("\0")) - {""}
+        mixed = sorted(staged & set(self.git(self.source, "diff", "--name-only", "-z").split("\0")))
+        if mixed: raise RuntimeError("Staged Hermes repair files have further unstaged edits: " + ", ".join(mixed) + ". Stage or unstage them fully before updating")
         archives = self.readable(self.source, excluded=self.objects) + self.readable(self.home, excluded=self.source)
         objects = tree_bytes(self.target / ".git")
         install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
