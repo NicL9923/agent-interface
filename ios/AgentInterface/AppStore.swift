@@ -358,10 +358,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       self.startDraftSave(botId: botId)
     }
   }
-  /// Sends the open draft's save now, unless it is the text being sent. A save in flight is
-  /// never cancelled: it may already have reached the server, and its response must be merged.
-  @discardableResult private func startDraftSave(botId: String) -> Bool {
+  /// Sends the open draft's save now, unless it is the text being sent. One save at a time: a
+  /// save in flight checks again when its response is merged, and is never cancelled, because it
+  /// may already have reached the server. Leaving (`force`) sends anyway.
+  @discardableResult private func startDraftSave(botId: String, force: Bool = false) -> Bool {
     scheduledDraftSave = nil
+    if !force, !settled(botId) { return false }
     let snapshot = draft
     guard pending?.botId != botId || pending?.text != snapshot.text || pending?.attachments != snapshot.attachments
     else { return false }
@@ -378,7 +380,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func flushDraft(inBackground: Bool = false) {
     draftTask?.cancel()
     var started = false
-    if scheduledDraftSave != nil, draftReady, let botId = selectedBotId { started = startDraftSave(botId: botId) }
+    if scheduledDraftSave != nil, draftReady, let botId = selectedBotId { started = startDraftSave(botId: botId, force: true) }
     scheduledDraftSave = nil
     guard inBackground, started || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return }
     draftBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save draft") { [weak self] in
@@ -395,7 +397,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func settled(_ botId: String) -> Bool { key("draft", botId).map { draftSavesInFlight[$0] == nil } ?? true }
   /// Saves a draft on its base revision, then merges the response into the open copy and the
   /// cached copy as they are now. Kept edits after a conflict save again on the new base.
-  private func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 2) async throws {
+  private func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 3) async throws {
     guard let api, let localKey = key("draft", botId) else { return }
     let currentGeneration = generation
     draftSavesInFlight[localKey, default: 0] += 1
@@ -435,8 +437,16 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     // The server now has this text, or a send made it obsolete.
     if !conflict || next?.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
-    if conflict, let next, next.dirty == true, retries > 0 {
-      try await saveDraft(next, botId: botId, retries: retries - 1)
+    ensureDraftSaved(botId, retries: retries - 1)
+  }
+  /// The one rule after every response or merge: a copy left unsaved, with no save in flight or
+  /// waiting, saves again.
+  private func ensureDraftSaved(_ botId: String, retries: Int = 3) {
+    guard settled(botId), let localKey = key("draft", botId) else { return }
+    if selectedBotId == botId && draftReady {
+      if draft.dirty == true, scheduledDraftSave == nil { startDraftSave(botId: botId) }
+    } else if let cached: Draft = read(localKey), cached.dirty == true, retries > 0 {
+      Task { try? await self.saveDraft(cached, botId: botId, retries: retries) }
     }
   }
   private func persistDraft() {
@@ -561,19 +571,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       Task { try? await self.saveDraft(target, botId: old.botId) }
     }
   }
-  /// Shows the draft once a read returns, merged with this device's copy. Kept edits save again
-  /// when the server moved on. A draft recovered by Discard is unsent work that may not have
-  /// reached the server, so it syncs once loaded. Any other leftover edit on an unchanged
-  /// server copy is shown, and saves with the next change.
+  /// Shows the draft once a read returns, merged with this device's copy. Unsaved edits that
+  /// survive the merge, such as a draft recovered by Discard, then save on their base revision,
+  /// so the server refuses them if it moved on.
   private func loadDraft(_ remote: SavedDraft?, botId: String) {
     let merged = Draft.merge(draftReady ? draft : read(key("draft", botId)) ?? draft, with: remote, settled: settled(botId))
     let changed = merged.draft != draft
     draft = merged.draft
     draftReady = true
     if changed { persistDraft() }
-    let recovered: Bool? = read(key("recovered", botId))
-    if merged.push || recovered == true && draft.dirty == true { updateDraft(draft) }
-    else if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
+    if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
+    ensureDraftSaved(botId)
   }
   /// Puts a pending message back in front of whatever the person has typed since.
   static func draft(restoring old: PendingSubmission, into current: Draft) -> Draft {

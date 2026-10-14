@@ -98,6 +98,18 @@ describe('draft sync across devices',()=>{
     expect(draft('shared')).toMatchObject({text:'A'});
   });
 
+  it('saves a revert again after an older save lands, even once the person moved to another assistant',async()=>{
+    phone.edit('shared','A');
+    await renderApp();
+    const release=holdNext(isDraftSave,'after');
+    await type('AB');await advance(400);
+    await type('A');await open('Other');await advance(0);
+    expect(draft('shared')).toMatchObject({text:'A',revision:1});
+    await release();await advance(0);
+    expect(draft('shared')).toMatchObject({text:'A',revision:3});
+    expect(cached('shared')).toMatchObject({text:'A',dirty:false,baseRevision:3});
+  });
+
   it('drops text sent while its save was in flight, without a retry restoring it',async()=>{
     await renderApp();
     const releaseSave=holdNext(isDraftSave,'after');
@@ -119,7 +131,10 @@ describe('draft sync across devices',()=>{
     phone.edit('shared','Phone words');
     const release=holdNext(isDraftSave,'before');
     await type('Older');await advance(400);
-    await type('Newer');await advance(400);await advance(400);
+    // Saves wait for the one in flight; leaving the page sends them anyway.
+    await type('Newer');
+    await act(async()=>window.dispatchEvent(new Event('pagehide')));await advance(0);
+    await act(async()=>window.dispatchEvent(new Event('pagehide')));await advance(0);
     expect(draft('shared')).toMatchObject({text:'Newer',revision:3});
     await release();await advance(0);
     expect(textarea().value).toBe('Newer');

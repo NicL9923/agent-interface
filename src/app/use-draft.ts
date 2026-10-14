@@ -15,9 +15,9 @@ let keepaliveBytes = 0;
 // Saves in flight per draft. A copy is not marked saved while an older save may still land.
 const inFlight = new Map<string, number>();
 /**
- * Saves a draft on its base revision, then updates the open copy and the cached copy. A conflict
- * merges the server's copy in. Kept edits on an open draft save again from the persistence
- * effect; for a draft no longer shown, they save again here.
+ * Saves a draft on its base revision, then merges the response into the open copy and the cached
+ * copy. Afterwards one rule holds: a copy left unsaved with no save in flight saves again, from
+ * the persistence effect for the open draft (`settle`), or here for a draft no longer shown.
  */
 async function saveDraft(options: {
   userId: string;
@@ -27,8 +27,10 @@ async function saveDraft(options: {
   /** False once the identity changed, so nothing is written for the wrong person. */
   live(): boolean;
   shown(): boolean;
+  /** Lets the open draft's persistence effect check the rule again. */
+  settle?(): void;
   keepalive?: boolean;
-}, retries = 2): Promise<void> {
+}, retries = 3): Promise<void> {
   const { userId, botId, draft, setDraft, live, shown, keepalive } = options;
   if (!live()) return;
   const key = draftKey(userId, botId);
@@ -63,7 +65,8 @@ async function saveDraft(options: {
   const next = cached ? update(cached) : undefined;
   if (next) localSave(key, next);
   setDraft(current => current.botId === botId && current.userId === userId ? update(current) : current);
-  if (conflict && next?.dirty && retries > 0 && !shown())
+  options.settle?.();
+  if (next?.dirty && !inFlight.has(key) && retries > 0 && !shown())
     await saveDraft({ ...options, draft: next }, retries - 1);
 }
 export function useDraft({ botId, userId, identityEpoch, setError }: {
@@ -259,6 +262,8 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
   // Assigned during render, so an effect cleanup sees where the person is going.
   const open = useRef({ botId, userId });
   open.current = { botId, userId };
+  // Advanced after every save response, so the effect checks again whether the draft needs one.
+  const [settled, setSettled] = useState(0);
   useEffect(() => {
     if (
       !userId ||
@@ -281,12 +286,14 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
         userId: user, botId, draft, setDraft, keepalive,
         live: () => epoch === identityEpoch.current,
         shown: () => open.current.botId === botId && open.current.userId === user,
+        settle: () => setSettled(count => count + 1),
       });
     };
     // A closing or hidden page may never run the timer.
     const leave = () => save(true);
     const hide = () => { if (document.visibilityState === "hidden") save(true); };
-    const timer = setTimeout(save, 350);
+    // One save at a time: a save in flight checks again when its response is merged.
+    const timer = inFlight.has(draftKey(user, botId)) ? undefined : setTimeout(save, 350);
     window.addEventListener("pagehide", leave);
     document.addEventListener("visibilitychange", hide);
     function stop() {
@@ -299,5 +306,5 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
       // Leaving this assistant sends the pending edit now. A newer edit here replaces it instead.
       if (open.current.botId !== botId || open.current.userId !== user) save(true);
     };
-  }, [draft, botId, draftReady, userId, offline, appUnavailable, pending]);
+  }, [draft, botId, draftReady, userId, offline, appUnavailable, pending, settled]);
 }

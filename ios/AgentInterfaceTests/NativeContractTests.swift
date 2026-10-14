@@ -508,15 +508,32 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!), "The recovery mark clears once the server has the draft")
     }
 
-    func testALeftoverDirtyDraftIsShownOnLoadButNeverPushedOverTheServersCopy() async throws {
+    func testALeftoverDirtyDraftSavesOnItsBaseOnceLoaded() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        let stale = Draft(text: "Old unsent text", attachments: [], dirty: true)
-        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key("draft", "bot")!)
+        server.versionDrafts(text: "Server copy", revision: 1)
+        let leftover = Draft(text: "Old unsent text", attachments: [], dirty: true, baseRevision: 1)
+        UserDefaults.standard.set(try JSONEncoder().encode(leftover), forKey: value.key("draft", "bot")!)
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Old unsent text"); XCTAssertTrue(value.draftReady)
-        try await Task.sleep(for: .milliseconds(900))
-        XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }.isEmpty)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Old unsent text", baseRevision: 1)], "Saved on its base, so a changed server copy refuses it")
+    }
+
+    func testARevertSavesAgainAfterAnOlderSaveLands() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "A", revision: 1)
+        value.draft = Draft(text: "A", attachments: [], dirty: false, baseRevision: 1, baseHash: Draft.contentHash("A", []))
+        let path = "/api/bots/bot/draft"; server.hold(path)
+        value.updateDraft(Draft(text: "AB", attachments: []))
+        try await server.waitForHeld(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await Task.sleep(for: .milliseconds(800))
+        server.release(path)
+        try await Task.sleep(for: .milliseconds(300))
+        await value.refreshConversation()
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "A", "Another device sees the revert")
+        XCTAssertEqual(value.draft.dirty, false)
     }
 
     func testAStaleDraftFromAnEarlierSessionIsDroppedOnceAnotherDeviceSentIt() async throws {
