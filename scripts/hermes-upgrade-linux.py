@@ -278,7 +278,13 @@ with contextlib.redirect_stdout(sys.stderr):
                 seed.write_bytes(Path(sys.argv[3]).read_bytes()); seed.chmod(0o600)
                 facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=seed)
         pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
-        if seed is not None: seed.unlink()
+        if seed is not None:
+            # A sync with nothing to rebuild leaves the facts naming the temporary seed.
+            facts=Facts(runtime_facts_path(root),strict=True)
+            recorded=(facts.get('venv') or {}).get('resolved_lock')
+            if recorded and Path(recorded).resolve()==seed.resolve():
+                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=Path(prior['resolved_lock']))
+            seed.unlink()
         publish_launchers(root)
     finally: lock.release()
 print(json.dumps({'ok':True,'state':'synced'}))
