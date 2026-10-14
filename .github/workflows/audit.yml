@@ -29,4 +29,7 @@ jobs:
         run: |
           pip install -r .github/requirements-ci.txt
           # The lock pins every version, so skip resolving and building packages.
-          pip-audit -r scripts/spike/requirements.lock.txt --no-deps --disable-pip
+          if ! pip-audit -r scripts/spike/requirements.lock.txt --no-deps --disable-pip; then
+            echo "::error::The lock mirrors the Python environment live Hermes runs, so do not bump it by hand. A fix arrives through a Hermes update, or through the locally approved Hermes repair."
+            exit 1
+          fi
