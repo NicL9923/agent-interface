@@ -874,6 +874,26 @@ if __name__=="__main__":
             with self.assertRaisesRegex(RuntimeError,'claim changed'): claim.validate()
         self.assertEqual(marker.read_text(),'999999\n0\n')
 
+    def test_native_v2_claim_hands_off_with_creation_time_and_tolerates_delegates(self):
+        # Marker v2: pid, started_at, ct:<creation time>, then optional delegate/run lines.
+        (self.source / "hermes_cli/update_lock.py").write_text(UPDATE_LOCK.replace(
+            'self.path.write_text(f"{os.getpid()}\\n{int(time.time())}\\n")',
+            'self.path.write_text(f"{os.getpid()}\\n1700000000\\n{_identity_line()}\\n")') + "def _identity_line(pid=None):\n    return 'ct:%d.000' % (pid or os.getpid())\n")
+        home = self.root / "native-home"; home.mkdir(mode=0o700)
+        marker = home / ".hermes-update-in-progress"
+        with worker.NativeUpdateClaim(self.source, home) as claim:
+            guardian = claim.owner_pid
+            self.assertNotEqual(guardian, os.getpid())
+            self.assertEqual(marker.read_text(), f"{guardian}\n1700000000\nct:{guardian}.000\n")
+            claim.refresh(); claim.validate()
+            self.assertEqual(marker.read_text(), f"{guardian}\n1700000000\nct:{guardian}.000\n")
+            marker.write_text(marker.read_text() + "delegate:4242 ct:9.000\n")
+            claim.refresh(); claim.validate()
+            self.assertTrue(marker.read_text().endswith("delegate:4242 ct:9.000\n"))
+            marker.write_text(f"{guardian}\n1700000000\nct:1.000\n")
+            with self.assertRaisesRegex(RuntimeError, "claim changed"): claim.validate()
+            marker.write_text(f"{guardian}\n1700000000\nct:{guardian}.000\n")
+
     def test_real_native_guardian_outlives_worker_and_orphan_hook(self):
         native_source = Path(os.environ.get("HERMES_NATIVE_LOCK_SOURCE", str(Path(__file__).resolve().parents[1] / ".private/hermes-integrations-spike/source")))
         if not (native_source / "hermes_cli/update_lock.py").exists(): self.skipTest("Set HERMES_NATIVE_LOCK_SOURCE to an actual prepared Hermes source")
