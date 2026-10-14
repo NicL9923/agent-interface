@@ -517,8 +517,6 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     var target = Self.draft(
       restoring: old, into: open && draftReady ? draft : read(localKey) ?? Draft())
     target.dirty = true
-    // The message may still have arrived; its send clear must not drop the restored text.
-    target.sentHere = true
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
     save(true, key("recovered", old.botId))
@@ -526,10 +524,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
     if open {
-      if draftReady {
-        draft.sentHere = true
-        updateDraft(target)
-      } else { draft = target }
+      if draftReady { updateDraft(target) } else { draft = target }
     } else {
       // Best effort: the dirty local draft already wins the next time that assistant opens.
       Task { try? await self.saveDraft(target, botId: old.botId) }

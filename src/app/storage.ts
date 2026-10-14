@@ -14,7 +14,9 @@ export type Draft = {
   dirty?: boolean;
   /** The server revision this copy was loaded from or last saved as. Missing means 0. */
   baseRevision?: number;
-  /** This device sent a message from this copy since its base, so a newer send clear may be its own. */
+  /** Fingerprint of the content at `baseRevision`, to tell whether this copy changed since. */
+  baseHash?: string;
+  /** This device's send from this copy was accepted since its base, so older save acknowledgments are stale. */
   sentHere?: boolean;
 };
 // A file still on its way to Hermes. It joins the draft's attachments once uploaded.
@@ -65,7 +67,7 @@ export const sameDraft = (a: Pick<Draft, "text" | "attachments">, b: Pick<Draft,
 /** This device's copy once its send was accepted: emptied if it still holds the sent text. */
 export function sentCopy(draft: Draft, submission: Pick<Pending, "text" | "attachments">): Draft {
   return sameDraft(draft, submission)
-    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, sentHere: true }
+    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, baseHash: draft.baseHash, sentHere: true }
     : { ...draft, sentHere: true };
 }
 export function clearSavedDraft(user: string, submission: Pending) {

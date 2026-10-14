@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { api, ApiError, uploadFile, write } from "../client-api";
-import { mergeDraft, savedCopy, savedDraft } from "./draft-merge";
+import { contentHash, mergeDraft, savedCopy, savedDraft } from "./draft-merge";
 import { draftKey, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
@@ -141,7 +141,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       await settle();
       if (!live()) return false;
       if (visible()) return true;
-      saved = localRead<Draft>(key) ?? { text: loaded.text, attachments: loaded.attachments, baseRevision: loaded.revision };
+      saved = localRead<Draft>(key) ?? { text: loaded.text, attachments: loaded.attachments, baseRevision: loaded.revision, baseHash: contentHash(loaded) };
     }
     const target = { ...saved, attachments: [...saved.attachments, result], dirty: true };
     if (!live()) return false;

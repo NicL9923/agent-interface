@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { api, ApiError, write } from '../src/client-api';
+import { contentHash } from '../src/app/draft-merge';
 import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shared/types';
 
 vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}));
@@ -20,7 +21,7 @@ const phone={
   edit:(bot:string,text:string)=>advanceDraft(bot,text,'edit'),
   send:(bot:string,text:string,base?:number)=>{
     const current=draft(bot);
-    if(current.text&&(current.text===text||base!==undefined&&current.revision<=base))advanceDraft(bot,'','sent');
+    if(!current.text||current.text===text||base!==undefined&&current.revision<=base)advanceDraft(bot,'','sent');
   },
 };
 let root:Root,container:HTMLDivElement,boot:Bootstrap;
@@ -81,14 +82,41 @@ describe('draft sync across devices',()=>{
     expect(draft('shared')).toMatchObject({text:'',reason:'sent'});
   });
 
-  it('drops a stale unsaved copy once the server shows its text was sent, without saving it back',async()=>{
-    // The save on switch never arrived, and the phone finished and sent the message.
-    localStorage.setItem(key('shared'),JSON.stringify({text:'Pick up fe',attachments:[],botId:'shared',userId:'one',dirty:true,baseRevision:0}));
-    phone.edit('shared','Pick up feed');phone.send('shared','Pick up feed');
+  it('drops an unsaved copy still holding the text that was sent, without saving it back',async()=>{
+    // Marked unsaved, but unchanged since the revision it was loaded on; the phone sent that text.
+    phone.edit('shared','Pick up feed');
+    localStorage.setItem(key('shared'),JSON.stringify({text:'Pick up feed',attachments:[],botId:'shared',userId:'one',dirty:true,baseRevision:1,baseHash:contentHash({text:'Pick up feed',attachments:[]})}));
+    phone.send('shared','Pick up feed');
     await renderApp();await advance(400);
     expect(textarea().value).toBe('');
     expect(cached('shared')).toMatchObject({text:'',dirty:false,baseRevision:2});
     expect(draftPuts('shared')).toEqual([]);
+  });
+
+  it('keeps different text typed offline when another device sends the shared draft',async()=>{
+    phone.edit('shared','Shared plan');
+    localStorage.setItem(key('shared'),JSON.stringify({text:'Offline note',attachments:[],botId:'shared',userId:'one',dirty:true,baseRevision:1,baseHash:contentHash({text:'Shared plan',attachments:[]})}));
+    phone.send('shared','Shared plan');
+    await renderApp();await advance(400);await advance(400);
+    expect(textarea().value).toBe('Offline note');
+    expect(draft('shared')).toMatchObject({text:'Offline note',revision:3});
+  });
+
+  it('ignores a late save acknowledgment from before a send, keeping the next message',async()=>{
+    await renderApp();
+    let release!:()=>void;
+    const held=new Promise<void>(resolve=>{release=resolve;});
+    const serve=vi.mocked(write).getMockImplementation()!;
+    vi.mocked(write).mockImplementationOnce(async (...args)=>{const response=await serve(...args);await held;return response;});
+    await type('First message');await advance(400);
+    expect(draft('shared')).toMatchObject({text:'First message',revision:1});
+    await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+    expect(draft('shared')).toMatchObject({text:'',reason:'sent',revision:2});
+    await type('Second message');
+    await act(async()=>release());
+    await advance(400);await advance(400);
+    expect(draft('shared')).toMatchObject({text:'Second message',revision:3});
+    expect(textarea().value).toBe('Second message');
   });
 
   it('keeps the words typed here over a newer phone edit, and saves them on its revision',async()=>{

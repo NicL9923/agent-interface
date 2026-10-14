@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum ActivityState: String, Codable, CaseIterable {
@@ -230,9 +231,20 @@ struct Draft: Codable, Equatable {
   var dirty: Bool? = nil
   /// The server revision this copy was loaded from or last saved as. Missing means 0.
   var baseRevision: Int? = nil
-  /// This device sent, or tried to send, a message from this copy since its base, so a newer
-  /// send clear on the server may be its own.
+  /// Fingerprint of the content at `baseRevision`, to tell whether this copy changed since.
+  var baseHash: String? = nil
+  /// This device's send from this copy was accepted since its base, so older save
+  /// acknowledgments are stale.
   var sentHere: Bool? = nil
+
+  /// A fingerprint of draft content, kept with a cached copy.
+  static func contentHash(_ text: String, _ attachments: [FileRef]) -> String {
+    struct Content: Encodable { var text: String; var attachments: [FileRef] }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    let data = (try? encoder.encode(Content(text: text, attachments: attachments))) ?? Data(text.utf8)
+    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+  }
 
   /// Reconciles this copy with the server's after a load, or after a save the server refused
   /// because the base revision was stale. `conflict` marks the server's current copy from a 409;
@@ -240,32 +252,40 @@ struct Draft: Codable, Equatable {
   /// `mergeDraft` in src/app/draft-merge.ts applies the same rule.
   ///
   /// - A clean copy adopts the server draft.
-  /// - A send cleared the server draft after this copy's base: the text was sent, so drop it.
-  ///   A copy this device sent from keeps its edits, because that clear may be its own.
-  /// - Otherwise unsaved edits here win. `push` asks the caller to save them on the new base.
+  /// - A send cleared the server draft after this copy's base, and this copy still holds the
+  ///   content of its base: that content was sent, so adopt the server draft.
+  /// - Otherwise unsaved edits here are new work and win. `push` asks the caller to save them
+  ///   on the new base.
   static func merge(_ local: Draft, with server: SavedDraft?, conflict: Bool = false) -> (draft: Draft, push: Bool) {
     let server = server ?? SavedDraft()
     let base = local.baseRevision ?? 0
     let revision = server.revision ?? 0
     if !conflict && revision < base { return (local, false) }
-    if local.dirty != true || local.text == server.text && local.attachments == server.attachments
-      || (server.sentRevision ?? 0) > base && local.sentHere != true
+    let hash = contentHash(server.text, server.attachments)
+    let same = local.text == server.text && local.attachments == server.attachments
+    if local.dirty != true || same
+      || (server.sentRevision ?? 0) > base && local.baseHash == contentHash(local.text, local.attachments)
     {
-      return (Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision), false)
+      return (Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash), false)
     }
     if revision == base { return (local, false) }
     var kept = local
     kept.baseRevision = revision
+    kept.baseHash = hash
     kept.sentHere = nil
     return (kept, true)
   }
-  /// This copy after the server saved `sent` as `server`. Edits typed since stay unsaved.
+  /// This copy after the server saved `sent` as `server`. Edits typed since stay unsaved. An
+  /// acknowledgment older than the copy is ignored: one from before a later save, or from a save
+  /// that went out before this copy's own send was accepted.
   func saved(_ sent: Draft, as server: SavedDraft) -> Draft {
     let revision = server.revision ?? 0
-    // A newer copy already came back, for example from a later save.
-    guard revision >= baseRevision ?? 0 else { return self }
+    guard revision >= baseRevision ?? 0,
+      sentHere != true || text == server.text && attachments == server.attachments
+    else { return self }
     var next = self
     next.baseRevision = revision
+    next.baseHash = Self.contentHash(server.text, server.attachments)
     next.sentHere = nil
     if text == sent.text && attachments == sent.attachments { next.dirty = false }
     return next
@@ -277,7 +297,7 @@ struct Draft: Codable, Equatable {
       next.sentHere = true
       return next
     }
-    return Draft(dirty: false, baseRevision: baseRevision, sentHere: true)
+    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, sentHere: true)
   }
 }
 /// The server's copy of a draft. Older servers omit the revision fields, which read as 0.

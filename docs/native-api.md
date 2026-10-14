@@ -106,24 +106,30 @@ conflict and does not advance the revision, so a retried save is harmless.
 
 A message submission may carry `draftBaseRevision`, the revision of the draft the
 message was written on. When Hermes accepts the message, the server clears the
-sender's draft for that assistant if it still holds exactly the sent text and
-attachments, or if its revision is at or below `draftBaseRevision`. The second
-rule clears a draft whose final edits were never saved because the person sent
-first. An edit saved from another device after that base keeps the draft.
-Without `draftBaseRevision`, as from older app builds, only the exact-text rule
-applies. Either clear advances the revision with reason `sent`.
+sender's draft for that assistant if it is empty or missing, still holds exactly
+the sent text and attachments, or has a revision at or below `draftBaseRevision`.
+The last rule clears a draft whose final edits were never saved because the
+person sent first. An edit saved from another device after that base keeps the
+draft. Without `draftBaseRevision`, as from older app builds, the base rule does
+not apply. A clear always advances the revision with reason `sent`, even for an
+empty draft, so a save dispatched before the send conflicts instead of restoring
+the sent text.
 
-Clients keep a local copy with its base revision and an unsaved-edits flag, and
-reconcile it the same way after a 409 or a load that shows a different revision:
+Clients keep a local copy with its base revision, a fingerprint of the content at
+that revision, and an unsaved-edits flag. They reconcile it the same way after a
+409 or a load that shows a different revision:
 
 1. A copy without unsaved edits adopts the server draft.
-2. If `sentRevision` is newer than the copy's base, the text was sent from another
-   device: drop the unsaved edits and adopt the server draft. A copy this device
-   sent from, or restored with Discard, keeps its edits, because that clear may be
-   its own send.
-3. Otherwise unsaved edits win. Keep them and save again on the server's revision.
+2. If `sentRevision` is newer than the copy's base and the copy still holds its
+   base content, that content was sent: adopt the server draft.
+3. Otherwise unsaved edits are new work and win, including text typed offline
+   while another device sent the shared draft. Keep them and save again on the
+   server's revision.
 
 A load older than the copy's base is ignored; a 409 is always the current draft.
+A save acknowledgment carries the revision it saved. It is ignored if the copy
+already has a newer base, or if this device's own send from the copy was accepted
+after the save went out and the copy no longer matches what was saved.
 The web client implements this in `src/app/draft-merge.ts` and iOS in
 `Draft.merge` in `Models.swift`. Both save a pending edit at once, instead of
 dropping it, when the person switches assistants or leaves: the web with a
