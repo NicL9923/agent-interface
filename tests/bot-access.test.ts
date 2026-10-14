@@ -458,3 +458,17 @@ describe("private assistant saves and agent traffic", () => {
     for (const leak of ["Midnight Tally", "42"]) expect(after).not.toContain(leak);
   });
 });
+
+describe("private assistant redaction across tools, restarts and failed creation", () => {
+  it("hides any tool detail that names another member's private assistant, whatever the tool", async () => {
+    const s = await setup();
+    s.runtime.conversation = async (botId: string) => ({ botId, activity: { state: "idle" }, approvals: [], attention: [], messages: [
+      { id: "batch", role: "tool", text: "", toolName: "message_agent, web_search", toolCall: { id: "b", name: "message_agent, web_search", status: "completed", arguments: JSON.stringify({ calls: [{ name: "message_agent", arguments: { target: secret, message: "Share the balance" } }] }), result: "Balance 42" } },
+      { id: "search", role: "tool", text: `Searched for ${secretName}`, toolName: "web_search", toolCall: { id: "w", name: "web_search", status: "completed", arguments: JSON.stringify({ query: secretName }), result: "Ledger 42" } },
+      { id: "plain", role: "tool", text: "Weather is fine", toolName: "web_search", toolCall: { id: "p", name: "web_search", status: "completed", arguments: JSON.stringify({ query: "weather" }), result: "Sunny" } },
+    ] });
+    const body = (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member })).body;
+    for (const leak of [secret, secretName, "42", "Share the balance"]) expect(body).not.toContain(leak);
+    expect(body).toContain("Sunny");
+  });
+});

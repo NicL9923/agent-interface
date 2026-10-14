@@ -95,14 +95,18 @@ export async function redactAgents(store: Store, roster: Roster, userId: string)
   const handles = new Set(hidden), labels = new Set(hidden.flatMap(id => [id, ...names.get(id) ?? []]).map(name => name.toLowerCase()));
   const named = (value: unknown) => typeof value === "string" && (handles.has(value) || labels.has(value.toLowerCase()));
   const target = (args?: string) => { try { return (JSON.parse(args ?? "") as { target?: unknown }).target; } catch { return undefined; } };
-  // A handoff whose target cannot be read counts as one to a hidden assistant.
-  const hides = (call: ToolCall) => call.name === "message_agent" && (named(target(call.arguments)) || !target(call.arguments));
+  // Any tool detail mentioning a hidden assistant is hidden, whatever the tool, as in a combined
+  // "message_agent, web_search" batch. A handoff whose target cannot be read counts as hidden too.
+  const mentions = (value?: string) => !!value && (() => { const text = value.toLowerCase(); return [...handles].some(id => text.includes(id.toLowerCase())) || [...labels].some(name => name.length > 2 && text.includes(name)); })();
+  const handoff = (name?: string) => !!name?.split(",").some(part => part.trim() === "message_agent");
+  const hides = (call: ToolCall) => mentions(call.arguments) || mentions(call.result) || mentions(call.error)
+    || handoff(call.name) && (named(target(call.arguments)) || !target(call.arguments));
   const call = (call: ToolCall): ToolCall => hides(call) ? { ...call, arguments: JSON.stringify({ target: "another member's assistant" }), result: undefined, error: undefined } : call;
   return {
     message: <T extends Message>(message: T): T => {
       const envelope = agentEnvelope(message);
       if (envelope && (named(envelope.handle) || named(envelope.name))) return { ...message, text: hiddenText };
-      if (message.toolCall ? hides(message.toolCall) : message.toolName === "message_agent")
+      if (message.toolCall ? hides(message.toolCall) || message.role === "tool" && mentions(message.text) : handoff(message.toolName) || message.role === "tool" && mentions(message.text))
         return { ...message, text: "", ...(message.toolCall ? { toolCall: call(message.toolCall) } : {}) };
       return message;
     },
