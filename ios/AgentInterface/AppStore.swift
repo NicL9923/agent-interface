@@ -301,7 +301,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     do {
       let remote: Draft? = try await api.get("/bots/\(APIClient.component(id))/draft")
       guard selectionGeneration == selectedGeneration else { return }
-      if cached?.dirty != true { draft = remote ?? cached ?? Draft() }
+      draft = loadedDraft(remote, botId: id)
       draftReady = true
       await refreshConversation()
     } catch {
@@ -324,7 +324,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       conversation = value
       conversationCache[id] = value
       if !draftReady {
-        draft = value.draft ?? Draft()
+        draft = loadedDraft(value.draft, botId: id)
         draftReady = true
       }
     } catch is CancellationError {} catch {
@@ -451,21 +451,29 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// arrived. The message may still show up, so its text and attachments go back into the
   /// draft of the assistant it was written for, where the person decides whether to send again.
   func discardUnconfirmedSubmission() {
-    guard let old = pending, !sending else { return }
+    guard let old = pending, !sending, let localKey = key("draft", old.botId) else { return }
+    let open = selectedBotId == old.botId
+    // While the open assistant's draft is still loading, the in-memory draft is not its draft.
+    var target = Self.draft(
+      restoring: old, into: open && draftReady ? draft : read(localKey) ?? Draft())
+    target.dirty = true
+    // Durable first: a dirty local draft wins over any draft read still in flight.
+    save(target, localKey)
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
-    if selectedBotId == old.botId {
-      updateDraft(Self.draft(restoring: old, into: draft))
-    } else if let localKey = key("draft", old.botId) {
-      // Local first, so this works offline. A dirty local draft wins when that assistant opens.
-      var target = Self.draft(restoring: old, into: read(localKey) ?? Draft())
-      target.dirty = true
-      save(target, localKey)
-      guard let api else { return }
-      let snapshot = target
-      Task { let _: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", snapshot, method: "PUT") }
+    if open {
+      if draftReady { updateDraft(target) } else { draft = target }
+    } else if let api {
+      // Best effort: the dirty local draft already wins the next time that assistant opens.
+      Task { let _: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", target, method: "PUT") }
     }
+  }
+  /// The draft to show once a read returns: unsent local edits win over the server's copy.
+  private func loadedDraft(_ remote: Draft?, botId: String) -> Draft {
+    let local: Draft? = read(key("draft", botId))
+    if let local, local.dirty == true { return local }
+    return remote ?? local ?? Draft()
   }
   /// Puts a pending message back in front of whatever the person has typed since.
   static func draft(restoring old: PendingSubmission, into current: Draft) -> Draft {

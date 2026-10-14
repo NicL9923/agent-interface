@@ -412,6 +412,23 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft.text, "Lost message")
     }
 
+    func testDiscardWhileTheAssistantsDraftIsStillLoadingSurvivesTheLateRead() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        UserDefaults.standard.removeObject(forKey: value.key("draft", "bot")!)
+        value.draft = Draft(); value.draftReady = false
+        value.pending = PendingSubmission(requestId: "lost", botId: "bot", text: "Lost message", attachments: [FileRef(id: "a", name: "a.txt", mime: "text/plain")], reviewedInterruption: false)
+        let path = "/api/bots/bot/draft"; server.hold(path)
+        let reopen = Task { await value.select("bot") }
+        try await server.waitForHeld(path)
+        value.discardUnconfirmedSubmission()
+        XCTAssertNil(value.pending)
+        let stored = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(stored?.text, "Lost message", "The recovered text is saved before the read returns")
+        server.release(path); await reopen.value
+        XCTAssertEqual(value.draft.text, "Lost message"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
+        XCTAssertTrue(value.draftReady); XCTAssertTrue(value.canSend)
+    }
+
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-contract-\(UUID().uuidString).txt")
