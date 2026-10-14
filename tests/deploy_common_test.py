@@ -221,6 +221,18 @@ class ToolWiringTests(unittest.TestCase):
                             self.assertEqual(target.id, value.attr, name)
                             self.assertTrue(callable(getattr(deploy_common.Deployment, value.attr, None)), value.attr)
 
+    def test_idle_wait_recognizes_the_guarded_preflights_busy_fence(self):
+        spec = importlib.util.spec_from_file_location("prepare_when_idle", TOOLS / "prepare-when-idle.py")
+        idle = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(idle)
+        source = (TOOLS / "deploy-guarded-app-release.py").read_text()
+        busy = [node.args[1].value for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) == "fence" and ast.unparse(node.args[0]) == "gate['active'] is False and gate['busy'] == []"]
+        self.assertEqual(len(busy), 1)
+        # Only the fence's own line, as a traceback without source would print it.
+        self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + busy[0]))
+        self.assertFalse(idle.BUSY.search("deploy_common.Fence: release serves the configured web build"))
+
     def test_staged_recovery_ships_the_shared_module_its_helper_pins(self):
         spec = importlib.util.spec_from_file_location("stage_recovery", TOOLS / "stage-recovery-tools.py")
         stage = importlib.util.module_from_spec(spec)
