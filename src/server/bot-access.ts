@@ -46,15 +46,14 @@ export class Roster {
   private bots?: Bot[];
   private at = 0;
   private refreshing?: Promise<void>;
-  // Every name an assistant has had, so an old agent message still matches after a rename.
-  private seen = new Map<string, Set<string>>();
-  constructor(private runtime: Pick<Runtime, "listBots">) {}
+  // Every name an assistant has had is stored, so an old agent message still matches after a rename or restart.
+  constructor(private runtime: Pick<Runtime, "listBots">, private store?: Pick<Store, "rememberNames" | "nameHistory">) {}
   note(bots: unknown) {
     // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
     if (!Array.isArray(bots) || !bots.some(bot => bot?.activity !== "disconnected")) return;
     this.bots = bots;
     this.at = Date.now();
-    for (const bot of bots as Bot[]) this.seen.set(bot.id, (this.seen.get(bot.id) ?? new Set()).add(bot.name));
+    this.store?.rememberNames(bots as Bot[]);
   }
   /** After this app creates, renames or deletes an assistant, the next check reads Hermes again. */
   forget() { this.at = 0; }
@@ -79,7 +78,7 @@ export class Roster {
   /** Each assistant's current and earlier names. */
   async names() {
     if (!this.fresh()) await this.refresh();
-    return this.seen;
+    return this.store?.nameHistory() ?? new Map((this.bots ?? []).map(bot => [bot.id, new Set([bot.name])]));
   }
 }
 
@@ -216,7 +215,7 @@ const named = (value: unknown) => {
 };
 
 /** Install after authentication and before any assistant route. */
-export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pick<Runtime, "routines" | "listBots" | "fileBotId">, roster = new Roster(runtime)) {
+export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pick<Runtime, "routines" | "listBots" | "fileBotId">, roster = new Roster(runtime, store)) {
   app.addHook("onRoute", (route) => {
     if (!route.url.startsWith("/api/") || scoped.test(route.url)) return;
     for (const method of [route.method].flat())

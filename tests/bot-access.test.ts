@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
-import { assistantRoutes, installBotAccess } from "../src/server/bot-access.js";
+import { assistantRoutes, installBotAccess, redactAgents, Roster } from "../src/server/bot-access.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import { HermesUpgrades } from "../src/server/upgrades.js";
@@ -470,5 +470,15 @@ describe("private assistant redaction across tools, restarts and failed creation
     const body = (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member })).body;
     for (const leak of [secret, secretName, "42", "Share the balance"]) expect(body).not.toContain(leak);
     expect(body).toContain("Sunny");
+  });
+
+  it("remembers earlier names across a restart", async () => {
+    const s = await setup();
+    await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member });
+    // A later process starts after the rename, with only the new name in Hermes's roster.
+    const restarted = new Roster({ listBots: async () => [{ id: secret, name: "Midnight Tally", model: "test", shared: false, activity: "idle" }] }, s.store);
+    const redact = await redactAgents(s.store, restarted, "local-two");
+    expect(redact.message({ id: "old", role: "user", text: `Message from 🤖 ${secretName}: The ledger balance is 42.` }).text).not.toContain(secretName);
+    expect(redact.message({ id: "new", role: "user", text: "Message from 🤖 Midnight Tally: 42" }).text).not.toContain("Midnight Tally");
   });
 });

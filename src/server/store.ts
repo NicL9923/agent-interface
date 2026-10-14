@@ -73,6 +73,8 @@ const migrations: ((db: DatabaseSync) => void)[] = [
   // owner_id is null while it was visible to everyone.
   db => {
     db.exec("CREATE TABLE bot_visibility_periods(bot_id TEXT NOT NULL,started_at INTEGER NOT NULL,owner_id TEXT,PRIMARY KEY(bot_id,started_at))");
+    // Every name each assistant has had, so a renamed private one stays hidden in old agent messages.
+    db.exec("CREATE TABLE bot_names(bot_id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(bot_id,name))");
   },
 ];
 export const schemaVersion = migrations.length;
@@ -353,6 +355,17 @@ export class Store {
   privateBots(): { botId: string; ownerId: string }[] {
     return this.db.prepare("SELECT bot_id AS botId,owner_id AS ownerId FROM bot_presentation WHERE shared=0 AND owner_id IS NOT NULL").all() as { botId: string; ownerId: string }[];
   }
+  rememberNames(bots: { id: string; name: string }[]) {
+    const insert = this.db.prepare("INSERT OR IGNORE INTO bot_names VALUES(?,?)");
+    for (const bot of bots) if (typeof bot.id === "string" && typeof bot.name === "string") insert.run(bot.id, bot.name);
+  }
+  /** Each assistant's current and earlier names. */
+  nameHistory() {
+    const names = new Map<string, Set<string>>();
+    for (const row of this.db.prepare("SELECT bot_id AS botId,name FROM bot_names").all() as { botId: string; name: string }[])
+      names.set(row.botId, (names.get(row.botId) ?? new Set()).add(row.name));
+    return names;
+  }
   /** Who could see the assistant from each moment on: an owner, or null for everyone. */
   visibilityPeriods(botId: string): { startedAt: number; ownerId: string | null }[] {
     return this.db.prepare("SELECT started_at AS startedAt,owner_id AS ownerId FROM bot_visibility_periods WHERE bot_id=? ORDER BY started_at").all(botId) as { startedAt: number; ownerId: string | null }[];
@@ -448,7 +461,7 @@ export class Store {
       this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
       for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
-      for (const table of ["bot_presentation", "bot_visibility_periods", "drafts", "read_positions", "card_state", "submissions", "approval_attribution", "routine_trials"])
+      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "read_positions", "card_state", "submissions", "approval_attribution", "routine_trials"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.users()) {
