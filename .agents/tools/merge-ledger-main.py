@@ -3,7 +3,7 @@
 
 Every release PR adds its entry at the top of docs/ValidationLedger.md, so two open
 release PRs always conflict there. The resolved ledger is main's, with this branch's
-own entries (headings main lacks) on top in their original order. Any other conflict
+own entries (any main lacks) on top in their original order. Any other conflict
 aborts the merge untouched. Pass --push to push the merge commit.
 """
 import subprocess
@@ -39,15 +39,16 @@ def main():
             git("merge", "--abort")
             raise SystemExit("Conflicts beyond the ledger need review: " + ", ".join(conflicted))
         main_entries = sections(git("show", "origin/main:" + LEDGER).stdout)
-        known = {heading for heading, _ in main_entries}
-        own = [entry for heading, entry in sections(git("show", "HEAD:" + LEDGER).stdout) if heading not in known]
+        # Identity is the entry's text: two releases of one commit on one day share a heading.
+        known = {entry.strip() for _, entry in main_entries}
+        own = [entry for _, entry in sections(git("show", "HEAD:" + LEDGER).stdout) if entry.strip() not in known]
         with open(LEDGER, "w") as output:
             output.write(TITLE + "".join(own + [entry for _, entry in main_entries]))
         git("add", LEDGER)
         git("commit", "--no-edit", "-q")
         print("Merged origin/main; the ledger keeps main's entries with this branch's %d on top" % len(own))
     if "--push" in sys.argv[1:]:
-        git("push", "-q")
+        git("push", "-q", "origin", "HEAD:refs/heads/" + branch)
         print("Pushed " + branch)
 
 
