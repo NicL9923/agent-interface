@@ -17,6 +17,7 @@ private final class NativeMockProtocol: URLProtocol, @unchecked Sendable {
         server.receive(self)
     }
     override func stopLoading() {}
+    func fail(_ error: URLError) { client?.urlProtocol(self, didFailWithError: error) }
     func respond(status: Int, data: Data, headers: [String: String] = [:]) {
         guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "application/json"]) { value, _ in value }) else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -35,6 +36,11 @@ private final class NativeMockServer: @unchecked Sendable {
     private var run = "run-one"
     private var state = "idle"
     private var logoutStatus = 200
+    private var logoutCode: String?
+    private var authConfigStatus = 200
+    private var bootstrapStatus = 200
+    private var bootstrapCode: String?
+    private var offline = false
     private var connected = true
     private var conversationStatus = 200
     private var upgradeResponseStatus = 200
@@ -46,7 +52,13 @@ private final class NativeMockServer: @unchecked Sendable {
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
     var requests: [URLRequest] { lock.withLock { recorded } }
     func interrupt(runId: String) { lock.withLock { run = runId; state = "interrupted" } }
-    func failLogout() { lock.withLock { logoutStatus = 503 } }
+    func failLogout(status: Int = 503, code: String? = nil) { lock.withLock { logoutStatus = status; logoutCode = code } }
+    func failAuthConfig(_ fail: Bool = true) { lock.withLock { authConfigStatus = fail ? 503 : 200 } }
+    /// Answers bootstrap with an error, like the app server's "sign in required" 401.
+    func failBootstrap(status: Int, code: String? = nil) { lock.withLock { bootstrapStatus = status; bootstrapCode = code } }
+    /// Drops every request as if the phone had no network.
+    func setOffline(_ value: Bool) { lock.withLock { offline = value } }
+    func requestCount(_ path: String) -> Int { requests.filter { $0.url?.path == path }.count }
     func disconnect() { lock.withLock { connected = false } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
@@ -63,6 +75,7 @@ private final class NativeMockServer: @unchecked Sendable {
             if heldPaths.contains(path) { held[path] = protocolInstance; return true }
             return false
         }
+        if lock.withLock({ offline }) { protocolInstance.fail(URLError(.notConnectedToInternet)); return }
         if !delay { finish(protocolInstance) }
     }
     func release(_ path: String) {
@@ -95,9 +108,16 @@ private final class NativeMockServer: @unchecked Sendable {
     private func finish(_ protocolInstance: NativeMockProtocol) {
         let request = protocolInstance.request, path = request.url!.path
         var status = 200, data = Self.json(["ok": true])
-        if path == "/api/auth/config" { data = Self.json(["googleClientId": "google", "localDevAuth": false, "nativeAuthVersion": 1]) }
+        if path == "/api/auth/config" {
+            status = lock.withLock { authConfigStatus }
+            data = status == 200 ? Self.json(["googleClientId": "google", "localDevAuth": false, "nativeAuthVersion": 1]) : Self.json(["error": "Synthetic config outage"])
+        }
         else if path == "/api/auth/native/exchange" { data = Self.json(["token": "replacement-session", "expiresAt": "2026-10-07T09:08:21.125Z", "user": ["id": "one", "name": "One", "email": "one@example.test"]]) }
-        else if path == "/api/bootstrap" { data = bootstrapData() }
+        else if path == "/api/bootstrap" {
+            let failure = lock.withLock { (status: bootstrapStatus, code: bootstrapCode) }
+            status = failure.status
+            data = status == 200 ? bootstrapData() : Self.errorBody("Sign in required", code: failure.code)
+        }
         else if path.hasSuffix("/conversation") {
             status = lock.withLock { conversationStatus }
             data = status == 200 ? conversationData() : Self.json(["error": "Synthetic conversation outage"])
@@ -109,7 +129,11 @@ private final class NativeMockServer: @unchecked Sendable {
             data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"]) : Self.json(["error": "Synthetic admission failure"])
         } else if path.hasSuffix("/uploads") { data = Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
-        else if path == "/api/auth/logout" { status = lock.withLock { logoutStatus } }
+        else if path == "/api/auth/logout" {
+            let failure = lock.withLock { (status: logoutStatus, code: logoutCode) }
+            status = failure.status
+            if status != 200 { data = Self.errorBody("Sign in required", code: failure.code) }
+        }
         else if path.hasPrefix("/api/hermes/upgrade") {
             status = lock.withLock { upgradeResponseStatus }
             data = status == 200 ? Self.json(["available": true, "phase": "ready", "current": ["revision": "current"], "candidate": ["revision": "candidate"], "message": "Update checked", "checks": [["id": "compatibility", "label": "Compatibility", "status": "passed"]], "canCheck": true, "canInstall": true, "canRetry": true, "canCancel": false, "canRestartService": true, "operationId": "failed-update", "busyBots": []]) : Self.json(["error": "Synthetic update failure"])
@@ -126,6 +150,9 @@ private final class NativeMockServer: @unchecked Sendable {
             return
         }
         protocolInstance.respond(status: status, data: data)
+    }
+    static func errorBody(_ message: String, code: String?) -> Data {
+        json(code.map { ["error": message, "code": $0] } ?? ["error": message])
     }
     static func json(_ object: Any) -> Data { try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) }
     static func body(_ request: URLRequest) -> Data? {
@@ -155,6 +182,13 @@ private final class NativeMockServer: @unchecked Sendable {
         value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: server.bootstrapData())
         value.selectedBotId = "bot"; value.conversation = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
         value.draft = Draft(text: "Send this", attachments: [], dirty: true); value.draftReady = true
+        return value
+    }
+    /// A store that has only a saved server address, like a fresh launch.
+    private func launchedStore(_ server: NativeMockServer, token: String?) -> AppStore {
+        let value = AppStore(); value.host = server.origin.absoluteString
+        let api = client(server); api.token = token
+        value.makeClient = { _ in api }
         return value
     }
     private func clean(_ server: NativeMockServer, _ store: AppStore? = nil) {
@@ -269,6 +303,148 @@ private final class NativeMockServer: @unchecked Sendable {
             server.release(path); await operation.value
             XCTAssertEqual(value.draft.text, "server draft for two"); XCTAssertNil(value.pending); XCTAssertNil(value.receipt)
         }
+    }
+
+    func testOnlyTheServersSessionExpiredCodeSignsThePersonOut() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.failBootstrap(status: 401)
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.api?.token, "synthetic-native-session")
+        XCTAssertFalse(value.sessionExpired); XCTAssertEqual(value.error, "Sign in required")
+        server.failBootstrap(status: 401, code: "other_failure")
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.api?.token, "synthetic-native-session"); XCTAssertFalse(value.sessionExpired)
+        server.failBootstrap(status: 403, code: "session_expired")
+        await value.refreshBootstrap()
+        XCTAssertFalse(value.sessionExpired, "The code only counts on a 401")
+        server.failBootstrap(status: 401, code: "session_expired")
+        await value.refreshBootstrap()
+        XCTAssertNil(value.api?.token); XCTAssertTrue(value.sessionExpired)
+    }
+
+    func testStoredSignInOpensWithoutAuthConfigAndRetriesAfterAnOutage() async throws {
+        let server = NativeMockServer(), value = launchedStore(server, token: "synthetic-native-session"); defer { clean(server, value) }
+        server.failAuthConfig(); server.setOffline(true)
+        await value.restore(); value.suspend()
+        XCTAssertNotNil(value.api); XCTAssertNil(value.bootstrap); XCTAssertNotNil(value.error)
+        XCTAssertEqual(server.requestCount("/api/auth/config"), 0, "A stored sign-in must not depend on auth config")
+        server.setOffline(false)
+        await value.resume(); value.suspend()
+        XCTAssertEqual(value.bootstrap?.user.id, "one"); XCTAssertEqual(value.selectedBotId, "bot")
+        XCTAssertNil(value.error); XCTAssertFalse(value.restoring)
+        XCTAssertEqual(server.requestCount("/api/auth/config"), 0)
+    }
+
+    func testForegroundResumeOnlyRetriesALaunchThatHasNoBootstrap() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let fresh = AppStore(); await fresh.resume()
+        XCTAssertNil(fresh.api, "Nothing to retry before a server is chosen")
+        value.sessionExpired = true; value.bootstrap = nil
+        let before = server.requests.count
+        await value.resume()
+        XCTAssertEqual(server.requests.count, before, "An expired session needs sign-in, not a retry")
+    }
+
+    func testSignInConfigIsFetchedLazilyAndRecoversAfterAnOutage() async throws {
+        let server = NativeMockServer(), value = launchedStore(server, token: nil); defer { clean(server, value) }
+        server.failAuthConfig()
+        await value.restore()
+        XCTAssertNotNil(value.api); XCTAssertNil(value.authConfig); XCTAssertNotNil(value.error)
+        do { try await value.ensureAuthConfig(); XCTFail("The outage should surface") } catch {}
+        server.failAuthConfig(false)
+        await value.restore()
+        XCTAssertEqual(value.authConfig?.nativeAuthVersion, 1); XCTAssertNil(value.error)
+        let requests = server.requestCount("/api/auth/config")
+        try await value.ensureAuthConfig()
+        XCTAssertEqual(server.requestCount("/api/auth/config"), requests, "A loaded config is reused")
+    }
+
+    func testChangeServerStillWorksWhenLogoutCannotBeConfirmed() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let api = value.api
+        server.failLogout()
+        let confirmed = await value.changeConnection()
+        XCTAssertFalse(confirmed); XCTAssertNotNil(value.api); XCTAssertEqual(api?.token, "synthetic-native-session")
+        let local = await value.changeConnection(localOnly: true)
+        XCTAssertTrue(local); XCTAssertNil(value.api); XCTAssertNil(api?.token); XCTAssertNil(value.bootstrap)
+        XCTAssertTrue(value.error?.contains("stays valid there until it expires") == true)
+    }
+
+    func testChangeServerTreatsAnAlreadyExpiredSessionAsSignedOut() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.failLogout(status: 401, code: "session_expired")
+        let changed = await value.changeConnection()
+        XCTAssertTrue(changed); XCTAssertNil(value.api); XCTAssertNil(value.error)
+    }
+
+    func testDiscardingAnUnconfirmedSendReturnsItsTextToThatAssistantsDraft() async throws {
+        // The draft still holds the text, or the person kept editing, or emptied it.
+        for edit in [nil, "Send this and more", ""] as [String?] {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            server.sendStatus = 503; await value.send()
+            XCTAssertNotNil(value.pending)
+            if let edit { value.draft.text = edit }
+            value.discardUnconfirmedSubmission()
+            XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
+            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
+            XCTAssertEqual(value.draft.text, edit == "Send this and more" ? "Send this and more" : "Send this")
+            try await Task.sleep(for: .milliseconds(800))
+            let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }
+            XCTAssertEqual(saved.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, value.draft.text)
+        }
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.draft.text = "Typed after"
+        value.pending = PendingSubmission(requestId: "lost", botId: "bot", text: "Lost message", attachments: [FileRef(id: "a", name: "a.txt", mime: "text/plain")], reviewedInterruption: false)
+        value.discardUnconfirmedSubmission()
+        XCTAssertEqual(value.draft.text, "Lost message\n\nTyped after"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
+    }
+
+    func testDiscardingAnotherAssistantsUnconfirmedSendWorksOfflineAndLandsInItsDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.pending = PendingSubmission(requestId: "lost", botId: "other", text: "Lost message", attachments: [], reviewedInterruption: false)
+        server.setOffline(true)
+        value.discardUnconfirmedSubmission()
+        XCTAssertNil(value.pending); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
+        let saved = UserDefaults.standard.data(forKey: value.key("draft", "other")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(saved?.text, "Lost message"); XCTAssertEqual(saved?.dirty, true)
+        server.setOffline(false)
+        await value.select("other")
+        XCTAssertEqual(value.draft.text, "Lost message")
+    }
+
+    func testDiscardWhileTheAssistantsDraftIsStillLoadingSurvivesTheLateRead() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        UserDefaults.standard.removeObject(forKey: value.key("draft", "bot")!)
+        value.draft = Draft(); value.draftReady = false
+        value.pending = PendingSubmission(requestId: "lost", botId: "bot", text: "Lost message", attachments: [FileRef(id: "a", name: "a.txt", mime: "text/plain")], reviewedInterruption: false)
+        let path = "/api/bots/bot/draft"; server.hold(path)
+        let reopen = Task { await value.select("bot") }
+        try await server.waitForHeld(path)
+        value.discardUnconfirmedSubmission()
+        XCTAssertNil(value.pending)
+        let stored = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(stored?.text, "Lost message", "The recovered text is saved before the read returns")
+        server.release(path); await reopen.value
+        XCTAssertEqual(value.draft.text, "Lost message"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
+        XCTAssertTrue(value.draftReady); XCTAssertTrue(value.canSend)
+        try await Task.sleep(for: .milliseconds(900))
+        let sync = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == path }
+        XCTAssertEqual(sync.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, "Lost message", "The recovered draft is synced to the server")
+        XCTAssertEqual(value.draft.dirty, false, "A successful sync clears dirty so newer web drafts can load again")
+        let synced = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(synced?.dirty, false)
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!), "The recovery mark clears once the server has the draft")
+    }
+
+    func testALeftoverDirtyDraftIsShownOnLoadButNeverPushedOverTheServersCopy() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let stale = Draft(text: "Old unsent text", attachments: [], dirty: true)
+        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key("draft", "bot")!)
+        value.draftReady = false
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, "Old unsent text"); XCTAssertTrue(value.draftReady)
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }.isEmpty)
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {

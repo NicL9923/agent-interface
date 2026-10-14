@@ -10,6 +10,7 @@ struct ConversationView: View {
   @State private var voiceOpen = false
   @State private var stopConfirm = false
   @State private var retryConfirm = false
+  @State private var discardConfirm = false
   @State private var actionBusy = false
   @State private var visibleMessage: String?
   @State private var restoredBot: String?
@@ -94,6 +95,14 @@ struct ConversationView: View {
     ) {
       Button("Review complete, retry same request") {
         Task { await store.send(reviewedUncertain: true) }
+      }
+    }
+    .confirmationDialog(
+      "The message may still arrive. Its text goes back into the draft, so sending it again could deliver it twice.",
+      isPresented: $discardConfirm, titleVisibility: .visible
+    ) {
+      Button("Discard and keep my text in the draft", role: .destructive) {
+        store.discardUnconfirmedSubmission()
       }
     }
   }
@@ -283,6 +292,9 @@ struct ConversationView: View {
               Button("Open assistant") { Task { await store.select(pending.botId) } }
             }
           }.font(.caption)
+          Button("Discard and keep my text in the draft", role: .destructive) {
+            discardConfirm = true
+          }.font(.caption).disabled(store.sending).accessibilityIdentifier("discardUnconfirmedSend")
         }.padding(10).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
       } else if let receipt = store.receipt,
         receipt.status == "rejected" || receipt.status == "interrupted"

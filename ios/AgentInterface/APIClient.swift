@@ -11,6 +11,10 @@ struct APIError: Error, LocalizedError {
   /// Short technical context, such as the JSON coding path an unreadable response failed at.
   var detail: String? = nil
   var errorDescription: String? { message }
+  /// The code the app server puts on a genuine "sign in required" 401. Other 401s, such as a
+  /// rejected upstream call, are ordinary failures and must not sign the person out.
+  static let sessionExpiredCode = "session_expired"
+  var isSessionExpired: Bool { status == 401 && code == Self.sessionExpiredCode }
 }
 struct SecureToken {
   static let service = "dev.agentinterface.native"
