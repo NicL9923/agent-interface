@@ -257,12 +257,16 @@ with contextlib.redirect_stdout(sys.stderr):
     if not lock.acquire(): raise RuntimeError('A native updater already owns Hermes')
     try:
         ensure_tools_for_sync()
-        pm.sync_venv(explicit=True,project_root=root,evict_incompatible_plugins=False)
+        pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
         publish_launchers(root)
     finally: lock.release()
 print(json.dumps({'ok':True,'state':'synced'}))
 """
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source)], capture=True))
+        # Build exactly the extras qualification built. Left to its default, Hermes d97007c chose
+        # fewer and dropped 38 packages, discord.py among them.
+        descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
+        extras = json.loads(private(descriptor).read_text())["extras"] if descriptor else None
+        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(extras)], capture=True))
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
