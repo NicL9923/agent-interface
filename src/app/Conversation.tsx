@@ -157,7 +157,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
             <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy" role="status">
-              <span className="activity-shimmer">{selected.name} is {action}...</span>
+              <Shimmer text={`${selected.name} is ${action}...`} />
             </div>
           </div>
         )}
@@ -192,6 +192,10 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
       </div>
     </>
   );
+}
+// The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
+function Shimmer({ text }: { text: string }) {
+  return <span className="activity-shimmer">{text}<span className="shimmer-band" aria-hidden="true"><span>{text}</span></span></span>;
 }
 function HistorySkeleton() {
   return <div className="history-skeleton" role="status">

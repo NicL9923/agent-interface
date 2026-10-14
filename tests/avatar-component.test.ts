@@ -79,6 +79,37 @@ describe("avatar animation loop", () => {
     expect(frames.size).toBeGreaterThan(0);
   });
 
+  it("lets a small avatar sleep between frames but keeps a large one on every display refresh", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const tick = async () => {
+        now += 1000 / 60;
+        const queued = [...frames.values()];
+        frames = new Map();
+        await act(async () => queued.forEach((callback) => callback(now)));
+      };
+      await act(async () => root.render(createElement(Avatar, { state: "working", size: 40, name: "Ranch hand" })));
+      // Past the 280 ms silhouette transition, which has its own frames.
+      await advance(0.5);
+      expect(frames.size).toBe(0);
+      const before = svg();
+      await act(async () => { vi.advanceTimersByTime(24); });
+      expect(frames.size).toBe(1);
+      await tick();
+      expect(svg()).not.toBe(before);
+      // Leaving the page must not leave a wake-up behind.
+      act(() => root.unmount());
+      await act(async () => { vi.advanceTimersByTime(100); });
+      expect(frames.size).toBe(0);
+      root = createRoot(container);
+      await render("working");
+      await advance(0.5);
+      expect(frames.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(seasonalChoices)("keeps the $label character visible and still under reduced motion", async ({ family }) => {
     reduceMotion = true;
     await render("thinking", seasonalAvatar(family));

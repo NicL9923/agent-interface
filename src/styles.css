@@ -1283,12 +1283,18 @@ dialog[open]::backdrop {
 /* Compact chat activity and controls. */
 .composer-tools .tool-label { display: none; }
 .composer-tools .send-button { margin-left: auto; flex-shrink: 0; }
-.activity-shimmer { display: inline-block; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.state-thinking .activity-shimmer, .state-working .activity-shimmer, .state-waiting .activity-shimmer {
-  background: linear-gradient(110deg, var(--muted) 25%, var(--ink) 43%, var(--muted) 60%);
-  background-size: 250% 100%; background-clip: text; color: transparent;
-  animation: glass-shimmer 2.8s linear infinite;
+.activity-shimmer { position: relative; display: inline-block; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.shimmer-band { display: none; }
+/* The highlight is a second copy of the text in full ink, seen through a soft-edged window that slides across.
+   The window and the copy move in opposite directions, so the copy stays in place and only transforms animate. */
+.state-thinking .activity-shimmer, .state-working .activity-shimmer, .state-waiting .activity-shimmer { color: var(--muted); }
+.state-thinking .shimmer-band, .state-working .shimmer-band, .state-waiting .shimmer-band {
+  display: block; position: absolute; top: 0; bottom: 0; left: 0; width: 87.5%; overflow: hidden; pointer-events: none;
+  -webkit-mask-image: linear-gradient(110deg, transparent, #000 51%, transparent);
+  mask-image: linear-gradient(110deg, transparent, #000 51%, transparent);
+  animation: glass-shimmer-window 2.8s linear infinite;
 }
+.shimmer-band > span { position: absolute; top: 0; left: 0; width: calc(100% / 0.875); color: var(--ink); animation: glass-shimmer-text 2.8s linear infinite; }
 .tool-calls { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
 .tool-calls > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; list-style: none; }
 .tool-calls > summary::-webkit-details-marker { display: none; }
@@ -1300,9 +1306,10 @@ dialog[open]::backdrop {
 .approval-card .actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .spin { animation: control-spin 1s linear infinite; }
 @keyframes control-spin { to { transform: rotate(360deg); } }
-@keyframes glass-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes glass-shimmer-window { from { transform: translateX(-98.57%); } to { transform: translateX(330%); } }
+@keyframes glass-shimmer-text { from { transform: translateX(86.25%); } to { transform: translateX(-288.75%); } }
 @media (prefers-reduced-motion: reduce) {
-  .activity-shimmer { animation: none !important; background: none !important; color: var(--muted) !important; }
+  .activity-shimmer .shimmer-band { display: none !important; }
   .spin { animation: none; }
 }
 .reasoning-part { margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; background: var(--raised); border-radius: 10px; }

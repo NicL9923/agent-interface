@@ -192,6 +192,10 @@ describe("conversation state", () => {
     expect(container.querySelector(".conversation-activity [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
     expect([...container.querySelectorAll(".chat-header [data-avatar-state], .bot-rail [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
+    // The sweeping highlight is a visual copy of the text, so assistive technology must hear the line once.
+    const highlight = container.querySelector(".activity-shimmer .shimmer-band");
+    expect(highlight?.getAttribute("aria-hidden")).toBe("true");
+    expect(highlight?.textContent).toBe("Shared is running terminal...");
     const textarea = container.querySelector("textarea")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
