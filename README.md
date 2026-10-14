@@ -27,11 +27,13 @@ also controls reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. Hermes validates support for the selected model.
 
 An assistant is either shared with the household or personal. A personal assistant
-is personalized, not private: everyone can open it, chat with it and use its memory
-and logins. Only its owner can change its details, model, visibility, tools, skills,
-reasoning, speed, avatar or routines, or delete it. Home previews, Today,
-notifications, search, automations, routines and group chats show it only to its
-owner.
+is private to its owner in WildBots: nobody else sees it in lists, Today, search,
+notifications, automations, routines or group chats, or can open it. Anyone may make
+a shared assistant personal after confirming it will disappear for everyone else;
+only its owner can share it again. Personal assistants created before owners were
+recorded stay visible to everyone. WildBots hides a personal assistant, but the
+Hermes dashboard is household-wide, so anyone with dashboard access can still reach
+its memory and logins.
 
 Web Settings > Notifications, or the same section in iOS Preferences, shows whether this account has notifications enabled
 on the current device. Turn the switch on or off there. A new browser asks once

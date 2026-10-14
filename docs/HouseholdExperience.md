@@ -4,6 +4,22 @@ The web and native iOS clients add a Today overview, voice messages, editable
 Hermes memory, interactive replies and routine recipes. They use the existing
 household sign-in and canonical Hermes conversations.
 
+## Personal assistants
+
+A personal assistant is private to its owner in WildBots. Nobody else sees it in
+the assistant list, Today, search, saved items, automations, routines,
+notifications or group chats, or can open it. A group that includes it exists
+only for its owner. Shared assistants, and personal ones created before owners
+were recorded, stay visible to everyone.
+
+Anyone may make a shared assistant personal. Both clients first confirm that it
+will disappear for the rest of the household. Only its owner can share it again.
+Someone with that assistant open returns home with a short message.
+
+WildBots hides the assistant; Hermes does not. The Hermes dashboard is
+household-wide, so anyone with dashboard access can still reach its profile's
+memory and logins.
+
 ## Today
 
 Open Today in the assistant navigation. It shows pending approvals and questions,
@@ -45,8 +61,9 @@ native tool changes it first, your edits stay available for review instead of
 overwriting the newer memory. Hermes's content checks, character limits and
 disabled-memory settings still apply.
 
-The profile label describes the real scope. Personal assistant organization does
-not isolate household data. Existing Hermes conversations retain their original
+The profile label describes the real scope. WildBots shows a personal
+assistant's memory only to its owner, but anyone with Hermes dashboard access can
+still read and change it. Existing Hermes conversations retain their original
 memory snapshot until Hermes starts a new session. Saving a memory edit does not
 rewrite a conversation's current context.
 
@@ -78,7 +95,8 @@ iOS opens the system event editor, where you choose whether to save.
 ## Routine recipes and trials
 
 Morning brief, weekly meal plan and VPS health digest presets fill the existing
-routine editor. New recipes start paused. Choose notification recipients and
+routine editor. New recipes start paused. Choose notification recipients; a
+personal assistant's results reach only its owner. Then
 preview the schedule before enabling it. The preview reports the actual Hermes
 profile timezone and its next three runs, or the one scheduled run for a one-shot.
 Presets use connected sources and do not authorize purchases or server changes.
