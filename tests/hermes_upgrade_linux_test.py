@@ -511,6 +511,17 @@ class PlatformTests(unittest.TestCase):
         with self.assertRaises((subprocess.CalledProcessError, RuntimeError)): self.platform.rollback()
         self.assertNotEqual(self.platform.load()["phase"], "restored")
 
+    def test_rollback_rebuilds_a_lost_object_store_and_clears_stale_git_metadata(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        shutil.rmtree(self.source / ".git/objects")
+        (self.source / ".git/index.lock").write_text("stale")
+        self.platform.rollback()
+        self.assertFalse((self.source / ".git/index.lock").exists())
+        self.assertEqual(self.platform.source_state()[0], self.old)
+        # Every index blob reads back, including the repair's staged addition, which is in no commit.
+        self.assertIn("new approved regression", self.git("diff", "--cached"))
+        self.git("fsck", "--no-dangling", "--no-reflogs")
+
     def test_dependency_change_blocks_before_source_cutover(self):
         self.platform.quiescence(); self.platform.backup()
         (self.target / "uv.lock").write_text("new dependencies")

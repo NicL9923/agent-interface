@@ -537,8 +537,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
             if digest(private(self.backup_dir / name)) != expected: raise RuntimeError("Cold recovery archive integrity failed before restoring")
         self.control("stop")
         if self.source.exists():
-            for path in [*self.source.iterdir(), *(self.objects.parent.iterdir() if self.objects.is_dir() else ())]:
-                if path in (self.objects, self.objects.parent): continue
+            git_dir = self.objects.parent
+            keep_git = git_dir.is_dir() and not git_dir.is_symlink()
+            for path in [*self.source.iterdir(), *(git_dir.iterdir() if keep_git else ())]:
+                if path == self.objects or path == git_dir and keep_git: continue
                 if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
                 else: path.unlink()
         self.extract("source.tar.gz", self.source.parent)
@@ -570,15 +572,30 @@ print(json.dumps({'ok':True,'state':'synced'}))
         store can lose objects; the staged repository holds the baseline's full history."""
         offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
         check = ["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", "--no-walk", revision]
-        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180).returncode == 0: return
-        for name in ("pack", "info"): (self.objects / name).mkdir(parents=True, exist_ok=True)
-        with subprocess.Popen(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"], stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline) as packer:
-            packer.stdin.write((revision + "\n").encode()); packer.stdin.close()
-            subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=packer.stdout,
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=900)
-            if packer.wait(timeout=60): raise RuntimeError("The staged repository cannot supply the baseline's objects")
-        subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180).returncode != 0:
+            for name in ("pack", "info"): (self.objects / name).mkdir(parents=True, exist_ok=True)
+            packer = subprocess.Popen(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+            try:
+                packer.stdin.write((revision + "\n").encode()); packer.stdin.close()
+                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=packer.stdout,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=900)
+                if packer.wait(timeout=60): raise RuntimeError("The staged repository cannot supply the baseline's objects")
+            finally:
+                if packer.poll() is None: packer.kill(); packer.wait(timeout=10)
+                packer.stdout.close()
+            subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+        # The repair's staged additions are in no commit. Their blobs equal the archived working
+        # files, because the repair is applied to the index and working tree together.
+        entries = [row.partition(b"\t") for row in subprocess.check_output(["git", "-C", str(self.source), "ls-files", "-s", "-z"],
+            env=offline, timeout=180).split(b"\0") if row]
+        entries = [(meta.split()[1].decode(), path.decode()) for meta, _, path in entries if not meta.startswith(b"160000")]
+        found = subprocess.run(["git", "-C", str(self.source), "cat-file", "--batch-check=%(objectname)"], input="".join(oid + "\n" for oid, _ in entries).encode(),
+            capture_output=True, env=offline, check=True, timeout=180).stdout.decode().splitlines()
+        for (oid, path), line in zip(entries, found, strict=True):
+            if line != oid + " missing": continue
+            if self.git(self.source, "hash-object", "-w", "--", path).strip() != oid:
+                raise RuntimeError("A staged repair file is missing from Git and its working copy differs: " + path)
 
     def recovery_guard(self):
         record = self.load()
