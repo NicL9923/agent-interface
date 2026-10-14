@@ -565,7 +565,8 @@ export async function createApp(
           : "application/octet-stream",
       );
     // Stream so one large artifact never sits in this process's memory.
-    return reply.send(Readable.from(file.body, { objectMode: false }));
+    // Fastify destroys this when the person disconnects, which cancels the Hermes read.
+    return reply.send(Readable.fromWeb(file.body as import("node:stream/web").ReadableStream<Uint8Array>));
   });
   for (const kind of ["tools", "skills"] as const) {
     app.get(`/api/bots/:id/${kind}`, async (req) => {

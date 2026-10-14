@@ -80,7 +80,7 @@ function runtimeDouble() {
     approve: async () => {},
     upload: async () => ({ id: "file", name: "test", mime: "text/plain" }),
     download: async () => ({
-      body: [Buffer.from("hello")],
+      body: new Blob(["hello"]).stream(),
       name: "test",
       mime: "text/plain",
     }),
@@ -618,7 +618,7 @@ it("streams downloads under the shared cap and explains a file that is too large
   fake.runtime.download = async (_id, maxBytes) => {
     limits.push(maxBytes);
     if (limits.length > 1) throw Object.assign(new Error("huge.zip is larger than 100 MB, the most this app opens."), { statusCode: 502, code: "file_too_large", expose: true });
-    return { name: "notes.txt", mime: "text/plain", size: 11, body: (async function* () { yield Buffer.from("hello "); yield Buffer.from("world"); })() };
+    return { name: "notes.txt", mime: "text/plain", size: 11, body: new Blob(["hello ", "world"]).stream() };
   };
   const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fake.runtime, { background: false });
   const headers = await login(app);

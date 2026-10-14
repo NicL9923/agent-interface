@@ -346,7 +346,8 @@ export type DownloadedFile = {
   name: string;
   mime: string;
   size?: number;
-  body: AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+  // A web stream, so cancelling it reaches the source instead of waiting on a pending read.
+  body: ReadableStream<Uint8Array>;
 };
 export const defaultPreferences: Preferences = {
   presentation: "simple",

@@ -59,8 +59,8 @@ When Hermes rejects this server's own credential, the server returns 502 with
 401 or 403. The person is still signed in; the self-hoster must update the
 server's Hermes token.
 
-`GET /api/files/:id` streams the file and sends `Content-Length` when Hermes reports
-one. A file over 100 MB returns 502 with `code: "file_too_large"` and a message
+`GET /api/files/:id` streams the file. It sends `Content-Length` only when Hermes
+reports one for an uncompressed body, and the cap counts decoded bytes. A file over 100 MB returns 502 with `code: "file_too_large"` and a message
 to show. If Hermes understated the length, the transfer stops at the cap instead,
 so treat a truncated body as a failed download.
 

@@ -751,13 +751,18 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async download(id,maxBytes){
       const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);
       const tooLarge=()=>Object.assign(new Error(`${file.name} is larger than ${formatBytes(maxBytes)}, the most this app opens. Ask the assistant for a smaller file.`),{statusCode:502,code:'file_too_large',expose:true});
-      const declared=Number(response.headers.get('content-length')??NaN);
+      // fetch decodes a compressed body, so the declared length counts encoded bytes.
+      // Trust it only for an unencoded body; the cap always counts what is sent on.
+      const encoding=response.headers.get('content-encoding');
+      const declared=!encoding||encoding==='identity'?Number(response.headers.get('content-length')??NaN):NaN;
       if(declared>maxBytes){await response.body?.cancel();throw tooLarge();}
       if(!response.body)throw new Error('Hermes returned no file content.');
-      const source=response.body as unknown as AsyncIterable<Uint8Array>;
-      // A missing or understated length still cannot carry more than the cap.
-      async function* capped(){let size=0;for await(const chunk of source){size+=chunk.byteLength;if(size>maxBytes)throw tooLarge();yield chunk;}}
-      return {name:file.name,mime:file.mime,...(Number.isSafeInteger(declared)?{size:declared}:{}),body:capped()};
+      let size=0;
+      // Cancelling the result, as when the person disconnects, cancels the Hermes read.
+      const body=response.body.pipeThrough(new TransformStream<Uint8Array,Uint8Array>({transform(chunk,controller){
+        size+=chunk.byteLength;if(size>maxBytes)controller.error(tooLarge());else controller.enqueue(chunk);
+      }}));
+      return {name:file.name,mime:file.mime,...(Number.isSafeInteger(declared)?{size:declared}:{}),body};
     },
     async transcribeVoice(botId, input) {
       await open(botId);
