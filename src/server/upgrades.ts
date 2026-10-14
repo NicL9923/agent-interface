@@ -1,12 +1,32 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
 import type { UpgradeControlAction, UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "../shared/upgrades.js";
 import type { Config } from "./config.js";
 
+type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
+// The worker keeps its own log once it runs. Output from a start that fails before then lands in
+// a new private launch log per attempt, so a retry never erases the failure it follows.
+const LAUNCH_LOGS_KEPT = 10;
+export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
+  script = resolve("scripts/hermes-upgrade-worker.py")) {
+  const directory = settings.stateDirectory;
+  const logs = readdirSync(directory).filter(name => /^worker-launch-.+\.log$/.test(name))
+    .map(name => ({ name, at: lstatSync(join(directory, name)).mtimeMs })).sort((a, b) => b.at - a.at);
+  for (const { name } of logs.slice(LAUNCH_LOGS_KEPT - 1)) rmSync(join(directory, name), { force: true });
+  // Exclusive creation never follows or reuses an existing path.
+  const log = openSync(join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`), "wx", 0o600);
+  try {
+    return spawn(settings.python, [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
+      "--action", args.action, "--operation-id", args.operationId],
+    { detached: true, stdio: ["ignore", log, log], env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "C.UTF-8" } });
+  } finally {
+    closeSync(log);
+  }
+}
 const phases = ["idle", "checking", "qualifying", "ready", "installing", "verifying", "succeeded", "blocked", "failed", "rolled_back", "recovering", "cancelled"] as const;
 const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional() });
 const stateSchema = z.object({
@@ -37,10 +57,7 @@ export class HermesUpgrades {
   private serial: Promise<unknown> = Promise.resolve();
   constructor(private config: Config, private runtime: Runtime,
     private launch: (args: { action: "check" | "install" | UpgradeControlAction; operationId: string }) => void = args => {
-      const settings = this.config.hermesUpgrade!;
-      const child = spawn(settings.python, [resolve("scripts/hermes-upgrade-worker.py"), "--config", settings.workerConfig,
-        "--state-dir", settings.stateDirectory, "--action", args.action, "--operation-id", args.operationId],
-      { detached: true, stdio: "ignore", env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "C.UTF-8" } });
+      const child = launchWorker(this.config.hermesUpgrade!, args);
       child.on("error", () => {
         const state = this.read();
         if (state.operationId === args.operationId) this.save({ ...state, phase: "failed", message: "The upgrade worker could not start. Ask the installer to check its configuration.", error: "worker_start_failed" });
