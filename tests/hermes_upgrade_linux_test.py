@@ -347,11 +347,20 @@ class PlatformTests(unittest.TestCase):
         with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
             self.platform.backup()
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
-        # Room for the archives alone is not enough: the candidate's objects and install count too.
+        # Each allowance counts: objects twice (imported, then archived) and the install, all checked
+        # before any object is imported.
         archives = self.platform.readable(self.source) + self.platform.readable(self.home, excluded=self.source)
-        usage.free = reserve + archives + 1
-        with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about"):
-            self.platform.backup()
+        objects = linux.tree_bytes(self.target / ".git")
+        install = linux.tree_bytes(self.target, excluded=self.target / ".git") + linux.tree_bytes(self.stage / "pm-home/installs")
+        self.assertGreater(install, 0)
+        imported = []
+        self.platform.materialize_candidate = lambda: imported.append(True)
+        for short in (archives + objects + install, archives + 2 * objects):
+            usage.free = reserve + short
+            with self.subTest(free=usage.free), patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about"):
+                self.platform.backup()
+        self.assertEqual(imported, [])
+        self.assertEqual(self.states.read_bytes(), before)
         self.assertEqual(self.states.read_bytes(), before)
         self.assertEqual(self.platform.load()["phase"], "quiescent")
 
@@ -365,6 +374,22 @@ class PlatformTests(unittest.TestCase):
             self.platform.backup()
         units = json.loads(self.states.read_text())
         self.assertEqual({units[name]["ActiveState"] for name in ("gateway.service", "dashboard.service")}, {"active"})
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_space_is_checked_on_both_filesystems_when_staging_is_separate(self):
+        self.platform.quiescence()
+        real_stat = os.stat
+        def separate(path, *args, **kwargs):
+            value = real_stat(path, *args, **kwargs)
+            if Path(path) == self.home:
+                return os.stat_result((value.st_mode, value.st_ino, value.st_dev + 1, *value[3:10]))
+            return value
+        roomy = type("Usage", (), {"free": 10 ** 15, "total": 10 ** 15, "used": 0})()
+        tight = type("Usage", (), {"free": 1024, "total": 10 ** 15, "used": 0})()
+        usage = lambda location: tight if Path(location) == self.home else roomy
+        with patch.object(linux.os, "stat", separate), patch.object(linux.shutil, "disk_usage", usage), \
+                self.assertRaisesRegex(RuntimeError, "needs about .* free at " + str(self.home)):
+            self.platform.backup()
         self.assertEqual(self.platform.load()["phase"], "quiescent")
 
     def test_a_failed_phase_write_right_after_stopping_still_restarts_hermes(self):

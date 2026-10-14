@@ -352,16 +352,20 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.gateway(draining=True)
         # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
         # room, before anything is written: on Oct 13, 2026 a full disk stopped a backup mid-archive.
-        # The budget covers both archives, the candidate's objects, its checkout and dependency
-        # generation as built in staging, plus a reserve for Hermes's own writes. It errs high.
+        # The budget errs high. Candidate objects land in the live repository and then in the source
+        # archive, so they count twice; the checkout and dependency generation, as built in staging,
+        # land in the live home; a reserve covers Hermes's own writes. Archives and the temporary
+        # object pack use the staging filesystem, which may differ from the live one.
         archives = self.readable(self.source) + self.readable(self.home, excluded=self.source)
         objects = tree_bytes(self.target / ".git")
         install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
-        needed = archives + objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
-        free = shutil.disk_usage(self.stage).free
-        if free < needed:
-            raise RuntimeError("The update needs about %d GB free and only %d GB is free. Free space on the Hermes host before updating"
-                               % (-(-needed // 1024 ** 3), free // 1024 ** 3))
+        staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
+        for location, needed in budgets.items():
+            free = shutil.disk_usage(location).free
+            if free < needed:
+                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
+                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
         self.materialize_candidate()
         self.gateway(draining=True)
         try:
