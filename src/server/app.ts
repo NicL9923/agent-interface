@@ -19,7 +19,7 @@ import type {
 } from "../shared/types.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
-import { installAuth, signedIn } from "./auth.js";
+import { installAuth, signedIn, stillSignedIn } from "./auth.js";
 import { canChange, installBotAccess } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
@@ -369,6 +369,62 @@ export async function createApp(
         params(req).id,
       ),
     };
+  });
+  // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
+  // and assistant access are the conversation read's own hooks; each notice rechecks the session.
+  const watchers = new Map<string, Set<() => void>>();
+  const streams = new Set<() => void>();
+  // The app's own conversation writes notify at once, before Hermes reports their effect.
+  const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId"]
+    .map(path => `POST /api/bots/:id/${path}`));
+  app.addHook("onResponse", async (req, reply) => {
+    if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
+      for (const changed of watchers.get(params(req).id) ?? []) changed();
+  });
+  app.addHook("preClose", async () => { for (const end of streams) end(); });
+  app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
+    const botId = id.parse(params(req).id);
+    reply.hijack();
+    const response = reply.raw;
+    // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
+    response.writeHead(200, {
+      ...reply.getHeaders() as Record<string, string | number | string[]>,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      // Caddy's encode handler would hold notices in its compressor; it skips an encoded body.
+      "Content-Encoding": "identity",
+      "X-Accel-Buffering": "no",
+      // An ended stream's connection is never reused, so shutdown need not wait for it.
+      "Connection": "close",
+    });
+    let last = 0, ended = false, pending: ReturnType<typeof setTimeout> | undefined;
+    const send = (text: string) => {
+      if (!stillSignedIn(store, config, req)) end();
+      else if (!ended) response.write(text);
+    };
+    // A streamed reply changes on every token. Notices go at most once a second.
+    const changed = () => {
+      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); send("data: change\n\n"); },
+        Math.max(0, last + 1000 - Date.now()));
+    };
+    const listeners = watchers.get(botId) ?? new Set();
+    watchers.set(botId, listeners.add(changed));
+    const unwatch = runtime.watch?.(botId, changed);
+    // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
+    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
+    function end() {
+      if (ended) return;
+      ended = true;
+      unwatch?.();
+      listeners.delete(changed);
+      if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+      clearTimeout(pending);
+      clearInterval(heartbeat);
+      streams.delete(end);
+      response.end();
+    }
+    streams.add(end);
+    response.on("close", end);
+    response.write("retry: 3000\n\n");
   });
   const submit = async (req: FastifyRequest, explicitSteering = false) => {
     const body = z

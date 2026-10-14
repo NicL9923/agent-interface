@@ -17,6 +17,7 @@ function runtimeDouble(calls: string[]) {
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }),
     routines: async () => [{ id: "r-mine", botId: "mine", name: "Mine", prompt: "Private prompt", schedule: "0 8 * * *", enabled: true }, { id: "r-family", botId: "family", name: "Family", prompt: "Dinner", schedule: "0 17 * * *", enabled: true }],
     listBots: async () => ["mine", "family", "legacy"].map(id => ({ id, name: id, model: "test", shared: id === "family", activity: "idle" })),
+    watch: () => () => {},
     close: async () => {},
   };
   return new Proxy(fixed, {
@@ -53,7 +54,8 @@ describe("assistant ownership", () => {
       const [method, url] = route.split(" ") as ["GET", string];
       expect(s.app.hasRoute({ method, url }), `${route} is listed but not registered`).toBe(true);
       s.calls.length = 0;
-      const response = await s.app.inject({ ...request(route, "mine"), headers: s.member });
+      // A change stream never ends, so only its status is read.
+      const response = await s.app.inject({ ...request(route, "mine"), headers: s.member, payloadAsStream: route.endsWith("/events") });
       if (access === "owner") {
         expect([route, response.statusCode, response.json().code]).toEqual([route, 403, "owner_only"]);
         expect(response.json().error).toBe("Only Local member one can do this with their personal assistant.");

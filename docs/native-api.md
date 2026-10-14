@@ -64,6 +64,11 @@ reports one for an uncompressed body, and the cap counts decoded bytes. A file o
 to show. If Hermes understated the length, the transfer stops at the cap instead,
 so treat a truncated body as a failed download.
 
+`GET /api/bots/:id/events` is a server-sent event stream for readers of
+`GET /api/bots/:id/conversation`: each `change` message means the
+conversation may have changed, so refetch it, and refetch after any reconnect.
+It sends a `ping` event every 25 seconds and ends when the session does.
+
 Only the owner of a personal assistant can change, delete or re-avatar it, change
 its tools, skills or inference settings, or read its search history and routine
 results. Anyone else receives 403 with `code: "owner_only"` and an explanation to

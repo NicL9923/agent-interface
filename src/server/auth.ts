@@ -215,6 +215,13 @@ export async function installAuth(
     return { ok: true };
   });
 }
+/** Whether the session that signed this request in is still valid, for a response that outlives the sign-in check. */
+export function stillSignedIn(store: Store, config: Config, req: FastifyRequest): boolean {
+  const session = req.nativeSessionHash ? store.getNativeSession(req.nativeSessionHash)
+    : req.cookies.session ? store.getSession(hash(req.cookies.session)) : undefined;
+  const user = session && session.userId === req.user?.id ? store.getUser(session.userId) : undefined;
+  return !!user && allowedIdentity(config, user);
+}
 export function signedIn(req: FastifyRequest): User {
   if (!req.user) throw new Error("Authentication hook was not installed");
   return req.user;

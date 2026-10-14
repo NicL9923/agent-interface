@@ -24,6 +24,7 @@ export const botRoutes: Readonly<Record<string, BotAccess>> = {
   "GET /api/bots/:id/skills": "household",
   "PUT /api/bots/:id/skills": "owner",
   "GET /api/bots/:id/conversation": "household",
+  "GET /api/bots/:id/events": "household",
   "POST /api/bots/:id/messages": "household",
   "POST /api/bots/:id/steer": "household",
   "POST /api/bots/:id/stop": "household",
