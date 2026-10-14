@@ -325,6 +325,8 @@ export async function createApp(
   app.delete("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
     await runtime.deleteBot(params(req).id);
+    // A new assistant that reuses this ID starts with no owner, visibility or per-person state.
+    store.forgetBot(params(req).id);
     return { ok: true };
   });
   app.put("/api/bots/:id/avatar", async (req) => {

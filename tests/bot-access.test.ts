@@ -193,4 +193,20 @@ describe("private assistants", () => {
     expect(s.store.presentation(secret)).toEqual({ shared: true, ownerId: undefined, avatar: undefined });
     expect(await listed(s.member)).toEqual([secret, "family", "legacy"]);
   });
+
+  it("forgets the owner and each person's state when an assistant is deleted", async () => {
+    const s = await setup();
+    seedMemberHistory(s.store);
+    s.store.saveCardState("local-one", secret, "m1", "card", { checkedIds: ["a"], notes: {} });
+    s.store.saveItem("local-one", { kind: "session", botId: secret, sessionId: "session", title: "Ledger notes" });
+    expect((await s.app.inject({ method: "DELETE", url: `/api/bots/${secret}`, headers: s.owner })).statusCode).toBe(200);
+    expect(s.calls).toContain("deleteBot");
+    expect(s.store.presentation(secret)).toEqual({});
+    expect(s.store.personal("drafts", "local-two", secret)).toBeNull();
+    expect(s.store.cardState("local-one", secret, "m1", "card")).toEqual({ checkedIds: [], notes: {} });
+    expect(s.store.savedItems("local-one")).toEqual([]);
+    expect(s.store.savedItems("local-two").map(item => item.botId)).toEqual(["family"]);
+    expect(s.store.preferences("local-two")).toMatchObject({ favorites: ["family"], followBots: [], sections: [{ botIds: ["family"] }] });
+    expect(s.store.preferences("local-two").defaultBotId).toBeUndefined();
+  });
 });

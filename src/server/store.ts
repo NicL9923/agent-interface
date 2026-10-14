@@ -347,6 +347,22 @@ export class Store {
             : null,
       );
   }
+  /** Removes what this app keeps about a deleted assistant, so a new one reusing its ID starts clean. */
+  forgetBot(botId: string) {
+    this.transaction(() => {
+      for (const table of ["bot_presentation", "drafts", "read_positions", "card_state"])
+        this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
+      this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
+      for (const user of this.users()) {
+        const value = this.preferences(user.id);
+        const kept = (id: string) => id !== botId;
+        const next = { ...value, favorites: value.favorites.filter(kept), followBots: value.followBots.filter(kept),
+          sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(kept) })),
+          defaultBotId: value.defaultBotId === botId ? undefined : value.defaultBotId };
+        if (JSON.stringify(next) !== JSON.stringify(value)) this.savePreferences(user.id, next);
+      }
+    });
+  }
   intent(input: Submission): {
     created: boolean;
     receipt: SubmissionReceipt;

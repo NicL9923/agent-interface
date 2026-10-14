@@ -64,13 +64,27 @@ reports one for an uncompressed body, and the cap counts decoded bytes. A file o
 to show. If Hermes understated the length, the transfer stops at the cap instead,
 so treat a truncated body as a failed download.
 
-Only the owner of a personal assistant can change, delete or re-avatar it, change
-its tools, skills or inference settings, or read its search history and routine
-results. Anyone else receives 403 with `code: "owner_only"` and an explanation to
-show. Its routines follow the same rule: `GET /api/routines` omits them for anyone
-else, routine-ID routes return 404 for them, and creating, moving or previewing a
-routine on that assistant returns 403 `owner_only`. Shared assistants and personal assistants without a recorded owner accept
-every household member.
+A personal assistant with a recorded owner is private to that owner. For anyone
+else it does not exist: lists such as `/api/bots`, bootstrap, Today, search, saved
+items, automations, routines and group chats leave it out, and every route that
+names it answers 404 with `code: "assistant_not_found"`. That covers every
+`/api/bots/:id` route and any `botId` or `profile` in a request body or query.
+Routine-ID routes for its routines answer 404 `Routine not found`. A group chat
+that includes it exists only for its owner. Bootstrap preferences drop it from
+favorites, sections, followed assistants and the default assistant. Treat a 404
+for the open assistant as "no longer available": refresh bootstrap and leave
+that conversation. Shared assistants and personal assistants without a recorded
+owner stay open to every household member, who may also change them.
+
+`PATCH /api/bots/:id` with `"shared": false` on an assistant everyone can see
+makes it the caller's private assistant. The request needs
+`"confirmPrivate": true`, sent after the person confirms that it will disappear
+for the rest of the household. Without it the server returns 409 with
+`code: "private_confirmation_required"` and changes nothing. Only its owner can
+reach a private assistant to share it again; sharing clears the recorded owner.
+`DELETE /api/bots/:id` also removes its owner, visibility and each person's
+drafts, read positions, reply choices, saved items and preference references,
+so a new assistant reusing the ID starts clean.
 
 Browser APIs continue to require their HttpOnly session cookie, exact app Origin
 for writes, and CSRF token for authenticated writes. A bearer request carrying
@@ -132,7 +146,9 @@ An Xcode debug app and TestFlight app that need different environments should
 connect to hosts configured for those environments.
 
 APNs and Web Push share the durable notification outbox and existing rules for
-run participants, routine recipients, and bot followers. Each endpoint records
+run participants, routine recipients, and bot followers. A private assistant's
+notifications reach only its owner, including any queued, held for quiet hours or
+batched into a digest before it became private. Each endpoint records
 delivery independently; retrying a failed endpoint does not repeat successful
 deliveries. No registered endpoint keeps an event pending. Native devices are
 removed when their native session expires or APNs reports an invalid token.
