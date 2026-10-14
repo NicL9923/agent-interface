@@ -43,6 +43,7 @@ private final class NativeMockServer: @unchecked Sendable {
     private var offline = false
     private var connected = true
     private var conversationStatus = 200
+    private var botHidden = false
     private var upgradeResponseStatus = 200
     private var etags = false
     private var forcedNotModified = 0
@@ -61,6 +62,8 @@ private final class NativeMockServer: @unchecked Sendable {
     func requestCount(_ path: String) -> Int { requests.filter { $0.url?.path == path }.count }
     func disconnect() { lock.withLock { connected = false } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
+    /// Another member made "bot" their personal assistant: it leaves the roster and its routes answer 404.
+    func hideBot() { lock.withLock { botHidden = true } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
     /// Mirrors the server: GET JSON carries a weak ETag, and a matching If-None-Match gets an empty 304.
@@ -92,10 +95,11 @@ private final class NativeMockServer: @unchecked Sendable {
         throw URLError(.timedOut)
     }
     func bootstrapData() -> Data {
-        let isConnected = lock.withLock { connected }
+        let (isConnected, hidden) = lock.withLock { (connected, botHidden) }
+        let family: [String: Any] = ["id": "family", "name": "Family", "model": "test", "shared": true, "activity": "idle"]
         return Self.json(["user": ["id": user, "name": user, "email": "\(user)@example.test", "picture": NSNull()],
                    "household": [], "preferences": ["presentation": "simple", "theme": "system", "favorites": [], "sections": [], "followBots": []],
-                   "bots": isConnected ? [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": "idle"]] : [],
+                   "bots": !isConnected ? [] : hidden ? [family] : [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": "idle"]],
                    "capabilities": ["uploads": ["supported": true], "chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
                    "connection": ["connected": isConnected], "csrfToken": NSNull()])
     }
@@ -118,6 +122,7 @@ private final class NativeMockServer: @unchecked Sendable {
             status = failure.status
             data = status == 200 ? bootstrapData() : Self.errorBody("Sign in required", code: failure.code)
         }
+        else if path.hasPrefix("/api/bots/bot/") && lock.withLock({ botHidden }) { status = 404; data = Self.errorBody("Assistant not found", code: "assistant_not_found") }
         else if path.hasSuffix("/conversation") {
             status = lock.withLock { conversationStatus }
             data = status == 200 ? conversationData() : Self.json(["error": "Synthetic conversation outage"])
@@ -239,6 +244,49 @@ private final class NativeMockServer: @unchecked Sendable {
         let replacement: TokenExchange = try await api.publicWrite("/auth/native/exchange", ["code": "one-time", "state": "state", "codeVerifier": "verifier"])
         XCTAssertEqual(replacement.token, "replacement-session")
         XCTAssertNil(server.requests.last?.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testAnAssistantThatBecomesSomeoneElsesPersonalOneReturnsHomeAndStopsAsking() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.hideBot()
+        await value.refreshConversation()
+        XCTAssertNil(value.selectedBotId); XCTAssertNil(value.conversation); XCTAssertEqual(value.leftBotId, "bot")
+        XCTAssertEqual(value.notice, "That assistant is no longer available to you.")
+        XCTAssertNil(value.error); XCTAssertFalse(value.appUnavailable)
+        await value.refreshBootstrap()
+        XCTAssertNil(value.selectedBotId, "home stays open instead of opening another assistant")
+        let reads = server.requestCount("/api/bots/bot/conversation")
+        await value.refreshConversation()
+        XCTAssertEqual(server.requestCount("/api/bots/bot/conversation"), reads)
+        await value.select("family")
+        XCTAssertNil(value.notice)
+    }
+
+    func testTheRosterDroppingTheOpenAssistantLeavesItAndAnOwnDeletionLeavesQuietly() async throws {
+        for deleted in [false, true] {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            server.hideBot()
+            if deleted { value.deletedBotId = "bot" }
+            await value.refreshBootstrap()
+            XCTAssertNil(value.selectedBotId)
+            XCTAssertEqual(value.notice, deleted ? nil : "That assistant is no longer available to you.")
+        }
+    }
+
+    func testMakingAnAssistantEveryoneSeesPersonalNeedsConfirmation() throws {
+        let shared = Bot(id: "family", name: "Family", model: "test", shared: true, activity: .idle)
+        var mine = shared; mine.shared = false; mine.ownerId = "one"
+        var legacy = shared; legacy.shared = false
+        for (bot, expected) in [(shared, true), (legacy, true), (mine, false)] {
+            var input = BotInput(bot: bot); input.shared = false
+            XCTAssertEqual(input.hidesFromHousehold(bot), expected, bot.ownerId ?? String(bot.shared))
+        }
+        var input = BotInput(bot: nil); input.shared = false
+        XCTAssertFalse(input.hidesFromHousehold(nil), "a new assistant hides nothing from anyone")
+        let encoded = { (value: BotInput) in try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:] }
+        XCTAssertNil(try encoded(input)["confirmPrivate"])
+        input.confirmPrivate = true
+        XCTAssertEqual(try encoded(input)["confirmPrivate"] as? Bool, true)
     }
 
     func testAcceptedSubmissionClearsDraftWithoutAnEmptyDraftWrite() async throws {

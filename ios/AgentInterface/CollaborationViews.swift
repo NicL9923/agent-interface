@@ -148,10 +148,14 @@ struct GroupCreateView: View {
       if let pending { Text("Check the saved request for \(pending.name). Hermes may already have created the room.") }
       else {
         TextField("Group name", text: $name)
-        Section("Choose 2–6 assistants") {
+        Section {
           ForEach((store.bootstrap?.bots ?? []).filter { !["all", "everyone"].contains($0.id.lowercased()) }) { bot in
             Toggle(bot.name, isOn: Binding(get: { botIds.contains(bot.id) }, set: { if $0 { botIds.insert(bot.id) } else { botIds.remove(bot.id) } }))
               .disabled(botIds.count >= 6 && !botIds.contains(bot.id))
+          }
+        } header: { Text("Choose 2–6 assistants") } footer: {
+          if (store.bootstrap?.bots ?? []).contains(where: { botIds.contains($0.id) && !$0.shared && $0.ownerId != nil }) {
+            Text("Only you will see this group, because it includes your personal assistant.")
           }
         }
       }
@@ -183,6 +187,8 @@ struct GroupConversationView: View {
   @State private var pending: GroupSend?
   @State private var error: String?
   @State private var busy = false
+  /// Another member made one of its assistants personal, so this group is gone for this person.
+  @State private var missing = false
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
   private var status: String {
@@ -191,8 +197,9 @@ struct GroupConversationView: View {
   var body: some View {
     List {
       Section { Text(room.members.map { "\($0.display_name ?? $0.profile) (@\($0.handle))" }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-        if let error { ErrorBanner(message: error) }
-        if state == nil && error == nil { ProgressView("Opening group…") }
+        if missing { Text("That group chat is no longer available to you.").font(.footnote) }
+        else if let error { ErrorBanner(message: error) }
+        if state == nil && error == nil && !missing { ProgressView("Opening group…") }
       }
       ForEach(events.filter { ["message.user", "message.member"].contains($0.kind) }) { event in
         VStack(alignment: .leading, spacing: 6) {
@@ -225,7 +232,7 @@ struct GroupConversationView: View {
       state = nil; events = []; cursor = 0
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
-      while !Task.isCancelled { await load(); do { try await Task.sleep(for: .seconds(3)) } catch { return } }
+      while !Task.isCancelled && !missing { await load(); do { try await Task.sleep(for: .seconds(3)) } catch { return } }
     }
   }
   private var composer: some View {
@@ -260,7 +267,11 @@ struct GroupConversationView: View {
       let page: GroupPage = try await api.get("\(path)/log?since=\(cursor)")
       guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
       state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor
-    } catch { if !Task.isCancelled, store.scope == scope { self.error = error.localizedDescription } }
+    } catch {
+      guard !Task.isCancelled, store.scope == scope else { return }
+      if (error as? APIError)?.status == 404 { missing = true; state = nil; events = []; self.error = nil }
+      else { self.error = error.localizedDescription }
+    }
   }
   private func send() async {
     guard let api = store.api else { return }; let scope = store.scope

@@ -135,6 +135,8 @@ struct BotInput: Encodable {
   var provider: String?
   var enabledMcpServers: [String] = []
   var shared = true
+  /// Sent only after the person agrees that the assistant disappears for everyone else.
+  var confirmPrivate: Bool?
   init(bot: Bot? = nil, fallback: Bot? = nil) {
     name = bot?.name ?? ""
     description = bot?.description ?? ""
@@ -143,6 +145,11 @@ struct BotInput: Encodable {
     provider = bot?.provider ?? fallback?.provider
     enabledMcpServers = bot?.enabledMcpServers ?? []
     shared = bot?.shared ?? true
+  }
+  /// Whether saving makes an assistant everyone could see this person's personal one.
+  func hidesFromHousehold(_ bot: Bot?) -> Bool {
+    guard let bot else { return false }
+    return !shared && (bot.shared || bot.ownerId == nil)
   }
 }
 struct FileRef: Codable, Identifiable, Equatable {
