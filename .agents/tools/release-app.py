@@ -335,10 +335,14 @@ finish({"discarded": [str(release), str(operation)]})
 """
 
 
+def remote_source(program, payload):
+    """The exact Python source a host program runs as, with its prelude and payload."""
+    return REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
+
+
 def remote(host, program, payload, timeout=900):
     """Run a Python program on the host with a JSON payload; return its final JSON line."""
-    source = REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python3", "-"], input=source,
+    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python3", "-"], input=remote_source(program, payload),
                           capture_output=True, text=True, timeout=timeout)
     if done.returncode:
         raise SystemExit(f"Host step failed:\n{(done.stderr or done.stdout).strip()[-3000:]}")

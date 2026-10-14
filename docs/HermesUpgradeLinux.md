@@ -364,3 +364,9 @@ directory. Recovery refuses unless its SHA256 matches the `deployFunctionsSha256
 read-only check pinned. Every native call sets `HERMES_HOME` to the configured home before
 Hermes bootstrap pins the process identity, as the gateway wrapper does, so an inherited value
 cannot send a drain request to another home.
+
+Host programs travel as Python source in `REMOTE*` string constants, which `compileall`
+cannot see. `tests/host_programs_test.py` finds every such constant, composes it exactly as
+it is sent, including `release-app.py`'s prelude and payload line, compiles it and refuses a
+name that is read but never bound. A program sent to `remote()` under any other name fails
+that test, and every tool script gets the same undefined-name check.
