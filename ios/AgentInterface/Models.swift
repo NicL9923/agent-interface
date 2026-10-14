@@ -233,6 +233,8 @@ struct Conversation: Codable {
   var botId: String
   var sessionId: String?
   var messages: [Message]
+  /// Turns before the first loaded message, present when the server windowed the history.
+  var earlier: Int?
   var activity: Activity
   var approvals: [Approval]
   var files: [FileRef]

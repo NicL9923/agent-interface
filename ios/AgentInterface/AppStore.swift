@@ -42,6 +42,18 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var selectionGeneration = UUID()
   private var fileTask: Task<Void, Never>?
   private var failures = 0
+  /// Turns of history one request covers, the same page the web client uses.
+  static let historyPageTurns = 20
+  /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
+  /// it, a foreground return and pull to refresh all refresh it sooner.
+  static let bootstrapInterval: Duration = .seconds(60)
+  /// Tests substitute a clock they advance by hand.
+  var now: () -> ContinuousClock.Instant = { .now }
+  private var bootstrapRefreshedAt: ContinuousClock.Instant?
+  /// Oldest loaded message per assistant whose earlier history was opened. Polls then ask for
+  /// everything from there on, so the window grows with new turns instead of sliding past it.
+  private var historyStarts: [String: String] = [:]
+  @Published var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
     bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
@@ -209,33 +221,48 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pollTask?.cancel()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
-        guard let self else { return }
-        if let api = self.api,
-          let expiry = UserDefaults.standard.string(
-            forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
-          let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
-        {
-          self.sessionExpired = true
-          self.error =
-            "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
-          return
-        }
-        await self.refreshBootstrap()
-        await self.refreshConversation()
-        await self.reconcilePending()
+        guard let self, await self.pollOnce() else { return }
         let seconds = self.failures == 0 ? 1.5 : min(30, pow(2, Double(min(self.failures, 5))))
         try? await Task.sleep(for: .seconds(seconds))
       }
     }
   }
+  /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
+  func pollOnce() async -> Bool {
+    if let api,
+      let expiry = UserDefaults.standard.string(
+        forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
+      let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
+    {
+      sessionExpired = true
+      error =
+        "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
+      return false
+    }
+    await refreshBootstrap(ifDue: true)
+    await refreshConversation()
+    await reconcilePending()
+    return true
+  }
   func suspend() {
     pollTask?.cancel()
     pollTask = nil
+    // The next poll loop starts with a fresh bootstrap.
+    bootstrapRefreshedAt = nil
     persistDraft()
     draftTask?.cancel()
   }
-  func refreshBootstrap() async {
-    guard let api, api.token != nil else { return }
+  /// Bootstrap costs the server several Hermes calls, so the poll loop asks for it only when it
+  /// is due. A failure, an outage or a missing roster is always due, because recovery needs it.
+  private var bootstrapDue: Bool {
+    guard let last = bootstrapRefreshedAt, bootstrap != nil, failures == 0, !appUnavailable,
+      bootstrap?.connection.connected == true
+    else { return true }
+    return now() - last >= Self.bootstrapInterval
+  }
+  func refreshBootstrap(ifDue: Bool = false) async {
+    guard let api, api.token != nil, !ifDue || bootstrapDue else { return }
+    bootstrapRefreshedAt = now()
     let currentGeneration = generation
     do {
       var value: Bootstrap = try await api.get("/bootstrap")
@@ -251,6 +278,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         selectedBotId = nil
         conversation = nil
         conversationCache.removeAll()
+        historyStarts.removeAll()
         draft = Draft()
         draftReady = false
         pending = nil
@@ -311,30 +339,58 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       report(error)
     }
   }
+  private func conversationPath(_ id: String, query: String) -> String {
+    "/bots/\(APIClient.component(id))/conversation?\(query)"
+  }
   func refreshConversation() async {
     guard let id = selectedBotId, let api, bootstrap != nil else { return }
     let selectedGeneration = selectionGeneration
+    // Once earlier history is open, the window stays pinned to its oldest message.
+    let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
+      ?? "turns=\(Self.historyPageTurns)"
     do {
-      let value: Conversation = try await api.get("/bots/\(APIClient.component(id))/conversation")
+      let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration else { return }
-      if conversation?.activity.runId != value.activity.runId
-        || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
-      {
-        interruptionReviewed = false
-      }
-      conversation = value
-      conversationCache[id] = value
-      if !draftReady {
-        draft = loadedDraft(value.draft, botId: id)
-        draftReady = true
-        syncRecoveredDraft(botId: id)
-      }
+      apply(value, botId: id)
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration {
         appUnavailable = true
         failures += 1
         report(error)
       }
+    }
+  }
+  /// Adds one more page of history above what is loaded. A failure is reported but does not
+  /// mark the server unavailable, because the loaded conversation is still current.
+  func loadEarlier() async {
+    guard let id = selectedBotId, let api, !loadingEarlier,
+      let first = conversation?.messages.first?.id, (conversation?.earlier ?? 0) > 0
+    else { return }
+    let selectedGeneration = selectionGeneration
+    loadingEarlier = true
+    defer { loadingEarlier = false }
+    do {
+      let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
+      let value: Conversation = try await api.get(conversationPath(id, query: query))
+      guard selectedGeneration == selectionGeneration else { return }
+      historyStarts[id] = value.messages.first?.id
+      apply(value, botId: id)
+    } catch is CancellationError {} catch {
+      if selectedGeneration == selectionGeneration { report(error) }
+    }
+  }
+  private func apply(_ value: Conversation, botId id: String) {
+    if conversation?.activity.runId != value.activity.runId
+      || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
+    {
+      interruptionReviewed = false
+    }
+    conversation = value
+    conversationCache[id] = value
+    if !draftReady {
+      draft = loadedDraft(value.draft, botId: id)
+      draftReady = true
+      syncRecoveredDraft(botId: id)
     }
   }
   func updateDraft(_ value: Draft) {
@@ -672,6 +728,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrap = nil
     conversation = nil
     conversationCache.removeAll()
+    historyStarts.removeAll()
+    bootstrapRefreshedAt = nil
     selectedBotId = nil
     draft = Draft()
     draftReady = false

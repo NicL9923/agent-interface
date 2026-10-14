@@ -110,6 +110,22 @@ struct ConversationView: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 18) {
+          if (store.conversation?.earlier ?? 0) > 0 {
+            Button {
+              // Prepending would otherwise move the view; keep the oldest message in place.
+              let anchor = store.conversation?.messages.first?.id
+              Task {
+                await store.loadEarlier()
+                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+              }
+            } label: {
+              if store.loadingEarlier {
+                ProgressView()
+              } else {
+                Text("Show earlier messages")
+              }
+            }.buttonStyle(.bordered).disabled(store.loadingEarlier).frame(maxWidth: .infinity)
+          }
           if store.conversation == nil {
             ProgressView("Loading conversation…").frame(maxWidth: .infinity).padding(40)
           } else if store.conversation?.messages.isEmpty == true {
