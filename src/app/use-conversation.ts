@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, cachedResponse, write } from "../client-api";
+import { api, cachedResponse, changeStream, pollWhileVisible, write } from "../client-api";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import type { Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
@@ -122,20 +122,28 @@ export function useConversation(botId: string, userId?: string) {
       void load();
     };
     void load();
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events`, () => void load());
+    if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
-      if (navigator.onLine !== false && document.visibilityState !== "hidden") void load();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      stream.open();
+      void load();
     };
-    const timer = setInterval(wake, 1500);
+    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
+    const stopPolling = pollWhileVisible(wake, 30_000);
+    // A hidden page holds no stream; showing it again reloads and reopens one.
+    const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
     window.addEventListener("online", wake);
     window.addEventListener("agent-interface:reconnect", wake);
-    document.addEventListener("visibilitychange", wake);
+    document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
       requestEarlier.current = () => {};
-      clearInterval(timer);
+      stopPolling();
+      stream.close();
       window.removeEventListener("online", wake);
       window.removeEventListener("agent-interface:reconnect", wake);
-      document.removeEventListener("visibilitychange", wake);
+      document.removeEventListener("visibilitychange", hide);
     };
   }, [botId, userId]);
   // Only messages with something to read count as seen, so a reply that was still

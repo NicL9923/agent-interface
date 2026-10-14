@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, write } from '../client-api';
+import { api, pollWhileVisible, write } from '../client-api';
 import type { Bootstrap } from '../shared/types';
 import type { GroupCatalog, GroupEvent, GroupPage, GroupRoom, GroupState } from '../shared/collaboration';
 import { MessageMarkdown } from './MessageMarkdown';
@@ -36,8 +36,8 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   useEffect(() => {
     let live = true;
     const load = async () => { try { const value = await api<GroupCatalog>('/groups'); if (live) { setCatalog(value); setRoomId(current => value.rooms.some(room => room.room_id === current) ? current : value.rooms[0]?.room_id || ''); setLoadError(''); } } catch (e) { if (live) setLoadError((e as Error).message); } };
-    void load(); const timer = setInterval(() => void load(), 15000);
-    return () => { live = false; clearInterval(timer); };
+    void load(); const stop = pollWhileVisible(() => void load(), 15000);
+    return () => { live = false; stop(); };
   }, [bootstrap.user.id]);
   useEffect(() => {
     let live = true, loading = false, cursor = 0;
@@ -57,8 +57,8 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       finally { loading = false; }
     };
     loadRoom.current = load; void load();
-    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void load(); }, 3000);
-    return () => { live = false; clearInterval(timer); };
+    const stop = pollWhileVisible(() => void load(), 3000);
+    return () => { live = false; stop(); };
   }, [roomId, key]);
   async function create() {
     const input = pendingCreate || { requestId: crypto.randomUUID(), name: name.trim(), botIds: members };

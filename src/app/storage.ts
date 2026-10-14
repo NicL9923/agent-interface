@@ -4,6 +4,8 @@ export type SavedConversation = Conversation & {
   readPosition?: { scrollTop?: number; messageId?: string };
   /** Messages before the requested window, present only when one was requested. */
   earlier?: number;
+  /** Files only those earlier messages carry, listed on demand. */
+  earlierFiles?: number;
 };
 export type Draft = {
   text: string;

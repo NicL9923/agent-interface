@@ -54,6 +54,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
+  const watchers = new Map<string, Set<() => void>>();
   let capabilityCache: Capabilities | undefined;
   let capabilityRequest: Promise<Capabilities> | undefined;
   let rosterRequest: Promise<Bot[]> | undefined;
@@ -62,6 +63,15 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const serviceAuth = options.authMode === 'service';
   const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
   const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
+  // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
+  function changed(botId?: string): void {
+    for (const [watched, listeners] of watchers) {
+      if (botId !== undefined && watched !== botId) continue;
+      for (const listener of listeners) {
+        try { listener(); } catch { /* A watcher never stops frame processing. */ }
+      }
+    }
+  }
 
   let origin: URL | undefined;
   let configurationError: TransportError | undefined;
@@ -115,6 +125,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // A disconnected stream cannot identify which turn is now active. Fresh
     // native snapshots restore current activity, reasoning and tools.
     transient.clear();
+    // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
+    // but failed attempts during an outage, which never carried frames, stay quiet.
+    if (current.verified) changed();
     if (current.ws.readyState < WebSocket.CLOSING) {
       try { current.ws.close(); } catch { /* Already disconnected. */ }
     }
@@ -231,11 +244,13 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         }
         if (connection !== current || current.ws.readyState !== WebSocket.OPEN) throw unavailable();
         verifyContract(capabilities);
-        if (!current.verified) lastConnectedAt = new Date().toISOString();
+        const fresh = !current.verified;
+        if (fresh) lastConnectedAt = new Date().toISOString();
         current.verified = true;
         failures = 0;
         retryAt = 0;
         diagnostic = {connected: true, code: 'ready', version: capabilities.revision, detail: 'The Hermes gateway and durable add-on contract are verified.'};
+        if (fresh) changed();
       } catch (error) {
         const failure = error instanceof TransportError ? error : unavailable();
         if (current && connection === current) disconnect(current, failure);
@@ -305,6 +320,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           catch { disconnect(current, unavailable()); }
         }
       }
+      // Opening a conversation attaches this socket to its session, so its frames arrive here.
+      const botId = owners.get(sid);
+      if (botId !== undefined) changed(botId);
     }
   }
   /**
@@ -841,7 +859,16 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     saveRoutine: routineMutation,
     async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});},
-    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');return await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;},
+    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const result=await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;
+      // Routine deliveries settle outside the open session's frames; the journal names their bot.
+      for(const event of result.events??[])if(typeof event.botId==='string')changed(event.botId);
+      return result;},
+    watch(botId, listener) {
+      const listeners = watchers.get(botId) ?? new Set();
+      watchers.set(botId, listeners);
+      listeners.add(listener);
+      return () => { listeners.delete(listener); if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId); };
+    },
     async close() {
       closed = true;
       retryAt = 0;
