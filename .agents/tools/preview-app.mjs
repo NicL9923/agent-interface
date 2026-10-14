@@ -9,7 +9,7 @@ import { tsImport } from 'tsx/esm/api';
 const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
-const { historyWindow } = await tsImport('../../src/shared/history.ts', import.meta.url);
+const { filesBefore, historyWindow, windowFiles } = await tsImport('../../src/shared/history.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
@@ -79,9 +79,12 @@ conversations.kitchen = { activity: { state: 'idle' }, messages: Array.from({ le
   { id: `k${turn}u`, role: 'user', sender: { id: 'preview', name: turn % 3 ? 'Nicolas' : 'Jordan' }, text: `Fixture turn ${turn + 1}: what goes with ${meals[turn % meals.length]} this week?`, createdAt: new Date(Date.UTC(2026, 8, 1 + Math.floor(turn / 3), 17, turn % 60)).toISOString() },
   { id: `k${turn}a`, role: 'assistant', text: `For **${meals[turn % meals.length]}**, try:\n\n- A crisp slaw with lime\n- Charro beans\n- Skillet cornbread\n\nI added the extras to the shared list. Fixture turn ${turn + 1}.`, createdAt: new Date(Date.UTC(2026, 8, 1 + Math.floor(turn / 3), 17, turn % 60, 30)).toISOString() },
 ]).flat() };
+// Open chats hold change streams, as from the app's /events route.
+const changeStreams = new Map();
+const changed = botId => { for (const stream of changeStreams.get(botId) ?? []) stream.write('data: change\n\n'); };
 if (process.env.PREVIEW_ARRIVALS === '1') {
   let arrival = 0;
-  setInterval(() => conversations.kitchen.messages.push({ id: `arrival-${++arrival}`, role: 'assistant', text: `Fixture arrival ${arrival}: the oven is preheated.`, createdAt: new Date().toISOString() }), 8000);
+  setInterval(() => { conversations.kitchen.messages.push({ id: `arrival-${++arrival}`, role: 'assistant', text: `Fixture arrival ${arrival}: the oven is preheated.`, createdAt: new Date().toISOString() }); changed('kitchen'); }, 8000);
 }
 conversations.ranch.files = artifactFiles;
 ranchMessages[0].files = [artifactFiles[2]];
@@ -257,12 +260,12 @@ const server = createServer(async (request, response) => {
     if (approvalMatch) {
       await new Promise(resolve => setTimeout(resolve, 1200));
       const conversation = conversations[approvalMatch[1]];
-      conversation.approvals = conversation.approvals.filter(approval => approval.id !== approvalMatch[2]);
+      conversation.approvals = conversation.approvals.filter(approval => approval.id !== approvalMatch[2]); changed(approvalMatch[1]);
       return json(response, { ok: true });
     }
     const stopMatch = /^\/bots\/([^/]+)\/stop$/.exec(path);
     if (stopMatch) {
-      conversations[stopMatch[1]].activity = { state: 'interrupted' };
+      conversations[stopMatch[1]].activity = { state: 'interrupted' }; changed(stopMatch[1]);
       return json(response, { ok: true });
     }
     const secureMatch = /^\/bots\/([^/]+)\/secure-requests\/([^/]+)$/.exec(path);
@@ -271,7 +274,7 @@ const server = createServer(async (request, response) => {
       if (!pending || body.epoch !== pending.secure.epoch || body.sessionId !== pending.secure.sessionId || body.method !== pending.secure.method) return json(response, { error: 'The fixture request expired.' }, 409);
       if (process.env.PREVIEW_SECURE_FAILURE === '1') return json(response, { error: 'Fixture result uncertain.' }, 502);
       if (!body.cancel && pending.secure.method === 'vault.save_login') vaultFor(botId).items.push({ id: 'fixture-' + randomUUID(), kind: 'login', label: pending.secure.site, origin: pending.secure.origin, identifier: body.identifier, identifierType: 'username', createdAt: new Date().toISOString(), hasOtp: false, backend: 'local', canRemove: true });
-      conversation.attention = []; conversation.activity = { state: 'idle' };
+      conversation.attention = []; conversation.activity = { state: 'idle' }; changed(botId);
       return json(response, { status: 'ok' });
     }
     const memoryMatch = /^\/bots\/([^/]+)\/memory(?:\/(memory|user))?$/.exec(path);
@@ -386,7 +389,16 @@ const server = createServer(async (request, response) => {
       const start = url.searchParams.get('start') ?? undefined, turns = url.searchParams.get('turns');
       if (start === undefined && turns === null) return json(response, conversation);
       const page = historyWindow(conversation.messages, { start, turns: Number(turns ?? 0) });
-      return json(response, { ...conversation, messages: page.messages, earlier: page.earlier });
+      return json(response, { ...conversation, messages: page.messages, earlier: page.earlier, ...windowFiles(conversation.messages, page.earlier, conversation.files) });
+    }
+    if (/^\/bots\/[^/]+\/files$/.test(path)) return json(response, filesBefore(conversationFor(decodeURIComponent(path.split('/')[2])).messages, url.searchParams.get('before') ?? undefined));
+    if (/^\/bots\/[^/]+\/events$/.test(path)) {
+      const botId = decodeURIComponent(path.split('/')[2]), streams = changeStreams.get(botId) ?? new Set();
+      changeStreams.set(botId, streams.add(response));
+      response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Content-Encoding': 'identity' });
+      response.write('retry: 3000\n\n');
+      const ping = setInterval(() => response.write('event: ping\ndata: ping\n\n'), 25_000);
+      return request.on('close', () => { clearInterval(ping); streams.delete(response); });
     }
     if (path.endsWith('/tools') || path.endsWith('/skills')) return json(response, [{ id: 'web', name: 'Web search', description: 'Search the web when current information matters.', enabled: true }, { id: 'shell', name: 'Terminal', description: "Run commands on the assistant's server.", enabled: false }]);
     if (/^\/routines\/[^/]+\/state$/.test(path)) { const row=routines.find(row=>row.id===path.split('/')[2]);if(row)row.enabled=body.enabled;return json(response,{ok:true}); }

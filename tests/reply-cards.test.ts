@@ -12,6 +12,49 @@ describe("interactive reply contracts", () => {
     expect(parseReplyDocument("not JSON")).toBeNull();
     expect(parseReplyDocument("x".repeat(100_001))).toBeNull();
   });
+  it("trims titles and text, and accepts only well-formed IDs, limits and fields", () => {
+    const parsed = parseReplyDocument(document([{ id: "groceries", type: "checklist", title: "  Groceries \n", items: [{ id: "milk", text: "  Milk " }] }]));
+    expect(parsed?.cards).toEqual([card]);
+    const invalid = (value: unknown) => expect(parseReplyDocument(document([value]))).toBeNull();
+    invalid({ ...card, id: "has space" });
+    invalid({ ...card, id: "x".repeat(81) });
+    invalid({ ...card, title: "   " });
+    invalid({ ...card, title: "x".repeat(201) });
+    invalid({ ...card, type: "poll" });
+    invalid({ ...card, items: [] });
+    invalid({ ...card, items: [{ id: "milk", text: "Milk", extra: true }] });
+    invalid({ ...card, items: [{ id: "milk", text: "x".repeat(501) }] });
+    invalid({ ...card, items: Array.from({ length: 61 }, (_, i) => ({ id: `i${i}`, text: "Item" })) });
+    invalid("groceries");
+    invalid(null);
+    expect(parseReplyDocument(document([{ ...card, items: Array.from({ length: 60 }, (_, i) => ({ id: `i${i}`, text: "Item" })) }]))?.cards).toHaveLength(1);
+    expect(parseReplyDocument(JSON.stringify({ version: 2, cards: [card] }))).toBeNull();
+    expect(parseReplyDocument(JSON.stringify({ version: 1, cards: [card], extra: 1 }))).toBeNull();
+    expect(parseReplyDocument(document(Array.from({ length: 9 }, (_, i) => ({ ...card, id: `c${i}` }))))).toBeNull();
+    expect(parseReplyDocument(document([card, card]))).toBeNull();
+  });
+  it("keeps itinerary links to http and https and strips the characters a URL parser ignores", () => {
+    const trip = (item: object) => document([{ id: "trip", type: "itinerary", title: "Trip", items: [{ id: "stop", title: "Stop", ...item }] }]);
+    expect(parseReplyDocument(trip({ time: "10 AM", detail: "Bring cash", url: " https://exa\nmple.com/a " }))?.cards[0]).toEqual({
+      id: "trip", type: "itinerary", title: "Trip",
+      items: [{ id: "stop", title: "Stop", time: "10 AM", detail: "Bring cash", url: "https://example.com/a" }],
+    });
+    for (const url of ["ftp://example.com", "javascript:alert(1)", "https:example.com", "not a url", `https://example.com/${"a".repeat(2000)}`, 5, null])
+      expect(parseReplyDocument(trip({ url }))).toBeNull();
+    expect(parseReplyDocument(trip({ time: "x".repeat(101) }))).toBeNull();
+    expect(parseReplyDocument(trip({ detail: null }))).toBeNull();
+  });
+  it("accepts only real calendar times that carry seconds and an offset", () => {
+    const event = (fields: object) => document([{ id: "dinner", type: "event", title: "Dinner", start: "2026-10-03T18:00:00-05:00", ...fields }]);
+    for (const start of ["2026-10-03T18:00:00Z", "2026-10-03T18:00:00.250+01:30", "2028-02-29T10:00:00Z"])
+      expect(parseReplyDocument(event({ start }))?.cards).toHaveLength(1);
+    for (const start of ["2026-02-29T10:00:00Z", "2026-04-31T10:00:00Z", "2026-10-03T24:00:00Z", "2026-10-03T18:00Z", "2026-10-03T18:00:00+0500", "2026-10-03T18:00:00+24:00", "2026-10-03 18:00:00Z", 5])
+      expect(parseReplyDocument(event({ start }))).toBeNull();
+    expect(parseReplyDocument(event({ end: "2026-10-03T18:00:00-05:00" }))).toBeNull();
+    expect(parseReplyDocument(event({ end: null }))).toBeNull();
+    expect(parseReplyDocument(event({ location: "Home", description: "Bring dessert" }))?.cards[0]).toMatchObject({ location: "Home", description: "Bring dessert" });
+    expect(parseReplyDocument(event({ location: "x".repeat(501) }))).toBeNull();
+  });
   it("rejects ambiguous card IDs across blocks and more than eight total cards", () => {
     expect(replyCardsFromText(`Here you go.\n${block([card])}`)).toEqual([card]);
     expect(replyCardsFromText(`${block([card])}\n${block([card])}`)).toEqual([]);

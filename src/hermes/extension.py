@@ -92,6 +92,13 @@ class Journal:
             if column not in columns:
                 self.db.execute(f"ALTER TABLE events ADD COLUMN {column} TEXT")
         self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS events_identity ON events(event_key) WHERE event_key IS NOT NULL")
+        # Every conversation poll reads these; without them each read scans its table.
+        self.db.execute("CREATE INDEX IF NOT EXISTS receipts_session ON receipts(session_id,created)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS receipts_owner ON receipts(profile,stored_session,created)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS receipts_row ON receipts(row_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS tools_call ON tools(profile,stored_session,tool_id,run_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS events_session ON events(profile,session_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS events_run ON events(run_id)")
         with self.db:
             for request_id, profile, sid, stored in self.db.execute("SELECT COALESCE(run_id,request_id),profile,session_id,stored_session FROM receipts WHERE terminal=0 AND status IN ('accepted','uncertain')").fetchall():
                 self.event(profile, sid, "interrupted", "Hermes restarted. Review before retrying.", request_id, event_key=f"{request_id}:interrupted")
@@ -505,57 +512,85 @@ def install(path=None):
                 terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
             value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
             # App attribution follows Hermes's durable row identity, never a rewritten body.
-            current_run = None
-            for message in value.get("messages", []):
-                if message.get("role") == "user":
-                    current_run = None
-                if message.get("role") == "user" and message.get("row_id") is not None:
-                    # Native steering persists a correction later, without an admission row ID.
-                    # Pair equal corrections in admission order within this canonical owner.
-                    candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, value["canonical_stored_session_id"], message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
-                    if candidate:
-                        with journal.db:
-                            journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
-                if message.get("role") == "user" and message.get("row_id") is not None:
-                    # Recovery for image-only turns completed before this binding hook.
-                    # Match the official persisted image-ref representation within the
-                    # admitted owner and time window, never arbitrary marker text.
-                    candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, value["canonical_stored_session_id"], float(message.get("timestamp") or time.time()) + 1)).fetchall()
-                    for request_id, input_text, raw_attachments in candidates:
-                        images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
-                        if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
-                            with journal.lock, journal.db:
-                                journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
-                            break
-                row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
-                if row:
-                    message["app_request_id"], message["app_sender_id"] = row[:2]
-                    current_run = row[2]
-                    message["app_attachments"] = json.loads(row[3] or "[]")
-                    display_text = row[4] or ""
-                    suffix = "\n".join("@file:" + json.dumps(x["path"], ensure_ascii=False) for x in message["app_attachments"] if not str(x.get("mime", "")).startswith("image/"))
-                    if suffix and display_text.endswith("\n" + suffix):
-                        display_text = display_text[:-len(suffix)-1]
-                    message["app_display_text"] = display_text
-                if current_run:
-                    message["app_run_id"] = current_run
-                if message.get("role") == "tool":
-                    recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall() if current_run else []
-                    tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
-                    if tool:
-                        # The persisted native output remains authoritative.
-                        message["app_artifacts"] = json.loads(tool[1] or "[]")
-                        # Reused IDs within a run cannot identify one call's
-                        # timestamps or arguments. Fall back to its native row.
-                        if len(recorded) == 1 and tool[2]:
-                            detail = json.loads(tool[2])
-                            if isinstance(detail, dict) and detail.get("name") == message.get("name"):
-                                try:
-                                    arguments = json.loads(detail.get("arguments", "{}"))
-                                except (ValueError, TypeError):
-                                    arguments = None
-                                if arguments == (message.get("args") or {}):
-                                    message["app_tool_call"] = detail
+            # Read each journal table once per poll, not once per message. Binding
+            # below only fills a NULL row_id, so the unbound snapshot can only
+            # overstate candidates, and only a row ID bound here needs a reread.
+            # Native writers hold the journal lock, so none lands mid-poll.
+            with journal.lock:
+                messages = value.get("messages", [])
+                unbound = journal.db.execute("SELECT steering,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND row_id IS NULL", (profile, value["canonical_stored_session_id"])).fetchall()
+                steering_texts = {text for steering, text, _ in unbound if steering}
+                image_pending = any(not steering and any(str(x.get("mime", "")).startswith("image/") for x in json.loads(raw or "[]")) for steering, _, raw in unbound)
+                attributed = {}
+                for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
+                    attributed.setdefault(row[0], row[1:])
+                tool_records = {}
+                for row in journal.db.execute("SELECT tool_id,run_id,result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str]))):
+                    tool_records.setdefault(row[:2], []).append(row[2:])
+                rebound = set()
+                current_run = None
+                for message in messages:
+                    if message.get("role") == "user":
+                        current_run = None
+                    if message.get("role") == "user" and message.get("row_id") is not None and message.get("text") in steering_texts:
+                        # Native steering persists a correction later, without an admission row ID.
+                        # Pair equal corrections in admission order within this canonical owner.
+                        candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, value["canonical_stored_session_id"], message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
+                        if candidate:
+                            with journal.db:
+                                journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
+                            rebound.add(message["row_id"])
+                    if message.get("role") == "user" and message.get("row_id") is not None and image_pending:
+                        # Recovery for image-only turns completed before this binding hook.
+                        # Match the official persisted image-ref representation within the
+                        # admitted owner and time window, never arbitrary marker text.
+                        candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, value["canonical_stored_session_id"], float(message.get("timestamp") or time.time()) + 1)).fetchall()
+                        for request_id, input_text, raw_attachments in candidates:
+                            images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
+                            if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
+                                with journal.lock, journal.db:
+                                    journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
+                                rebound.add(message["row_id"])
+                                break
+                    if message.get("row_id") is None:
+                        row = None
+                    elif type(message["row_id"]) is int and message["row_id"] not in rebound:
+                        row = attributed.get(message["row_id"])
+                    else:
+                        row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
+                    if row:
+                        message["app_request_id"], message["app_sender_id"] = row[:2]
+                        current_run = row[2]
+                        message["app_attachments"] = json.loads(row[3] or "[]")
+                        display_text = row[4] or ""
+                        suffix = "\n".join("@file:" + json.dumps(x["path"], ensure_ascii=False) for x in message["app_attachments"] if not str(x.get("mime", "")).startswith("image/"))
+                        if suffix and display_text.endswith("\n" + suffix):
+                            display_text = display_text[:-len(suffix)-1]
+                        message["app_display_text"] = display_text
+                    if current_run:
+                        message["app_run_id"] = current_run
+                    if message.get("role") == "tool":
+                        if not current_run:
+                            recorded = []
+                        elif type(message.get("tool_call_id")) is str:
+                            recorded = tool_records.get((message["tool_call_id"], current_run), [])
+                        else:
+                            recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall()
+                        tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
+                        if tool:
+                            # The persisted native output remains authoritative.
+                            message["app_artifacts"] = json.loads(tool[1] or "[]")
+                            # Reused IDs within a run cannot identify one call's
+                            # timestamps or arguments. Fall back to its native row.
+                            if len(recorded) == 1 and tool[2]:
+                                detail = json.loads(tool[2])
+                                if isinstance(detail, dict) and detail.get("name") == message.get("name"):
+                                    try:
+                                        arguments = json.loads(detail.get("arguments", "{}"))
+                                    except (ValueError, TypeError):
+                                        arguments = None
+                                    if arguments == (message.get("args") or {}):
+                                        message["app_tool_call"] = detail
             # Standard native tools flush before completion; Codex can expose
             # completion before its turn flush. Keep those results until their
             # exact call appears in visible canonical history. Reused old IDs
