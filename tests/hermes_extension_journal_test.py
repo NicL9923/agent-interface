@@ -186,6 +186,50 @@ class CanonicalOpenTests(unittest.TestCase):
         scans = {sql[:200]: plan for sql, plan in plans.items() if any(re.match(r"SCAN (receipts|tools|events|interruptions)\b", step) for step in plan)}
         self.assertEqual(scans, {})
 
+    def test_poll_never_shows_half_of_a_concurrent_write(self):
+        report = {"path": "/srv/report.pdf", "name": "report.pdf", "mime": "application/pdf"}
+        photo = {"path": "/srv/photo.png", "name": "photo.png", "mime": "image/png"}
+        messages = [
+            {"role": "user", "row_id": 10, "text": "Summarize", "timestamp": 100},
+            {"role": "tool", "row_id": 11, "tool_call_id": "read", "name": "read_file", "args": {}, "app_tool_result": {"pages": 3}},
+            # Its persisted text is not the image-ref form, so only a native completion can bind it.
+            {"role": "user", "row_id": 20, "text": "Look at this", "timestamp": 200},
+            {"role": "assistant", "row_id": 21, "text": "A photo", "timestamp": 201},
+        ]
+        class Interleaved:
+            """The journal connection, with one native writer let in before its first tools read."""
+            def __init__(self, db, writer):
+                self.db, self.writer = db, writer
+            def __enter__(self):
+                return self.db.__enter__()
+            def __exit__(self, *exc):
+                return self.db.__exit__(*exc)
+            def execute(self, sql, *args):
+                if self.writer and "FROM tools" in sql:
+                    self.writer.start()
+                    self.writer.join(0.5)
+                    self.writer = None
+                return self.db.execute(sql, *args)
+        with FakeHermes(messages) as hermes:
+            journal, db = hermes.journal, hermes.journal.db
+            with db:
+                receipt(db, "first", 10, 1, text="Summarize")
+                receipt(db, "photo", None, 2, text="Look at this", attachments=[photo])
+            before = hermes.open()["messages"]
+            def native_writes():
+                # Same shape as the write hook: one transaction under the journal lock.
+                with journal.lock, db:
+                    db.execute("UPDATE receipts SET row_id=20 WHERE request_id='photo'")
+                    tool(db, "first", "read", {"pages": 3}, name="read_file", artifacts=[report])
+            writer = threading.Thread(target=native_writes)
+            journal.db = Interleaved(db, writer)
+            during = hermes.open()["messages"]
+            writer.join(5)
+            journal.db = db
+            after = hermes.open()["messages"]
+        self.assertNotEqual(before, after)
+        self.assertIn(during, (before, after))
+
 
 if __name__ == "__main__":
     unittest.main()
