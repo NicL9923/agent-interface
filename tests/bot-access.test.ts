@@ -481,4 +481,13 @@ describe("private assistant redaction across tools, restarts and failed creation
     expect(redact.message({ id: "old", role: "user", text: `Message from 🤖 ${secretName}: The ledger balance is 42.` }).text).not.toContain(secretName);
     expect(redact.message({ id: "new", role: "user", text: "Message from 🤖 Midnight Tally: 42" }).text).not.toContain("Midnight Tally");
   });
+
+  it("keeps a profile Hermes created but could not remove private to its creator", async () => {
+    const s = await setup();
+    s.runtime.saveBot = async () => { throw Object.assign(new Error("Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot night-ledger."), { createdBotId: "night-ledger" }); };
+    const failed = await s.app.inject({ method: "POST", url: "/api/bots", headers: s.owner, payload: { name: "Night Ledger", instructions: "", model: "test", shared: false } });
+    expect([failed.statusCode, failed.json().code]).toEqual([502, "created_incomplete"]);
+    expect(failed.json().error).toContain("Night Ledger");
+    expect(s.store.presentation("night-ledger")).toMatchObject({ shared: false, ownerId: "local-one" });
+  });
 });

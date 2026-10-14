@@ -313,7 +313,17 @@ export async function createApp(
     const version = id ? store.swapPresentation(id, prior, next) : false;
     let bot;
     try { bot = await runtime.saveBot(input as BotInput); }
-    catch (error) { if (version !== false) store.restorePresentation(id, version, prior); throw error; }
+    catch (error) {
+      // Hermes may have created the profile and then failed to remove it; it stays the creator's.
+      const created = (error as { createdBotId?: unknown }).createdBotId;
+      if (typeof created === "string") {
+        if (created !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(created, next); }
+        roster.forget();
+        throw Object.assign(failure(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`), { expose: true, code: "created_incomplete" });
+      }
+      if (version !== false) store.restorePresentation(id, version, prior);
+      throw error;
+    }
     roster.forget();
     // A runtime that names it differently still gets its record.
     if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
