@@ -26,11 +26,15 @@ QUALIFIED_REVISIONS = {REVISION, "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6"}
 QUALIFIED_OAUTH_PATCH = "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c"
 
 
-def qualification_module():
-    spec = importlib.util.spec_from_file_location("agent_interface_qualification", Path(__file__).with_name("qualification.py"))
+def sibling_module(name):
+    spec = importlib.util.spec_from_file_location("agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def qualification_module():
+    return sibling_module("qualification")
 
 
 def source_state():
@@ -744,6 +748,38 @@ def install(path=None):
     server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in {"open": open_bot, "submit": submit, "receipt": receipt, "discover": discover}.items():
         server.register_method("agent-interface." + name, handler)
+
+    # Routines and bot messages arrive as turns in the canonical chat. A Hermes whose
+    # native delivery only reaches the gateway authority gets the add-on producer.
+    # The consumer always runs: after a rollback it still owes queued add-on receipts.
+    import tools.bot_live_delivery as mailbox
+    bot_delivery = sibling_module("bot_delivery")
+    bridge = bot_delivery.bridge_required(mailbox, server)
+    if bridge:
+        bot_delivery.install_producer(mailbox)
+
+    def open_canonical(profile):
+        with canonical_lock:
+            if canonical.get(profile) in server._sessions:
+                return canonical[profile]
+            response = open_bot("agent-interface-delivery", {"profile": profile})
+        return None if "error" in response else response["result"]["session_id"]
+
+    @contextlib.contextmanager
+    def delivery_admission(sid):
+        # Same order as submit: no delivery starts beside an unsettled app task or maintenance.
+        with submission_lock:
+            with maintenance_lock:
+                closed = bool(maintenance_state())
+            with journal.lock:
+                unsettled = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1", (sid,)).fetchone()
+            yield not closed and unsettled is None
+
+    from tools.bot_failure_reasons import classify_agent_error
+    journal.bot_delivery = bot_delivery.Consumer(server, mailbox, bot_delivery.profile_homes(get_hermes_home()),
+                                                 open_canonical, delivery_admission, classify=classify_agent_error,
+                                                 native_records=bridge)
+    journal.bot_delivery.start()
     return journal
 
 

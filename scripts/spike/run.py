@@ -13,7 +13,9 @@ import sys
 import tempfile
 import time
 import hashlib
+import importlib.util
 import re
+import signal
 import urllib.request
 from pathlib import Path
 from guard import verify_target
@@ -36,6 +38,49 @@ def stop(process):
             process.wait(timeout=15)
         except subprocess.TimeoutExpired:
             process.kill(); process.wait()
+
+
+def native_gateway_command(source, python):
+    """Production's guarded gateway entry, loading the guard from the add-on under test."""
+    path = REPO / "src/hermes/gateway_guard.py"
+    spec = importlib.util.spec_from_file_location("spike_gateway_guard", path)
+    guard = importlib.util.module_from_spec(spec); spec.loader.exec_module(guard)
+    return guard.native_command(source, python, [], guard=path)
+
+
+def process_start_time(pid):
+    """Linux start time in clock ticks, the PID-reuse guard Hermes records in gateway.pid."""
+    try:
+        return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def stop_home_gateway(home):
+    """Stop a gateway still owning this disposable home, including one Hermes started itself.
+
+    Only the exact process Hermes recorded as this home's gateway is signalled. The
+    suite runs on the Linux qualification host; elsewhere this finds nothing.
+    """
+    try:
+        record = json.loads((home / "gateway.pid").read_text())
+    except (OSError, ValueError):
+        return None
+    pid, started = record.get("pid"), record.get("start_time")
+    if (not isinstance(pid, int) or record.get("kind") != "hermes-gateway" or started is None
+            or Path(str(record.get("hermes_home") or "/")).resolve() != home.resolve()):
+        return None
+    def recorded():
+        return process_start_time(pid) == started
+    if not recorded():
+        return None
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(150):
+        if not recorded():
+            return pid
+        time.sleep(0.1)
+    os.kill(pid, signal.SIGKILL)
+    return pid
 
 
 def main():
@@ -146,13 +191,33 @@ approvals:
             except Exception:
                 time.sleep(0.1)
         stop(process); raise RuntimeError("Isolated Hermes startup timed out.")
+    native_gateway = None
+    def start_native_gateway():
+        # Production runs the guarded native gateway beside the dashboard. It fires and
+        # delivers routines, so qualification must exercise that path, not the
+        # unguarded idle-exit gateway Hermes starts for itself when none is running.
+        process = subprocess.Popen(native_gateway_command(source, python), env=env, cwd=home,
+                                   stdout=(root / "native-gateway.log").open("w"), stderr=subprocess.STDOUT)
+        for _ in range(1200):
+            if process.poll() is not None:
+                raise RuntimeError("Isolated native gateway exited; inspect its private startup log.")
+            try:
+                state = json.loads((home / "gateway_state.json").read_text())
+            except (OSError, ValueError):
+                state = {}
+            if state.get("pid") == process.pid and state.get("gateway_state") == "running":
+                return process
+            time.sleep(0.1)
+        stop(process); raise RuntimeError("Isolated native gateway startup timed out.")
     try:
         if args.app_only:
+            native_gateway = start_native_gateway()
             gateway = start(extension=True)
         else:
             gateway = start()
             subprocess.run([str(python), str(REPO / "scripts/spike/probe.py")], cwd=REPO, env=env, check=True)
             stop(gateway)
+            native_gateway = start_native_gateway()
             gateway = start(extension=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/extension_probe.py"), "--pid", str(gateway.pid)], cwd=REPO, env=env, check=True)
             # The probe deliberately kills the executor while work is active. Restart, never replay.
@@ -195,6 +260,10 @@ approvals:
         print("Native and add-on spike passed. Evidence: " + str(evidence_root) + ". Disposable private logs: " + str(root))
     finally:
         if gateway: stop(gateway)
+        if native_gateway: stop(native_gateway)
+        leaked = stop_home_gateway(home)
+        if leaked:
+            print(f"Stopped gateway {leaked} that outlived the isolated suite.", file=sys.stderr)
         stop(provider)
 
 
