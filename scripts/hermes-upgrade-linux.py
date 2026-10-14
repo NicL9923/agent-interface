@@ -247,7 +247,8 @@ class Platform:
         if expected is not None and value != expected:
             if value.get("interpreterSha256") != expected.get("interpreterSha256"): raise RuntimeError("The managed interpreter differs from the qualified runtime")
             raise RuntimeError("Managed dependencies differ from the qualified runtime" + (". Its package rows are in the stage as " + dump.name if descriptor else ""))
-        if descriptor: dump.unlink(missing_ok=True)
+        if descriptor:
+            for path in (dump, dump.with_name(dump.name + ".editable.json")): path.unlink(missing_ok=True)
         return value
 
     def sync(self):

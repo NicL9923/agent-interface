@@ -51,7 +51,8 @@ def ignored(directory, names):
     return result
 
 
-def tree_digest(root):
+def tree_digest(root, listing=None):
+    """One digest of a tree's names and bytes; ``listing`` collects each file's hash."""
     digest = hashlib.sha256()
     for directory, dirs, files in os.walk(root):
         dirs[:] = sorted(set(dirs) - set(ignored(directory, dirs)))
@@ -60,6 +61,7 @@ def tree_digest(root):
             relative = path.relative_to(root).as_posix()
             data = os.readlink(path).encode() if path.is_symlink() else path.read_bytes()
             digest.update(relative.encode() + b"\0" + data + b"\0")
+            if listing is not None: listing.append([relative, sha(data)])
     return digest.hexdigest()
 
 
@@ -127,6 +129,7 @@ def active_fingerprint(dump=None):
     # The source identity and actual editable tree are hashed below. Keep dependencies made
     # importable by .pth files in the inventory as well.
     editable_source_names = set()
+    editable = []
     for distribution in importlib.metadata.distributions(path=[packages_path]):
         direct = distribution.read_text("direct_url.json")
         if source and direct and distribution.read_text("RECORD") is not None:
@@ -157,7 +160,9 @@ def active_fingerprint(dump=None):
                     raise RuntimeError("Editable dependencies require exact managed source identity")
                 # Generated snapshots are part of the actual loaded environment.
                 # Their content and the exact checked-out Hermes SHA must match.
-                token = "<editable:" + sha(json.dumps(identity, sort_keys=True).encode()) + ":" + tree_digest(root) + ">"
+                files = [] if dump is not None else None
+                token = "<editable:" + sha(json.dumps(identity, sort_keys=True).encode()) + ":" + tree_digest(root, files) + ">"
+                if files is not None: editable.append({"name": name, "identity": identity, "files": files})
                 replacements[str(root)] = token
                 replacements[root.as_uri()] = token
                 replacements[urllib.parse.unquote(url.path)] = token
@@ -213,6 +218,9 @@ def active_fingerprint(dump=None):
     if dump is not None:
         # Exactly the hashed rows, so two dumps diff to the package and file that differ.
         with os.fdopen(os.open(dump, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output: output.write(rows)
+        # Editable rows hash a whole tree into one token; this names the file behind a change.
+        with os.fdopen(os.open(str(dump) + ".editable.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
+            json.dump(editable, output)
     return {"interpreterSha256": sha(binary.read_bytes()), "dependenciesSha256": sha(rows)}
 
 

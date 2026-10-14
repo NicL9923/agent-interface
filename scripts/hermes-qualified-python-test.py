@@ -58,6 +58,12 @@ class ManagedFingerprintTests(unittest.TestCase):
         self.assertEqual(qualified.sha(dump.read_bytes()), value["dependenciesSha256"])
         self.assertEqual(json.loads(dump.read_bytes())[0][0], "fixture")
         self.assertEqual(dump.stat().st_mode & 0o777, 0o600)
+        # The editable tree behind the row's token, file by file, with the source identity.
+        editable = json.loads(Path(str(dump) + ".editable.json").read_text())
+        self.assertEqual([entry["name"] for entry in editable], ["fixture"])
+        self.assertEqual(editable[0]["identity"], qualified.source_identity(self.source))
+        self.assertEqual(dict(editable[0]["files"])["core.py"], qualified.sha(b"answer = 42\n"))
+        self.assertEqual(Path(str(dump) + ".editable.json").stat().st_mode & 0o777, 0o600)
 
     def test_equivalent_staged_and_native_generations_match_but_library_bytes_do_not(self):
         stage = self.distribution(self.root / "stage-libs", self.source)
