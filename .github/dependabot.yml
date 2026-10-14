@@ -14,21 +14,17 @@ updates:
     groups:
       actions-minor-patch:
         update-types: [minor, patch]
-  # CI tools in .github/requirements-ci.txt and the Hermes spike lock file.
-  # Dependabot reads any .txt requirements file in the directory. The spike
-  # lock records the versions qualified against Hermes, so review its updates
-  # as qualification changes, not routine bumps.
+  # CI tools in .github/requirements-ci.txt only. Dependabot would read any
+  # .txt requirements file here, but scripts/spike/requirements.lock.txt is
+  # deliberately not covered: it mirrors the Python environment of the Hermes
+  # revision this app is qualified against, which comes from Hermes upstream's
+  # uv.lock. Bumping it alone would make qualification test a different
+  # environment than production. Its updates arrive through a Hermes update, and
+  # the weekly audit workflow still checks it for known vulnerabilities.
   - package-ecosystem: pip
     directory: /.github
     schedule:
       interval: weekly
     groups:
       pip-minor-patch:
-        update-types: [minor, patch]
-  - package-ecosystem: pip
-    directory: /scripts/spike
-    schedule:
-      interval: weekly
-    groups:
-      pip-spike-minor-patch:
         update-types: [minor, patch]
