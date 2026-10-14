@@ -184,6 +184,13 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft = Draft(text: "Send this", attachments: [], dirty: true); value.draftReady = true
         return value
     }
+    /// A store that has only a saved server address, like a fresh launch.
+    private func launchedStore(_ server: NativeMockServer, token: String?) -> AppStore {
+        let value = AppStore(); value.host = server.origin.absoluteString
+        let api = client(server); api.token = token
+        value.makeClient = { _ in api }
+        return value
+    }
     private func clean(_ server: NativeMockServer, _ store: AppStore? = nil) {
         store?.suspend()
         for user in ["one", "two"] {
@@ -313,6 +320,61 @@ private final class NativeMockServer: @unchecked Sendable {
         server.failBootstrap(status: 401, code: "session_expired")
         await value.refreshBootstrap()
         XCTAssertNil(value.api?.token); XCTAssertTrue(value.sessionExpired)
+    }
+
+    func testStoredSignInOpensWithoutAuthConfigAndRetriesAfterAnOutage() async throws {
+        let server = NativeMockServer(), value = launchedStore(server, token: "synthetic-native-session"); defer { clean(server, value) }
+        server.failAuthConfig(); server.setOffline(true)
+        await value.restore(); value.suspend()
+        XCTAssertNotNil(value.api); XCTAssertNil(value.bootstrap); XCTAssertNotNil(value.error)
+        XCTAssertEqual(server.requestCount("/api/auth/config"), 0, "A stored sign-in must not depend on auth config")
+        server.setOffline(false)
+        await value.resume(); value.suspend()
+        XCTAssertEqual(value.bootstrap?.user.id, "one"); XCTAssertEqual(value.selectedBotId, "bot")
+        XCTAssertNil(value.error); XCTAssertFalse(value.restoring)
+        XCTAssertEqual(server.requestCount("/api/auth/config"), 0)
+    }
+
+    func testForegroundResumeOnlyRetriesALaunchThatHasNoBootstrap() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let fresh = AppStore(); await fresh.resume()
+        XCTAssertNil(fresh.api, "Nothing to retry before a server is chosen")
+        value.sessionExpired = true; value.bootstrap = nil
+        let before = server.requests.count
+        await value.resume()
+        XCTAssertEqual(server.requests.count, before, "An expired session needs sign-in, not a retry")
+    }
+
+    func testSignInConfigIsFetchedLazilyAndRecoversAfterAnOutage() async throws {
+        let server = NativeMockServer(), value = launchedStore(server, token: nil); defer { clean(server, value) }
+        server.failAuthConfig()
+        await value.restore()
+        XCTAssertNotNil(value.api); XCTAssertNil(value.authConfig); XCTAssertNotNil(value.error)
+        do { try await value.ensureAuthConfig(); XCTFail("The outage should surface") } catch {}
+        server.failAuthConfig(false)
+        await value.restore()
+        XCTAssertEqual(value.authConfig?.nativeAuthVersion, 1); XCTAssertNil(value.error)
+        let requests = server.requestCount("/api/auth/config")
+        try await value.ensureAuthConfig()
+        XCTAssertEqual(server.requestCount("/api/auth/config"), requests, "A loaded config is reused")
+    }
+
+    func testChangeServerStillWorksWhenLogoutCannotBeConfirmed() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let api = value.api
+        server.failLogout()
+        let confirmed = await value.changeConnection()
+        XCTAssertFalse(confirmed); XCTAssertNotNil(value.api); XCTAssertEqual(api?.token, "synthetic-native-session")
+        let local = await value.changeConnection(localOnly: true)
+        XCTAssertTrue(local); XCTAssertNil(value.api); XCTAssertNil(api?.token); XCTAssertNil(value.bootstrap)
+        XCTAssertTrue(value.error?.contains("stays valid there until it expires") == true)
+    }
+
+    func testChangeServerTreatsAnAlreadyExpiredSessionAsSignedOut() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.failLogout(status: 401, code: "session_expired")
+        let changed = await value.changeConnection()
+        XCTAssertTrue(changed); XCTAssertNil(value.api); XCTAssertNil(value.error)
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {

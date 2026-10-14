@@ -23,6 +23,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var appUnavailable = false
   @Published var interruptionReviewed = false
   @Published var authConfig: AuthConfig?
+  @Published var restoring = false
   @Published var sessionExpired = false
   @Published var notificationStatus = "Notifications are off"
   @Published var openedFile: PreviewFile?
@@ -31,6 +32,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var upgradeError: String?
   @Published var upgradeInstallUncertain = false
   private var upgradeRequest: UpgradeInstallRequest?
+  /// Builds the client for a server address. Tests substitute a client with a mock transport.
+  var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
   private var draftTask: Task<Void, Never>?
@@ -80,22 +83,46 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
 
+  /// Reopens the saved server. A stored sign-in goes straight to bootstrap, because
+  /// `/auth/config` only matters for signing in and an outage there must not strand the person.
   func restore() async {
-    guard !host.isEmpty else { return }
+    guard !host.isEmpty, !restoring else { return }
+    restoring = true
+    defer { restoring = false }
     do {
-      let url = try ConnectionAddress.parse(host)
-      api = APIClient(baseURL: url)
-      authConfig = try await api?.publicGet("/auth/config")
-      guard authConfig?.nativeAuthVersion == 1 else {
-        throw APIError(
-          message: "Update this app server to a version with native iOS sign-in support.",
-          status: 409)
-      }
+      if api == nil { api = makeClient(try ConnectionAddress.parse(host)) }
+      error = nil
       if api?.token != nil {
         await refreshBootstrap()
-        startPolling()
+        if api?.token != nil { startPolling() }
+      } else {
+        try await ensureAuthConfig()
       }
     } catch { report(error) }
+  }
+  /// Retries a launch that could not reach the server. Called when the app returns to the foreground.
+  func resume() async {
+    if bootstrap != nil {
+      if !sessionExpired { startPolling() }
+    } else if api != nil, !sessionExpired {
+      await restore()
+    }
+  }
+  /// Sign-in needs the server's native-auth version. Fetch it when needed instead of at launch.
+  @discardableResult func ensureAuthConfig() async throws -> AuthConfig {
+    if let authConfig { return authConfig }
+    guard let requested = api else {
+      throw APIError(message: "Connect to an app server first.", status: 0)
+    }
+    let config: AuthConfig = try await requested.publicGet("/auth/config")
+    guard api === requested else { throw CancellationError() }
+    guard config.nativeAuthVersion == 1 else {
+      throw APIError(
+        message: "Update this app server to a version with native iOS sign-in support.",
+        status: 409)
+    }
+    authConfig = config
+    return config
   }
   func connect() async {
     guard !loading else { return }
@@ -132,9 +159,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     let authGeneration = generation
     do {
-      guard authConfig?.nativeAuthVersion == 1 else {
-        throw APIError(message: "Update the app server to support native iOS sign-in.", status: 409)
-      }
+      try await ensureAuthConfig()
       let pkce = try PKCE()
       var url = URLComponents(url: try api.url("/native/sign-in"), resolvingAgainstBaseURL: false)!
       url.queryItems = [
@@ -568,17 +593,29 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       } catch { if currentGeneration == generation { report(error) } }
     }
   }
-  @discardableResult func signOut() async -> Bool {
+  /// Revokes this device's server session, then clears it locally. If the server cannot be
+  /// reached the token is kept and this returns false, unless `localOnly` accepts that the
+  /// server-side session stays valid until it expires.
+  @discardableResult func signOut(localOnly: Bool = false) async -> Bool {
     persistDraft()
     if let api, api.token != nil {
+      var revoked = true
       do { let _: EmptyResponse = try await api.write("/auth/logout", [String: String]()) } catch {
-        self.error =
-          "Sign-out could not be completed. Reconnect and retry so this device's server session and notifications can be revoked. \(error.localizedDescription)"
-        return false
+        // A session the server already rejected has nothing left to revoke.
+        if !((error as? APIError)?.isSessionExpired ?? false) { revoked = false }
+        if !revoked && !localOnly {
+          self.error =
+            "Sign-out could not be completed. Reconnect and retry so this device's server session and notifications can be revoked. \(error.localizedDescription)"
+          return false
+        }
       }
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
       api.token = nil
       api.csrf = nil
+      if !revoked {
+        self.error =
+          "Signed out on this device only. The server could not be reached, so this device's session stays valid there until it expires, and notifications may still be delivered. Sign in on that server again to revoke it."
+      }
     }
     pollTask?.cancel()
     draftTask?.cancel()
@@ -664,11 +701,13 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
   }
-  func changeConnection() async {
-    if await signOut() {
-      api = nil
-      authConfig = nil
-    }
+  /// Returns false when the server could not be reached to revoke the session. The caller
+  /// then asks before repeating with `localOnly`, which still lets the person leave.
+  @discardableResult func changeConnection(localOnly: Bool = false) async -> Bool {
+    guard await signOut(localOnly: localOnly) else { return false }
+    api = nil
+    authConfig = nil
+    return true
   }
   func report(_ error: Error) {
     if error is CancellationError { return }
