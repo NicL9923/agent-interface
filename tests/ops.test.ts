@@ -31,7 +31,7 @@ function runtime(overrides: Partial<Runtime> = {}) {
     status: async () => status,
     capabilities: async () => ({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
     listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
-    download: async () => ({ data: Buffer.from("hello"), name: "note.txt", mime: "text/plain" }),
+    download: async () => ({ body: [Buffer.from("hello")], name: "note.txt", mime: "text/plain" }),
     close: async () => {},
     ...overrides,
   } as unknown as Runtime;

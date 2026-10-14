@@ -51,6 +51,11 @@ Native bearer sessions do not need CSRF tokens. Every request rechecks the curre
 household allowlist. Expired and revoked native sessions return 401; clear the
 Keychain session and require sign-in.
 
+`GET /api/files/:id` streams the file and sends `Content-Length` when Hermes reports
+one. A file over 100 MB returns 502 with `code: "file_too_large"` and a message
+to show. If Hermes understated the length, the transfer stops at the cap instead,
+so treat a truncated body as a failed download.
+
 Only the owner of a personal assistant can change, delete or re-avatar it, change
 its tools, skills or inference settings, or read its search history and routine
 results. Anyone else receives 403 with `code: "owner_only"` and an explanation to

@@ -330,7 +330,8 @@ export interface Runtime {
     botId: string,
     input: { name: string; mime: string; data: Buffer },
   ): Promise<FileRef>;
-  download(id: string): Promise<{ data: Buffer; name: string; mime: string }>;
+  /** The body never yields more than maxBytes; a larger file is refused with file_too_large. */
+  download(id: string, maxBytes: number): Promise<DownloadedFile>;
   tools(botId: string): Promise<Tool[]>;
   setTools(botId: string, ids: string[]): Promise<void>;
   skills(botId: string): Promise<Skill[]>;
@@ -341,6 +342,12 @@ export interface Runtime {
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
   close(): Promise<void>;
 }
+export type DownloadedFile = {
+  name: string;
+  mime: string;
+  size?: number;
+  body: AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+};
 export const defaultPreferences: Preferences = {
   presentation: "simple",
   theme: "system",

@@ -5,6 +5,7 @@ import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
+import { Readable } from "node:stream";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type {
@@ -34,7 +35,7 @@ import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
-import { formatBytes, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
+import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { historyWindow, MAX_HISTORY_TURNS } from "../shared/history.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
@@ -157,6 +158,8 @@ export async function createApp(
       statusCode?: number;
       code?: string;
       confirmRequired?: boolean;
+      // A 5xx whose fixed message tells the person what to do next.
+      expose?: boolean;
     };
     const status = err.statusCode ?? 502;
     if (status >= 500) {
@@ -167,7 +170,7 @@ export async function createApp(
     }
     reply.code(status).send({
       error:
-        err.statusCode && err.statusCode < 500
+        err.statusCode && (err.statusCode < 500 || err.expose)
           ? err.message
           : "The Hermes operation could not be completed",
       detail: config.production ? undefined : err.message,
@@ -535,7 +538,8 @@ export async function createApp(
   });
   app.get("/api/files/:id", async (req, reply) => {
     await requireCapability("generatedFiles");
-    const file = await runtime.download(params(req).id);
+    const file = await runtime.download(params(req).id, MAX_DOWNLOAD_BYTES);
+    if (file.size !== undefined) reply.header("Content-Length", file.size);
     reply
       .header("X-Content-Type-Options", "nosniff")
       .header(
@@ -554,7 +558,8 @@ export async function createApp(
           ? file.mime
           : "application/octet-stream",
       );
-    return reply.send(file.data);
+    // Stream so one large artifact never sits in this process's memory.
+    return reply.send(Readable.from(file.body, { objectMode: false }));
   });
   for (const kind of ["tools", "skills"] as const) {
     app.get(`/api/bots/:id/${kind}`, async (req) => {

@@ -386,7 +386,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const body=Buffer.from(JSON.stringify({path:'/etc/passwd',name:'passwd',mime:'text/plain',botId:'shared'})).toString('base64url');
     const id=`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
     const fetch=vi.fn();vi.stubGlobal('fetch',fetch);
-    await expect(runtime.download(id)).rejects.toThrow('Unregistered file identifier');
+    await expect(runtime.download(id,1024)).rejects.toThrow('Unregistered file identifier');
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -500,6 +500,33 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const metadata=calls.find(call=>call.method==='profiles.configure')?.params;
     expect(metadata?.ui_meta.agent_interface.unrelated).toBe('preserve');
     expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
+  });
+
+  it('refuses an oversized file from its declared length before reading it',async()=>{
+    const file=await runtime.upload('shared',{name:'archive.zip',mime:'application/zip',data:Buffer.from('zip')});
+    const pull=vi.fn(),cancel=vi.fn();
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream({pull,cancel},{highWaterMark:0}),{headers:{'Content-Length':String(11)}})));
+    await expect(runtime.download(file.id,10)).rejects.toMatchObject({statusCode:502,code:'file_too_large',message:expect.stringContaining('archive.zip is larger than 10 B')});
+    expect([pull.mock.calls.length,cancel.mock.calls.length]).toEqual([0,1]);
+  });
+
+  it('stops streaming a file without a declared length once it passes the cap',async()=>{
+    const file=await runtime.upload('shared',{name:'archive.zip',mime:'application/zip',data:Buffer.from('zip')});
+    let sent=0;
+    const body=new ReadableStream<Uint8Array>({pull(controller){sent++;controller.enqueue(new Uint8Array(4));}});
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(body)));
+    const download=await runtime.download(file.id,10);
+    const received:Uint8Array[]=[];
+    await expect((async()=>{for await(const chunk of download.body)received.push(chunk);})()).rejects.toMatchObject({code:'file_too_large'});
+    expect(received.reduce((size,chunk)=>size+chunk.byteLength,0)).toBe(8);
+    expect(sent).toBeLessThan(6);
+  });
+
+  it('refuses an oversized portrait before buffering it',async()=>{
+    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream(),{headers:{'Content-Length':'2000001'}})));
+    await expect(runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!})).rejects.toThrow('Hermes portraits must be 2 MB or smaller.');
+    expect(calls.some(call=>call.method==='profiles.set_asset')).toBe(false);
   });
 
   it('does not overwrite a native portrait after metadata CAS rejects a stale save',async()=>{
