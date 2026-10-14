@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -349,22 +350,26 @@ class PlatformTests(unittest.TestCase):
         with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
             self.platform.backup()
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
-        # Each allowance counts: objects twice (imported, then archived) and the install, all checked
-        # before any object is imported.
-        archives = self.platform.readable(self.source) + self.platform.readable(self.home, excluded=self.source)
+        # Each allowance counts: the archives, candidate objects twice (packed in staging, then
+        # imported) and the install, all checked before any object is imported. The live object
+        # store is not archived, so it needs no room.
+        archives = self.platform.readable(self.source, excluded=self.source / ".git/objects") + self.platform.readable(self.home, excluded=self.source)
         objects = linux.tree_bytes(self.target / ".git")
         install = linux.tree_bytes(self.target, excluded=self.target / ".git") + linux.tree_bytes(self.stage / "pm-home/installs")
         self.assertGreater(install, 0)
         imported = []
         self.platform.materialize_candidate = lambda: imported.append(True)
-        for short in (archives + objects + install, archives + 2 * objects):
+        for short in (archives + objects + install, 2 * objects + install, archives + 2 * objects):
             usage.free = reserve + short
             with self.subTest(free=usage.free), patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about"):
                 self.platform.backup()
         self.assertEqual(imported, [])
         self.assertEqual(self.states.read_bytes(), before)
-        self.assertEqual(self.states.read_bytes(), before)
         self.assertEqual(self.platform.load()["phase"], "quiescent")
+        # Exactly enough room is enough.
+        usage.free = reserve + archives + 2 * objects + install
+        with patch.object(linux.shutil, "disk_usage", return_value=usage): self.platform.backup()
+        self.assertEqual(self.platform.load()["phase"], "backed_up")
 
     def test_failed_backup_restarts_hermes_even_when_logging_fails(self):
         self.platform.quiescence()
@@ -478,7 +483,10 @@ class PlatformTests(unittest.TestCase):
         (self.home / "auth.json").write_text("fresh-live-grant")
         (self.home / "installs/selected.json").write_text("new generation")
         (self.home / "config.yaml").write_text("unexpected configuration mutation")
+        # The live object store is kept as is, never rebuilt.
+        packs = sorted((self.source / ".git/objects/pack").iterdir())
         self.platform.rollback()
+        self.assertEqual(sorted((self.source / ".git/objects/pack").iterdir()), packs)
         self.platform.env["HERMES_UPGRADE_ROLLBACK"] = "1"
         self.platform.verify(); self.platform.finish()
         self.assertEqual(self.platform.source_state()[0], self.old)
@@ -488,6 +496,20 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("model: chosen", (self.home / "config.yaml").read_text())
         self.assertIn("repair fixed", (self.source / "repair.py").read_text())
         self.assertEqual(self.git("diff", "--cached", "--name-only", "--", "staged-repair.py").strip(), "staged-repair.py")
+
+    def test_source_archive_leaves_out_git_objects_and_rollback_refuses_an_incomplete_store(self):
+        self.platform.quiescence(); self.platform.backup()
+        with tarfile.open(self.stage / "backup/source.tar.gz") as archive: names = archive.getnames()
+        self.assertIn("hermes-agent/.git/HEAD", names)
+        self.assertFalse([name for name in names if name.startswith("hermes-agent/.git/objects")])
+        self.platform.install()
+        # A lost baseline blob, with no staged copy to restore it from, stops rollback.
+        blob = self.git("rev-parse", self.old + ":app.py").strip()
+        (self.source / ".git/objects" / blob[:2] / blob[2:]).unlink(missing_ok=True)
+        for pack in (self.source / ".git/objects/pack").glob("*"): pack.unlink()
+        shutil.rmtree(self.target / ".git/objects"); (self.target / ".git/objects/pack").mkdir(parents=True)
+        with self.assertRaises((subprocess.CalledProcessError, RuntimeError)): self.platform.rollback()
+        self.assertNotEqual(self.platform.load()["phase"], "restored")
 
     def test_dependency_change_blocks_before_source_cutover(self):
         self.platform.quiescence(); self.platform.backup()

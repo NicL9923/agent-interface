@@ -103,6 +103,7 @@ class Platform:
         for key in ("source", "hermesHome", "managedLauncher", "managedPython", "serviceEnvFile", "qualificationReceipt", "maintenanceFile", "stageRoot", "systemctl"):
             if not isinstance(self.config.get(key), str) or not Path(self.config[key]).is_absolute(): raise RuntimeError("Installer paths must be fixed and absolute: " + key)
         self.source, self.home = Path(self.config["source"]), Path(self.config["hermesHome"])
+        self.objects = self.source / ".git/objects"
         if self.source.is_symlink() or self.home.is_symlink(): raise RuntimeError("Source and Hermes home must be real directories")
         if not self.source.is_relative_to(self.home): raise RuntimeError("Managed source must be inside the shared Hermes home")
         if Path(self.config["stageRoot"]).is_relative_to(self.home): raise RuntimeError("Staging and backups must be outside the live Hermes home")
@@ -357,7 +358,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 if "ActiveState=inactive" not in state or "MainPID=0" not in state: raise RuntimeError("Native service did not stop cleanly")
 
     def archive(self, path, source, excluded=None):
-        with tarfile.open(path, "w:gz", dereference=False) as archive:
+        # Fast compression: most bytes are packages and binaries that barely shrink at higher levels.
+        with tarfile.open(path, "w:gz", compresslevel=1, dereference=False) as archive:
             archive.add(source, arcname=source.name, filter=lambda entry: None if excluded and (entry.name == excluded or entry.name.startswith(excluded + "/")) else entry)
         path.chmod(0o600)
         with tarfile.open(path) as archive: archive.getmembers()
@@ -369,11 +371,12 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.gateway(draining=True)
         # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
         # room, before anything is written: on Oct 13, 2026 a full disk stopped a backup mid-archive.
-        # The budget errs high. Candidate objects land in the live repository and then in the source
-        # archive, so they count twice; the checkout and dependency generation, as built in staging,
-        # land in the live home; a reserve covers Hermes's own writes. Archives and the temporary
-        # object pack use the staging filesystem, which may differ from the live one.
-        archives = self.readable(self.source) + self.readable(self.home, excluded=self.source)
+        # The budget errs high. Candidate objects are packed in staging, then land in the live
+        # repository; the checkout and
+        # dependency generation, as built in staging, land in the live home; a reserve covers
+        # Hermes's own writes. Archives and the temporary object pack use the staging filesystem,
+        # which may differ from the live one.
+        archives = self.readable(self.source, excluded=self.objects) + self.readable(self.home, excluded=self.source)
         objects = tree_bytes(self.target / ".git")
         install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
         staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
@@ -389,7 +392,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.control("stop")
             self.save(dict(record, phase="stopped"))
             self.backup_dir.mkdir(mode=0o700)
-            hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source),
+            # Git's object store stays out of the archive: installation only adds objects, so the
+            # live store still holds the baseline at rollback. It was 6 GB of a 29-minute backup.
+            hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source, str(self.objects.relative_to(self.source.parent))),
                 "home.tar.gz": self.archive(self.backup_dir / "home.tar.gz", self.home, str(self.source.relative_to(self.home.parent)))}
             protected = {}
             for filename, expected in record["baseline"]["settings"].items():
@@ -531,8 +536,13 @@ print(json.dumps({'ok':True,'state':'synced'}))
         for name, expected in record["archives"].items():
             if digest(private(self.backup_dir / name)) != expected: raise RuntimeError("Cold recovery archive integrity failed before restoring")
         self.control("stop")
-        if self.source.exists(): shutil.rmtree(self.source)
+        if self.source.exists():
+            for path in [*self.source.iterdir(), *(self.objects.parent.iterdir() if self.objects.is_dir() else ())]:
+                if path in (self.objects, self.objects.parent): continue
+                if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
+                else: path.unlink()
         self.extract("source.tar.gz", self.source.parent)
+        self.restore_baseline_objects(record["baseline"]["source"][0])
         # Restore managed generations/selections and tool binaries only. Never
         # restore .env, auth.json, profile OAuth files or sessions from home.tar.gz.
         for name in ("installs", "tools"):
@@ -554,6 +564,21 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if self.source_state() != tuple(record["baseline"]["source"]): raise RuntimeError("Rollback source or repair does not match the cold snapshot")
         self.save(dict(record, phase="restored"))
         self.control("start")
+
+    def restore_baseline_objects(self, revision):
+        """The kept object store must hold the whole baseline tree, offline. A crash or a damaged
+        store can lose objects; the staged repository holds the baseline's full history."""
+        offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+        check = ["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", "--no-walk", revision]
+        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180).returncode == 0: return
+        for name in ("pack", "info"): (self.objects / name).mkdir(parents=True, exist_ok=True)
+        with subprocess.Popen(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline) as packer:
+            packer.stdin.write((revision + "\n").encode()); packer.stdin.close()
+            subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=packer.stdout,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=900)
+            if packer.wait(timeout=60): raise RuntimeError("The staged repository cannot supply the baseline's objects")
+        subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
 
     def recovery_guard(self):
         record = self.load()
