@@ -82,7 +82,7 @@ if (!settings.clientId && !document.getElementById('one')) {
     const flowCookie = req.cookies.native_flow;
     const flowHash = typeof flowCookie === "string" ? hash(flowCookie) : "";
     const flow = flowCookie ? store.getNativeFlow(flowHash) : undefined;
-    if (!flow) return reply.code(401).send({ error: "Sign-in expired. Start again in the app." });
+    if (!flow) return reply.code(401).send({ error: "Sign-in expired. Start again in the app.", code: "session_expired" });
     const body = z.union([z.object({ credential: z.string().min(1).max(20000) }).strict(), z.object({ member: z.enum(["one", "two"]) }).strict()]).parse(req.body);
     let user: User;
     if ("member" in body) {
@@ -99,7 +99,7 @@ if (!settings.clientId && !document.getElementById('one')) {
     if (!allowedIdentity(config, user)) return reply.code(403).send({ error: "This account is not in the household allowlist" });
     store.user(user);
     const code = random();
-    if (!store.finishNativeFlow(flowHash, hash(code), user.id)) return reply.code(401).send({ error: "Sign-in expired. Start again in the app." });
+    if (!store.finishNativeFlow(flowHash, hash(code), user.id)) return reply.code(401).send({ error: "Sign-in expired. Start again in the app.", code: "session_expired" });
     reply.clearCookie("native_flow", { path: "/" });
     const url = new URL(callback); url.searchParams.set("code", code); url.searchParams.set("state", flow.state);
     return { callback: url.toString() };
@@ -109,7 +109,7 @@ if (!settings.clientId && !document.getElementById('one')) {
     const challenge = createHash("sha256").update(body.codeVerifier).digest("base64url");
     const userId = store.consumeNativeCode(hash(body.code), body.state, challenge);
     const user = userId ? store.getUser(userId) : undefined;
-    if (!user || !allowedIdentity(config, user)) return reply.code(401).send({ error: "Connection code is invalid or expired" });
+    if (!user || !allowedIdentity(config, user)) return reply.code(401).send({ error: "Connection code is invalid or expired", code: "session_expired" });
     const token = random(), expires = Date.now() + 7 * 86400000;
     store.nativeSession(hash(token), user.id, expires);
     return { token, expiresAt: new Date(expires).toISOString(), user };
