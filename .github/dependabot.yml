@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+  # CI tools in .github/requirements-ci.txt and the Hermes spike lock file.
+  # Dependabot reads any .txt requirements file in the directory. The spike
+  # lock records the versions qualified against Hermes, so review its updates
+  # as qualification changes, not routine bumps.
+  - package-ecosystem: pip
+    directory: /.github
+    schedule:
+      interval: weekly
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: pip
+    directory: /scripts/spike
+    schedule:
+      interval: weekly
+    groups:
+      pip-spike-minor-patch:
+        update-types: [minor, patch]

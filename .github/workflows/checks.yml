@@ -14,54 +14,57 @@ concurrency:
 
 jobs:
   application:
-    name: Node ${{ matrix.node }}
+    name: Node ${{ matrix.node-version || '(.node-version)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        node: [24.21.0, 26.10.0]
+        include:
+          # The primary version comes from .node-version so it cannot drift.
+          - node-version-file: .node-version
+          - node-version: 26.10.0
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ matrix.node-version }}
+          node-version-file: ${{ matrix.node-version-file }}
           cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run build
+  python:
+    # Runs once, on the Python the Hermes host runs (scripts/spike/requirements.lock.txt).
+    name: Python 3.14.7
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.14.7
+          cache: pip
+          cache-dependency-path: .github/requirements-ci.txt
+      # Some tests start node, as the Hermes host does.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+      - run: pip install -r .github/requirements-ci.txt
       - name: Check Python syntax
-        run: python3 -m compileall -q src/hermes scripts .agents/tools
-      - name: Check dashboard startup boundaries
-        run: python3 scripts/spike/dashboard_contract_test.py
-      - name: Check qualification boundaries
-        run: python3 scripts/spike/qualification_contract_test.py
-      - name: Check integration authorization and file boundaries
-        run: python3 tests/hermes_integrations_test.py
-      - name: Check native memory, vault and manual routine ownership
-        run: |
-          python3 tests/hermes_experience_test.py
-          python3 tests/hermes_vault_test.py
-      - name: Check upgrade and recovery control plane
-        run: python3 scripts/hermes-upgrade-worker-test.py
-      - name: Check Linux upgrade hooks
-        run: python3 tests/hermes_upgrade_linux_test.py
-      - name: Check persistent gateway maintenance
-        run: python3 tests/hermes_gateway_guard_test.py
-      - name: Check shared computer control and persistent terminal
+        run: python -m compileall -q src/hermes scripts .agents/tools
+      - name: Check for undefined names and likely bugs
+        run: ruff check --output-format=github .
+      - name: Install tmux for the terminal and computer tests
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y tmux
-          python3 tests/hermes_computer_test.py
-          python3 tests/system_terminal_test.py
-      - name: Check managed dependency fingerprints
-        run: python3 scripts/hermes-qualified-python-test.py
-      - name: Check release and native recovery rules
-        run: |
-          python3 tests/release_app_test.py
-          python3 tests/recovery_app_test.py
+      - name: Run Python tests
+        run: python scripts/run-python-tests.py
   native:
     name: iOS unit tests
     runs-on: macos-26
