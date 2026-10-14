@@ -100,7 +100,7 @@ class BotDeliveryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name).resolve() / "profiles" / "penny"
         self.home.mkdir(parents=True)
-        (self.home / "state.db").write_text("")
+        (self.home / "state.db").write_text("written store")
     def tearDown(self): self.temp.cleanup()
 
     def record(self, key=KEY):
@@ -200,6 +200,32 @@ class BotDeliveryTests(unittest.TestCase):
         server = Server({"session_key": "child", "agent": object()})
         self.assertTrue(self.consumer(server, Store(tips={"old": "child"})).deliver_once("penny", self.home))
         self.assertEqual(self.record()["status"], "settled")
+
+    def test_new_profile_with_unwritten_store_queues_for_its_first_chat(self):
+        self.box = mailbox()
+        (self.home / "state.db").write_text("")
+        def unopenable(home):
+            raise AssertionError("an empty store has no schema to read")
+        delivery.install_producer(self.box, unopenable)
+        owner = self.box.find_canonical_live_owner(self.home)
+        self.assertEqual((owner["consumer"], owner["session_id"]), ("agent-interface", delivery.UNOPENED))
+
+    def test_update_runs_only_never_started_native_owner_receipts(self):
+        # Hermes 6ebd92d pinned receipts to its dashboard lease, which an update ends.
+        self.box = mailbox()
+        root = self.box._root(self.home); root.mkdir(parents=True)
+        native = {"profile_home": str(self.home), "session_id": "stored", "lease_id": "old-lease", "live_session_id": "old"}
+        for key, status, extra in ((KEY, "queued", {}), (OTHER, "claimed", {}), ("c" * 64, "queued", {"admission_id": "authority"})):
+            (root / f"{key}.json").write_text(json.dumps(dict(id=key, delivery_id=key, owner=native, **native, message="native " + status,
+                                                              status=status, created_at=1, sequence=1, **extra)))
+        session = {"session_key": "stored", "agent": object()}
+        server = Server(session)
+        consumer = self.consumer(server, Store())
+        self.assertTrue(consumer.deliver_once("penny", self.home))
+        session["running"] = False
+        self.assertFalse(consumer.deliver_once("penny", self.home))
+        self.assertEqual([turn[2] for turn in server.turns], ["native queued"])
+        self.assertEqual((self.record()["status"], self.record(OTHER)["status"], self.record("c" * 64)["status"]), ("settled", "claimed", "queued"))
 
     def test_profile_homes_lists_default_and_named_profiles(self):
         root = Path(self.temp.name).resolve()

@@ -56,8 +56,12 @@ def open_session_db(home):
 
 def canonical_target(home, open_db=open_session_db):
     """``(present, tip, authority_owned)`` for the profile's exact "Bot Chat" title."""
-    if not (Path(home) / "state.db").is_file():
+    store = Path(home) / "state.db"
+    if not store.is_file():
         return False, None, False
+    if store.stat().st_size == 0:
+        # A new profile's store stays empty until its first session writes it.
+        return True, None, False
     db = open_db(home)
     try:
         row = db.get_session_by_title("Bot Chat")
@@ -135,12 +139,20 @@ def install_producer(mailbox, open_db=open_session_db):
     return True
 
 
+def runnable(record):
+    """A never-started delivery the add-on may run: its own, or a live-owner record
+    Hermes 6ebd92d queued before an update retired that consumer. Authority
+    admissions belong to the gateway."""
+    return (record is not None and record.get("status") == "queued" and not record.get("admission_id")
+            and (record.get("consumer") == CONSUMER or isinstance(record.get("owner"), dict)))
+
+
 def _pending(mailbox, root, stored, open_db, home):
-    """Queued add-on records this canonical session may run, oldest first."""
+    """Queued records this canonical session may run, oldest first."""
     found, tips = [], {}
     for path in root.glob("*.json"):
         record = mailbox._scan_read(path)
-        if record is None or record.get("consumer") != CONSUMER or record.get("status") != "queued":
+        if not runnable(record):
             continue
         pinned = record["owner"]["session_id"]
         if pinned not in (UNOPENED, stored):
@@ -193,8 +205,7 @@ class Consumer:
         if self.idle.get(home) == stamp:
             return False
         for path in root.glob("*.json"):
-            record = self.mailbox._scan_read(path)
-            if record is not None and record.get("consumer") == CONSUMER and record.get("status") == "queued":
+            if runnable(self.mailbox._scan_read(path)):
                 return True
         self.idle[home] = stamp
         return False

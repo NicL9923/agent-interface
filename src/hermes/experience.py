@@ -151,14 +151,12 @@ def routine_results(data):
     profile, job_id = data["profile"], data.get("routineId")
     if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", job_id):
         raise ExperienceError("Invalid routine ID.")
-    if store_unwritten(profile):
-        if data["operation"] == "routine_results":
-            return []
-        raise ExperienceError("This run is no longer in the routine history. Refresh the results.", 404)
+    # Script-only runs write output documents without session history.
+    unwritten = store_unwritten(profile)
     with _owner_home_scope(profile):
-        db = _open_session_db_for_profile(profile, read_only=True)
+        db = None if unwritten else _open_session_db_for_profile(profile, read_only=True)
         try:
-            sessions = db.list_cron_job_runs(job_id, limit=100, offset=0)
+            sessions = [] if db is None else db.list_cron_job_runs(job_id, limit=100, offset=0)
             job = _call_cron_for_profile(profile, "get_job", job_id)
             directory = _cron_output_runs_dir(profile, job_id)
             expected = get_hermes_home().resolve() / "cron" / "output" / job_id
@@ -196,6 +194,8 @@ def routine_results(data):
                             text = text[:500000] + "\n\n[Output truncated after 500,000 characters.]"
                         return dict(previewOnly=False, messages=[dict(id=result_id, role="assistant", text=text)])
                 return dict(previewOnly=True, messages=[dict(id=result_id, role="system", text=row.get("preview") or row.get("title") or "No output document was saved.")])
+            if db is None:
+                raise ExperienceError("This run is no longer in the routine history. Refresh the results.", 404)
             sid = db.resolve_resume_session_id(result_id)
             messages = db.get_messages(sid, limit=500, latest=True, include_ancestors=True)
             projected = _project_for_display(messages, inline_images=False)
@@ -212,7 +212,8 @@ def routine_results(data):
                 output.insert(0, dict(id="history-limit", role="system", text="Showing the latest 500 transcript rows. Earlier output remains in Hermes."))
             return dict(previewOnly=False, messages=output)
         finally:
-            db.close()
+            if db is not None:
+                db.close()
 
 
 class RoutineRuns:

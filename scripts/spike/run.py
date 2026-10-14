@@ -48,24 +48,35 @@ def native_gateway_command(source, python):
     return guard.native_command(source, python, [], guard=path)
 
 
+def process_start_time(pid):
+    """Linux start time in clock ticks, the PID-reuse guard Hermes records in gateway.pid."""
+    try:
+        return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def stop_home_gateway(home):
-    """Stop a gateway still owning this disposable home, including one Hermes started itself."""
+    """Stop a gateway still owning this disposable home, including one Hermes started itself.
+
+    Only the exact process Hermes recorded as this home's gateway is signalled. The
+    suite runs on the Linux qualification host; elsewhere this finds nothing.
+    """
     try:
         record = json.loads((home / "gateway.pid").read_text())
     except (OSError, ValueError):
         return None
-    pid = record.get("pid")
-    if not isinstance(pid, int) or Path(str(record.get("hermes_home") or "/")).resolve() != home.resolve():
+    pid, started = record.get("pid"), record.get("start_time")
+    if (not isinstance(pid, int) or record.get("kind") != "hermes-gateway" or started is None
+            or Path(str(record.get("hermes_home") or "/")).resolve() != home.resolve()):
         return None
-    try:
-        environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-    except OSError:
-        return None
-    if ("HERMES_HOME=" + str(home)).encode() not in environment:
+    def recorded():
+        return process_start_time(pid) == started
+    if not recorded():
         return None
     os.kill(pid, signal.SIGTERM)
     for _ in range(150):
-        if not Path(f"/proc/{pid}").exists():
+        if not recorded():
             return pid
         time.sleep(0.1)
     os.kill(pid, signal.SIGKILL)

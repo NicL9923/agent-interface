@@ -181,13 +181,18 @@ class RoutineOutputTests(unittest.TestCase):
         text = experience.routine_results(self.data)['messages'][0]['text']
         self.assertTrue(text.startswith('x' * 500000)); self.assertIn('Output truncated', text)
 
-    def test_unwritten_profile_store_has_no_runs_instead_of_failing(self):
-        # The unified runtime refuses to open a store no session has written yet.
+    def test_unwritten_profile_store_still_lists_output_documents(self):
+        # The unified runtime refuses to open a store no session has written yet,
+        # while a script-only run can still save its output document.
         (self.home / 'state.db').write_text('')
-        self.db = None
-        self.assertEqual(experience.routine_results({**self.data, 'operation': 'routine_results'}), [])
+        self.modules['hermes_cli.web_routers.cron']._open_session_db_for_profile = lambda *a, **kw: self.fail('opened an unwritten store')
+        (self.directory / '2026-10-02_07-00-00.md').write_text('Script output')
+        results = experience.routine_results({**self.data, 'operation': 'routine_results'})
+        self.assertEqual([row['id'] for row in results], [self.rows[0]['id']])
+        self.assertEqual(experience.routine_results(self.data)['messages'][0]['text'], 'Script output')
+        self.rows.append(dict(id='cron_routine_session', source='session', title='Run'))
         with self.assertRaises(experience.ExperienceError) as missing:
-            experience.routine_results(self.data)
+            experience.routine_results({**self.data, 'resultId': 'cron_routine_session'})
         self.assertEqual(missing.exception.status, 404)
 
 
