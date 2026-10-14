@@ -472,6 +472,18 @@ describe("private assistant redaction across tools, restarts and failed creation
     expect(body).toContain("Sunny");
   });
 
+  it("matches a private assistant's names as whole words, however short", async () => {
+    const s = await setup();
+    s.store.rememberNames([{ id: secret, name: "Penny" }]);
+    const roster = new Roster({ listBots: async () => [{ id: secret, name: "Al", model: "test", shared: false, activity: "idle" }] }, s.store);
+    const redact = await redactAgents(s.store, roster, "local-two");
+    const result = (text: string) => redact.call({ id: "w", name: "web_search", status: "completed", arguments: "{}", result: text }).result;
+    expect(result("Prices in halfpenny coins")).toBe("Prices in halfpenny coins");
+    expect(result("Penny's ledger is balanced")).toBeUndefined();
+    expect(result("Ask Al about it")).toBeUndefined();
+    expect(result("Always and alpha")).toBe("Always and alpha");
+  });
+
   it("remembers earlier names across a restart", async () => {
     const s = await setup();
     await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member });

@@ -96,7 +96,13 @@ export async function redactAgents(store: Store, roster: Roster, userId: string)
   const target = (args?: string) => { try { return (JSON.parse(args ?? "") as { target?: unknown }).target; } catch { return undefined; } };
   // Any tool detail mentioning a hidden assistant is hidden, whatever the tool, as in a combined
   // "message_agent, web_search" batch. A handoff whose target cannot be read counts as hidden too.
-  const mentions = (value?: string) => !!value && (() => { const text = value.toLowerCase(); return [...handles].some(id => text.includes(id.toLowerCase())) || [...labels].some(name => name.length > 2 && text.includes(name)); })();
+  // IDs and handles match exactly. Names match as whole words, ignoring case, with Unicode word
+  // boundaries, however short: "Penny" hides "Penny's" but not "halfpenny". A shared tool detail
+  // that happens to use the word, like "penny", is hidden too, erring toward privacy.
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const words = [...new Set(hidden.flatMap(id => [...names.get(id) ?? []]))].filter(name => name.trim())
+    .map(name => new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name.trim())}(?![\\p{L}\\p{N}_])`, "iu"));
+  const mentions = (value?: string) => !!value && ([...handles].some(id => value.includes(id)) || words.some(word => word.test(value)));
   const handoff = (name?: string) => !!name?.split(",").some(part => part.trim() === "message_agent");
   const hides = (call: ToolCall) => mentions(call.arguments) || mentions(call.result) || mentions(call.error)
     || handoff(call.name) && (named(target(call.arguments)) || !target(call.arguments));
@@ -112,7 +118,7 @@ export async function redactAgents(store: Store, roster: Roster, userId: string)
     // Calls still running are listed beside the messages.
     call,
     // Search snippets and previews are fragments, so any mention of a hidden handle or name hides them.
-    text: (text: string) => [...handles].some(id => text.includes(`@${id}`) || text.includes(`'${id}'`)) || [...labels].some(name => name.length > 2 && text.toLowerCase().includes(`message from 🤖 ${name}`) || text.toLowerCase().includes(`message from ${name}`)) ? hiddenText : text,
+    text: (text: string) => mentions(text) ? hiddenText : text,
   };
 }
 
