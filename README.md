@@ -26,6 +26,13 @@ the assistant's model from the same catalog without opening settings. The web di
 also controls reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. Hermes validates support for the selected model.
 
+An assistant is either shared with the household or personal. A personal assistant
+is personalized, not private: everyone can open it, chat with it and use its memory
+and logins. Only its owner can change its details, model, visibility, tools, skills,
+reasoning, speed, avatar or routines, or delete it. Home previews, Today,
+notifications, search, automations, routines and group chats show it only to its
+owner.
+
 Web Settings > Notifications, or the same section in iOS Preferences, shows whether this account has notifications enabled
 on the current device. Turn the switch on or off there. A new browser asks once
 whether to enable notifications and explains where to change the setting later.
@@ -87,7 +94,8 @@ rollback instructions before using that extension. The app does not directly
 edit Hermes databases or take over execution from an existing Hermes owner.
 Setup connects to an existing compatible owner; it does not install Hermes or
 change its supervisor. A missing add-on, incompatible revision, rejected token,
-or unreachable gateway gets a distinct diagnostic.
+or unreachable gateway gets a distinct diagnostic. When Hermes rejects the server's
+token, requests fail with 502 and keep people signed in to the app.
 
 For a Google-protected Hermes dashboard, run this app on the same host and use
 the private service connection described in the capability matrix. This keeps

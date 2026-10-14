@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import { gzipSync } from 'node:zlib';
 import { createHermesRuntime } from '../src/server/hermes.js';
 import type { Runtime, Submission } from '../src/shared/types.js';
 
+const realFetch=globalThis.fetch;
 // Isolated wire-contract regressions. Real Hermes execution evidence lives in the spike probes.
 const token='isolated-contract-token';
 const revision='b9cb268deffc97946ec11645aa622a7353dd0591';
@@ -386,7 +392,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const body=Buffer.from(JSON.stringify({path:'/etc/passwd',name:'passwd',mime:'text/plain',botId:'shared'})).toString('base64url');
     const id=`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
     const fetch=vi.fn();vi.stubGlobal('fetch',fetch);
-    await expect(runtime.download(id)).rejects.toThrow('Unregistered file identifier');
+    await expect(runtime.download(id,1024)).rejects.toThrow('Unregistered file identifier');
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -500,6 +506,61 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const metadata=calls.find(call=>call.method==='profiles.configure')?.params;
     expect(metadata?.ui_meta.agent_interface.unrelated).toBe('preserve');
     expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
+  });
+
+  it('refuses an oversized file from its declared length before reading it',async()=>{
+    const file=await runtime.upload('shared',{name:'archive.zip',mime:'application/zip',data:Buffer.from('zip')});
+    const pull=vi.fn(),cancel=vi.fn();
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream({pull,cancel},{highWaterMark:0}),{headers:{'Content-Length':String(11)}})));
+    await expect(runtime.download(file.id,10)).rejects.toMatchObject({statusCode:502,code:'file_too_large',message:expect.stringContaining('archive.zip is larger than 10 B')});
+    expect([pull.mock.calls.length,cancel.mock.calls.length]).toEqual([0,1]);
+  });
+
+  it('stops streaming a file without a declared length once it passes the cap',async()=>{
+    const file=await runtime.upload('shared',{name:'archive.zip',mime:'application/zip',data:Buffer.from('zip')});
+    let sent=0;
+    const body=new ReadableStream<Uint8Array>({pull(controller){sent++;controller.enqueue(new Uint8Array(4));}});
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(body)));
+    const download=await runtime.download(file.id,10);
+    const received:Uint8Array[]=[];
+    await expect((async()=>{for await(const chunk of download.body)received.push(chunk);})()).rejects.toMatchObject({code:'file_too_large'});
+    expect(received.reduce((size,chunk)=>size+chunk.byteLength,0)).toBe(8);
+    expect(sent).toBeLessThan(6);
+  });
+
+  it('counts decoded bytes and drops the encoded length of a compressed file',async()=>{
+    const file=await runtime.upload('shared',{name:'notes.txt',mime:'text/plain',data:Buffer.from('notes')});
+    const decoded=Buffer.alloc(1100,'a'),encoded=gzipSync(decoded);
+    const server=createServer((_req,res)=>{res.writeHead(200,{'Content-Encoding':'gzip','Content-Length':encoded.length});res.end(encoded);});
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const port=(server.address() as AddressInfo).port;
+    vi.stubGlobal('fetch',(url:URL,init:RequestInit)=>realFetch(new URL(url.pathname+url.search,`http://127.0.0.1:${port}`),init));
+    try{
+      const whole=await runtime.download(file.id,2000);
+      expect(whole.size).toBeUndefined();
+      expect(Buffer.from(await new Response(whole.body).arrayBuffer())).toEqual(decoded);
+      const capped=await runtime.download(file.id,1000);
+      await expect(new Response(capped.body).arrayBuffer()).rejects.toMatchObject({code:'file_too_large'});
+    }finally{server.close();}
+  });
+
+  it('cancels a stalled Hermes read as soon as the person disconnects',async()=>{
+    const file=await runtime.upload('shared',{name:'notes.txt',mime:'text/plain',data:Buffer.from('notes')});
+    const cancel=vi.fn();
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel}))));
+    const stream=Readable.fromWeb((await runtime.download(file.id,1000)).body as NodeReadableStream<Uint8Array>);
+    stream.resume();
+    await new Promise(resolve=>setTimeout(resolve,10));
+    stream.destroy();
+    await new Promise(resolve=>setTimeout(resolve,10));
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('refuses an oversized portrait before buffering it',async()=>{
+    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
+    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream(),{headers:{'Content-Length':'2000001'}})));
+    await expect(runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!})).rejects.toThrow('Hermes portraits must be 2 MB or smaller.');
+    expect(calls.some(call=>call.method==='profiles.set_asset')).toBe(false);
   });
 
   it('does not overwrite a native portrait after metadata CAS rejects a stale save',async()=>{

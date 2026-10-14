@@ -5,6 +5,7 @@ import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.
 import ClientWebSocket from 'ws';
 import type { SecureRequest } from '../shared/vault.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
+import { formatBytes } from '../shared/uploads.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
@@ -418,6 +419,12 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
     } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
+    // Hermes refusing this server's own token is a server configuration problem. Never pass
+    // it on as a 401 or 403, which clients read as the end of the person's own sign-in.
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel();
+      throw Object.assign(new Error("Hermes rejected this server's credential. You are still signed in. Ask whoever runs the server to update its Hermes token, then reconnect."), {statusCode: 502, code: 'hermes_unauthorized', expose: true});
+    }
     if (!response.ok && path.startsWith('/api/audio/') && response.status === 400) {
       await response.body?.cancel();
       throw Object.assign(new Error('Voice is unavailable. Check the speech provider in the native Hermes dashboard.'), { statusCode: 409 });
@@ -430,8 +437,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const detail = await response.json().catch(() => ({})) as {error?:unknown};
       throw Object.assign(new Error(typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.'), {statusCode:response.status});
     }
-    if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
-      response.status === 401 || response.status === 403 ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes HTTP ${response.status}: request failed.`);
+    if (!response.ok) throw new TransportError('unreachable', `Hermes HTTP ${response.status}: request failed.`);
     return response;
   }
   async function voiceReply(path: string, payload: Wire): Promise<Wire> {
@@ -672,8 +678,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if(avatar.mode==='portrait'){
         if(!avatar.src.startsWith('/api/files/')||/[?#]/.test(avatar.src))throw new Error('Choose an image uploaded or generated through this app.');
         const id=decodeURIComponent(avatar.src.slice('/api/files/'.length));const file=fileValue(id);if(file.botId!==botId)throw new Error('Portrait belongs to a different Hermes bot.');if(!['image/png','image/jpeg','image/webp'].includes(file.mime))throw new Error('Hermes portraits support PNG, JPEG, and WebP.');
-        const image=await this.download(id);if(image.data.length>2_000_000)throw new Error('Hermes portraits must be 2 MB or smaller.');
-        portraitData=`data:${image.mime};base64,${image.data.toString('base64')}`;
+        const chunks:Uint8Array[]=[];
+        try{for await(const chunk of (await this.download(id,2_000_000)).body)chunks.push(chunk);}
+        catch(error){throw (error as {code?:string}).code==='file_too_large'?new Error('Hermes portraits must be 2 MB or smaller.'):error;}
+        portraitData=`data:${file.mime};base64,${Buffer.concat(chunks).toString('base64')}`;
       }
       const meta=row.ui_meta?.agent_interface??{};const result=await rpc('profiles.configure',{name:botId,ui_meta:{agent_interface:{...meta,avatar}},ui_meta_expected_revisions:{agent_interface:row.ui_meta_revisions?.agent_interface??0}});if(!result.ok||result.applied?.ui_meta===false||Object.keys(result.applied?.ui_meta_conflicts??{}).length)throw new Error('The Hermes avatar changed on another client. Reload before saving.');
       // Native assets do not support CAS. Never overwrite one after a rejected metadata revision.
@@ -740,7 +748,22 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}});if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
     async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}});if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
-    async download(id){const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);return {data:Buffer.from(await response.arrayBuffer()),name:file.name,mime:file.mime};},
+    async download(id,maxBytes){
+      const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);
+      const tooLarge=()=>Object.assign(new Error(`${file.name} is larger than ${formatBytes(maxBytes)}, the most this app opens. Ask the assistant for a smaller file.`),{statusCode:502,code:'file_too_large',expose:true});
+      // fetch decodes a compressed body, so the declared length counts encoded bytes.
+      // Trust it only for an unencoded body; the cap always counts what is sent on.
+      const encoding=response.headers.get('content-encoding');
+      const declared=!encoding||encoding==='identity'?Number(response.headers.get('content-length')??NaN):NaN;
+      if(declared>maxBytes){await response.body?.cancel();throw tooLarge();}
+      if(!response.body)throw new Error('Hermes returned no file content.');
+      let size=0;
+      // Cancelling the result, as when the person disconnects, cancels the Hermes read.
+      const body=response.body.pipeThrough(new TransformStream<Uint8Array,Uint8Array>({transform(chunk,controller){
+        size+=chunk.byteLength;if(size>maxBytes)controller.error(tooLarge());else controller.enqueue(chunk);
+      }}));
+      return {name:file.name,mime:file.mime,...(Number.isSafeInteger(declared)?{size:declared}:{}),body};
+    },
     async transcribeVoice(botId, input) {
       await open(botId);
       const value = await voiceReply(`/api/audio/transcribe?profile=${encodeURIComponent(botId)}`, { data_url: `data:${input.mime};base64,${input.data.toString('base64')}`, mime_type: input.mime });
