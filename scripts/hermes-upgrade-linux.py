@@ -6,6 +6,7 @@ managed dependency state, never old rotating OAuth grants from the home archive.
 """
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -349,14 +350,27 @@ print(json.dumps({'ok':True,'state':'synced'}))
         record = self.load()
         if record["phase"] != "quiescent": raise RuntimeError("Cold backup requires verified quiescence")
         self.gateway(draining=True)
+        # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
+        # room, before anything is written: on Oct 13, 2026 a full disk stopped a backup mid-archive.
+        # The budget errs high. Candidate objects land in the live repository and then in the source
+        # archive, so they count twice; the checkout and dependency generation, as built in staging,
+        # land in the live home; a reserve covers Hermes's own writes. Archives and the temporary
+        # object pack use the staging filesystem, which may differ from the live one.
+        archives = self.readable(self.source) + self.readable(self.home, excluded=self.source)
+        objects = tree_bytes(self.target / ".git")
+        install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
+        staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
+        for location, needed in budgets.items():
+            free = shutil.disk_usage(location).free
+            if free < needed:
+                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
+                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
         self.materialize_candidate()
-        # Archives read every file while Hermes is stopped. Find an unreadable one before that.
-        self.readable(self.source)
-        self.readable(self.home, excluded=self.source)
         self.gateway(draining=True)
-        self.control("stop")
-        self.save(dict(record, phase="stopped"))
         try:
+            self.control("stop")
+            self.save(dict(record, phase="stopped"))
             self.backup_dir.mkdir(mode=0o700)
             hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source),
                 "home.tar.gz": self.archive(self.backup_dir / "home.tar.gz", self.home, str(self.source.relative_to(self.home.parent)))}
@@ -369,9 +383,11 @@ print(json.dumps({'ok':True,'state':'synced'}))
             hashes["protected.json"] = digest(self.backup_dir / "protected.json")
             self.save(dict(record, phase="backed_up", archives=hashes))
         except Exception as error:
-            # Name the failure before restarting, so a restart problem cannot hide it.
-            print("Cold backup failed: " + describe(error), file=sys.stderr, flush=True)
-            self.control("start")
+            # Restart Hermes before writing anything: a full disk can make even logging fail.
+            # The cause is named either way, so a restart problem cannot hide it.
+            try: self.control("start")
+            finally:
+                with contextlib.suppress(OSError): print("Cold backup failed: " + describe(error), file=sys.stderr, flush=True)
             self.wait_gateway(draining=True, seconds=self.config.get("gatewayStartSeconds", 120))
             self.save(dict(record, phase="quiescent"))
             raise
@@ -380,6 +396,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         def refuse(path):
             raise RuntimeError("The cold backup cannot read " + str(path) + ". Make it readable by this account or move it out of Hermes before updating")
         def failed(error): refuse(error.filename)
+        total = 0
         for directory, names, files in os.walk(root, onerror=failed):
             current = Path(directory)
             if excluded is not None and current == excluded:
@@ -391,7 +408,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
             for name in files:
                 path = current / name
                 # Archives keep links as links; only regular files are read.
-                if not path.is_symlink() and path.is_file() and not os.access(path, os.R_OK): refuse(path)
+                if path.is_symlink() or not path.is_file(): continue
+                if not os.access(path, os.R_OK): refuse(path)
+                total += path.lstat().st_size
+        return total
 
     def materialize_candidate(self):
         # A production promisor clone can have the candidate commit but none of
@@ -585,7 +605,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
         record = self.load()
         # Backup failures can leave the old source untouched; verify its live
         # gate, service identity and auth before allowing admission again.
-        if record["phase"] == "quiescent":
+        # Backup failures leave the old source untouched. If the phase write failed after Hermes
+        # was restarted, the record still says stopped; verification proves the actual state.
+        if record["phase"] in ("quiescent", "stopped"):
             self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
             self.verify(); record = self.load()
         if record["phase"] != "verified" or tuple(record.get("verifiedSource", ())) != self.source_state(): raise RuntimeError("Release requires verified live source repair and services")
@@ -605,6 +627,18 @@ KNOWN_ERRORS = frozenset((
     "ConnectionResetError", "BrokenPipeError", "JSONDecodeError", "UnicodeDecodeError", "HTTPError", "URLError",
     "SSLError", "InvalidStatus", "InvalidHandshake", "InvalidURI", "ConnectionClosed", "ConnectionClosedError",
     "ConnectionClosedOK", "HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"))
+
+
+def tree_bytes(root, excluded=None):
+    """Regular-file bytes under root, without following links."""
+    total = 0
+    for directory, names, files in os.walk(root):
+        if excluded is not None:
+            names[:] = [name for name in names if Path(directory) / name != excluded]
+        for name in files:
+            path = Path(directory) / name
+            if not path.is_symlink() and path.is_file(): total += path.lstat().st_size
+    return total
 
 
 def describe(error):

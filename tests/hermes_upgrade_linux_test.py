@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -336,6 +337,91 @@ class PlatformTests(unittest.TestCase):
             self.platform.rpc = leaky
             with self.subTest(line=line), self.assertRaises(RuntimeError) as raised: self.platform.verify()
             self.assertEqual(str(raised.exception), "native maintenance status failed: CalledProcessError (exit 2, unrecognized error)")
+
+    def test_too_little_space_refuses_cold_backup_before_service_shutdown(self):
+        self.platform.quiescence()
+        before = self.states.read_bytes()
+        # Only the reserve free: the archives, candidate objects and install still need room.
+        reserve = self.platform.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        usage = type("Usage", (), {"free": reserve + 1, "total": 72 * 1024 ** 3, "used": 60 * 1024 ** 3})()
+        with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
+            self.platform.backup()
+        self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
+        # Each allowance counts: objects twice (imported, then archived) and the install, all checked
+        # before any object is imported.
+        archives = self.platform.readable(self.source) + self.platform.readable(self.home, excluded=self.source)
+        objects = linux.tree_bytes(self.target / ".git")
+        install = linux.tree_bytes(self.target, excluded=self.target / ".git") + linux.tree_bytes(self.stage / "pm-home/installs")
+        self.assertGreater(install, 0)
+        imported = []
+        self.platform.materialize_candidate = lambda: imported.append(True)
+        for short in (archives + objects + install, archives + 2 * objects):
+            usage.free = reserve + short
+            with self.subTest(free=usage.free), patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about"):
+                self.platform.backup()
+        self.assertEqual(imported, [])
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_failed_backup_restarts_hermes_even_when_logging_fails(self):
+        self.platform.quiescence()
+        def full(path, source, excluded=None): raise OSError(28, "No space left on device", str(path))
+        self.platform.archive = full
+        class FullDisk(io.StringIO):
+            def write(self, text): raise OSError(28, "No space left on device")
+        with contextlib.redirect_stderr(FullDisk()), self.assertRaises(OSError):
+            self.platform.backup()
+        units = json.loads(self.states.read_text())
+        self.assertEqual({units[name]["ActiveState"] for name in ("gateway.service", "dashboard.service")}, {"active"})
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_space_is_checked_on_both_filesystems_when_staging_is_separate(self):
+        self.platform.quiescence()
+        real_stat = os.stat
+        def separate(path, *args, **kwargs):
+            value = real_stat(path, *args, **kwargs)
+            if Path(path) == self.home:
+                return os.stat_result((value.st_mode, value.st_ino, value.st_dev + 1, *value[3:10]))
+            return value
+        roomy = type("Usage", (), {"free": 10 ** 15, "total": 10 ** 15, "used": 0})()
+        tight = type("Usage", (), {"free": 1024, "total": 10 ** 15, "used": 0})()
+        usage = lambda location: tight if Path(location) == self.home else roomy
+        with patch.object(linux.os, "stat", separate), patch.object(linux.shutil, "disk_usage", usage), \
+                self.assertRaisesRegex(RuntimeError, "needs about .* free at " + str(self.home)):
+            self.platform.backup()
+        self.assertEqual(self.platform.load()["phase"], "quiescent")
+
+    def test_a_failed_phase_write_right_after_stopping_still_restarts_hermes(self):
+        self.platform.quiescence()
+        save = self.platform.save
+        def full(record):
+            if record.get("phase") == "stopped": raise OSError(28, "No space left on device")
+            save(record)
+        self.platform.save = full
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(OSError): self.platform.backup()
+        units = json.loads(self.states.read_text())
+        self.assertEqual({units[name]["ActiveState"] for name in ("gateway.service", "dashboard.service")}, {"active"})
+
+    def test_a_failed_restart_still_names_the_backup_failure(self):
+        self.platform.quiescence()
+        def full(path, source, excluded=None): raise OSError(28, "No space left on device", str(path))
+        self.platform.archive = full
+        control = self.platform.control
+        def refuse_start(verb):
+            if verb == "start": raise RuntimeError("systemd refused to start")
+            control(verb)
+        self.platform.control = refuse_start
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaisesRegex(RuntimeError, "systemd refused"): self.platform.backup()
+        self.assertIn("Cold backup failed: OSError on ", errors.getvalue())
+
+    def test_finish_releases_a_stopped_record_once_hermes_is_verified_running(self):
+        self.platform.quiescence()
+        self.platform.save(dict(self.platform.load(), phase="stopped"))
+        self.platform.finish()
+        self.assertEqual(self.platform.load()["phase"], "finished")
+        self.assertIn("release", self.platform.rpc_calls)
 
     def test_missing_qualified_objects_refuses_backup_without_service_shutdown(self):
         self.platform.quiescence()
