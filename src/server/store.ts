@@ -350,10 +350,13 @@ export class Store {
   clearSubmittedDraft(userId: string, botId: string, expected: Pick<SavedDraft, "text" | "attachments">, baseRevision?: number) {
     const current = this.draft(userId, botId);
     const empty = JSON.stringify({ text: "", attachments: [] });
-    if (!current || JSON.stringify({ text: current.text, attachments: current.attachments }) === empty) return false;
-    const sent = JSON.stringify({ text: current.text, attachments: current.attachments }) === JSON.stringify(expected);
-    if (!sent && (baseRevision === undefined || current.revision > baseRevision)) return false;
-    this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=?").run(empty, userId, botId);
+    const content = current ? JSON.stringify({ text: current.text, attachments: current.attachments }) : empty;
+    // An empty draft still records the send, so a save dispatched before it cannot restore the text.
+    if (content !== empty && content !== JSON.stringify(expected) && (baseRevision === undefined || current!.revision > baseRevision))
+      return false;
+    this.db
+      .prepare("INSERT INTO drafts(user_id,bot_id,value) VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value")
+      .run(userId, botId, empty);
     this.advanceDraft(userId, botId, "sent");
     return true;
   }

@@ -159,6 +159,24 @@ describe('connection recovery API',()=>{
     expect(await read()).toMatchObject({text:'',revision:4,reason:'sent'});
   });
 
+  it('records every accepted send, so a save dispatched before it cannot restore the sent text',async()=>{
+    const {app}=await installation({
+      conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]}),
+      submit:async input=>({requestId:input.requestId,status:'accepted',runId:input.requestId}),
+    });
+    const one=await identity(app);
+    const put=(bot:string,text:string,baseRevision:number)=>app.inject({method:'PUT',url:`/api/bots/${bot}/draft`,headers:one,payload:{text,attachments:[],baseRevision}});
+    const submit=(bot:string,text:string,draftBaseRevision:number)=>app.inject({method:'POST',url:`/api/bots/${bot}/messages`,headers:one,payload:{requestId:randomUUID(),text,attachments:[],draftBaseRevision}});
+    // Never saved: the send creates the draft at revision 1.
+    expect((await submit('shared','Typed and sent at once',0)).json().status).toBe('accepted');
+    expect((await app.inject({url:'/api/bots/shared/draft',headers:one})).json()).toEqual({text:'',attachments:[],revision:1,reason:'sent',sentRevision:1});
+    expect((await put('shared','Typed and sent at once',0)).statusCode).toBe(409);
+    // Already empty on the server.
+    await put('other','',0);
+    expect((await submit('other','Second',1)).json().status).toBe('accepted');
+    expect((await put('other','Second',1)).json()).toMatchObject({code:'draft_conflict',draft:{text:'',revision:2,reason:'sent'}});
+  });
+
   it('clears a matching draft only on first accepted receipt, preserving newer phone edits and a retyped identical draft',async()=>{
     const {app}=await installation({
       conversation:async()=>({botId:'shared',messages:[],activity:{state:'idle'},approvals:[],files:[]}),
