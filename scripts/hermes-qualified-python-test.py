@@ -48,6 +48,17 @@ class ManagedFingerprintTests(unittest.TestCase):
         with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, environment):
             return qualified.active_fingerprint()
 
+    def test_dump_holds_exactly_the_hashed_rows(self):
+        distribution = self.distribution(self.root / "libs", self.source)
+        dump = self.root / "rows.json"
+        environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file(""))}
+        with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, environment):
+            value = qualified.active_fingerprint(dump)
+            with self.assertRaises(FileExistsError): qualified.active_fingerprint(dump)
+        self.assertEqual(qualified.sha(dump.read_bytes()), value["dependenciesSha256"])
+        self.assertEqual(json.loads(dump.read_bytes())[0][0], "fixture")
+        self.assertEqual(dump.stat().st_mode & 0o777, 0o600)
+
     def test_equivalent_staged_and_native_generations_match_but_library_bytes_do_not(self):
         stage = self.distribution(self.root / "stage-libs", self.source)
         native = self.distribution(self.root / "native-libs", self.other_source)
