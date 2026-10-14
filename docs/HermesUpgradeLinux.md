@@ -390,3 +390,11 @@ production receipt and ledger entry, then commits them on `docs/record-NAME` fro
 the docs PR for review. The branch and the ledger check are keyed by the release, so a second
 release of the same commit is recorded separately. Reruns reuse an existing PR, pushed branch or
 recorded entry. A git or gh failure leaves the release recorded and prints the manual steps.
+
+Qualification resolves dependencies exactly as the install will. With plugin members, native PM
+seeds an install's resolution from the selected generation's resolved lock, not the checkout's
+`uv.lock`, so the stage records live's lock as its own prior lock and both resolve with
+`UV_EXCLUDE_NEWER` set to the moment qualification began. The backup, before downtime, and the
+install sync refuse if live's lock changed since the check. On Oct 14, 2026 the stage took the
+checkout's nemo-relay 0.10.0 while live, seeded from its 0.9.3 lock, took 0.10.1, released hours
+earlier; every install failed its runtime fingerprint and rolled back.

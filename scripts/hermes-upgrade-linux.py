@@ -273,9 +273,22 @@ print(json.dumps({'ok':True,'state':'synced'}))
 """
         # Build exactly the extras qualification built. Left to its default, Hermes d97007c chose
         # fewer and dropped 38 packages, discord.py among them.
+        qualified = self.qualified_resolution()
+        # The same cutoff as qualification, over the same seed lock, resolves the same versions.
+        env = dict(self.child_env, UV_EXCLUDE_NEWER=qualified["excludeNewer"]) if qualified.get("excludeNewer") else None
+        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras"))], capture=True, env=env))
+
+    def qualified_resolution(self):
+        """What qualification resolved from, after proving live will seed from the same lock."""
         descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
-        extras = json.loads(private(descriptor).read_text())["extras"] if descriptor else None
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(extras)], capture=True))
+        if not descriptor: return {}
+        value = json.loads(private(descriptor).read_text())
+        seed = value.get("seedLock")
+        if seed:
+            facts = json.loads(Path(seed["facts"]).read_text()).get("packages", {}).get("venv", {})
+            if facts.get("resolved_lock") != seed["path"] or not Path(seed["path"]).is_file() or digest(Path(seed["path"])) != seed["sha256"]:
+                raise RuntimeError("Hermes's installed dependency lock changed since the update check. Check again")
+        return value
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
@@ -389,6 +402,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # dependency generation, as built in staging, land in the live home; a reserve covers
         # Hermes's own writes. Archives and the temporary object pack use the staging filesystem,
         # which may differ from the live one.
+        self.qualified_resolution()
         # Rollback can rebuild a staged repair blob from its working file only if they match.
         staged = set(self.git(self.source, "diff", "--cached", "--name-only", "-z").split("\0")) - {""}
         mixed = sorted(staged & set(self.git(self.source, "diff", "--name-only", "-z").split("\0")))
