@@ -548,6 +548,8 @@ export async function createApp(
       data,
     });
   });
+  // Stays no-store like every API response. An id is signed over a path, not a version, so an
+  // overwritten artifact keeps its URL, and a browser cache is shared by whoever signs in next.
   app.get("/api/files/:id", async (req, reply) => {
     await requireCapability("generatedFiles");
     const file = await runtime.download(params(req).id, MAX_DOWNLOAD_BYTES);
