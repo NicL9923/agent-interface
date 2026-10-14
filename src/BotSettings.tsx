@@ -40,12 +40,14 @@ export function BotSettings({
   bootstrap,
   onClose,
   onSaved,
+  onDeleted,
   onOpenRoutine,
 }: {
   bot: Bot | "new";
   bootstrap: Bootstrap;
   onClose: () => void;
   onSaved: () => void;
+  onDeleted?: (botId: string) => void;
   onOpenRoutine?: (botId: string, routineId: string) => void;
 }) {
   const existing = bot === "new" ? null : bot;
@@ -108,6 +110,9 @@ export function BotSettings({
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [error, setError] = useState("");
   const [confirmModel, setConfirmModel] = useState(false);
+  // Making a shared or ownerless assistant personal hides it from everyone else, so it asks first.
+  const [confirmPersonal, setConfirmPersonal] = useState(false);
+  const [personalConfirmed, setPersonalConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [notice, setNotice] = useState("");
@@ -184,18 +189,25 @@ export function BotSettings({
     } catch (e) {
       setError((e as Error).message);
       if (e instanceof ApiError && e.confirmRequired) setConfirmModel(true);
+      if (e instanceof ApiError && e.code === "private_confirmation_required") { setError(""); setConfirmPersonal(true); }
     } finally {
       setBusy(false);
       if (key) setSaving(null);
     }
   };
-  const saveBot = (confirmed = false) => {
+  const saveBot = (confirmed = false, personal = personalConfirmed) => {
     const submitted = form;
+    if (existing && !submitted.shared && !(existing.shared === false && existing.ownerId) && !personal) {
+      setConfirmPersonal(true);
+      return;
+    }
+    setConfirmPersonal(false);
+    setPersonalConfirmed(personal);
     return run(
       async () => {
         await write(
           existing ? `/bots/${encodeURIComponent(existing.id)}` : "/bots",
-          { ...submitted, confirmModel: confirmed },
+          { ...submitted, confirmModel: confirmed, ...(existing && personal ? { confirmPrivate: true } : {}) },
           existing ? "PATCH" : "POST",
         );
         setConfirmModel(false);
@@ -332,6 +344,22 @@ export function BotSettings({
             </div>
           </div>
         )}
+        {confirmPersonal && existing && (
+          <div className="capability-note" role="alert">
+            <p>
+              Make {existing.name} your personal assistant? It will disappear for the
+              rest of the household, along with its conversation, routines and group chats.
+            </p>
+            <div className="actions">
+              <button type="button" className="danger" disabled={busy} onClick={() => void saveBot(false, true)}>
+                Make it personal
+              </button>
+              <button type="button" onClick={() => setConfirmPersonal(false)}>
+                Keep editing
+              </button>
+            </div>
+          </div>
+        )}
         {confirmModel && (
           <div className="capability-note">
             <p>
@@ -409,12 +437,11 @@ export function BotSettings({
               />{" "}
               Shared with your household
             </label>
-            {form.shared && (
-              <p className="muted">
-                This assistant has one shared model. Provider and model changes
-                are visible to both people.
-              </p>
-            )}
+            <p className="muted">
+              {form.shared
+                ? "This assistant has one shared model. Provider and model changes are visible to both people."
+                : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins."}
+            </p>
             <label>
               Enabled existing MCP servers
               <input
@@ -432,8 +459,7 @@ export function BotSettings({
               />
             </label>
             <p className="muted">
-              Only existing Hermes connections can be configured here. Personal
-              assistants organize work; they do not isolate private data.
+              Only existing Hermes connections can be configured here.
             </p>
             <div className="actions">
               <button
@@ -451,6 +477,7 @@ export function BotSettings({
                   supported={bootstrap.capabilities.botConfiguration.supported}
                   remove={() =>
                     void run(async () => {
+                      onDeleted?.(existing.id);
                       await api(`/bots/${encodeURIComponent(existing.id)}`, {
                         method: "DELETE",
                       });

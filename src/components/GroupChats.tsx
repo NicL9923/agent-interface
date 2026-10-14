@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, write } from '../client-api';
+import { api, ApiError, write } from '../client-api';
 import type { Bootstrap } from '../shared/types';
 import type { GroupCatalog, GroupEvent, GroupPage, GroupRoom, GroupState } from '../shared/collaboration';
 import { MessageMarkdown } from './MessageMarkdown';
@@ -20,6 +20,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const [threadId, setThreadId] = useState('');
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
@@ -53,7 +54,11 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
           setState(next); setEvents(current => [...new Map([...current, ...page.events].map(event => [event.event_id, event])).values()].sort((a, b) => a.seq - b.seq));
           cursor = page.cursor; setMore(page.has_more); setLoadError('');
         }
-      } catch (e) { if (live) setLoadError((e as Error).message); }
+      } catch (e) {
+        // Another member made one of its assistants personal, so the group left this person's list.
+        if (live && e instanceof ApiError && e.status === 404) { live = false; setNotice('That group chat is no longer available to you.'); void refreshCatalog().catch(() => {}); }
+        else if (live) setLoadError((e as Error).message);
+      }
       finally { loading = false; }
     };
     loadRoom.current = load; void load();
@@ -95,7 +100,8 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const newGroup = <button type="button" className="group-new" disabled={!writable || busy} aria-expanded={creating} onClick={() => setCreating(value => !value)}><Icon name="plus" size={16} />New group</button>;
   const createForm = (creating || pendingCreate) && <form className="group-create" onSubmit={event => { event.preventDefault(); void create(); }}><h3>{pendingCreate ? 'Finish creating group' : 'New group'}</h3>
     {pendingCreate ? <p>{pendingCreate.name} · {pendingCreate.botIds.length} assistants. The saved request will be checked with Hermes.</p> : <><label>Name<input value={name} maxLength={100} required onChange={event => setName(event.target.value)} /></label>
-      <fieldset><legend>Choose 2–6 assistants</legend>{bootstrap.bots.filter(bot => !['all', 'everyone'].includes(bot.id.toLowerCase())).map(bot => <label key={bot.id}><input type="checkbox" checked={members.includes(bot.id)} disabled={busy || members.length === 6 && !members.includes(bot.id)} onChange={event => setMembers(current => event.target.checked ? [...current, bot.id] : current.filter(id => id !== bot.id))} />{bot.name}</label>)}</fieldset></>}
+      <fieldset><legend>Choose 2–6 assistants</legend>{bootstrap.bots.filter(bot => !['all', 'everyone'].includes(bot.id.toLowerCase())).map(bot => <label key={bot.id}><input type="checkbox" checked={members.includes(bot.id)} disabled={busy || members.length === 6 && !members.includes(bot.id)} onChange={event => setMembers(current => event.target.checked ? [...current, bot.id] : current.filter(id => id !== bot.id))} />{bot.name}</label>)}</fieldset>
+      {members.some(id => bootstrap.bots.some(bot => bot.id === id && !bot.shared && bot.ownerId)) && <p className="muted">Only you will see this group, because it includes your personal assistant.</p>}</>}
     <div className="actions">{!pendingCreate && <button type="button" onClick={() => setCreating(false)}>Cancel</button>}<button type="submit" className="primary" disabled={busy || !writable || !pendingCreate && (members.length < 2 || !name.trim())}>{pendingCreate ? 'Retry saved group request' : 'Create group'}</button></div>
   </form>;
   // A saved uncertain request stays above the rooms so they remain readable until it is retried.
@@ -104,11 +110,12 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   return <div className="group-panel">
     {loadError && <p className="form-error" role="alert">{loadError} <button onClick={() => void refreshCatalog().catch(e => setLoadError(e.message))}>Retry</button></p>}
     {error && <p className="form-error" role="alert">{error}</p>}
+    {notice && <p className="capability-note" role="status">{notice}</p>}
     {!catalog && !loadError && <p role="status" className="muted">Checking Hermes group chats…</p>}
     {catalog?.reason && <p className="capability-note">{catalog.reason}</p>}
     {pendingCreate && createForm}
     {catalog?.supported && !catalog.rooms.length && !pendingCreate && <>{createForm || <div className="group-empty"><p>No group chats yet. Create one to let your assistants discuss a task together.</p>{newGroup}</div>}</>}
-    {!!catalog?.rooms.length && <div className="group-layout"><nav className="group-rooms" aria-label="Group chats">{catalog.rooms.map(room => <button key={room.room_id} disabled={busy} aria-current={roomId === room.room_id && !drafting ? 'page' : undefined} onClick={() => { setCreating(false); setRoomId(room.room_id); }}>{room.name}<small>{room.members.length} assistants</small></button>)}{newGroup}</nav>
+    {!!catalog?.rooms.length && <div className="group-layout"><nav className="group-rooms" aria-label="Group chats">{catalog.rooms.map(room => <button key={room.room_id} disabled={busy} aria-current={roomId === room.room_id && !drafting ? 'page' : undefined} onClick={() => { setCreating(false); setNotice(''); setRoomId(room.room_id); }}>{room.name}<small>{room.members.length} assistants</small></button>)}{newGroup}</nav>
       <section aria-label="Group conversation">{drafting ? createForm : (state ? <><div className="group-heading"><div><h3>{state.room.name}</h3>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p></div>{state.driver_status?.working && <button disabled={busy || !writable} onClick={() => void action('stop', { requestId: crypto.randomUUID() })}><Icon name="stop" size={14} /> Stop discussion</button>}</div>
         {messages.map(event => { const member = state.room.members.find(member => member.member_id === event.actor.id || member.member_id === event.payload.member_id); return <article className="group-message" key={event.event_id}><div className="message-attribution"><strong>{event.kind === 'message.user' ? 'Household member' : member?.display_name || member?.profile || event.actor.id}</strong><When value={event.created_at * 1000} /></div><MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''} />

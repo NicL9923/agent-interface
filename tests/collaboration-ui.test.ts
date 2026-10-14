@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { api, write } from '../src/client-api';
+import { api, ApiError, write } from '../src/client-api';
 import { agentEnvelope } from '../src/shared/collaboration';
 import { GroupChats } from '../src/components/GroupChats';
 import { RoutineResults } from '../src/components/RoutineResults';
@@ -49,4 +49,24 @@ it('keeps existing rooms readable while a saved group creation awaits retry',asy
   await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
   expect(container.textContent).toContain('Finish creating group');expect(container.textContent).toContain('Bring water');
   expect(Array.from(container.querySelectorAll('button')).some(button=>button.textContent==='Retry saved group request')).toBe(true);
+});
+it('leaves a group that disappears and says that a personal assistant keeps a new group to its owner',async()=>{
+  const other={...room,room_id:'other',name:'Garden crew'};
+  let rooms=[room,other],reads=0;
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(path==='/groups')return {supported:true,canSend:true,rooms};
+    if(path.startsWith('/groups/room')){reads++;if(!rooms.includes(room))throw new ApiError('Group chat not found',404);}
+    return path.includes('/log')?{events:[],cursor:0,has_more:false}:{room:path.startsWith('/groups/other')?other:room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  });
+  const mine={...bootstrap,bots:[...bootstrap.bots,{id:'books',name:'Ranch books',shared:false,ownerId:'one'}]} as Bootstrap;
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap:mine})));
+  rooms=[other];
+  await act(async()=>vi.advanceTimersByTimeAsync(3000));
+  expect(container.textContent).toContain('That group chat is no longer available to you.');
+  expect(container.querySelector('[aria-current="page"]')?.textContent).toContain('Garden crew');
+  const settled=reads;await act(async()=>vi.advanceTimersByTimeAsync(9000));expect(reads).toBe(settled);
+  await click('New group');
+  expect(container.textContent).not.toContain('Only you will see this group');
+  await act(async()=>Array.from(container.querySelectorAll('label')).find(label=>label.textContent==='Ranch books')!.querySelector('input')!.click());
+  expect(container.textContent).toContain('Only you will see this group, because it includes your personal assistant.');
 });
