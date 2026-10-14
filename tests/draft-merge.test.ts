@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { contentHash, mergeDraft, savedCopy, savedDraft } from "../src/app/draft-merge";
-import { sentCopy } from "../src/app/storage";
+import { sameDraft, sentCopy } from "../src/app/storage";
 import type { SavedDraft } from "../src/shared/types";
 
 const server = (text: string, revision: number, sentRevision = 0): SavedDraft =>
@@ -78,6 +78,14 @@ describe("draft merge", () => {
     const sent = { text: "Typed here", attachments: [] };
     expect(sentCopy({ ...local, baseRevision: 3, baseHash: "h" }, sent)).toEqual({ text: "", attachments: [], botId: "ranch", userId: "one", baseRevision: 3, baseHash: "h", sentHere: true });
     expect(sentCopy({ ...local, text: "More", dirty: true, baseRevision: 3 }, sent)).toMatchObject({ text: "More", dirty: true, sentHere: true });
+  });
+
+  it("fingerprints and compares attachments regardless of their field order", () => {
+    const uploaded = { id: "map.sig", name: "map.png", mime: "image/png", url: "/api/files/map.sig", size: 6 };
+    const validated = { id: "map.sig", name: "map.png", mime: "image/png", size: 6, url: "/api/files/map.sig" };
+    expect(contentHash({ text: "Map", attachments: [uploaded] })).toBe(contentHash({ text: "Map", attachments: [validated] }));
+    expect(sameDraft({ text: "Map", attachments: [uploaded] }, { text: "Map", attachments: [validated] })).toBe(true);
+    expect(contentHash({ text: "Map", attachments: [uploaded] })).not.toBe(contentHash({ text: "Map", attachments: [{ ...uploaded, size: 7 }] }));
   });
 
   it("reads a missing draft or a server without revisions as revision 0", () => {

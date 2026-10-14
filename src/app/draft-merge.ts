@@ -1,5 +1,5 @@
 import type { SavedDraft } from "../shared/types";
-import { sameDraft } from "./storage";
+import { draftContent, sameDraft } from "./storage";
 import type { Draft } from "./storage";
 
 /** Reads a draft response. Someone who never saved a draft, or an older server, is at revision 0. */
@@ -16,7 +16,7 @@ export function savedDraft(value: unknown): SavedDraft {
 
 /** A fingerprint of a draft's content (cyrb53), kept with a cached copy to tell whether it changed since its base. */
 export function contentHash(draft: Pick<Draft, "text" | "attachments">): string {
-  const value = JSON.stringify([draft.text, draft.attachments]);
+  const value = draftContent(draft);
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);

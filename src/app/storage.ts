@@ -62,8 +62,11 @@ export function localSave(key: string, value: unknown) {
     /* Server persistence still applies when browser storage is full. */
   }
 }
+/** Draft content in a fixed field order: uploads and the server's validation order file fields differently. */
+export const draftContent = (draft: Pick<Draft, "text" | "attachments">) =>
+  JSON.stringify([draft.text, draft.attachments.map(file => [file.id, file.name, file.mime, file.size ?? null, file.url ?? null])]);
 export const sameDraft = (a: Pick<Draft, "text" | "attachments">, b: Pick<Draft, "text" | "attachments">) =>
-  a.text === b.text && JSON.stringify(a.attachments) === JSON.stringify(b.attachments);
+  draftContent(a) === draftContent(b);
 /** This device's copy once its send was accepted: emptied if it still holds the sent text. */
 export function sentCopy(draft: Draft, submission: Pick<Pending, "text" | "attachments">): Draft {
   return sameDraft(draft, submission)
