@@ -268,6 +268,23 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if value != {"authenticatedHttp": True, "freshWebsocket": True}: raise RuntimeError("Original Google HTTP and fresh WebSocket authentication were not verified")
         return value
 
+    def wait_dashboard(self):
+        """The first start after an update builds the web UI before listening: 70 seconds on
+        Oct 14, 2026, and verification that asked sooner rolled back a working update. Any HTTP
+        response means it listens; only refused or unreachable connections keep waiting."""
+        deadline = time.monotonic() + self.config.get("dashboardStartSeconds", 600)
+        while True:
+            try:
+                urllib.request.urlopen(self.config["dashboardOrigin"] + "/api/status", timeout=5).close()
+                return
+            except urllib.error.HTTPError as response:
+                response.close()
+                return
+            except (urllib.error.URLError, OSError):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("The dashboard did not start listening in time") from None
+                time.sleep(1)
+
     def anonymous_rejection(self):
         for path in ("/api/config", "/api/profiles"):
             try:
@@ -489,6 +506,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
             if all(gateway.get("platforms", {}).get(key, {}).get("state") == "connected" for key in baseline["discordConnections"]): break
             if time.monotonic() >= deadline: raise RuntimeError("Both original Discord connections were not restored")
             time.sleep(.5)
+        verifying("dashboard start", self.wait_dashboard)
         gate = verifying("native maintenance status", lambda: self.rpc("status"))
         if gate.get("active") is not True or gate.get("operationId") != self.operation: raise RuntimeError("Native maintenance gate ownership was lost")
         verifying("anonymous rejection", self.anonymous_rejection)

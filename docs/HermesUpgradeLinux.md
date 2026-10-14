@@ -348,3 +348,8 @@ will read and refuses, before stopping Hermes, unless that much plus `backupRese
 is free. If a backup still fails, Hermes is restarted before anything is written, because a full
 disk can make even logging fail. On Oct 13, 2026 a backup filled the disk with services stopped
 and the household lost its assistants for 84 minutes.
+
+Verification first waits up to `dashboardStartSeconds` (600 by default) for the dashboard to
+answer at all. The first start after an update builds the web UI before listening, which took
+70 seconds on Oct 14, 2026; verification that asked sooner got a refused connection and rolled
+back an update that was working.
