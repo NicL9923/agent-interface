@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 2,
+  "objects": [
+    {
+      "type": "index",
+      "name": "notification_batch_items_batch",
+      "tableName": "notification_batch_items",
+      "sql": "CREATE INDEX notification_batch_items_batch ON notification_batch_items(batch_id)"
+    },
+    {
+      "type": "index",
+      "name": "notification_events_created",
+      "tableName": "notification_events",
+      "sql": "CREATE INDEX notification_events_created ON notification_events(created_at)"
+    },
+    {
+      "type": "index",
+      "name": "outbox_ready",
+      "tableName": "outbox",
+      "sql": "CREATE INDEX outbox_ready ON outbox(state,next_attempt)"
+    },
+    {
+      "type": "index",
+      "name": "submissions_message",
+      "tableName": "submissions",
+      "sql": "CREATE INDEX submissions_message ON submissions(bot_id,json_extract(receipt,'$.messageId'))"
+    },
+    {
+      "type": "index",
+      "name": "submissions_status",
+      "tableName": "submissions",
+      "sql": "CREATE INDEX submissions_status ON submissions(json_extract(receipt,'$.status'))"
+    },
+    {
+      "type": "table",
+      "name": "approval_attribution",
+      "tableName": "approval_attribution",
+      "sql": "CREATE TABLE approval_attribution(approval_id TEXT PRIMARY KEY,bot_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),decision TEXT NOT NULL,created_at INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "bot_presentation",
+      "tableName": "bot_presentation",
+      "sql": "CREATE TABLE bot_presentation(bot_id TEXT PRIMARY KEY,owner_id TEXT,shared INTEGER NOT NULL DEFAULT 1,avatar TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "card_state",
+      "tableName": "card_state",
+      "sql": "CREATE TABLE card_state(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,message_id TEXT NOT NULL,card_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id,message_id,card_id))"
+    },
+    {
+      "type": "table",
+      "name": "delivered",
+      "tableName": "delivered",
+      "sql": "CREATE TABLE delivered(outbox_id TEXT NOT NULL REFERENCES outbox(id),endpoint TEXT NOT NULL,PRIMARY KEY(outbox_id,endpoint))"
+    },
+    {
+      "type": "table",
+      "name": "drafts",
+      "tableName": "drafts",
+      "sql": "CREATE TABLE drafts(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id))"
+    },
+    {
+      "type": "table",
+      "name": "metadata",
+      "tableName": "metadata",
+      "sql": "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "native_codes",
+      "tableName": "native_codes",
+      "sql": "CREATE TABLE native_codes(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),state TEXT NOT NULL,challenge TEXT NOT NULL,expires INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "native_devices",
+      "tableName": "native_devices",
+      "sql": "CREATE TABLE native_devices(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL REFERENCES native_sessions(hash) ON DELETE CASCADE,token TEXT NOT NULL,environment TEXT NOT NULL,UNIQUE(token,environment))"
+    },
+    {
+      "type": "table",
+      "name": "native_flows",
+      "tableName": "native_flows",
+      "sql": "CREATE TABLE native_flows(hash TEXT PRIMARY KEY,state TEXT NOT NULL,challenge TEXT NOT NULL,nonce TEXT NOT NULL,expires INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "native_sessions",
+      "tableName": "native_sessions",
+      "sql": "CREATE TABLE native_sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "notification_batch_items",
+      "tableName": "notification_batch_items",
+      "sql": "CREATE TABLE notification_batch_items(outbox_id TEXT PRIMARY KEY REFERENCES outbox(id),batch_id TEXT NOT NULL REFERENCES notification_batches(id))"
+    },
+    {
+      "type": "table",
+      "name": "notification_batches",
+      "tableName": "notification_batches",
+      "sql": "CREATE TABLE notification_batches(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),payload TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "notification_events",
+      "tableName": "notification_events",
+      "sql": "CREATE TABLE notification_events(id TEXT PRIMARY KEY,value TEXT NOT NULL,created_at INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "notification_ingestion",
+      "tableName": "notification_ingestion",
+      "sql": "CREATE TABLE notification_ingestion(id INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL REFERENCES notification_events(id) ON DELETE CASCADE)"
+    },
+    {
+      "type": "table",
+      "name": "outbox",
+      "tableName": "outbox",
+      "sql": "CREATE TABLE outbox(id TEXT PRIMARY KEY,event_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),payload TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, last_error TEXT,UNIQUE(event_id,user_id))"
+    },
+    {
+      "type": "table",
+      "name": "participants",
+      "tableName": "participants",
+      "sql": "CREATE TABLE participants(run_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(run_id,user_id))"
+    },
+    {
+      "type": "table",
+      "name": "preferences",
+      "tableName": "preferences",
+      "sql": "CREATE TABLE preferences(user_id TEXT PRIMARY KEY REFERENCES users(id),value TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "read_positions",
+      "tableName": "read_positions",
+      "sql": "CREATE TABLE read_positions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(user_id,bot_id))"
+    },
+    {
+      "type": "table",
+      "name": "routine_recipients",
+      "tableName": "routine_recipients",
+      "sql": "CREATE TABLE routine_recipients(routine_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(routine_id,user_id))"
+    },
+    {
+      "type": "table",
+      "name": "routine_trials",
+      "tableName": "routine_trials",
+      "sql": "CREATE TABLE routine_trials(request_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),routine_id TEXT NOT NULL,bot_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'uncertain')"
+    },
+    {
+      "type": "table",
+      "name": "saved_items",
+      "tableName": "saved_items",
+      "sql": "CREATE TABLE saved_items(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),pointer_key TEXT NOT NULL,value TEXT NOT NULL,UNIQUE(user_id,pointer_key))"
+    },
+    {
+      "type": "table",
+      "name": "session_confirmations",
+      "tableName": "session_confirmations",
+      "sql": "CREATE TABLE session_confirmations(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "sessions",
+      "tableName": "sessions",
+      "sql": "CREATE TABLE sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "submissions",
+      "tableName": "submissions",
+      "sql": "CREATE TABLE submissions(request_id TEXT PRIMARY KEY,bot_id TEXT NOT NULL,sender_id TEXT NOT NULL REFERENCES users(id),payload TEXT NOT NULL,receipt TEXT NOT NULL,created_at INTEGER NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "subscriptions",
+      "tableName": "subscriptions",
+      "sql": "CREATE TABLE subscriptions(endpoint TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),value TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "today_seen",
+      "tableName": "today_seen",
+      "sql": "CREATE TABLE today_seen(user_id TEXT PRIMARY KEY REFERENCES users(id),seen_at TEXT NOT NULL,event_frontier INTEGER NOT NULL DEFAULT 0)"
+    },
+    {
+      "type": "table",
+      "name": "users",
+      "tableName": "users",
+      "sql": "CREATE TABLE users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,picture TEXT)"
+    }
+  ]
+}

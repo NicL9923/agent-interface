@@ -106,7 +106,48 @@ describe("store migrations", () => {
   });
 });
 
-// The previous release, as on origin/main. A shallow checkout without it skips this check.
+// The schema the previous release creates and accepts. Regenerate it only with a deliberate
+// schema bump, which also ends rollback to that release.
+const previousRelease = JSON.parse(readFileSync(new URL("./fixtures/previous-release-schema.json", import.meta.url), "utf8")) as
+  { schemaVersion: number; objects: { type: string; name: string; tableName: string; sql: string }[] };
+const objects = (db: DatabaseSync) =>
+  db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all() as typeof previousRelease.objects;
+
+describe("rollback to the previous release", () => {
+  it("never raises the schema version past what the previous release accepts", () => {
+    expect(schemaVersion).toBeLessThanOrEqual(previousRelease.schemaVersion);
+    expect(version(open(legacyDatabase()).db)).toBeLessThanOrEqual(previousRelease.schemaVersion);
+  });
+
+  it("keeps every object of the previous schema and only adds new tables beside them", () => {
+    const current = objects(open(legacyDatabase()).db);
+    for (const object of previousRelease.objects) expect(current).toContainEqual(object);
+    const known = new Set(previousRelease.objects.map(object => object.name));
+    const oldTables = new Set(previousRelease.objects.filter(object => object.type === "table").map(object => object.name));
+    for (const added of current.filter(object => !known.has(object.name))) {
+      expect(added.type, added.name).toBe("table");
+      expect(added.sql, added.name).toMatch(/^CREATE TABLE/);
+      expect(oldTables.has(added.tableName), added.name).toBe(false);
+    }
+  });
+
+  it("opens a database the previous release wrote", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-store-"));
+    directories.push(directory);
+    const path = join(directory, "app.sqlite");
+    const db = new DatabaseSync(path);
+    for (const object of [...previousRelease.objects].sort((a, b) => +(a.type === "index") - +(b.type === "index"))) db.exec(object.sql);
+    db.exec(`PRAGMA user_version=${previousRelease.schemaVersion}`);
+    db.prepare("INSERT INTO users VALUES(?,?,?,?)").run("one", "one@example.test", "One", null);
+    db.prepare("INSERT INTO drafts VALUES(?,?,?)").run("one", "ranch", JSON.stringify({ text: "Written before the upgrade", attachments: [] }));
+    db.close();
+    const store = open(path);
+    expect(store.draft("one", "ranch")).toEqual({ text: "Written before the upgrade", attachments: [], revision: 0, reason: "edit", sentRevision: 0 });
+    expect(store.saveDraft("one", "ranch", { text: "Edited", attachments: [] }, 0)).toMatchObject({ saved: true, draft: { revision: 1 } });
+  });
+});
+
+// An extra local check with the real previous store, as on origin/main. A shallow checkout skips it.
 const previousStore = (() => {
   try { return execFileSync("git", ["show", "origin/main:src/server/store.ts"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
   catch { return undefined; }
