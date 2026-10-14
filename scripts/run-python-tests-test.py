@@ -34,6 +34,18 @@ class Classification(unittest.TestCase):
         summary = "Ran 5 tests in 1s\nOK\nRan 2 tests in 1s\n\nOK (skipped=2)\n"
         self.assertEqual(runner.classify(0, summary, False)[0], "SKIP")
 
+    def test_earlier_nested_skips_do_not_contaminate_a_clean_final_summary(self):
+        summary = "Ran 1 test in 0s\n\nOK (skipped=1)\nRan 4 tests in 1s\n\nOK\n"
+        self.assertEqual(runner.classify(0, summary, True), ("PASS", ""))
+
+    def test_ran_line_without_an_ok_outcome_fails_even_with_exit_zero(self):
+        self.assertEqual(runner.classify(0, "Ran 4 tests in 1s\n\nFAILED (failures=1)\n", False)[0], "FAIL")
+        self.assertEqual(runner.classify(0, "Ran 4 tests in 1s\n", False)[0], "FAIL")
+        self.assertEqual(runner.classify(0, "Ran 1 test in 0s\n\nOK (skipped=1)\nRan 4 tests in 1s\n", False)[0], "FAIL")
+
+    def test_skips_beside_other_outcome_details_are_counted(self):
+        self.assertEqual(runner.classify(0, "Ran 2 tests in 0s\n\nOK (expected failures=1, skipped=2)\n", False)[0], "SKIP")
+
 
 class Discovery(unittest.TestCase):
     def test_tests_in_any_directory_are_found_unless_ignored_by_git(self):

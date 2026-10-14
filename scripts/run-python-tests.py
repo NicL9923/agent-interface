@@ -37,16 +37,29 @@ def stray_tests(found, root=ROOT):
 
 
 def classify(returncode, summary, ci):
-    """Return (status, note) from the exit code and the unittest summary on stderr."""
+    """Return (status, note) from the exit code and the unittest summary on stderr.
+
+    The last "Ran N tests" line and the outcome line right after it are read as
+    one unit, so output from a nested unittest run earlier in the stream cannot
+    contribute a skip count or an OK. Skips reported through subTest are not
+    counted; the worst case is a loud false SKIP (a CI failure), never a
+    silent pass.
+    """
     if returncode != 0:
         return "FAIL", ""
-    ran = re.findall(r"^Ran (\d+) tests? in ", summary, re.MULTILINE)
-    if not ran or int(ran[-1]) == 0:
+    final = re.findall(r"^Ran (\d+) tests? in [^\n]*\n+([^\n]*)", summary, re.MULTILINE)
+    if not final:
         return "FAIL", "no unittest tests ran; test files must define unittest tests"
-    skipped = re.findall(r"^OK \(.*?skipped=(\d+)", summary, re.MULTILINE)
-    count, skips = int(ran[-1]), int(skipped[-1]) if skipped else 0
-    if skips >= count:
-        return ("FAIL", f"all {count} tests skipped under CI") if ci else ("SKIP", f"all {count} tests skipped")
+    ran, outcome = int(final[-1][0]), final[-1][1].strip()
+    if ran == 0:
+        return "FAIL", "no unittest tests ran; test files must define unittest tests"
+    match = re.fullmatch(r"OK(?: \((.*)\))?", outcome)
+    if not match:
+        return "FAIL", f"unittest did not report OK: {outcome or 'no outcome line'}"
+    skipped = re.search(r"skipped=(\d+)", match.group(1) or "")
+    skips = int(skipped.group(1)) if skipped else 0
+    if skips >= ran:
+        return ("FAIL", f"all {ran} tests skipped under CI") if ci else ("SKIP", f"all {ran} tests skipped")
     return "PASS", f"{skips} skipped" if skips else ""
 
 
