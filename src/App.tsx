@@ -26,6 +26,14 @@ export function App() {
   // Phones open on the home list unless a link names a destination.
   const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && !hasDestination());
   const mobile = useMobile();
+  // An assistant this person just deleted leaves quietly; any other one explains itself.
+  const deleted = useRef("");
+  const gone = (id: string) => {
+    setPanel(current => current?.kind === "routine" && current.botId === id || current?.kind === "settings" && current.bot !== "new" && current.bot.id === id ? null : current);
+    if (deleted.current === id) return;
+    setError("That assistant is no longer available to you.");
+    setRailOpen(mobile);
+  };
   const session = useSession({
     onIdentityChange: () => {
       reset(); clearUploads();
@@ -33,13 +41,18 @@ export function App() {
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
+    onBotGone: gone,
   });
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId);
+  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId, id => {
+    gone(id);
+    setBotId("");
+    void session.refresh();
+  });
   const connectionLost = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
@@ -151,6 +164,7 @@ export function App() {
             bot={panel.bot}
             bootstrap={boot}
             onClose={() => closePanels("settings")}
+            onDeleted={id => { deleted.current = id; }}
             onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
             onSaved={() => void session.refresh()}
           />

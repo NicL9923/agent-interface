@@ -259,7 +259,7 @@ describe("authentication and household state", () => {
     expect((await signIn()).statusCode).toBe(200);
     await app.close();
   });
-  it("shows a private assistant's latest reply only to its owner", async () => {
+  it("lists a private assistant, with its latest reply, only for its owner", async () => {
     const fake = runtimeDouble();
     const lastMessage = { text: "Your private reply", at: "2026-10-08T12:00:00.000Z" };
     fake.runtime.listBots = async () => [
@@ -276,8 +276,8 @@ describe("authentication and household state", () => {
         return (Array.isArray(value) ? value : value.bots) as { id: string; lastMessage?: unknown }[];
       };
       const theirs = bots(await app.inject({ url, headers: two }));
-      expect(theirs.find(bot => bot.id === "mine")?.lastMessage).toBeUndefined();
-      expect(theirs.find(bot => bot.id === "shared")?.lastMessage).toEqual(lastMessage);
+      expect(theirs.map(bot => bot.id)).toEqual(["shared"]);
+      expect(theirs[0].lastMessage).toEqual(lastMessage);
       expect(bots(await app.inject({ url, headers: one })).find(bot => bot.id === "mine")?.lastMessage).toEqual(lastMessage);
     }
     await app.close();

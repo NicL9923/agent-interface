@@ -9,6 +9,7 @@ import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
 import { SystemTerminal } from "./terminal.js";
 import { safeError } from "./logging.js";
+import { visibleTo } from "./bot-access.js";
 
 type Session = { kind: "web" | "native"; hash: string; userId: string };
 type Attachment = { session: Session; expires: number; type: "desktop" | "terminal"; native?: ComputerAttachment };
@@ -86,6 +87,10 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
       try { native = await runtime.computerRequest({action: "status", ...actor(req)}) as ComputerStatus; }
       catch { native.reason = "Hermes is disconnected. The system terminal is independent of that connection."; }
     }
+    // Hermes names the acting assistant by its profile, the assistant's ID. The desktop itself
+    // is one household screen, so a private assistant at work can still be watched there.
+    if (native.control?.kind === "bot" && !visibleTo(store, native.control.name, signedIn(req).id))
+      native = {...native, control: {kind: "bot"}};
     const denied = shellDenial(req);
     if (denied) return {...native, terminal: {available: false, target: "", reason: denied}};
     const available = terminals.available;

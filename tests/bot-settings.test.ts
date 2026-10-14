@@ -133,6 +133,36 @@ describe("assistant deletion", () => {
   });
 });
 
+describe("making an assistant personal", () => {
+  const submit = () => act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  const uncheckShared = () => act(async () => container.querySelector<HTMLInputElement>("input[type=checkbox]")!.click());
+
+  it("asks before hiding a shared assistant from the household, and sends nothing until confirmed", async () => {
+    await uncheckShared();
+    expect(container.textContent).toContain("Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins.");
+    await submit();
+    expect(container.textContent).toContain("It will disappear for the rest of the household");
+    expect(write).not.toHaveBeenCalled();
+    await click("Keep editing");
+    expect(write).not.toHaveBeenCalled();
+    await submit();
+    await click("Make it personal");
+    expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
+  });
+
+  it("asks when the server reports the assistant is still visible to others", async () => {
+    // The roster said it was already this person's, but another member shared it meanwhile.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(createElement(BotSettings, { bot: { ...bot, id: "mine", shared: false, ownerId: "one" }, bootstrap, onClose, onSaved })));
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Confirm making this assistant personal.", 409, "private_confirmation_required"));
+    await submit();
+    expect(write).toHaveBeenCalledExactlyOnceWith("/bots/mine", expect.not.objectContaining({ confirmPrivate: true }), "PATCH");
+    await click("Make it personal");
+    expect(write).toHaveBeenLastCalledWith("/bots/mine", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
+  });
+});
+
 it("clears expensive-model confirmation when a different model is selected", async () => {
   vi.mocked(api).mockResolvedValueOnce([]).mockResolvedValueOnce({ provider: "provider", model: "test", providers: [
     { id: "provider", name: "Provider", authenticated: true, models: [{ id: "other", name: "Other model", available: true }] },
@@ -441,4 +471,18 @@ it("shows saving and saved on the avatar button itself, then resets", async () =
     await act(async () => vi.advanceTimersByTimeAsync(2600));
     expect(save().textContent).toBe("Save avatar");
   } finally { vi.useRealTimers(); }
+});
+
+it("offers only the owner as a recipient of a private assistant's routines", async () => {
+  const household = [{ id: "one", name: "One", email: "one@example.test" }, { id: "two", name: "Two", email: "two@example.test" }];
+  const recipients = async (assistant: Bot) => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    vi.mocked(api).mockImplementation(async (path: string) => (path === "/routines" ? [] : { providers: [], provider: "", model: "" }) as never);
+    await act(async () => root.render(createElement(BotSettings, { bot: assistant, bootstrap: { ...bootstrap, household, bots: [assistant] }, onClose, onSaved })));
+    await click("routines");
+    return Array.from(container.querySelectorAll("fieldset label")).map(label => label.textContent);
+  };
+  expect(await recipients({ ...bot, id: "mine", shared: false, ownerId: "one" })).toEqual(["One"]);
+  expect(await recipients(bot)).toEqual(["One", "Two"]);
 });

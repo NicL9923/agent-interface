@@ -8,7 +8,8 @@ last connection check. **Configured** means Hermes has saved configuration;
 model or image request will succeed.
 
 Connections belong to Hermes profiles. Household members share access to the
-installation; marking a bot personal does not create an account boundary.
+installation; marking a bot personal hides it from others in WildBots but does not
+create an account boundary.
 Connecting, reconnecting, disconnecting and adding MCP servers require an
 integration administrator. Credentials remain in Hermes's existing stores and
 are never returned in catalog responses. Disconnecting removes this profile's

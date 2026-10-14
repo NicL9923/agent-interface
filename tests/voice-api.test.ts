@@ -27,7 +27,8 @@ async function setup() {
   const conversation = vi.fn(async () => ({ messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
   const listBots = vi.fn(async () => [{ id: "ranch" }]);
   const runtime = { transcribeVoice, synthesizeVoice, conversation, listBots } as unknown as Runtime;
-  await registerVoiceRoutes(app, runtime, { now: () => clock });
+  const hidden = new Set<string>();
+  await registerVoiceRoutes(app, runtime, { now: () => clock, visible: botId => !hidden.has(botId) });
   const login = (id: string) => {
     store.user({ id, name: id, email: `${id}@example.invalid` });
     const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
@@ -35,7 +36,7 @@ async function setup() {
     return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
   };
   app.addHook("onClose", async () => store.close());
-  return { app, store, runtime, transcribeVoice, synthesizeVoice, conversation, listBots, first: login("first"), second: login("second"), advance: (ms: number) => { clock += ms; } };
+  return { app, store, runtime, hidden, transcribeVoice, synthesizeVoice, conversation, listBots, first: login("first"), second: login("second"), advance: (ms: number) => { clock += ms; } };
 }
 function recording(mime = "audio/webm", data = Buffer.from("fixture recording")) {
   const boundary = "voice-fixture";
@@ -102,4 +103,13 @@ it("limits concurrent voice provider calls for an identity and releases the slot
   expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).statusCode).toBe(429);
   reject(new Error("provider fixture failure")); expect((await first).statusCode).toBe(502);
   expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).statusCode).toBe(200);
+});
+
+it("refuses cached speech once its assistant becomes another member's private one", async () => {
+  const s = await setup();
+  const url = (await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).json().url;
+  s.hidden.add("ranch");
+  const audio = await s.app.inject({ url, headers: s.first });
+  expect([audio.statusCode, audio.body]).not.toContain("fixture audio");
+  expect(audio.statusCode).toBe(404);
 });

@@ -1,4 +1,4 @@
-import { reasoningLevels, serviceTiers } from "../shared/types.js";
+import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
@@ -679,7 +679,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       rosterRequest = request;
       try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }
     },
-    async saveBot(input:BotInput,id?:string){await connect();const name=id??input.name.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-|-$/g,'');if(!name)throw new Error('Bot name needs letters or numbers.');
+    async saveBot(input:BotInput,id?:string){await connect();const name=id??botIdFor(input.name);if(!name)throw new Error('Bot name needs letters or numbers.');
       let created=false;try{if(!id){await rpc('profiles.create',{name,description:input.description,soul:input.instructions,mirror_credentials:true,no_alias:true});created=true;}
       const rosterBefore=await rpc('profiles.list',{include_sessions:false});const previous=rosterBefore.profiles.find((x:Wire)=>x.name===name);
       const config:Wire={name,soul:input.instructions,description:input.description??'',ui_meta:{'hermes-bots':{...previous?.ui_meta?.['hermes-bots'],title:input.name},agent_interface:{...previous?.ui_meta?.agent_interface,name:input.name,shared:input.shared}},ui_meta_expected_revisions:{'hermes-bots':previous?.ui_meta_revisions?.['hermes-bots']??0,agent_interface:previous?.ui_meta_revisions?.agent_interface??0}};
@@ -766,6 +766,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}});if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
     async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}});if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
+    fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){
       const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);
       const tooLarge=()=>Object.assign(new Error(`${file.name} is larger than ${formatBytes(maxBytes)}, the most this app opens. Ask the assistant for a smaller file.`),{statusCode:502,code:'file_too_large',expose:true});

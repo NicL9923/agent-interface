@@ -55,6 +55,8 @@ export class HermesUpgrades {
   private readonly requestsDirectory?: string;
   private readonly controlsDirectory?: string;
   private serial: Promise<unknown> = Promise.resolve();
+  /** Whether this person may see the assistant; the app installs its visibility rule. */
+  visibleTo: (botId: string, userId: string) => boolean = () => true;
   constructor(private config: Config, private runtime: Runtime,
     private launch: (args: { action: "check" | "install" | UpgradeControlAction; operationId: string }) => void = args => {
       const child = launchWorker(this.config.hermesUpgrade!, args);
@@ -165,17 +167,21 @@ export class HermesUpgrades {
   }
   maintenance() { return Boolean(this.config.hermesUpgrade && (this.read().maintenance || this.pendingInstall())); }
   private administrator(user: User) { return Boolean(this.config.hermesUpgrade?.adminEmails.includes(user.email.toLowerCase())); }
-  private async busyBots() {
+  private async busyBots(user: User) {
     try {
       const status = await this.runtime.status();
       if (!status.connected) return ["Hermes connection unavailable"];
-      return (await this.runtime.listBots()).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity)).map(bot => bot.name);
+      // Another member's private assistant still blocks the update, as one unnamed entry however
+      // many are busy. That entry shows some assistant is working, a documented privacy limit.
+      const busy = (await this.runtime.listBots()).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity));
+      const shown = busy.filter(bot => this.visibleTo(bot.id, user.id)).map(bot => bot.name);
+      return shown.length < busy.length ? [...shown, "An assistant"] : shown;
     } catch { return ["Hermes activity unavailable"]; }
   }
   async status(user: User): Promise<UpgradeStatus> {
     const state = this.read();
     const available = Boolean(this.config.hermesUpgrade), administrator = this.administrator(user);
-    const busyBots = available && !this.maintenance() ? await this.busyBots() : [];
+    const busyBots = available && !this.maintenance() ? await this.busyBots(user) : [];
     const starting = Boolean(state.updatedAt && Date.now() - Date.parse(state.updatedAt) < 15000);
     const held = available && await this.workerHeld();
     const abandoned = active.has(state.phase) && !held && !starting;

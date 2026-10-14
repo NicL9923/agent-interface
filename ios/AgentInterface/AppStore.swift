@@ -16,6 +16,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var pending: PendingSubmission?
   @Published var receipt: Receipt?
   @Published var error: String?
+  /// A short message for home, such as an assistant that is no longer available.
+  @Published var notice: String?
+  /// The assistant this person just lost access to, so views showing it close.
+  @Published var leftBotId: String?
+  /// Set before deleting, so the deleted assistant leaves without a message.
+  var deletedBotId: String?
+  /// After leaving an assistant, home stays open instead of choosing another one.
+  private var stayHome = false
   @Published var signingIn = false
   @Published var loading = false
   @Published var sending = false
@@ -288,6 +296,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         selectionGeneration = UUID()
         generation = UUID()
         selectedBotId = nil
+        stayHome = false
         conversation = nil
         conversationCache.removeAll()
         historyStarts.removeAll()
@@ -306,7 +315,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       appUnavailable = false
       failures = 0
       if pending == nil { pending = read(key("pending")) }
-      if selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
+      if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
+        await leave(open)
+      } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
         let last: String? = read(key("selected"))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {
@@ -321,7 +332,19 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       report(error)
     }
   }
+  /// Another member made the open assistant personal, or it was deleted: return home and stop asking for it.
+  func leave(_ id: String) async {
+    conversationCache[id] = nil
+    if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
+    error = nil
+    stayHome = true
+    if pending?.botId != id { receipt = nil }
+    await select(nil)
+    leftBotId = id
+  }
+  private static func missing(_ error: Error) -> Bool { (error as? APIError)?.code == "assistant_not_found" }
   func select(_ id: String?) async {
+    if id != nil { stayHome = false; notice = nil }
     persistDraft()
     draftTask?.cancel()
     selectionGeneration = UUID()
@@ -348,6 +371,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
+      if Self.missing(error) { await leave(id); return }
       draftReady = cached != nil
       report(error)
     }
@@ -379,7 +403,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       historyStarts[id] = value.messages.first?.id
       apply(value, botId: id)
     } catch is CancellationError {} catch {
-      if selectedGeneration == selectionGeneration {
+      if selectedGeneration == selectionGeneration && Self.missing(error) {
+        await leave(id)
+      } else if selectedGeneration == selectionGeneration {
         appUnavailable = true
         failures += 1
         report(error)
@@ -803,6 +829,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     earlierFileCache.removeAll()
     bootstrapRefreshedAt = nil
     selectedBotId = nil
+    stayHome = false
+    notice = nil
     draft = Draft()
     draftReady = false
     pending = nil

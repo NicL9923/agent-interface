@@ -2,6 +2,7 @@ import webpush from "web-push";
 import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
+import { visibleTo } from "./bot-access.js";
 import { createApnsSender, type ApnsSender } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 export type PushSender = (
@@ -129,9 +130,9 @@ export class BackgroundWorker {
         // Security alerts are never batched, so the group payload carries their kind.
         const security = JSON.parse(item.payload).kind === "security";
         if (!security && inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
+        // An assistant made private after this was queued, held by quiet hours or a digest, stays with its owner.
         if (!security) item.items = item.items.filter(row => {
-          const payload = JSON.parse(row.payload); const bot = this.store.presentation(payload.botId);
-          const visible = bot.shared || !bot.ownerId || bot.ownerId === item.user_id;
+          const visible = visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id);
           if (!visible) this.store.finishDelivery(row.id);
           return visible;
         });
@@ -145,8 +146,13 @@ export class BackgroundWorker {
         // Keep undelivered events durable until this person has a subscription.
         if (!subscriptions.length && !devices.length) continue;
         let failed: string | undefined;
+        // A send can take a while; an assistant made private meanwhile stops the rest of this
+        // delivery before its frozen payload reaches another endpoint. The next pass drops it.
+        const stillVisible = () => item.items.every(row => security || visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id));
+        let revoked = false;
         for (const subscription of subscriptions) {
           if (item.items.every(row => this.store.delivered(row.id, subscription.endpoint))) continue;
+          if (!stillVisible()) { revoked = true; break; }
           try {
             await this.send!(subscription, deliveryPayload);
             for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
@@ -162,9 +168,10 @@ export class BackgroundWorker {
             }
           }
         }
-        for (const device of devices) {
+        for (const device of revoked ? [] : devices) {
           const endpoint = `apns:${device.environment}:${device.token}`;
           if (item.items.every(row => this.store.delivered(row.id, endpoint))) continue;
+          if (!stillVisible()) { revoked = true; break; }
           try {
             await this.sendApns!(device, deliveryPayload);
             for (const row of item.items) this.store.markDelivered(row.id, endpoint);
@@ -180,6 +187,7 @@ export class BackgroundWorker {
             }
           }
         }
+        if (revoked) continue;
         let abandoned = 0;
         for (const row of item.items) {
           if (failed === undefined) this.store.finishDelivery(row.id);

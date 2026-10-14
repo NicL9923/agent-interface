@@ -202,6 +202,12 @@ extension Data {
     }
     guard (200..<300).contains(response.statusCode) else {
       let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      // An assistant turned private while this read ran; the server dropped it, so read once more.
+      if method == "GET", conditional, response.statusCode == 503, object?["code"] as? String == "assistants_changed" {
+        return try await self.data(
+          path: path, method: method, body: body, contentType: contentType,
+          authenticated: authenticated, conditional: false)
+      }
       throw APIError(
         message: object?["detail"] as? String ?? object?["error"] as? String
           ?? "Request failed (\(response.statusCode)).", status: response.statusCode,

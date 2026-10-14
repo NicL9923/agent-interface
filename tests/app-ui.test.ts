@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api, clearResponseCache, uploadFile, write } from "../src/client-api";
+import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
@@ -509,6 +509,46 @@ describe("conversation state", () => {
     await act(async () => back.click());
     expect(rail().classList.contains("open")).toBe(true);
     expect(document.activeElement).toBe(container.querySelector(".bot-rail [aria-current='page']"));
+  });
+
+  it.each([false, true])("leaves an assistant that becomes someone else's personal one, on a phone: %s", async (phone) => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: phone && query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const books = { ...bootstrap.bots[0], id: "books", name: "Ranch books" };
+    let hidden = false, reads = 0;
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => {
+      if (path === "/bootstrap") return { ...bootstrap, bots: hidden ? bootstrap.bots : [books, ...bootstrap.bots] } as T;
+      if (path.startsWith("/bots/books/conversation?")) {
+        reads++;
+        if (hidden) throw new ApiError("Assistant not found", 404, "assistant_not_found");
+        return { ...conversation, botId: "books", activity: { state: "idle" } } as T;
+      }
+      return original(path) as Promise<T>;
+    });
+    history.replaceState(null, "", "/?bot=books");
+    await render();
+    if (phone) await act(async () => container.querySelector<HTMLButtonElement>(".bot-row")!.click());
+    expect(container.querySelector(".bot-rail")!.classList.contains("open")).toBe(false);
+    hidden = true;
+    // The change stream says the conversation changed; reading it now answers 404.
+    await act(async () => FakeEventSource.notifyAll());
+    expect(container.textContent).toContain("That assistant is no longer available to you.");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("shared");
+    expect(container.querySelector(".bot-rail")!.classList.contains("open")).toBe(phone);
+    const settled = reads;
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(31_000);
+    expect(reads, "no request loop for the missing assistant").toBe(settled);
+  });
+
+  it("calls an ownerless personal assistant visible to the household, not yours", async () => {
+    const original = bootstrap.bots[0];
+    bootstrap.bots[0] = { ...original, shared: false };
+    try {
+      await render();
+      expect(container.querySelector(".chat-title")?.textContent).toContain("Personal, visible to the household");
+      expect(container.textContent).not.toContain("Your personal assistant");
+    } finally { bootstrap.bots[0] = original; }
   });
 
   it("collects a turn's reasoning into one accordion between the prompt and the reply", async () => {

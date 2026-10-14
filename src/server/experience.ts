@@ -6,6 +6,7 @@ import type { ExperienceRequest, TodayItem, TodayOverview } from '../shared/expe
 import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.js';
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
+import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
@@ -25,9 +26,9 @@ export async function assertRoutineEditable(runtime: Runtime, store: Store, rout
     }
   }
 }
-export async function installExperienceRoutes(app: FastifyInstance, runtime: Runtime, store: Store) {
+export async function installExperienceRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const bot = async (botId: string) => {
-    if (!(await runtime.listBots()).some(row => row.id === botId)) throw failure(404, 'Assistant not found');
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw Object.assign(failure(404, notFound.error), { code: notFound.code });
   };
   const request = async (input: ExperienceRequest) => {
     await bot(input.profile);
@@ -44,8 +45,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     // discovered during those reads belongs to the next page, even when its
     // native occurredAt precedes the person's last visit.
     const upperFrontier = store.latestEventFrontier();
-    const bots = (await runtime.listBots()).map(bot => ({...bot,...store.presentation(bot.id)})).filter(bot => bot.shared || !bot.ownerId || bot.ownerId === userId);
-    const page = store.eventPage(query.since ? 0 : store.todayFrontier(userId), upperFrontier, bots.map(bot => bot.id), query.since || !store.todaySeen(userId) ? since : undefined);
+    const bots = await visibleBots(runtime, store, userId);
+    const redact = await redactAgents(store, roster, userId);
+    const page = store.eventPage(userId, query.since ? 0 : store.todayFrontier(userId), upperFrontier, bots.map(bot => bot.id), query.since || !store.todaySeen(userId) ? since : undefined);
     const eventFiles = new Map<string, typeof page.events[number]['files']>();
     const items: TodayItem[] = [];
     for (let index = 0; index < bots.length; index += 4) {
@@ -63,7 +65,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
           return { botId: bot.id, botName: bot.name, activity: conversation.activity,
             approvals: conversation.approvals.filter(approval => approval.status === 'pending'),
             attention: conversation.attention ?? [],
-            ...(latest ? { latestMessage: { id: latest.id, text: latest.text, createdAt: latest.createdAt, files: latest.files } } : {}),
+            ...(latest ? { latestMessage: { id: latest.id, text: redact.text(redact.message(latest).text), createdAt: latest.createdAt, files: latest.files } } : {}),
             files: [...new Map(files.map(file => [file.id, file])).values()] };
         } catch {
           return { botId: bot.id, botName: bot.name, activity: { state: 'disconnected' as const }, approvals: [], attention: [], files: [], error: 'Could not read this Hermes conversation. Open it to reconnect.' };
