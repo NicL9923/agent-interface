@@ -280,6 +280,22 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.git("config", "--get", "remote.origin.promisor").strip(), "true")
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
 
+    def test_candidate_import_copies_only_objects_the_installed_store_lacks(self):
+        new = [line.split()[0] for line in self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines()]
+        for oid in new[1:]: (self.source / ".git/objects" / oid[:2] / oid[2:]).unlink()
+        self.platform.quiescence(); self.platform.backup()
+        imported = [line.split()[1] for index in (self.source / ".git/objects/pack").glob("*.idx")
+            for line in subprocess.check_output(["git", "show-index"], stdin=index.open("rb")).decode().splitlines()]
+        self.assertEqual(sorted(imported), sorted(new[1:]))
+
+    def test_candidate_import_restores_an_old_object_the_installed_store_lacks(self):
+        # A partial clone can lack an old object that the candidate's history still reaches.
+        blob = self.git("rev-parse", self.old + ":app.py").strip()
+        (self.source / ".git/objects" / blob[:2] / blob[2:]).unlink()
+        self.platform.quiescence(); self.platform.backup()
+        self.git("cat-file", "-e", blob)
+        self.assertEqual(self.platform.load()["phase"], "backed_up")
+
     def test_unreadable_file_refuses_cold_backup_before_service_shutdown(self):
         self.platform.quiescence()
         before = self.states.read_bytes()
@@ -601,7 +617,7 @@ class PlatformTests(unittest.TestCase):
         cli = self.source / "hermes_cli"; cli.mkdir()
         calls = self.home / "pm-calls.json"
         record = "import json\nfrom pathlib import Path\np=Path(" + repr(str(calls)) + ")\ndef note(v):\n old=json.loads(p.read_text()) if p.exists() else []\n p.write_text(json.dumps(old+[v]))\n"
-        (pm / "__init__.py").write_text(record + "def sync_venv(**kwargs):\n note({'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root'])})\n")
+        (pm / "__init__.py").write_text(record + "def sync_venv(extras=None, **kwargs):\n note({'extras':extras,'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root'])})\n")
         (pm / "client.py").write_text("from pm import note\ndef ensure_tools_for_sync(): note('tools')\n")
         (cli / "__init__.py").write_text("")
         (cli / "venv_sync.py").write_text("from pm import note\ndef publish_launchers(root): note('publish')\n")
@@ -609,7 +625,14 @@ class PlatformTests(unittest.TestCase):
         (self.source / "hermes_bootstrap.py").write_text("raise RuntimeError('Automatic source updater must never be imported')\n")
         result = linux.Platform.sync(self.platform)
         self.assertEqual(result, {"ok": True, "state": "synced"})
-        self.assertEqual(json.loads(calls.read_text()), [{"handoff": str(os.getpid())}, "tools", {"evict": False, "explicit": True, "root": str(self.source)}, "publish", "release"])
+        self.assertEqual(json.loads(calls.read_text()), [{"handoff": str(os.getpid())}, "tools", {"extras": None, "evict": False, "explicit": True, "root": str(self.source)}, "publish", "release"])
+        # A dependency change installs exactly the extras qualification built.
+        calls.unlink()
+        descriptor = self.stage / "qualified-runtime.json"
+        descriptor.write_text(json.dumps({"extras": ["all", "discord"]})); descriptor.chmod(0o600)
+        self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
+        linux.Platform.sync(self.platform)
+        self.assertEqual(json.loads(calls.read_text())[2]["extras"], ["all", "discord"])
 
     def test_private_config_and_fixed_stage_paths_are_required(self):
         self.config.chmod(0o644)

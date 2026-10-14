@@ -21,9 +21,9 @@ import UserNotifications
           await store.restore()
         }
         .onChange(of: scenePhase) { _, phase in
-          if phase == .active && store.bootstrap != nil && !store.sessionExpired {
-            store.startPolling()
-          } else if phase != .active {
+          if phase == .active {
+            Task { await store.resume() }
+          } else {
             store.suspend()
           }
         }

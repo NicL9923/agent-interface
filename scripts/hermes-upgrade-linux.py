@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -257,12 +258,16 @@ with contextlib.redirect_stdout(sys.stderr):
     if not lock.acquire(): raise RuntimeError('A native updater already owns Hermes')
     try:
         ensure_tools_for_sync()
-        pm.sync_venv(explicit=True,project_root=root,evict_incompatible_plugins=False)
+        pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
         publish_launchers(root)
     finally: lock.release()
 print(json.dumps({'ok':True,'state':'synced'}))
 """
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source)], capture=True))
+        # Build exactly the extras qualification built. Left to its default, Hermes d97007c chose
+        # fewer and dropped 38 packages, discord.py among them.
+        descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
+        extras = json.loads(private(descriptor).read_text())["extras"] if descriptor else None
+        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(extras)], capture=True))
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
@@ -456,22 +461,40 @@ print(json.dumps({'ok':True,'state':'synced'}))
             return rows
         before = metadata()
         if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate: raise RuntimeError("Qualified candidate changed before object preparation")
-        pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
+        # Copy exactly what the installed store lacks: a full copy each time grew it by 1 GB per
+        # update, and a partial clone can lack old objects the candidate's history still reaches.
+        # Streamed, so only the missing names are held: the full list is about a million objects.
+        lister = subprocess.Popen(["git", "-C", str(self.target), "rev-list", "--objects", "--no-object-names", self.candidate],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+        checker = subprocess.Popen(["git", "-C", str(self.source), "cat-file", "--batch-check=%(objectname)"],
+            stdin=lister.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+        lister.stdout.close()
+        timer = threading.Timer(180, lambda: [process.kill() for process in (lister, checker)]); timer.start()
         try:
-            with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-                def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
-                subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"],
-                    input=(self.candidate + "\n").encode(), stdout=output, stderr=subprocess.PIPE, env=offline,
-                    check=True, timeout=180, preexec_fn=bounded_pack)
-                output.flush(); os.fsync(output.fileno())
-            with pack.open("rb") as payload:
-                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
-            subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
-            if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
+            missing = [line.split()[0] + b"\n" for line in checker.stdout if line.endswith(b" missing\n")]
+            if checker.wait(timeout=30) or lister.wait(timeout=30): raise RuntimeError("Listing the qualified candidate's objects failed")
         finally:
-            pack.unlink(missing_ok=True)
+            timer.cancel()
+            for process in (lister, checker):
+                if process.poll() is None: process.kill(); process.wait(timeout=10)
+            checker.stdout.close()
+        if missing:
+            pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
+            try:
+                with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                    def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
+                    subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout"],
+                        input=b"".join(missing), stdout=output, stderr=subprocess.PIPE, env=offline,
+                        check=True, timeout=180, preexec_fn=bounded_pack)
+                    output.flush(); os.fsync(output.fileno())
+                with pack.open("rb") as payload:
+                    subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+            finally:
+                pack.unlink(missing_ok=True)
+        subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+        if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
 
     def install(self):
         record = self.load()

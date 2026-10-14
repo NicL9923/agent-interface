@@ -79,7 +79,9 @@ any Origin is rejected. Invalid bearer credentials never fall back to cookies.
 `POST /api/auth/logout` revokes the presented native session immediately and
 removes all device registrations linked to it. Await the operation before
 discarding a valid credential. A failed/offline logout needs a visible retry
-because clearing only local storage cannot revoke the server session.
+because clearing only local storage cannot revoke the server session. When the
+server stays unreachable, the app lets the person clear the local session anyway
+after warning that the server-side session remains valid until it expires.
 
 ## Household experience
 

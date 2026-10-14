@@ -6,11 +6,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".agents/tools"))
 spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
 release_app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_app)
@@ -36,8 +38,7 @@ if __name__ == "__main__":
 
 def run_remote(program, payload):
     """Execute a host program locally, exactly as the wrapper sends it over SSH."""
-    source = release_app.REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
-    done = subprocess.run(["python3", "-"], input=source, capture_output=True, text=True)
+    done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True)
     return done.returncode, done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "", done.stderr
 
 
@@ -218,10 +219,10 @@ class Activation(unittest.TestCase):
     def evidence(self):
         return list((self.root / "docs/evidence").iterdir())
 
-    def activate(self, guarded, checks):
+    def activate(self, guarded, checks, *options):
         release_app.guarded = guarded
         release_app.verify_release = lambda manifest: (checks, None)
-        release_app.main(["activate", self.NAME])
+        release_app.main(["activate", self.NAME, *(options or ["--no-docs-pr"])])
 
     def test_records_a_verified_release(self):
         self.activate(lambda host, manifest, check: {"webBuild": "b" * 16}, {"maintenanceCleared": True})
@@ -258,11 +259,40 @@ class Activation(unittest.TestCase):
             self.activate(lambda *_, **__: {"webBuild": "b" * 16}, {"maintenanceCleared": False})
         self.assertEqual((self.status(), self.evidence()), ("activated", []))
         release_app.verify_release = lambda manifest: ({"maintenanceCleared": True}, None)
-        release_app.main(["record", self.NAME])
+        release_app.main(["record", self.NAME, "--no-docs-pr"])
         self.assertEqual(self.status(), "recorded")
         self.assertEqual(len(self.evidence()), 1)
+        # Recording again only retries the docs PR; it never writes a second entry.
+        release_app.main(["record", self.NAME, "--no-docs-pr"])
+        self.assertEqual(len(self.evidence()), 1)
+        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text().count("app release 7fac68e"), 1)
+
+    def test_rerecording_an_interrupted_record_keeps_one_ledger_entry(self):
+        # A record that wrote its files but died before saving its status reruns as activated.
         with self.assertRaises(SystemExit):
-            release_app.main(["record", self.NAME])
+            self.activate(lambda *_, **__: {"webBuild": "b" * 16}, {"maintenanceCleared": False})
+        release_app.verify_release = lambda manifest: ({"maintenanceCleared": True}, None)
+        original = release_app.save_manifest
+        def crash_on_recorded(manifest):
+            original(manifest)
+            if manifest["status"] == "recorded":
+                raise KeyboardInterrupt
+        release_app.save_manifest = crash_on_recorded
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                release_app.main(["record", self.NAME, "--no-docs-pr"])
+        finally:
+            release_app.save_manifest = original
+        release_app.save_manifest({**release_app.load_manifest(self.NAME), "status": "activated"})
+        # Rerun on a later day: the saved entry keeps its heading instead of adding a new one.
+        original_entry = release_app.ledger_entry
+        release_app.ledger_entry = lambda *args: "## October 2 app release 7fac68e\n"
+        try:
+            release_app.main(["record", self.NAME, "--no-docs-pr"])
+        finally:
+            release_app.ledger_entry = original_entry
+        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text().count("app release 7fac68e"), 1)
+        self.assertEqual(self.status(), "recorded")
 
 
 class RecoveryCommand(unittest.TestCase):
@@ -502,11 +532,26 @@ class HostPrograms(unittest.TestCase):
             str(self.host.base / "shared/hermes-service.env"): "file:hermes-service.env",
             str(self.host.base / "shared/hermes-worker.json"): "file:hermes-worker.json",
             str(self.host.source / "agent_interface_gateway.py"): "link:" + release + "/gateway_guard.py"})
+        # A live helper from before deploy_common.py names no shared module and runs these.
+        self.assertEqual(config["deployFunctionsSha256"], "file:deploy-app-release.py")
         self.heartbeat()
         code, output, error = self.recover(check=False)
         self.assertEqual((code, json.loads(output or "null")), (0, {"checked": False}), error)
         self.assertEqual(json.loads((tools / "calls.json").read_text()),
                          [["--config", str(path), "--check"], ["--config", str(path)]])
+
+    def test_recovery_check_pins_the_shared_module_the_live_helper_imports(self):
+        tools, _ = self.recovery_host()
+        for name in ("recover-app-after-native-update.py", "deploy_common.py"):
+            (tools / name).write_bytes((ROOT / ".agents/tools" / name).read_bytes())
+        self.heartbeat()
+        # The real helper then refuses this incomplete release; only its configuration matters here.
+        code, _, error = self.recover(check=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("Recovery check stopped", error)
+        config = json.loads((self.host.base / "operations/native-recovery-config-op-new/config.json").read_text())
+        self.assertEqual(config["deployFunctionsSha256"], hashlib.sha256((tools / "deploy_common.py").read_bytes()).hexdigest())
+        self.assertFalse((tools / "__pycache__").exists(), "Loading the helper must not write into the live release")
 
     def test_recovery_needs_a_passed_check_and_a_fresh_heartbeat_before_the_helper_runs(self):
         tools, _ = self.recovery_host()
