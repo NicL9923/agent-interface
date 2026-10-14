@@ -1,17 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActivityState, Bot } from "./shared/types";
 import { write } from "./client-api";
-import { BotSettings } from "./BotSettings";
 import { AvatarTrio, SignIn } from "./components/SignIn";
-import { IntegrationsPanel } from "./components/IntegrationsPanel";
-import { HermesUpgradePanel } from "./components/HermesUpgradePanel";
-import { ComputerPanel } from "./components/ComputerPanel";
 import { useDeviceNotifications } from "./components/use-device-notifications";
 import { TodayPanel } from "./components/TodayPanel";
-import { RoutineResults } from "./components/RoutineResults";
-import { DiscoveryPanel } from "./components/DiscoveryPanel";
 import "./components/discovery.css";
-import { GroupChats } from "./components/GroupChats";
 import { hasDestination, initialPanel, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
 import { useSession } from "./app/use-session";
@@ -23,7 +16,7 @@ import { Sidebar } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
 import { Composer } from "./app/Composer";
-import { PreferencesDialog } from "./app/PreferencesDialog";
+import { BotSettings, ComputerPanel, DiscoveryPanel, GroupChats, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
   const [panel, setPanel] = useState<Panel | null>(initialPanel);
@@ -57,6 +50,9 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [boot?.preferences.theme]);
   const { workerUpdate, installEvent, notice, setNotice } = useAppInstall();
+  // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
+  const computerLoaded = useOnceActive(panel?.kind === "computer");
+  const upgradeLoaded = useOnceActive(panel?.kind === "upgrade");
   // Phone navigation hides one screen behind inert, so move focus to the one shown.
   const shownRail = useRef(railOpen);
   useEffect(() => {
@@ -131,7 +127,7 @@ export function App() {
           connectionLost={connectionLost} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
           onSettings={bot => setPanel({ kind: "settings", bot })} onPin={togglePin} />
-        {view === "find" ? <DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /> : view === "groups" ? <GroupChats key={boot.user.id} bootstrap={boot} /> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
+        {view === "find" ? <Loading><DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
@@ -150,25 +146,29 @@ export function App() {
         </>}
       </main>
       {panel?.kind === "settings" && (
-        <BotSettings
-          bot={panel.bot}
-          bootstrap={boot}
-          onClose={() => closePanels("settings")}
-          onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
-          onSaved={() => void session.refresh()}
-        />
+        <Loading>
+          <BotSettings
+            bot={panel.bot}
+            bootstrap={boot}
+            onClose={() => closePanels("settings")}
+            onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
+            onSaved={() => void session.refresh()}
+          />
+        </Loading>
       )}
-      {panel?.kind === "routine" && <RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} />}
-      {panel?.kind === "integrations" && <IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} />}
-      <ComputerPanel key={`computer:${boot.user.id}`} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} />
-      <HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
-        bots={boot.bots} currentVersion={boot.connection.version} />
+      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
+      {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
+      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} /></Loading>}
+      {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
+        bots={boot.bots} currentVersion={boot.connection.version} /></Loading>}
       {panel?.kind === "preferences" && (
-        <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} savePreferences={session.savePreferences}
-          notifications={notifications} installEvent={installEvent} notice={notice}
-          onClose={() => closePanels("preferences")} onSignOut={signOut}
-          onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
-          onUpgrade={() => open({ kind: "upgrade" })} />
+        <Loading>
+          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} savePreferences={session.savePreferences}
+            notifications={notifications} installEvent={installEvent} notice={notice}
+            onClose={() => closePanels("preferences")} onSignOut={signOut}
+            onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
+            onUpgrade={() => open({ kind: "upgrade" })} />
+        </Loading>
       )}
     </div>
   );

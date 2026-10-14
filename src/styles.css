@@ -752,6 +752,33 @@ a {
   border-radius: 10px;
   padding: 12px;
 }
+/* A screen opens in a few milliseconds from the installed cache, so the status waits before it shows. */
+.panel-loading, .panel-failure {
+  position: fixed;
+  left: 50%;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 30;
+  translate: -50% 0;
+  max-width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px #0002;
+}
+.panel-loading {
+  padding: 8px 14px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+  animation: panel-loading-in 200ms ease 250ms backwards;
+}
+@keyframes panel-loading-in {
+  from { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-loading { animation-duration: 1ms; }
+}
 .interruption-review {
   display: flex;
   flex-direction: row;

@@ -89,6 +89,11 @@ async function advance(milliseconds: number) {
   await act(async () => vi.advanceTimersByTimeAsync(milliseconds));
 }
 
+// Screens such as preferences load on first use.
+async function loaded() {
+  await act(async () => { await vi.dynamicImportSettled(); });
+}
+
 const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interruption-review input")!;
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
@@ -128,6 +133,7 @@ describe("conversation state", () => {
     vi.mocked(write).mockImplementation(async <T>(path: string) => { order.push(path); return {} as T; });
     await render();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
@@ -143,10 +149,27 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/integrations") ? { profile: "shared", canManage: true, connections: [] } as T : original(path) as Promise<T>);
     await render();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
+    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Integrations"))!.click());
+    await loaded();
     await advance(30_000);
     expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
-    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
+    // Rarely used screens stay unloaded until opened, and an opened one stays mounted.
+    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
+  });
+
+  it("loads the Hermes updates panel when first opened and keeps it mounted for its running status", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Hermes and updates"))!.click());
+    await loaded();
+    expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close Hermes updates"]')!.click());
+    expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(false);
   });
 
   it("does not re-render the app when bootstrap and conversation polls are unchanged", async () => {
