@@ -1,0 +1,32 @@
+name: Dependency audit
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.14.7
+      - name: Audit production npm dependencies
+        run: npm audit --omit=dev
+      - name: Audit pinned Python dependencies
+        run: |
+          pip install -r .github/requirements-ci.txt
+          # The lock pins every version, so skip resolving and building packages.
+          pip-audit -r scripts/spike/requirements.lock.txt --no-deps --disable-pip

@@ -1,0 +1,36 @@
+# Static check that catches undefined names and other likely bugs. CI runs it in
+# the Python job with a pinned ruff version; run `npm run lint:py` locally.
+target-version = "py314"
+
+[lint]
+# F: pyflakes (undefined names, unused imports and variables).
+# E9: syntax and I/O errors. B: bugbear, for bug-prone patterns.
+select = ["F", "E9", "B"]
+# Style-leaning bugbear rules, not bugs. Enable them in a dedicated cleanup.
+ignore = [
+  "B904", # raise ... from err inside except (13 sites)
+  "B905", # zip() without strict= (4 sites)
+  "B007", # unused loop control variable (3 sites)
+  "B017", # assertRaises(Exception) (2 sites)
+]
+
+[lint.per-file-ignores]
+# Baseline of existing findings so CI starts green. This list should only
+# shrink: fix a file, then delete its line. New files get no exemptions.
+# F821 is a false positive: the file exec()s functions parsed out of
+# deploy-app-release.py, so names such as system, pid, atomic and journal exist
+# only at run time.
+".agents/tools/deploy-guarded-app-release.py" = ["F821"]
+".agents/tools/release-app.py" = ["F401"]
+"scripts/hermes-qualified-python-test.py" = ["F841"]
+"scripts/hermes-qualified-python.py" = ["F401"]
+"scripts/hermes-upgrade-worker-test.py" = ["F401", "F841"]
+"scripts/spike/integrations_probe.py" = ["F401"]
+"scripts/spike/qualification_contract_test.py" = ["F401"]
+"scripts/spike/routine_probe.py" = ["F841"]
+"scripts/spike/vault_probe.py" = ["B023", "F841"]
+"src/hermes/experience.py" = ["F401", "F811"]
+"src/hermes/extension.py" = ["F401", "F841"]
+"src/hermes/integrations.py" = ["F401", "F841"]
+"tests/hermes_computer_test.py" = ["F401"]
+"tests/recovery_app_test.py" = ["B023"]
