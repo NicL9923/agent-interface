@@ -24,7 +24,6 @@ import argparse
 import contextlib
 import datetime
 import fcntl
-import hashlib
 import json
 import re
 import shlex

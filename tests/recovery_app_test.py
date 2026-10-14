@@ -377,7 +377,7 @@ class StoppedResumeTests(unittest.TestCase):
         host.system = dashboard_term
         host.verify_stopped(time.time()-1)
         for bad_unit in (recover.UNITS[0], recover.UNITS[2]):
-            def other_term(action, *units):
+            def other_term(action, *units, bad_unit=bad_unit):
                 if action == "show" and units[0] == bad_unit:
                     return "Result=success\nExecMainCode=2\nExecMainStatus=15"
                 return original(action, *units)
@@ -407,7 +407,7 @@ class StoppedResumeTests(unittest.TestCase):
                     host.write_json(host.ops / "phase.json", {"operationId": host.operation, "phase": "admission-needs-review"})
                 else:
                     original = host.system
-                    host.system = lambda action, *units: "999" if "--property=ExecMainPID" in units else original(action, *units)
+                    host.system = lambda action, *units, original=original: "999" if "--property=ExecMainPID" in units else original(action, *units)
                 with self.assertRaises(AssertionError):
                     self.resume(host)
                 self.assertFalse((host.ops / "resume-attempt.json").exists())
