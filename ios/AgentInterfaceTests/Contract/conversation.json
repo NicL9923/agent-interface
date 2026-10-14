@@ -183,9 +183,9 @@
           "url": "/api/files/pantry.signature"
         }
       ],
-      "revision": 1,
+      "revision": 2,
       "reason": "edit",
-      "sentRevision": 0
+      "sentRevision": 1
     },
     "readPosition": {
       "messageId": "message-assistant",

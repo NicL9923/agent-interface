@@ -46,9 +46,9 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.preferences.assistantGroups($0.bots).map(\.title), ["Home", "More assistants"])
     },
     "bot-avatar": check(AvatarConfig.self) { XCTAssertEqual($0.shape, "pebble"); XCTAssertEqual($0.accessory, "glasses") },
-    "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 1); XCTAssertEqual($0?.reason, "edit") },
-    "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 1); XCTAssertEqual($0.draft.sentRevision, 0) },
-    "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 1) },
+    "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
+    "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
+    "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },
     "bot-portrait": check(FileRef.self) { XCTAssertEqual($0.url, "/api/files/portrait.signature") },
     "bot-read-position": check(ReadPosition.self) { XCTAssertEqual($0.messageId, "message-assistant"); XCTAssertEqual($0.scrollTop, 240.5) },
     "bot-skills": check([CapabilityItem].self) { XCTAssertEqual($0.first?.required, true) },
