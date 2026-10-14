@@ -338,6 +338,12 @@ struct CapabilityItem: Codable, Identifiable {
   var enabled: Bool
   var required: Bool?
 }
+extension Bot {
+  /// Only its owner can receive a private assistant's routine results.
+  func routineRecipients(_ household: [Member]) -> [Member] {
+    !shared && ownerId != nil ? household.filter { $0.id == ownerId } : household
+  }
+}
 struct Routine: Codable, Identifiable {
   var id: String
   var botId: String

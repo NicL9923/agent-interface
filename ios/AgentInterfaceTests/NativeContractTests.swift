@@ -44,6 +44,7 @@ private final class NativeMockServer: @unchecked Sendable {
     private var connected = true
     private var conversationStatus = 200
     private var botHidden = false
+    private var assistantsChanged = 0
     private var upgradeResponseStatus = 200
     private var etags = false
     private var forcedNotModified = 0
@@ -64,6 +65,8 @@ private final class NativeMockServer: @unchecked Sendable {
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     /// Another member made "bot" their personal assistant: it leaves the roster and its routes answer 404.
     func hideBot() { lock.withLock { botHidden = true } }
+    /// Answers the next reads as if an assistant turned private while they ran.
+    func answerAssistantsChanged(times: Int) { lock.withLock { assistantsChanged = times } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
     /// Mirrors the server: GET JSON carries a weak ETag, and a matching If-None-Match gets an empty 304.
@@ -117,6 +120,9 @@ private final class NativeMockServer: @unchecked Sendable {
             data = status == 200 ? Self.json(["googleClientId": "google", "localDevAuth": false, "nativeAuthVersion": 1]) : Self.json(["error": "Synthetic config outage"])
         }
         else if path == "/api/auth/native/exchange" { data = Self.json(["token": "replacement-session", "expiresAt": "2026-10-07T09:08:21.125Z", "user": ["id": "one", "name": "One", "email": "one@example.test"]]) }
+        else if request.httpMethod == "GET", lock.withLock({ assistantsChanged > 0 ? { assistantsChanged -= 1; return true }() : false }) {
+            status = 503; data = Self.errorBody("Assistants changed while this loaded. Try again.", code: "assistants_changed")
+        }
         else if path == "/api/bootstrap" {
             let failure = lock.withLock { (status: bootstrapStatus, code: bootstrapCode) }
             status = failure.status
@@ -287,6 +293,28 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertNil(try encoded(input)["confirmPrivate"])
         input.confirmPrivate = true
         XCTAssertEqual(try encoded(input)["confirmPrivate"] as? Bool, true)
+    }
+
+    func testAMissingGroupKeepsNoPrivateIdentityAndPrivateRoutinesNotifyOnlyTheOwner() {
+        let room = GroupRoom(room_id: "ledger", name: "Ledger room", members: [GroupMember(member_id: "zq-ledger", profile: "zq-ledger", handle: "zq-ledger", display_name: "Moonlit Saddle Ledger")])
+        XCTAssertEqual(GroupConversationView.identity(room, missing: false).members, "Moonlit Saddle Ledger (@zq-ledger)")
+        let gone = GroupConversationView.identity(room, missing: true)
+        XCTAssertEqual(gone.title, "Group chat"); XCTAssertNil(gone.members)
+        let household = [Member(id: "one", name: "One", email: "one@example.test"), Member(id: "two", name: "Two", email: "two@example.test")]
+        var bot = Bot(id: "books", name: "Books", model: "test", shared: true, activity: .idle)
+        XCTAssertEqual(bot.routineRecipients(household).map(\.id), ["one", "two"])
+        bot.shared = false; bot.ownerId = "one"
+        XCTAssertEqual(bot.routineRecipients(household).map(\.id), ["one"])
+    }
+
+    func testAReadRacingAnAssistantTurningPrivateIsReadAgainOnce() async throws {
+        let server = NativeMockServer(), api = client(server); defer { clean(server) }
+        server.answerAssistantsChanged(times: 1)
+        let _: Bootstrap = try await api.get("/bootstrap")
+        XCTAssertEqual(server.requestCount("/api/bootstrap"), 2)
+        server.answerAssistantsChanged(times: 2)
+        do { let _: Bootstrap = try await api.get("/bootstrap"); XCTFail("A second change in a row is reported") }
+        catch { XCTAssertEqual((error as? APIError)?.code, "assistants_changed") }
     }
 
     func testAcceptedSubmissionClearsDraftWithoutAnEmptyDraftWrite() async throws {

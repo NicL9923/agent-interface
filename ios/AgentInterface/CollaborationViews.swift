@@ -194,9 +194,14 @@ struct GroupConversationView: View {
   private var status: String {
     state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Ready for a topic."
   }
+  /// A group that disappeared keeps none of its name, members or messages on screen.
+  static func identity(_ room: GroupRoom, missing: Bool) -> (title: String, members: String?) {
+    missing ? ("Group chat", nil) : (room.name, room.members.map { "\($0.display_name ?? $0.profile) (@\($0.handle))" }.joined(separator: " · "))
+  }
   var body: some View {
+    let identity = Self.identity(room, missing: missing)
     List {
-      Section { Text(room.members.map { "\($0.display_name ?? $0.profile) (@\($0.handle))" }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+      Section { if let members = identity.members { Text(members).font(.caption).foregroundStyle(.secondary) }
         if missing { Text("That group chat is no longer available to you.").font(.footnote) }
         else if let error { ErrorBanner(message: error) }
         if state == nil && error == nil && !missing { ProgressView("Opening group…") }
@@ -228,7 +233,7 @@ struct GroupConversationView: View {
     }
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
-    .navigationTitle(room.name).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
+    .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
       state = nil; events = []; cursor = 0
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }

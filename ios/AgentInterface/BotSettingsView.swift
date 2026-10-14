@@ -603,7 +603,7 @@ struct RoutineEditor: View {
         }
         RoutinePreviewControls(routine: $routine, previewValid: $schedulePreviewValid)
         Section {
-          ForEach(store.bootstrap?.household ?? []) { user in
+          ForEach(recipients) { user in
             Toggle(
               user.name,
               isOn: Binding(
@@ -654,16 +654,22 @@ struct RoutineEditor: View {
         }
     }
   }
+  private var recipients: [Member] {
+    let household = store.bootstrap?.household ?? []
+    return store.bootstrap?.bots.first { $0.id == routine.botId }?.routineRecipients(household) ?? household
+  }
   private func save() {
     busy = true
     error = nil
+    var value = routine
+    value.recipientIds = value.recipientIds?.filter { id in recipients.contains { $0.id == id } }
     Task {
       defer { busy = false }
       do {
         guard let api = store.api else { return }
         let _: Routine = try await api.write(
           routine.id.isEmpty ? "/routines" : "/routines/\(APIClient.component(routine.id))",
-          routine, method: routine.id.isEmpty ? "POST" : "PUT")
+          value, method: routine.id.isEmpty ? "POST" : "PUT")
         onSaved()
         dismiss()
       } catch { self.error = error.localizedDescription }
