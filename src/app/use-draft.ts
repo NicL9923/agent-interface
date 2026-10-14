@@ -8,8 +8,10 @@ import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
 type SetDraft = (update: (current: Draft) => Draft) => void;
 const draftPath = (botId: string) => `/bots/${encodeURIComponent(botId)}/draft`;
-// Keepalive requests share a 64 KiB budget. A larger draft is sent as an ordinary request.
+// Keepalive requests in flight share a 64 KiB budget, and the browser rejects one over it. A
+// save that does not fit is sent as an ordinary request instead.
 const KEEPALIVE_BYTES = 60_000;
+let keepaliveBytes = 0;
 /**
  * Saves a draft on its base revision, then updates the open copy and the cached copy. A conflict
  * merges the server's copy in. Kept edits on an open draft save again from the persistence
@@ -31,8 +33,11 @@ async function saveDraft(options: {
   const body = { ...sent, baseRevision: draft.baseRevision ?? 0 };
   let update: (local: Draft) => Draft;
   let conflict = false;
+  const bytes = keepalive ? new Blob([JSON.stringify(body)]).size : 0;
+  const budgeted = keepalive && keepaliveBytes + bytes <= KEEPALIVE_BYTES;
+  if (budgeted) keepaliveBytes += bytes;
   try {
-    const server = savedDraft(await (keepalive && new Blob([JSON.stringify(body)]).size < KEEPALIVE_BYTES
+    const server = savedDraft(await (budgeted
       ? write<SavedDraft>(draftPath(botId), body, "PUT", { keepalive: true })
       : write<SavedDraft>(draftPath(botId), body, "PUT")));
     update = local => savedCopy(local, sent, server);
@@ -42,6 +47,8 @@ async function saveDraft(options: {
     const server = savedDraft(e.data?.draft);
     update = local => mergeDraft(local, server, true).draft;
     conflict = true;
+  } finally {
+    if (budgeted) keepaliveBytes -= bytes;
   }
   if (!live()) return;
   const key = draftKey(userId, botId);

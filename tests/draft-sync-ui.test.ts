@@ -183,6 +183,23 @@ describe('draft sync across devices',()=>{
     expect(draftPuts('shared')).toEqual([]);
   });
 
+  it('sends a save as an ordinary request when overlapping keepalive saves would exceed the browser budget',async()=>{
+    await renderApp();
+    let release!:()=>void;
+    const held=new Promise<void>(resolve=>{release=resolve;});
+    const serve=vi.mocked(write).getMockImplementation()!;
+    vi.mocked(write).mockImplementation(async (...args)=>{await held;return serve(...args);});
+    const long=(word:string)=>word.repeat(35_000/word.length);
+    await type(long('feed '));await open('Other');
+    await type(long('gate '));await open('Shared');
+    expect(draftPuts('shared')[0][3]).toEqual({keepalive:true});
+    expect(draftPuts('other')).toHaveLength(1);
+    expect(draftPuts('other')[0]).toHaveLength(3);
+    await act(async()=>release());await advance(0);
+    expect(draft('shared').text).toBe(long('feed '));
+    expect(draft('other').text).toBe(long('gate '));
+  });
+
   it('saves a pending edit when the page is hidden or closed',async()=>{
     await renderApp();
     await type('Before closing');
