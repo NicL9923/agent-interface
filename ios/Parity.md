@@ -5,7 +5,7 @@ The native implementation uses the web client's settled scope in
 means the native control and authenticated request path exist. The validation
 ledger remains the repository's single source for tested code-state hashes.
 
-The native unit run passed 94 tests on Xcode 27 and iOS 27. The subsequent Today
+The native unit run passed 96 tests on Xcode 27 and iOS 27. The subsequent Today
 frontier update passed eight focused unit tests and two phone UI flows. October 1 focused
 simulator UI checks covered account health, the real Calendar permission prompt
 and denial, confirmed service recovery, and disconnect followed by a refreshed
