@@ -46,7 +46,7 @@ export function App() {
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId);
+  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
@@ -136,7 +136,7 @@ export function App() {
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError} workerUpdate={workerUpdate}
-            notifications={notifications} scroll={scroll} content={content} history={history} onScroll={persistPosition}
+            notifications={notifications} scroll={scroll} content={content} history={history} reply={reply} onScroll={persistPosition}
             onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
