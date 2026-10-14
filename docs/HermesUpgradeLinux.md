@@ -354,3 +354,9 @@ answer at all. The first start after an update builds the web UI before listenin
 70 seconds on Oct 14, 2026; verification that asked sooner got a refused connection and rolled
 back an update that was working. The Discord connection check runs after this wait, so a
 long build cannot leave it stale.
+
+The source archive leaves out Git's object store, and archives use fast gzip. Installation only
+adds objects, so rollback keeps the live store, replaces everything else from the archive, and
+then proves the baseline tree is complete offline. If a crash or damage lost objects, rollback
+copies the baseline's history back from the staged repository first. On Oct 14, 2026 the backup
+archived a 6.3 GB object store at full compression, which took 29 of the 31 minutes Hermes was down.
