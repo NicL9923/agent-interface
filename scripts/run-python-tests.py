@@ -6,8 +6,14 @@ imported), so each runs as `python <file>` from the repository root. With no
 arguments this runs every discovered file; pass file paths to run a subset.
 A test-looking file outside the discovery globs is an error, so a new test
 cannot silently never run.
+
+Test files must use unittest. A file passes only if its unittest summary shows
+at least one test ran, so an empty file or a bare script that exits 0 fails. A
+file whose every test was skipped shows SKIP, which passes locally (for example
+no tmux) and fails when CI=true, so a runner missing a tool cannot go green.
 """
 import os
+import re
 import subprocess
 import sys
 import time
@@ -16,29 +22,38 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GLOBS = ("tests/*_test.py", "scripts/*-test.py", "scripts/spike/*_test.py")
 TEST_NAMES = ("*_test.py", "*-test.py", "test_*.py")
-SKIP_DIRS = {".git", "node_modules", "build", "dist", "ios", "__pycache__", ".venv", "venv"}
 
 
 def discover():
     return sorted({path for pattern in GLOBS for path in ROOT.glob(pattern)})
 
 
-def stray_tests(found):
+def stray_tests(found, root=ROOT):
+    """Test-looking files that git tracks or would add, so ignored output is skipped."""
+    listing = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root, check=True, stdout=subprocess.PIPE, text=True).stdout
     known = set(found)
-    strays = []
-    for directory, names, files in os.walk(ROOT):
-        names[:] = [name for name in names if name not in SKIP_DIRS]
-        for file in files:
-            path = Path(directory) / file
-            if path not in known and any(path.match(name) for name in TEST_NAMES):
-                strays.append(path)
-    return sorted(strays)
+    paths = (root / name for name in listing.split("\0") if name)
+    return sorted(path for path in paths if path not in known and path.is_file() and any(path.match(pattern) for pattern in TEST_NAMES))
+
+
+def classify(returncode, summary, ci):
+    """Return (status, note) from the exit code and the unittest summary on stderr."""
+    if returncode != 0:
+        return "FAIL", ""
+    ran = re.findall(r"^Ran (\d+) tests? in ", summary, re.MULTILINE)
+    if not ran or int(ran[-1]) == 0:
+        return "FAIL", "no unittest tests ran; test files must define unittest tests"
+    skipped = re.findall(r"^OK \(.*?skipped=(\d+)", summary, re.MULTILINE)
+    count, skips = int(ran[-1]), int(skipped[-1]) if skipped else 0
+    if skips >= count:
+        return ("FAIL", f"all {count} tests skipped under CI") if ci else ("SKIP", f"all {count} tests skipped")
+    return "PASS", f"{skips} skipped" if skips else ""
 
 
 def run(path):
     started = time.monotonic()
-    result = subprocess.run([sys.executable, str(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    return result.returncode, time.monotonic() - started, result.stdout
+    result = subprocess.run([sys.executable, str(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return result.returncode, time.monotonic() - started, result.stdout, result.stderr
 
 
 def main(argv):
@@ -59,16 +74,20 @@ def main(argv):
     if not selected:
         print("No Python test files found.")
         return 2
+    ci = os.environ.get("CI") == "true"
     failures = []
+    counts = {}
     started = time.monotonic()
     for path in selected:
         name = str(path.relative_to(ROOT))
-        code, seconds, output = run(path)
-        print(f"{'PASS' if code == 0 else 'FAIL'} {name} ({seconds:.1f}s)", flush=True)
-        if code != 0:
+        code, seconds, stdout, stderr = run(path)
+        status, note = classify(code, stderr, ci)
+        counts[status] = counts.get(status, 0) + 1
+        print(f"{status} {name} ({seconds:.1f}s){' ' + note if note else ''}", flush=True)
+        if status == "FAIL":
             failures.append(name)
-            print(output.rstrip(), flush=True)
-    print(f"\n{len(selected) - len(failures)} passed, {len(failures)} failed in {time.monotonic() - started:.1f}s (Python {sys.version.split()[0]})")
+            print((stdout + stderr).rstrip(), flush=True)
+    print(f"\n{counts.get('PASS', 0)} passed, {counts.get('SKIP', 0)} skipped, {len(failures)} failed in {time.monotonic() - started:.1f}s (Python {sys.version.split()[0]})")
     if failures:
         print("Failed:", *failures, sep="\n  ")
     return 1 if failures else 0

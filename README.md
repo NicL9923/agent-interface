@@ -221,7 +221,9 @@ Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
 `scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file
 sits outside those paths. Pass file paths to run a subset, for example
 `npm run test:py -- tests/hermes_vault_test.py`. Use Python 3.14, which the
-Hermes host runs; the system terminal test skips itself without `tmux`.
+Hermes host runs. Test files use `unittest`, and a file passes only if at least
+one test ran. A file whose tests all skip, such as the system terminal test
+without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
