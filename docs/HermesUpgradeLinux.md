@@ -352,4 +352,5 @@ and the household lost its assistants for 84 minutes.
 Verification first waits up to `dashboardStartSeconds` (600 by default) for the dashboard to
 answer at all. The first start after an update builds the web UI before listening, which took
 70 seconds on Oct 14, 2026; verification that asked sooner got a refused connection and rolled
-back an update that was working.
+back an update that was working. The Discord connection check runs after this wait, so a
+long build cannot leave it stale.

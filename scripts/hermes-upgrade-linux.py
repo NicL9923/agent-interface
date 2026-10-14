@@ -499,6 +499,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
         for name, original in baseline["units"].items():
             current = self.unit(name)
             if current["FragmentPath"] != original["FragmentPath"] or current["fragmentSha256"] != original["fragmentSha256"]: raise RuntimeError("A native/app unit changed")
+        # The dashboard can take minutes to rebuild after an update, so Discord is checked after it, while still fresh.
+        verifying("dashboard start", self.wait_dashboard)
         deadline = time.monotonic() + self.config.get("verificationSeconds", 120)
         while True:
             # A just-started gateway takes a while to report; the whole verification window applies.
@@ -506,7 +508,6 @@ print(json.dumps({'ok':True,'state':'synced'}))
             if all(gateway.get("platforms", {}).get(key, {}).get("state") == "connected" for key in baseline["discordConnections"]): break
             if time.monotonic() >= deadline: raise RuntimeError("Both original Discord connections were not restored")
             time.sleep(.5)
-        verifying("dashboard start", self.wait_dashboard)
         gate = verifying("native maintenance status", lambda: self.rpc("status"))
         if gate.get("active") is not True or gate.get("operationId") != self.operation: raise RuntimeError("Native maintenance gate ownership was lost")
         verifying("anonymous rejection", self.anonymous_rejection)

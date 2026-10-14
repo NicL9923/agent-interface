@@ -430,6 +430,16 @@ class PlatformTests(unittest.TestCase):
         self.platform.rpc_calls.clear(); self.platform.verify()
         self.assertEqual(self.platform.rpc_calls[:2], ["dashboard-ready", "status"])
 
+    def test_verification_checks_discord_after_the_dashboard_wait(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        def disconnect():
+            state = json.loads((self.platform.home / "gateway_state.json").read_text())
+            state["platforms"] = {key: {"state": "disconnected"} for key in state["platforms"]}
+            linux.atomic(self.platform.home / "gateway_state.json", state)
+        self.platform.wait_dashboard = disconnect
+        self.platform.config.update(verificationSeconds=1)
+        with self.assertRaisesRegex(RuntimeError, "Discord connections were not restored"): self.platform.verify()
+
     def test_dashboard_wait_tolerates_a_slow_first_start_and_gives_up_at_its_limit(self):
         import http.server, socket
         with socket.socket() as probe:
