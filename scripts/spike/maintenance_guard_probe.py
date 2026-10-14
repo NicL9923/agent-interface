@@ -107,7 +107,24 @@ def probe_gateway(home, checks):
     spec = importlib.util.spec_from_file_location("qualification_gateway_guard", Path(__file__).resolve().parents[2] / "src/hermes/gateway_guard.py")
     guard = importlib.util.module_from_spec(spec); spec.loader.exec_module(guard)
     lease = home / "gateway-maintenance.json"
-    guard.install(drain, startup, status, lease, inbound)
+    authority = refusal = None
+    if importlib.util.find_spec("gateway.session_authority") is not None:
+        import gateway.session_authority as authority
+        from hermes_state_runtime import RuntimeStoreError as refusal
+    guard.install(drain, startup, status, lease, inbound, authority, refusal)
+    if authority is not None:
+        # The unified runtime admits durable work before running it. A held lease must
+        # refuse that admission through the native drain refusal, then restore it.
+        owner = types.SimpleNamespace(runner=types.SimpleNamespace(_draining=False), retiring=False)
+        lease.write_text("held")
+        try:
+            authority.SessionAuthority._require_admission_open(owner)
+            raise AssertionError("Held maintenance admitted authority work")
+        except refusal as error:
+            assert error.reason == "runtime_draining", error.reason
+        lease.unlink()
+        authority.SessionAuthority._require_admission_open(owner)
+        checks["persistent_gateway_fences_authority_admission"] = True
 
     # Exercise the actual shared native inbound pipeline. Only the eventual
     # command body is harmless; production authorization and work stay untouched.

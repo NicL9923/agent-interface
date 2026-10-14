@@ -45,6 +45,11 @@ private final class NativeMockServer: @unchecked Sendable {
     private var conversationStatus = 200
     private var botHidden = false
     private var assistantsChanged = 0
+    private var failAnchoredOnce = false
+    private var history: [String]?
+    private var heldOnce: Set<String> = []
+    private var fileOwners: [String: [String]] = [:]
+    private var readAnchor = "message-one"
     private var upgradeResponseStatus = 200
     private var etags = false
     private var forcedNotModified = 0
@@ -61,7 +66,9 @@ private final class NativeMockServer: @unchecked Sendable {
     /// Drops every request as if the phone had no network.
     func setOffline(_ value: Bool) { lock.withLock { offline = value } }
     func requestCount(_ path: String) -> Int { requests.filter { $0.url?.path == path }.count }
-    func disconnect() { lock.withLock { connected = false } }
+    func disconnect(_ value: Bool = true) { lock.withLock { connected = !value } }
+    /// Fails the next conversation request that starts at a message, as a saved reading position does.
+    func failNextAnchoredConversation() { lock.withLock { failAnchoredOnce = true } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     /// Another member made "bot" their personal assistant: it leaves the roster and its routes answer 404.
     func hideBot() { lock.withLock { botHidden = true } }
@@ -78,7 +85,7 @@ private final class NativeMockServer: @unchecked Sendable {
         let path = protocolInstance.request.url!.path
         let delay = lock.withLock {
             recorded.append(protocolInstance.request)
-            if heldPaths.contains(path) { held[path] = protocolInstance; return true }
+            if heldPaths.contains(path) || heldOnce.remove(path) != nil { held[path] = protocolInstance; return true }
             return false
         }
         if lock.withLock({ offline }) { protocolInstance.fail(URLError(.notConnectedToInternet)); return }
@@ -106,11 +113,91 @@ private final class NativeMockServer: @unchecked Sendable {
                    "capabilities": ["uploads": ["supported": true], "chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
                    "connection": ["connected": isConnected], "csrfToken": NSNull()])
     }
-    func conversationData() -> Data {
-        let activity = lock.withLock { ["state": state, "runId": run] }
-        return Self.json(["botId": "bot", "messages": [], "activity": activity, "approvals": [], "files": [],
-                          "draft": ["text": "server draft for \(user)", "attachments": []],
-                          "readPosition": ["messageId": "message-one", "scrollTop": 12.5]])
+    func conversationData(query: String? = nil) -> Data {
+        let state: String = lock.withLock { self.state }
+        let run: String = lock.withLock { self.run }
+        let history: [String]? = lock.withLock { self.history }
+        let activity: [String: String] = ["state": state, "runId": run]
+        let draft: [String: Any] = ["text": "server draft for \(user)", "attachments": [String]()]
+        let readPosition: [String: Any] = ["messageId": lock.withLock { readAnchor }, "scrollTop": 12.5]
+        var body: [String: Any] = [:]
+        body["botId"] = "bot"
+        body["messages"] = [String]()
+        body["activity"] = activity
+        body["approvals"] = [String]()
+        body["files"] = [String]()
+        body["draft"] = draft
+        body["readPosition"] = readPosition
+        if let history {
+            let window = Self.window(history, query: query)
+            body["messages"] = window.ids.map { (id: String) -> [String: Any] in messageBody(id) }
+            body["earlier"] = window.earlier
+            var shown = Set<String>(), before = Set<String>(), files: [[String: Any]] = []
+            for (index, id) in history.enumerated() {
+                for file in lock.withLock({ fileOwners[id] ?? [] }) {
+                    if index >= window.earlier {
+                        if shown.insert(file).inserted { files.append(fileBody(file)) }
+                    } else { before.insert(file) }
+                }
+            }
+            body["files"] = files
+            body["earlierFiles"] = before.subtracting(shown).count
+        }
+        return Self.json(body)
+    }
+    private func messageBody(_ id: String) -> [String: Any] {
+        var message: [String: Any] = ["id": id, "role": "user", "text": id]
+        let owned: [String] = lock.withLock { fileOwners[id] ?? [] }
+        if !owned.isEmpty { message["files"] = owned.map { (file: String) -> [String: Any] in fileBody(file) } }
+        return message
+    }
+    private func fileBody(_ id: String) -> [String: Any] { ["id": id, "name": id + ".txt", "mime": "text/plain"] }
+    /// Gives these messages the files with these IDs.
+    func serveFiles(_ owners: [String: [String]]) { lock.withLock { fileOwners = owners } }
+    /// Sets the message the person last read, as the server remembers it.
+    func serveReadAnchor(_ id: String) { lock.withLock { readAnchor = id } }
+    /// Mirrors `filesBefore`: the file-bearing messages before `before`.
+    private func earlierFilesData(query: String?) -> Data {
+        let history: [String] = lock.withLock { self.history ?? [] }
+        var before: String?
+        for item in URLComponents(string: "?" + (query ?? ""))?.queryItems ?? [] where item.name == "before" { before = item.value }
+        let end: Int = before.flatMap { history.firstIndex(of: $0) } ?? history.count
+        var messages: [[String: Any]] = []
+        for id in history[..<end] where !lock.withLock({ fileOwners[id] ?? [] }).isEmpty {
+            var message = messageBody(id)
+            message["text"] = nil
+            messages.append(message)
+        }
+        return Self.json(["messages": messages])
+    }
+    /// Mirrors the app server's `historyWindow` for a history where every message starts a turn.
+    private static func window(_ ids: [String], query: String?) -> (ids: [String], earlier: Int) {
+        guard let query else { return (ids, 0) }
+        let items: [URLQueryItem] = URLComponents(string: "?" + query)?.queryItems ?? []
+        var start: String?
+        var turns = 0
+        for item in items {
+            if item.name == "start" { start = item.value }
+            if item.name == "turns", let value = item.value, let count = Int(value) { turns = count }
+        }
+        var end = ids.count
+        if let start, let index = ids.firstIndex(of: start) { end = index } else { turns = max(turns, 20) }
+        let from: Int = max(0, end - turns)
+        return (Array(ids[from...]), from)
+    }
+    /// Makes the conversation answer with these message IDs, windowed by each request's query.
+    /// The reader starts at the latest message.
+    func serveHistory(_ ids: [String]) { lock.withLock { history = ids; readAnchor = ids.last ?? readAnchor } }
+    func appendHistory(_ id: String) { lock.withLock { history?.append(id) } }
+    /// Holds only the next request to this path, so a later one can overtake it.
+    func holdNext(_ path: String) { _ = lock.withLock { heldOnce.insert(path) } }
+    /// The query of each conversation request, in order.
+    var conversationQueries: [String] {
+        var queries: [String] = []
+        for request in requests where request.url?.path.hasSuffix("/conversation") == true {
+            queries.append(request.url?.query ?? "")
+        }
+        return queries
     }
     private func finish(_ protocolInstance: NativeMockProtocol) {
         let request = protocolInstance.request, path = request.url!.path
@@ -129,9 +216,16 @@ private final class NativeMockServer: @unchecked Sendable {
             data = status == 200 ? bootstrapData() : Self.errorBody("Sign in required", code: failure.code)
         }
         else if path.hasPrefix("/api/bots/bot/") && lock.withLock({ botHidden }) { status = 404; data = Self.errorBody("Assistant not found", code: "assistant_not_found") }
+        else if path == "/api/bots/bot/files" { data = earlierFilesData(query: request.url?.query) }
         else if path.hasSuffix("/conversation") {
             status = lock.withLock { conversationStatus }
-            data = status == 200 ? conversationData() : Self.json(["error": "Synthetic conversation outage"])
+            let anchored: Bool = lock.withLock {
+                guard failAnchoredOnce, request.url?.query?.hasPrefix("start=") == true else { return false }
+                failAnchoredOnce = false
+                return true
+            }
+            if anchored { status = 503 }
+            data = status == 200 ? conversationData(query: request.url?.query) : Self.json(["error": "Synthetic conversation outage"])
         }
         else if path.hasSuffix("/draft") { data = Self.json(["text": "server draft for \(user)", "attachments": []]) }
         else if path.hasSuffix("/messages") {
@@ -409,6 +503,180 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.bootstrap?.user.id, "one"); XCTAssertEqual(value.selectedBotId, "bot")
         XCTAssertNil(value.error); XCTAssertFalse(value.restoring)
         XCTAssertEqual(server.requestCount("/api/auth/config"), 0)
+    }
+
+    func testPollingRefreshesBootstrapOnlyWhenDueButTheConversationEveryPass() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        let bootstraps = { server.requestCount("/api/bootstrap") }
+        let polls = { server.conversationQueries.count }
+        let tick = { (seconds: Double) in time += .seconds(seconds); _ = await value.pollOnce() }
+        _ = await value.pollOnce()
+        XCTAssertEqual(bootstraps(), 1, "A fresh poll loop starts from current data")
+        for _ in 0..<30 { await tick(1.5) }
+        XCTAssertEqual(bootstraps(), 1, "Bootstrap must not ride the 1.5 second conversation cadence")
+        XCTAssertEqual(polls(), 31)
+        await tick(30)
+        XCTAssertEqual(bootstraps(), 2, "The slow timer refreshes bootstrap about once a minute")
+        await value.refreshBootstrap()
+        await tick(59)
+        XCTAssertEqual(bootstraps(), 3, "An action's refresh restarts the timer")
+        await tick(2)
+        XCTAssertEqual(bootstraps(), 4)
+        value.suspend(); _ = await value.pollOnce()
+        XCTAssertEqual(bootstraps(), 5, "Returning to the foreground refreshes at once")
+        XCTAssertEqual(polls(), 35)
+    }
+
+    func testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        _ = await value.pollOnce()
+        let bootstraps = { server.requestCount("/api/bootstrap") }
+        server.disconnect(); await value.refreshBootstrap()
+        var expected = bootstraps()
+        for _ in 0..<2 {
+            time += .seconds(1.5); _ = await value.pollOnce(); expected += 1
+            XCTAssertEqual(bootstraps(), expected, "Recovery from a runtime disconnect needs bootstrap")
+        }
+        server.disconnect(false)
+        time += .seconds(1.5); _ = await value.pollOnce(); expected += 1
+        XCTAssertEqual(bootstraps(), expected)
+        time += .seconds(1.5); _ = await value.pollOnce()
+        XCTAssertEqual(bootstraps(), expected, "Once connected again, bootstrap goes back to the slow timer")
+        server.failConversation(); time += .seconds(1.5); _ = await value.pollOnce()
+        XCTAssertFalse(value.connected)
+        server.failConversation(false)
+        time += .seconds(1.5); _ = await value.pollOnce(); expected += 1
+        XCTAssertEqual(bootstraps(), expected, "An outage clears only through bootstrap")
+        XCTAssertTrue(value.connected)
+    }
+
+    private func ids(_ range: ClosedRange<Int>) -> [String] { range.map { String(format: "m%02d", $0) } }
+
+    func testConversationRequestsAreWindowedAndEarlierHistoryExtendsTheWindow() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries, ["turns=20"])
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m11"); XCTAssertEqual(value.conversation?.earlier, 10)
+        await value.loadEarlier()
+        XCTAssertEqual(server.conversationQueries.last, "start=m11&turns=20")
+        XCTAssertEqual(value.conversation?.messages.count, 30)
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m01", "Polling keeps the loaded window")
+        let requests = server.conversationQueries.count
+        await value.loadEarlier()
+        XCTAssertEqual(server.conversationQueries.count, requests, "Nothing is requested once the start is loaded")
+        server.user = "two"; await value.refreshBootstrap()
+        XCTAssertEqual(server.conversationQueries.dropFirst(requests).first, "turns=20", "Another person starts from the latest page")
+    }
+
+    func testNewTurnsBetweenPollsDoNotSlideTheWindowPastTheTurnBeingRead() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...25))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m06")
+        for next in 26...28 {
+            server.appendHistory(String(format: "m%02d", next))
+            await value.refreshConversation()
+            XCTAssertEqual(server.conversationQueries.last, "start=m06")
+            XCTAssertEqual(value.conversation?.messages.first?.id, "m06", "The oldest loaded turn stays put")
+            XCTAssertEqual(value.conversation?.messages.last?.id, String(format: "m%02d", next))
+        }
+    }
+
+    func testAPollThatAnsweredLateCannotReplaceExpandedHistory() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        let path = "/api/bots/bot/conversation"
+        server.holdNext(path)
+        let poll = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        await value.loadEarlier()
+        XCTAssertEqual(value.conversation?.messages.count, 30)
+        server.release(path); await poll.value
+        XCTAssertEqual(value.conversation?.messages.count, 30, "The late response asked for the narrower window")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m01")
+    }
+
+    func testFilesFromBeforeTheWindowLoadOnDemandAndMergeWithoutDuplicates() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...30))
+        server.serveFiles(["m02": ["old.txt"], "m05": ["old.txt", "older.txt"], "m12": ["new.txt"], "m11": ["old.txt"]])
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.earlierFiles, 1, "Only older.txt exists solely before the window")
+        XCTAssertEqual(value.conversationFiles.map(\.id), ["old.txt", "new.txt"])
+        XCTAssertTrue(value.hasConversationFiles)
+        await value.loadEarlierFiles()
+        XCTAssertEqual(server.requests.last?.url?.query, "before=m11")
+        XCTAssertEqual(value.conversationFiles.map(\.id).sorted(), ["new.txt", "old.txt", "older.txt"], "Merged by ID")
+        let requests = server.requests.count
+        await value.loadEarlierFiles()
+        XCTAssertEqual(server.requests.count, requests, "A fetched list is not fetched again")
+        await value.loadEarlier()
+        XCTAssertEqual(value.conversation?.earlierFiles, 0)
+        XCTAssertEqual(value.conversationFiles.map(\.id).sorted(), ["new.txt", "old.txt", "older.txt"])
+    }
+
+    func testFileListStaysAvailableWhenOnlyEarlierTurnsHaveFiles() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...30)); server.serveFiles(["m03": ["only.txt"]])
+        await value.refreshConversation()
+        XCTAssertTrue(value.conversationFiles.isEmpty)
+        XCTAssertTrue(value.hasConversationFiles, "The list must not hide while older files wait to load")
+        await value.loadEarlierFiles()
+        XCTAssertEqual(value.conversationFiles.map(\.id), ["only.txt"])
+    }
+
+    func testASavedReadingPositionOlderThanTheLatestPageOpensTheWindowThatEndsAtIt() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...60)); server.serveReadAnchor("m35")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries, ["turns=20", "start=m35&turns=20"])
+        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m35")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m15", "The page reaches back 20 turns from the saved message")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m15", "The window stays where the position put it")
+    }
+
+    func testAFailedSavedPositionFetchKeepsRestorationPendingUntilThePollRetries() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        server.serveHistory(ids(1...60)); server.serveReadAnchor("m35")
+        server.failNextAnchoredConversation()
+        await value.refreshConversation()
+        XCTAssertTrue(value.conversation?.messages.isEmpty ?? true, "The latest page must not stand in for the saved position")
+        XCTAssertNotNil(value.error); XCTAssertFalse(value.connected)
+        XCTAssertFalse(server.requests.contains { $0.url?.path.hasSuffix("/read-position") == true })
+        time += .seconds(2); _ = await value.pollOnce()
+        XCTAssertEqual(server.conversationQueries, ["turns=20", "start=m35&turns=20", "turns=20", "start=m35&turns=20"])
+        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m35")
+        XCTAssertTrue(value.connected)
+    }
+
+    func testRecentOrMissingReadingPositionsStayOnTheLatestPage() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...60)); server.serveReadAnchor("m58")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries, ["turns=20"])
+        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m58")
+    }
+
+    func testFailedEarlierHistoryReportsWithoutMarkingTheServerUnavailable() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.failConversation(); await value.loadEarlier()
+        XCTAssertNotNil(value.error); XCTAssertTrue(value.connected)
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m11")
+        server.failConversation(false); await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m11", "A failed page leaves the window where it was")
     }
 
     func testForegroundResumeOnlyRetriesALaunchThatHasNoBootstrap() async throws {

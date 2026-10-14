@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, write } from "../client-api";
+import { api, ApiError, pollWhileVisible, write } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
 import "./experience.css";
@@ -55,8 +55,7 @@ export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }
   }, [requestId]);
   useEffect(() => {
     if (receipt?.status !== "accepted" || !requestId || disabled) return;
-    const timer = setInterval(() => void check(requestId), 5000);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void check(requestId), 5000);
   }, [receipt?.status, requestId, disabled]);
   async function start(retryId?: string) {
     const id = retryId || crypto.randomUUID();

@@ -312,6 +312,8 @@ export interface Runtime {
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   conversation(botId: string): Promise<Conversation>;
+  /** Calls `changed` whenever the bot's conversation may have changed, until the returned function is called. */
+  watch?(botId: string, changed: () => void): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;

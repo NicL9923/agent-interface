@@ -41,6 +41,55 @@ async function enter(input: HTMLInputElement, value: string) {
 }
 
 describe("conversation artifacts", () => {
+  it("counts files of earlier, unloaded history and lists them when opened", async () => {
+    const old = file("old", "fence-survey.pdf", "application/pdf"), shared = file("shared", "brands.csv", "text/csv"), recent = file("recent", "gate.png", "image/png");
+    const window = { ...conversation, files: [recent], earlierFiles: 2,
+      messages: [{ id: "p9", role: "user" as const, text: "Again" }, { id: "a9", role: "assistant" as const, text: "Done", files: [recent] }] };
+    let finish!: (response: Response) => void;
+    fetchFile.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await render(window);
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    await open();
+    expect(String(fetchFile.mock.calls[0][0])).toBe("/api/bots/ranch/files?before=p9");
+    expect(container.textContent).toContain("Loading files from earlier in the conversation");
+    await act(async () => finish(Response.json({ messages: [{ id: "a1", role: "assistant", files: [old] }, { id: "p2", role: "user", files: [shared] }] })));
+    expect([...container.querySelectorAll(".artifact-item small")].map(item => item.textContent)).toEqual(["Generated", "Shared", "Generated"]);
+    expect([...container.querySelectorAll(".artifact-item strong")].map(item => item.textContent)).toEqual(["fence-survey.pdf", "brands.csv", "gate.png"]);
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    expect(container.textContent).not.toContain("Loading files from earlier");
+  });
+
+  it("fetches earlier files once the conversation arrives, and again when history replaces its window", async () => {
+    const old = file("old", "fence-survey.pdf", "application/pdf"), other = file("other", "new-plan.pdf", "application/pdf");
+    const window = (sessionId: string, start: string) => ({ ...conversation, sessionId, earlierFiles: 1, files: [],
+      messages: [{ id: start, role: "user" as const, text: "Again" }] });
+    const answers: ((response: Response) => void)[] = [];
+    fetchFile.mockImplementation(() => new Promise<Response>(resolve => answers.push(resolve)));
+    await render(null);
+    await open();
+    expect(fetchFile).not.toHaveBeenCalled();
+    await render(window("one", "p9"));
+    expect(String(fetchFile.mock.calls[0][0])).toBe("/api/bots/ranch/files?before=p9");
+    // Hermes replaced the history before the first answer came back.
+    await render(window("two", "q4"));
+    expect(String(fetchFile.mock.calls[1][0])).toBe("/api/bots/ranch/files?before=q4");
+    await act(async () => answers[0](Response.json({ messages: [{ id: "a1", role: "assistant", files: [old] }] })));
+    expect(container.textContent).not.toContain("fence-survey.pdf");
+    await act(async () => answers[1](Response.json({ messages: [{ id: "b1", role: "assistant", files: [other] }] })));
+    expect([...container.querySelectorAll(".artifact-item strong")].map(item => item.textContent)).toEqual(["new-plan.pdf"]);
+    // The same session with its window start gone also fetches again.
+    await render(window("two", "r0"));
+    expect(container.textContent).not.toContain("new-plan.pdf");
+    expect(String(fetchFile.mock.calls[2][0])).toBe("/api/bots/ranch/files?before=r0");
+  });
+
+  it("does not fetch when the window already holds every file", async () => {
+    conversation.files = [file("pasture", "pasture.png", "image/png")];
+    await render({ ...conversation, earlierFiles: 0 } as Conversation);
+    await open();
+    expect(fetchFile).not.toHaveBeenCalled();
+  });
+
   it("deduplicates discovered/message files, reports their origin, and filters by filename and type", async () => {
     const plan = file("plan", "grazing-plan.md", "text/markdown"), image = file("image", "pasture.png", "image/png"), shared = file("csv", "sensor-history.csv", "text/csv");
     conversation.files = [plan, image, shared];

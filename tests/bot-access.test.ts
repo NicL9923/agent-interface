@@ -51,6 +51,7 @@ function runtimeDouble(calls: string[]) {
     computerRequest: async () => ({ available: true, running: true, browserReady: true, label: "Household computer", control: { kind: "bot", name: secret }, terminal: { available: false, target: "" } }),
     integrationRequest: async (input: { profile: string }) => ({ profile: input.profile, connections: [{ id: "workspace", name: "Google Workspace", profile: input.profile, botIds: [input.profile] }] }),
     modelOptions: async () => ({ provider: "", model: "", providers: [] }),
+    watch: () => () => {},
     // Like Hermes, only a genuine signature names the file's assistant.
     fileBotId: (id: string) => id.endsWith(".signature") ? JSON.parse(Buffer.from(id.split(".")[0], "base64url").toString()).botId : undefined,
     saveRoutine: async (input: { botId: string }) => { calls.push("saveRoutine"); return { ...input, id: "r-new" }; },
@@ -125,6 +126,8 @@ describe("private assistants", () => {
       // The owner's pass below may have deleted or reshaped it.
       s.store.savePresentation(secret, { shared: false, ownerId: "local-one" });
       s.calls.length = 0;
+      // A change stream never ends, so only its status is read.
+      const stream = url.endsWith("/events");
       const refused = await s.app.inject({ ...request(method, url, secret), headers: s.member });
       const routine = scope === "routine" || scope === "routine and body";
       expect([method, url, refused.statusCode, refused.json().code ?? refused.json().error])
@@ -133,7 +136,8 @@ describe("private assistants", () => {
       checked++;
       for (const [botId, headers] of [[secret, s.owner], ["family", s.member], ["legacy", s.member]] as const) {
         if (routine && botId !== secret) continue;
-        const allowed = await s.app.inject({ ...request(method, url, botId), headers });
+        const allowed = await s.app.inject({ ...request(method, url, botId), headers, payloadAsStream: stream });
+        if (stream) { expect(allowed.statusCode).toBe(200); allowed.stream().destroy(); continue; }
         expect([method, url, botId, allowed.json()?.code], "the owner and anyone for shared or ownerless assistants pass")
           .not.toEqual([method, url, botId, "assistant_not_found"]);
       }
@@ -153,7 +157,8 @@ describe("private assistants", () => {
   it("leaves another member's private assistant out of every GET response", async () => {
     const s = await setup();
     seedMemberHistory(s.store);
-    const gets = [...new Set(s.routes.filter(route => route.method === "GET" && route.url.startsWith("/api/")).map(route => route.url))];
+    // The change stream never ends and carries no content; its own test covers it.
+    const gets = [...new Set(s.routes.filter(route => route.method === "GET" && route.url.startsWith("/api/") && !route.url.endsWith("/events")).map(route => route.url))];
     const leaks: string[] = [], seen: string[] = [];
     for (const url of gets) {
       const memberBody = (await s.app.inject({ ...request("GET", url, "family"), headers: s.member })).body;
@@ -238,6 +243,19 @@ describe("private assistants under concurrency and side channels", () => {
     expect(list.body).not.toContain("r-family");
     // The owner gained nothing to hide, so their read stands.
     expect(own.statusCode).toBe(200);
+  });
+
+  it("ends a change stream, sending nothing more, once its assistant becomes someone else's", async () => {
+    const s = await setup();
+    const notify: (() => void)[] = [];
+    s.runtime.watch = (_botId: string, changed: () => void) => { notify.push(changed); return () => {}; };
+    const response = await s.app.inject({ url: "/api/bots/family/events", headers: s.member, payloadAsStream: true });
+    expect(response.statusCode).toBe(200);
+    makePrivate(s.store, "family");
+    notify.forEach(changed => changed());
+    let body = "";
+    for await (const chunk of response.stream()) body += chunk;
+    expect(body).not.toContain("change");
   });
 
   it("refuses a save authorized before another member made the assistant theirs", async () => {

@@ -7,6 +7,7 @@ import { App } from "../src/App";
 import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
+import { FakeEventSource } from "./fake-event-source";
 
 vi.mock("../src/client-api", async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -50,6 +51,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  FakeEventSource.reset();
+  vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("matchMedia", vi.fn(() => ({
     matches: false,
     addEventListener: vi.fn(),
@@ -88,6 +91,16 @@ async function render() {
 async function advance(milliseconds: number) {
   await act(async () => vi.advanceTimersByTimeAsync(milliseconds));
 }
+/** The server reports a change, as Hermes frames or a write would. */
+async function changed() {
+  await act(async () => FakeEventSource.notifyAll());
+  await advance(1500);
+}
+
+// Screens such as preferences load on first use.
+async function loaded() {
+  await act(async () => { await vi.dynamicImportSettled(); });
+}
 
 const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interruption-review input")!;
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
@@ -109,7 +122,7 @@ describe("conversation state", () => {
     expect(write).not.toHaveBeenCalled();
     expect(JSON.stringify(Object.values(localStorage))).not.toContain("synthetic-pending-secret");
     conversation = { ...conversation, attention: [{ ...conversation.attention![0], secure: { ...secure, sessionId: "replacement" } }] };
-    await advance(1500);
+    await changed();
     expect(container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!.value).toBe("");
   });
 
@@ -128,6 +141,7 @@ describe("conversation state", () => {
     vi.mocked(write).mockImplementation(async <T>(path: string) => { order.push(path); return {} as T; });
     await render();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
@@ -143,10 +157,27 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/integrations") ? { profile: "shared", canManage: true, connections: [] } as T : original(path) as Promise<T>);
     await render();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
+    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Integrations"))!.click());
+    await loaded();
     await advance(30_000);
     expect(container.querySelectorAll(".integrations-panel")).toHaveLength(1);
-    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(1);
+    // Rarely used screens stay unloaded until opened, and an opened one stays mounted.
+    expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
+  });
+
+  it("loads the Hermes updates panel when first opened and keeps it mounted for its running status", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Hermes and updates"))!.click());
+    await loaded();
+    expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close Hermes updates"]')!.click());
+    expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(false);
   });
 
   it("does not re-render the app when bootstrap and conversation polls are unchanged", async () => {
@@ -169,6 +200,10 @@ describe("conversation state", () => {
     expect(container.querySelector(".conversation-activity [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
     expect([...container.querySelectorAll(".chat-header [data-avatar-state], .bot-rail [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
+    // The sweeping highlight is a visual copy of the text, so assistive technology must hear the line once.
+    const highlight = container.querySelector(".activity-shimmer .shimmer-band");
+    expect(highlight?.getAttribute("aria-hidden")).toBe("true");
+    expect(highlight?.textContent).toBe("Shared is running terminal...");
     const textarea = container.querySelector("textarea")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
@@ -181,7 +216,7 @@ describe("conversation state", () => {
       if (path.startsWith("/bots/shared/conversation?")) throw new Error("Disconnected");
       return (path === "/bootstrap" ? bootstrap : savedDraft) as T;
     });
-    await advance(1500);
+    await changed();
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.hasAttribute("data-avatar-prop")).toBe(false);
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
@@ -201,6 +236,24 @@ describe("conversation state", () => {
     expect(replies.some(reply => reply.querySelector(".message-attribution")?.textContent?.includes("Shared"))).toBe(false);
     expect(container.querySelector(".message-user .message-attribution")?.textContent).toContain("One");
     expect(container.querySelector(".tool-count")?.textContent).toBe("1");
+  });
+
+  it("loads transcript images lazily and reserves the space of one that has been seen", async () => {
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "chart-message", role: "assistant", text: "Here is the chart.", files: [{ id: "chart-file", name: "chart.png", mime: "image/png" }] },
+    ] };
+    await render();
+    const image = () => container.querySelector<HTMLImageElement>(".file-link img")!;
+    expect(image().getAttribute("loading")).toBe("lazy");
+    expect(image().getAttribute("decoding")).toBe("async");
+    expect(image().hasAttribute("width")).toBe(false);
+    Object.defineProperty(image(), "naturalWidth", { value: 800 });
+    Object.defineProperty(image(), "naturalHeight", { value: 600 });
+    await act(async () => image().dispatchEvent(new Event("load")));
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render();
+    expect([image().getAttribute("width"), image().getAttribute("height")]).toEqual(["800", "600"]);
   });
 
   it("keeps the transcript from re-rendering while typing", async () => {
@@ -477,12 +530,14 @@ describe("conversation state", () => {
     if (phone) await act(async () => container.querySelector<HTMLButtonElement>(".bot-row")!.click());
     expect(container.querySelector(".bot-rail")!.classList.contains("open")).toBe(false);
     hidden = true;
-    await advance(1600);
+    // The change stream says the conversation changed; reading it now answers 404.
+    await act(async () => FakeEventSource.notifyAll());
     expect(container.textContent).toContain("That assistant is no longer available to you.");
     expect(new URLSearchParams(location.search).get("bot")).toBe("shared");
     expect(container.querySelector(".bot-rail")!.classList.contains("open")).toBe(phone);
     const settled = reads;
-    await advance(6000);
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(31_000);
     expect(reads, "no request loop for the missing assistant").toBe(settled);
   });
 
@@ -614,7 +669,7 @@ describe("conversation state", () => {
       ...conversation.messages,
       { id: "answer", role: "assistant", text: "The file is in your Documents folder." },
     ] };
-    await advance(1500);
+    await changed();
     expect(container.querySelector(".transcript")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
     expect(container.querySelector(".conversation-activity")).toBeNull();
     expect(container.querySelector(".chat-header [data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("idle");
@@ -658,7 +713,7 @@ describe("conversation state", () => {
       if (path.startsWith("/bots/shared/conversation?")) throw new Error("Disconnected");
       return (path === "/bootstrap" ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } } : savedDraft) as T;
     });
-    await advance(1500);
+    await changed();
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Last seen running");
   });
 
@@ -692,17 +747,17 @@ describe("conversation state", () => {
     expect(sendButton().disabled).toBe(false);
 
     conversation = { ...conversation, activity: { state: "working", runId: "old-run" } };
-    await advance(1500);
+    await changed();
     expect(reviewCheckbox()).toBeNull();
     conversation = { ...conversation, activity: { state: "interrupted", runId: "new-run" } };
-    await advance(1500);
+    await changed();
     expect(reviewCheckbox().checked).toBe(false);
     expect(sendButton().disabled).toBe(true);
 
     await act(async () => reviewCheckbox().click());
     expect(sendButton().disabled).toBe(false);
     conversation = { ...conversation, activity: { state: "interrupted", runId: "another-run" } };
-    await advance(1500);
+    await changed();
     expect(reviewCheckbox().checked).toBe(false);
     expect(sendButton().disabled).toBe(true);
   });
@@ -727,7 +782,7 @@ describe("reply announcements", () => {
   it("stays quiet for the reply already in the conversation when it opens", async () => {
     hold(settled);
     await render();
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
   });
 
@@ -736,7 +791,7 @@ describe("reply announcements", () => {
     await render();
     hold([...settled, message("u2", "user", "Status?"),
       message("a2", "assistant", "## Done\n**The report** is [ready](https://example.invalid).\n```\nnpm test\n```")]);
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("Shared replied: Done The report is ready.");
   });
 
@@ -744,13 +799,13 @@ describe("reply announcements", () => {
     hold(settled);
     await render();
     hold([...settled, message("u2", "user", "Status?"), message("a2", "assistant", "Checking")], "working");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
     hold([...settled, message("u2", "user", "Status?"), message("a2", "assistant", "Checking. All clear.")], "working");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
     hold([...settled, message("u2", "user", "Status?"), message("a2", "assistant", "Checking. All clear.")], "done");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("Shared replied: Checking. All clear.");
   });
 
@@ -759,10 +814,10 @@ describe("reply announcements", () => {
     await render();
     const prompt = message("u2", "user", "Status?");
     hold([...settled, prompt, message("session-inflight", "assistant", "Checking")], "working");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
     hold([...settled, prompt, message("row-41", "assistant", "Checking. All clear.")], "done");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("Shared replied: Checking. All clear.");
   });
 
@@ -771,7 +826,7 @@ describe("reply announcements", () => {
     await render();
     const prompt = message("u2", "user", "Status?");
     hold([...settled, prompt, message("session-inflight", "assistant", "All clear.")], "done");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("Shared replied: All clear.");
     const first = container.querySelector('.transcript-frame > [role="status"] > span');
     hold([...settled, prompt, message("row-41", "assistant", "All clear.")], "done");
@@ -784,17 +839,17 @@ describe("reply announcements", () => {
     await render();
     const first = message("u2", "user", "Status?");
     hold([...settled, first, message("session-inflight", "assistant", "Done.")], "done");
-    await advance(1500);
+    await changed();
     const node = container.querySelector('.transcript-frame > [role="status"] > span');
     const saved = [...settled, first, message("row-41", "assistant", "Done.")];
     const second = message("u3", "user", "And now?");
     hold([...saved, second, message("session-inflight", "assistant", "Done.")], "done");
-    await advance(1500);
+    await changed();
     const next = container.querySelector('.transcript-frame > [role="status"] > span');
     expect(announcement()).toBe("Shared replied: Done.");
     expect(next).not.toBe(node);
     hold([...saved, second, message("row-50", "assistant", "Done.")], "done");
-    await advance(1500);
+    await changed();
     expect(container.querySelector('.transcript-frame > [role="status"] > span')).toBe(next);
   });
 
@@ -802,10 +857,10 @@ describe("reply announcements", () => {
     const prompt = message("u2", "user", "Status?");
     hold([...settled, prompt, message("session-inflight", "assistant", "Old news.")], "done");
     await render();
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
     hold([...settled, prompt, message("row-41", "assistant", "Old news.")], "done");
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
   });
 
@@ -813,11 +868,11 @@ describe("reply announcements", () => {
     hold(settled);
     await render();
     hold([...settled, message("a2", "assistant", "Done.")]);
-    await advance(1500);
+    await changed();
     const first = container.querySelector('.transcript-frame > [role="status"] > span');
     expect(announcement()).toBe("Shared replied: Done.");
     hold([...settled, message("a2", "assistant", "Done."), message("a3", "assistant", "Done.")]);
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("Shared replied: Done.");
     expect(container.querySelector('.transcript-frame > [role="status"] > span')).not.toBe(first);
   });
@@ -838,7 +893,7 @@ describe("reply announcements", () => {
       hold(settled);
       await render();
       hold([...settled, message("a2", "assistant", "Done.")]);
-      await advance(1500);
+      await changed();
       expect(announcement()).toBe("Shared replied: Done.");
       await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes("Other"))!.click());
       expect(written.filter(text => text.startsWith("Other"))).toEqual([]);
@@ -853,7 +908,7 @@ describe("reply announcements", () => {
     hold(settled);
     await render();
     hold([...settled, message("a2", "assistant", "word ".repeat(100))]);
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe(`Shared replied: ${"word ".repeat(40).trim()}…`);
   });
 
@@ -861,7 +916,7 @@ describe("reply announcements", () => {
     hold(settled);
     await render();
     hold([message("u0", "user", "Earlier"), message("a0", "assistant", "An older answer"), ...settled]);
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
   });
 
@@ -869,7 +924,7 @@ describe("reply announcements", () => {
     hold(settled);
     await render();
     hold([...settled, message("u2", "user", "More please")]);
-    await advance(1500);
+    await changed();
     expect(announcement()).toBe("");
   });
 });
