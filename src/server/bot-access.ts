@@ -1,4 +1,5 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import type { Runtime } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import type { Store } from "./store.js";
 
@@ -56,28 +57,68 @@ export const botRoutes: Readonly<Record<string, BotAccess>> = {
   "GET /api/bots/:botId/routines/:routineId/results/:resultId": "owner",
 };
 
+// Routines are part of what an assistant does, so they follow the same rule. Automations
+// already list only routines of assistants a person may change; every other routine route
+// now agrees. Each entry names where the route finds the assistants it touches:
+// "routine" is the :id routine's assistant, "body" is botId in the request, "list" is
+// filtered by its handler, and "none" touches no assistant.
+export type RoutineScope = "none" | "list" | "routine" | "body" | "routine and body";
+export const routineRoutes: Readonly<Record<string, RoutineScope>> = {
+  "GET /api/routines": "list",
+  "POST /api/routines": "body",
+  "PUT /api/routines/:id": "routine and body",
+  "DELETE /api/routines/:id": "routine",
+  "PATCH /api/routines/:id/state": "routine",
+  "POST /api/routines/:id/run": "routine",
+  "GET /api/routines/:id/runs/:requestId": "routine",
+  "POST /api/routines/preview": "body",
+  "GET /api/routines/templates": "none",
+};
+
+/** Whether this person may change the assistant: shared, ownerless, or theirs. */
+export function canChange(store: Store, botId: string, userId: string | undefined) {
+  const bot = store.presentation(botId);
+  return bot.shared !== false || !bot.ownerId || bot.ownerId === userId;
+}
 const scoped = /^\/api\/bots\/:(\w+)(?:\/|$)/;
+const routinePath = /^\/api\/routines(?:\/|$)/;
 // Fastify derives a HEAD route from each GET.
 const key = (method: string, url: string) => `${method === "HEAD" ? "GET" : method} ${url}`;
 
 /** Install after authentication and before any assistant route. */
-export function installBotAccess(app: FastifyInstance, store: Store) {
+export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pick<Runtime, "routines">) {
   app.addHook("onRoute", (route) => {
-    if (!scoped.test(route.url)) return;
+    const table: Record<string, unknown> | undefined = scoped.test(route.url) ? botRoutes : routinePath.test(route.url) ? routineRoutes : undefined;
+    if (!table) return;
     for (const method of [route.method].flat())
-      if (!botRoutes[key(method, route.url)])
-        throw new Error(`Classify ${method} ${route.url} as household or owner access in src/server/bot-access.ts`);
+      if (!table[key(method, route.url)])
+        throw new Error(`Classify ${method} ${route.url} for assistant ownership in src/server/bot-access.ts`);
   });
+  const refuse = (reply: FastifyReply, ownerId: string) => {
+    const owner = store.getUser(ownerId)?.name;
+    return reply.code(403).send({ code: "owner_only", error: owner
+      ? `Only ${owner} can do this with their personal assistant.`
+      : "Only the owner can do this with this personal assistant." });
+  };
   app.addHook("onRequest", async (req, reply) => {
     const url = routePattern(req);
     const param = scoped.exec(url)?.[1];
     if (!param || botRoutes[key(req.method, url)] !== "owner") return;
-    const bot = store.presentation((req.params as Record<string, string>)[param]);
+    const botId = (req.params as Record<string, string>)[param];
     // Without a signed-in person, as for a path the sign-in hook missed, nobody is the owner.
-    if (bot.shared !== false || !bot.ownerId || bot.ownerId === req.user?.id) return;
-    const owner = store.getUser(bot.ownerId)?.name;
-    return reply.code(403).send({ code: "owner_only", error: owner
-      ? `Only ${owner} can do this with their personal assistant.`
-      : "Only the owner can do this with this personal assistant." });
+    if (!canChange(store, botId, req.user?.id)) return refuse(reply, store.presentation(botId).ownerId!);
+  });
+  // Routine checks need the parsed body, so they run just before the handler.
+  app.addHook("preHandler", async (req, reply) => {
+    const scope = routineRoutes[key(req.method, routePattern(req))];
+    if (!scope || scope === "none" || scope === "list") return;
+    if (scope !== "body") {
+      const routineId = (req.params as { id?: string }).id;
+      const row = (await runtime.routines()).find(routine => routine.id === routineId);
+      // The list hides it, so do not reveal it exists. A missing one is the handler's 404.
+      if (row && !canChange(store, row.botId, req.user?.id)) return reply.code(404).send({ error: "Routine not found" });
+    }
+    const botId = scope === "routine" ? undefined : (req.body as { botId?: unknown } | undefined)?.botId;
+    if (typeof botId === "string" && !canChange(store, botId, req.user?.id)) return refuse(reply, store.presentation(botId).ownerId!);
   });
 }

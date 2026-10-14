@@ -67,7 +67,9 @@ so treat a truncated body as a failed download.
 Only the owner of a personal assistant can change, delete or re-avatar it, change
 its tools, skills or inference settings, or read its search history and routine
 results. Anyone else receives 403 with `code: "owner_only"` and an explanation to
-show. Shared assistants and personal assistants without a recorded owner accept
+show. Its routines follow the same rule: `GET /api/routines` omits them for anyone
+else, routine-ID routes return 404 for them, and creating, moving or previewing a
+routine on that assistant returns 403 `owner_only`. Shared assistants and personal assistants without a recorded owner accept
 every household member.
 
 Browser APIs continue to require their HttpOnly session cookie, exact app Origin

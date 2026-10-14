@@ -20,7 +20,7 @@ import type {
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
-import { installBotAccess } from "./bot-access.js";
+import { canChange, installBotAccess } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
@@ -140,7 +140,7 @@ export async function createApp(
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
   await installAuth(app, store, config, options.verifyGoogle);
-  installBotAccess(app, store);
+  installBotAccess(app, store, runtime);
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
@@ -582,9 +582,10 @@ export async function createApp(
       return { ok: true };
     });
   }
-  app.get("/api/routines", async () => {
+  app.get("/api/routines", async (req) => {
     await requireCapability("routines");
-    return (await runtime.routines()).map((r) => ({
+    const userId = signedIn(req).id;
+    return (await runtime.routines()).filter(r => canChange(store, r.botId, userId)).map((r) => ({
       ...r,
       recipientIds: store.getRoutineRecipients(r.id),
     }));
