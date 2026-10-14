@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,11 +43,16 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(api).mockReset().mockResolvedValue({ providers: [], provider: "", model: "" });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // Like a browser, closing queues a close event that arrives after the current work.
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true, value: vi.fn(),
+    configurable: true, value: vi.fn(function (this: HTMLDialogElement) { this.open = true; }),
   });
   Object.defineProperty(HTMLDialogElement.prototype, "close", {
-    configurable: true, value: vi.fn(),
+    configurable: true, value: vi.fn(function (this: HTMLDialogElement) {
+      if (!this.open) return;
+      this.open = false;
+      queueMicrotask(() => this.dispatchEvent(new Event("close")));
+    }),
   });
   container = document.createElement("div");
   document.body.append(container);
@@ -226,10 +231,73 @@ describe("closing with unsaved edits", () => {
   it("reopens the dialog when the browser closes it without a cancelable Escape", async () => {
     await edit();
     vi.mocked(HTMLDialogElement.prototype.showModal).mockClear();
+    dialog().open = false;
     await act(async () => dialog().dispatchEvent(new Event("close")));
     expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("Discard your unsaved changes?");
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the control that was focused before the prompt", async () => {
+    await edit();
+    instructions().focus();
+    await escape();
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await click("Keep editing");
+    expect(document.activeElement).toBe(instructions());
+    const close = container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!;
+    close.focus();
+    await act(async () => close.click());
+    await click("Keep editing");
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("falls back to the heading when nothing in the dialog held focus", async () => {
+    await edit();
+    (document.activeElement as HTMLElement).blur();
+    await escape();
+    await click("Keep editing");
+    expect(document.activeElement).toBe(container.querySelector("#assistant-settings-title"));
+  });
+
+  it.each(["tools", "skills"])("asks about %s toggled but not yet saved", async (tab) => {
+    vi.mocked(api).mockResolvedValueOnce([{ id: "one", name: "One", description: "", enabled: true }]);
+    await click(tab);
+    await escape();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    onClose.mockClear();
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    await escape();
+    expect(container.textContent).toContain("Discard your unsaved changes?");
+    expect(onClose).not.toHaveBeenCalled();
+    await click("Keep editing");
+    await click(`Save ${tab}`);
+    expect(write).toHaveBeenCalledWith(`/bots/shared/${tab}`, { ids: [] }, "PUT");
+    await escape();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("survives Strict Mode closing and reopening the dialog while it mounts", async () => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(createElement(StrictMode, null, createElement(BotSettings, { bot, bootstrap, onClose, onSaved }))));
+    await act(async () => { await Promise.resolve(); });
+    expect(dialog().open).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the rail when the opener was never focused, as in WebKit after a click", async () => {
+    const rail = document.createElement("nav");
+    rail.className = "bot-rail";
+    rail.innerHTML = '<button aria-label="Settings"></button>';
+    document.body.append(rail);
+    await act(async () => root.unmount());
+    (document.activeElement as HTMLElement).blur();
+    root = createRoot(container);
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
+    await act(async () => root.unmount());
+    expect(document.activeElement).toBe(rail.querySelector("button"));
+    rail.remove();
   });
 
   it("returns focus to the control that opened it", async () => {

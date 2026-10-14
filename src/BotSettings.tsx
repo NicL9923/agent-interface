@@ -20,6 +20,7 @@ import { VaultPanel } from "./components/VaultPanel";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
+const enabledKey = (items: Skill[]) => items.filter((item) => item.enabled).map((item) => item.id).sort().join("\n");
 const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "memory", "logins"];
 function useCompactSettings() {
   const query = "(max-width: 620px)";
@@ -68,15 +69,31 @@ export function BotSettings({
   }));
   const [form, setForm] = useState<BotInput>(baseline.form);
   const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
-  const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar]);
+  const [tools, setTools] = useState<Tool[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  // Tool and skill choices wait for their own Save button, so the loaded or saved choice is their baseline.
+  const [catalogBaseline, setCatalogBaseline] = useState<{ tools?: string; skills?: string }>({});
+  const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar])
+    || (catalogBaseline.tools !== undefined && enabledKey(tools) !== catalogBaseline.tools)
+    || (catalogBaseline.skills !== undefined && enabledKey(skills) !== catalogBaseline.skills);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const keepEditing = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (confirmDiscard) keepEditing.current?.focus(); }, [confirmDiscard]);
+  const beforePrompt = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!confirmDiscard) return;
+    beforePrompt.current = document.activeElement as HTMLElement | null;
+    keepEditing.current?.focus();
+  }, [confirmDiscard]);
+  // The prompt unmounts its own focused button, so focus goes back to where the reader was.
+  const resumeEditing = () => {
+    const target = beforePrompt.current;
+    setConfirmDiscard(false);
+    (target?.isConnected && dialog.current?.contains(target) ? target
+      : dialog.current?.querySelector<HTMLElement>("#assistant-settings-title"))?.focus();
+  };
   useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
   // Escape and the close button both land here, so nothing is discarded without asking.
   const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
   const [catalog, setCatalog] = useState<{
     tab: string;
     botId: string;
@@ -109,7 +126,8 @@ export function BotSettings({
     return () => {
       mounted.current = false;
       element?.close();
-      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
+      // WebKit does not focus a clicked button, so the opener can be the page itself.
+      if (previous && previous !== document.body && previous.isConnected && !previous.closest("[inert]")) previous.focus();
       else (document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
         ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
     };
@@ -125,6 +143,7 @@ export function BotSettings({
           if (!current) return;
           if (tab === "tools") setTools(items);
           else setSkills(items);
+          setCatalogBaseline((current) => ({ ...current, [tab]: enabledKey(items) }));
           setCatalog({ tab, botId: existing.id, status: "ready" });
         })
         .catch((e) => {
@@ -235,8 +254,9 @@ export function BotSettings({
         setConfirmDiscard(true);
       }}
       onClose={() => {
+        // Closing and reopening in one pass, as Strict Mode does, queues an event for a dialog that is open.
+        if (!mounted.current || dialog.current?.open) return;
         // A second Escape can close the dialog without a cancelable event, so put it back.
-        if (!mounted.current) return;
         if (!unsaved) return onClose();
         dialog.current?.showModal();
         setConfirmDiscard(true);
@@ -245,7 +265,7 @@ export function BotSettings({
       <header>
         <div>
           <p className="eyebrow">Assistant settings</p>
-          <h2 id="assistant-settings-title">{existing?.name || "New assistant"}</h2>
+          <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || "New assistant"}</h2>
         </div>
         <button
           className="icon-button"
@@ -301,7 +321,7 @@ export function BotSettings({
             <p>Discard your unsaved changes?</p>
             <div className="actions">
               <button type="button" className="danger" onClick={onClose}>Discard changes</button>
-              <button type="button" ref={keepEditing} onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+              <button type="button" ref={keepEditing} onClick={resumeEditing}>Keep editing</button>
             </div>
           </div>
         )}
@@ -592,16 +612,19 @@ export function BotSettings({
                   className="primary with-progress"
                   disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported}
                   onClick={() =>
-                    void run(() =>
-                      write(
+                    void run(async () => {
+                      const submitted = tab === "tools" ? tools : skills;
+                      await write(
                         `/bots/${encodeURIComponent(existing.id)}/${tab}`,
                         {
-                          ids: (tab === "tools" ? tools : skills)
+                          ids: submitted
                             .filter((item) => item.enabled)
                             .map((item) => item.id),
                         },
                         "PUT",
-                      ), "Saved", tab,
+                      );
+                      setCatalogBaseline((current) => ({ ...current, [tab]: enabledKey(submitted) }));
+                    }, "Saved", tab,
                     )
                   }
                 >
