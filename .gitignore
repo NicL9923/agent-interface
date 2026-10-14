@@ -18,3 +18,4 @@ secrets/
 .DS_Store
 __pycache__/
 *.pyc
+src/server/.previous-store-*.ts

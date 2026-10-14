@@ -69,14 +69,13 @@ const migrations: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX notification_batch_items_batch ON notification_batch_items(batch_id);
     `);
   },
-  // 3: draft revisions. A separate table, because the previous release writes drafts positionally.
-  // A draft without a row here is at revision 0.
-  db => {
-    db.exec(`
-      CREATE TABLE draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
-    `);
-  },
 ];
+// Tables the previous release ignores. They are created on every start without raising
+// user_version, because the previous release refuses a newer schema and must still open this
+// database after a rollback. Rows it never writes here read as defaults.
+const additions = `
+  CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
+`;
 export const schemaVersion = migrations.length;
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
@@ -110,6 +109,8 @@ export class Store {
     if (path !== ":memory:") chmodSync(path, 0o600);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
     migrate(this.db);
+    // Draft revisions: a draft without a row there is at revision 0.
+    this.db.exec(additions);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
   }
   close() {

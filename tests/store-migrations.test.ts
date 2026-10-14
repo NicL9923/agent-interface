@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, schemaVersion } from "../src/server/store.js";
@@ -101,5 +103,32 @@ describe("store migrations", () => {
     expect(() => store.db.prepare("INSERT INTO sessions VALUES(?,?,?,?)").run("rollback-session", "one", "csrf", Date.now())).not.toThrow();
     expect(() => store.db.prepare("INSERT INTO drafts VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value").run("one", "ranch", "{}")).not.toThrow();
     expect(() => store.db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-2", "event-2", "one", "{}")).not.toThrow();
+  });
+});
+
+// The previous release, as on origin/main. A shallow checkout without it skips this check.
+const previousStore = (() => {
+  try { return execFileSync("git", ["show", "origin/main:src/server/store.ts"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
+  catch { return undefined; }
+})();
+describe.skipIf(!previousStore)("rollback", () => {
+  it("lets the previous release start on a database this release wrote", async () => {
+    const path = legacyDatabase();
+    const current = open(path);
+    current.saveDraft("one", "ranch", { text: "Saved by this release", attachments: [] }, 0);
+    current.close();
+    stores.pop();
+    // Placed beside the real module so its relative imports resolve.
+    const file = fileURLToPath(new URL(`../src/server/.previous-store-${process.pid}.ts`, import.meta.url));
+    writeFileSync(file, previousStore!);
+    try {
+      const { Store: Previous } = await import(/* @vite-ignore */ pathToFileURL(file).href) as typeof import("../src/server/store.js");
+      const previous = new Previous(path);
+      try {
+        expect(previous.personal("drafts" as "read_positions", "one", "ranch")).toEqual({ text: "Saved by this release", attachments: [] });
+        previous.savePersonal("drafts" as "read_positions", "one", "ranch", { text: "Written after rollback", attachments: [] });
+      } finally { previous.close(); }
+    } finally { rmSync(file, { force: true }); }
+    expect(open(path).draft("one", "ranch")).toMatchObject({ text: "Written after rollback", revision: 1 });
   });
 });
