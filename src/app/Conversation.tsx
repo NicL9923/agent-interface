@@ -361,7 +361,10 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }
+// Natural sizes of images already shown, so one that scrolls back into the transcript reserves its space before it reloads.
+const imageSizes = new Map<string, { width: number; height: number }>();
 function FileLink({ file }: { file: FileRef }) {
+  const size = imageSizes.get(file.id);
   return (
     <a
       className="file-link"
@@ -373,7 +376,11 @@ function FileLink({ file }: { file: FileRef }) {
         <img
           src={file.url || `/api/files/${encodeURIComponent(file.id)}`}
           alt={file.name}
+          width={size?.width}
+          height={size?.height}
           loading="lazy"
+          decoding="async"
+          onLoad={event => imageSizes.set(file.id, { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
         />
       )}
       <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>

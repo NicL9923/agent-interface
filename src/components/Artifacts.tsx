@@ -169,7 +169,7 @@ function FilePreview({ file, url }: { file: FileRef; url: string }) {
     {loading && <p className="artifact-preview-status" role="status">Loading preview…</p>}
     {failed ? <div className="artifact-preview-error" role="alert"><p>We couldn’t load this preview. The file may be unavailable or your connection may have changed.</p>
       <button onClick={retry}>Retry preview</button></div> : kind === "image"
-      ? <img key={attempt} src={url} alt={file.name} onLoad={loaded} onError={error} />
+      ? <img key={attempt} src={url} alt={file.name} decoding="async" onLoad={loaded} onError={error} />
       : kind === "audio" ? <audio key={attempt} src={url} controls preload="metadata" onLoadedMetadata={loaded} onError={error} aria-label={file.name} />
         : <video key={attempt} src={url} controls preload="metadata" playsInline onLoadedMetadata={loaded} onError={error} aria-label={file.name} />}
   </>;

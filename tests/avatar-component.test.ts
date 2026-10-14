@@ -110,6 +110,13 @@ describe("avatar animation loop", () => {
     }
   });
 
+  it("sizes a portrait up front and loads it lazily, since list avatars are tiny copies of a large file", async () => {
+    await render("idle", { mode: "portrait", src: "/api/files/portrait" } as AvatarConfig);
+    const image = container.querySelector("img.avatar-portrait")!;
+    expect([image.getAttribute("width"), image.getAttribute("height")]).toEqual(["64", "64"]);
+    expect([image.getAttribute("loading"), image.getAttribute("decoding")]).toEqual(["lazy", "async"]);
+  });
+
   it.each(seasonalChoices)("keeps the $label character visible and still under reduced motion", async ({ family }) => {
     reduceMotion = true;
     await render("thinking", seasonalAvatar(family));

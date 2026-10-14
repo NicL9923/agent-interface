@@ -551,6 +551,10 @@ export function Avatar({
             className="avatar-portrait"
             src={avatar.src || undefined}
             alt=""
+            width={size}
+            height={size}
+            loading="lazy"
+            decoding="async"
             onError={(e) => {
               e.currentTarget.style.display = "none";
             }}

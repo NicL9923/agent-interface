@@ -230,6 +230,24 @@ describe("conversation state", () => {
     expect(container.querySelector(".tool-count")?.textContent).toBe("1");
   });
 
+  it("loads transcript images lazily and reserves the space of one that has been seen", async () => {
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "chart-message", role: "assistant", text: "Here is the chart.", files: [{ id: "chart-file", name: "chart.png", mime: "image/png" }] },
+    ] };
+    await render();
+    const image = () => container.querySelector<HTMLImageElement>(".file-link img")!;
+    expect(image().getAttribute("loading")).toBe("lazy");
+    expect(image().getAttribute("decoding")).toBe("async");
+    expect(image().hasAttribute("width")).toBe(false);
+    Object.defineProperty(image(), "naturalWidth", { value: 800 });
+    Object.defineProperty(image(), "naturalHeight", { value: 600 });
+    await act(async () => image().dispatchEvent(new Event("load")));
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render();
+    expect([image().getAttribute("width"), image().getAttribute("height")]).toEqual(["800", "600"]);
+  });
+
   it("keeps the transcript from re-rendering while typing", async () => {
     conversation = { ...conversation, activity: { state: "idle" }, messages: [{ id: "answer", role: "assistant", text: "Ready when you are." }] };
     await render();
