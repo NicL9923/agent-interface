@@ -56,7 +56,12 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
         }
       } catch (e) {
         // Another member made one of its assistants personal, so the group left this person's list.
-        if (live && e instanceof ApiError && e.status === 404) { live = false; setNotice('That group chat is no longer available to you.'); void refreshCatalog().catch(() => {}); }
+        if (live && e instanceof ApiError && e.status === 404) {
+          // Its name, members and transcript go at once, whether or not the list refreshes.
+          live = false; setState(null); setEvents([]); setRoomId('');
+          setCatalog(current => current && { ...current, rooms: current.rooms.filter(room => room.room_id !== roomId) });
+          setNotice('That group chat is no longer available to you.'); void refreshCatalog().catch(() => {});
+        }
         else if (live) setLoadError((e as Error).message);
       }
       finally { loading = false; }

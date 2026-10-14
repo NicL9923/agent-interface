@@ -70,3 +70,17 @@ it('leaves a group that disappears and says that a personal assistant keeps a ne
   await act(async()=>Array.from(container.querySelectorAll('label')).find(label=>label.textContent==='Ranch books')!.querySelector('input')!.click());
   expect(container.textContent).toContain('Only you will see this group, because it includes your personal assistant.');
 });
+it('clears a vanished group at once, even when the group list cannot be refreshed',async()=>{
+  let gone=false;
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(gone)throw path==='/groups'?new Error('Connection lost'):new ApiError('Group chat not found',404);
+    if(path==='/groups')return {supported:true,canSend:true,rooms:[room]};
+    return path.includes('/log')?{events:[{event_id:'e',seq:1,kind:'message.member',actor:{id:'planner'},payload:{text:'The secret ledger total',member_id:'planner'},created_at:1}],cursor:1,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  });
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  expect(container.textContent).toContain('The secret ledger total');
+  gone=true;
+  await act(async()=>vi.advanceTimersByTimeAsync(3000));
+  for(const leak of ['The secret ledger total','Weekend plans','@planner'])expect(container.textContent).not.toContain(leak);
+  expect(container.textContent).toContain('That group chat is no longer available to you.');
+});
