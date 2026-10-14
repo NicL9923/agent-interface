@@ -419,6 +419,12 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         headers,
         signal: AbortSignal.timeout(45_000), redirect: 'error'});
     } catch { throw new TransportError('unreachable', 'Hermes HTTP request failed or timed out. A mutation outcome may be uncertain.'); }
+    // Hermes refusing this server's own token is a server configuration problem. Never pass
+    // it on as a 401 or 403, which clients read as the end of the person's own sign-in.
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel();
+      throw Object.assign(new Error("Hermes rejected this server's credential. You are still signed in. Ask whoever runs the server to update its Hermes token, then reconnect."), {statusCode: 502, code: 'hermes_unauthorized', expose: true});
+    }
     if (!response.ok && path.startsWith('/api/audio/') && response.status === 400) {
       await response.body?.cancel();
       throw Object.assign(new Error('Voice is unavailable. Check the speech provider in the native Hermes dashboard.'), { statusCode: 409 });
@@ -431,8 +437,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const detail = await response.json().catch(() => ({})) as {error?:unknown};
       throw Object.assign(new Error(typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.'), {statusCode:response.status});
     }
-    if (!response.ok) throw new TransportError(response.status === 401 || response.status === 403 ? 'unauthorized' : 'unreachable',
-      response.status === 401 || response.status === 403 ? 'Hermes rejected the session token. Update the server-side token and reconnect.' : `Hermes HTTP ${response.status}: request failed.`);
+    if (!response.ok) throw new TransportError('unreachable', `Hermes HTTP ${response.status}: request failed.`);
     return response;
   }
   async function voiceReply(path: string, payload: Wire): Promise<Wire> {

@@ -47,11 +47,13 @@ it("uses single-use state and PKCE-bound native codes, hashed sessions, and reta
   expect(started.response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
   const complete = () => app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { member: "one" } });
   const completed = await complete();
-  expect((await complete()).statusCode).toBe(401);
+  const replayed = await complete();
+  expect([replayed.statusCode, replayed.json().code]).toEqual([401, "session_expired"]);
   const callback = new URL(completed.json().callback);
   const payload = { code: callback.searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
   const exchange = (body: Record<string, unknown>, headers = {}) => app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: body, headers });
-  expect((await exchange({ ...payload, codeVerifier: randomBytes(32).toString("base64url") })).statusCode).toBe(401);
+  const wrongVerifier = await exchange({ ...payload, codeVerifier: randomBytes(32).toString("base64url") });
+  expect([wrongVerifier.statusCode, wrongVerifier.json().code]).toEqual([401, "session_expired"]);
   expect((await exchange({ ...payload, state: randomBytes(32).toString("base64url") })).statusCode).toBe(401);
   expect((await exchange(payload, { origin })).statusCode).toBe(403);
   const result = await exchange(payload);

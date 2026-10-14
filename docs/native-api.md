@@ -48,8 +48,16 @@ Use the existing application API for all chat, bot, avatar, upload, file downloa
 draft, preference, routine, approval, clarification, and connection operations.
 Send `Authorization: Bearer OPAQUE_SESSION` without cookies or an Origin header.
 Native bearer sessions do not need CSRF tokens. Every request rechecks the current
-household allowlist. Expired and revoked native sessions return 401; clear the
-Keychain session and require sign-in.
+household allowlist. A missing, invalid, expired or revoked session returns 401
+with `code: "session_expired"`. Clear the Keychain session and require sign-in
+only for that code. An expired or replayed native sign-in flow or handoff code
+returns the same code. Other 401s keep the session, such as terminal step-up
+with `code: "reauthentication_required"`.
+
+When Hermes rejects this server's own credential, the server returns 502 with
+`code: "hermes_unauthorized"` and a message to show. It never forwards a Hermes
+401 or 403. The person is still signed in; the self-hoster must update the
+server's Hermes token.
 
 `GET /api/files/:id` streams the file and sends `Content-Length` when Hermes reports
 one. A file over 100 MB returns 502 with `code: "file_too_large"` and a message

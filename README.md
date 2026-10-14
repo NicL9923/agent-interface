@@ -93,7 +93,8 @@ rollback instructions before using that extension. The app does not directly
 edit Hermes databases or take over execution from an existing Hermes owner.
 Setup connects to an existing compatible owner; it does not install Hermes or
 change its supervisor. A missing add-on, incompatible revision, rejected token,
-or unreachable gateway gets a distinct diagnostic.
+or unreachable gateway gets a distinct diagnostic. When Hermes rejects the server's
+token, requests fail with 502 and keep people signed in to the app.
 
 For a Google-protected Hermes dashboard, run this app on the same host and use
 the private service connection described in the capability matrix. This keeps
