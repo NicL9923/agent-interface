@@ -54,7 +54,10 @@ class ManagedFingerprintTests(unittest.TestCase):
         environment = {"HERMES_QUALIFIED_SOURCE": str(self.source), "HERMES_QUALIFIED_SITE_PACKAGES": str(distribution.locate_file(""))}
         with patch.object(qualified.importlib.metadata, "distributions", return_value=[distribution]), patch.dict(os.environ, environment):
             value = qualified.active_fingerprint(dump)
-            with self.assertRaises(FileExistsError): qualified.active_fingerprint(dump)
+            first = dump.read_bytes()
+            # A diagnostic that cannot be written never changes or hides the result.
+            self.assertEqual(qualified.active_fingerprint(dump), value)
+            self.assertEqual(dump.read_bytes(), first)
         self.assertEqual(qualified.sha(dump.read_bytes()), value["dependenciesSha256"])
         self.assertEqual(json.loads(dump.read_bytes())[0][0], "fixture")
         self.assertEqual(dump.stat().st_mode & 0o777, 0o600)

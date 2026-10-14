@@ -216,11 +216,15 @@ def active_fingerprint(dump=None):
     binary = Path(sys._base_executable).resolve()
     rows = json.dumps(sorted(distributions), separators=(",", ":")).encode()
     if dump is not None:
-        # Exactly the hashed rows, so two dumps diff to the package and file that differ.
-        with os.fdopen(os.open(dump, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output: output.write(rows)
-        # Editable rows hash a whole tree into one token; this names the file behind a change.
-        with os.fdopen(os.open(str(dump) + ".editable.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
-            json.dump(editable, output)
+        # Diagnostics are best-effort: a full disk must not replace the comparison's result.
+        try:
+            # Exactly the hashed rows, so two dumps diff to the package and file that differ.
+            with os.fdopen(os.open(dump, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output: output.write(rows)
+            # Editable rows hash a whole tree into one token; this names the file behind a change.
+            with os.fdopen(os.open(str(dump) + ".editable.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
+                json.dump(editable, output)
+        except OSError:
+            pass
     return {"interpreterSha256": sha(binary.read_bytes()), "dependenciesSha256": sha(rows)}
 
 
