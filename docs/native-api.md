@@ -83,6 +83,47 @@ because clearing only local storage cannot revoke the server session. When the
 server stays unreachable, the app lets the person clear the local session anyway
 after warning that the server-side session remains valid until it expires.
 
+## Drafts
+
+Each person has one draft per assistant, shared by their devices.
+`GET /api/bots/:id/draft` returns it, or `null` if they never saved one there. The
+conversation response carries the same object as `draft`:
+
+```json
+{ "text": "Add basil", "attachments": [], "revision": 4, "reason": "edit", "sentRevision": 2 }
+```
+
+`revision` grows with every change. `reason` is `edit`, or `sent` when the latest
+change was the clear after an accepted message. `sentRevision` is the revision of
+the latest such clear, or 0. A draft saved before revisions existed is at revision 0.
+
+`PUT /api/bots/:id/draft` takes `{ "text": "...", "attachments": [], "baseRevision": 4 }`
+and returns the saved draft. `baseRevision` is the revision the edit was made on.
+If the draft has changed since, the server returns 409 with `code: "draft_conflict"`
+and the current draft as `draft`, and saves nothing. Without `baseRevision`, as from
+older app builds, the edit always applies. Content the server already has is not a
+conflict and does not advance the revision, so a retried save is harmless.
+
+When Hermes accepts a message, the server clears the sender's draft for that
+assistant if it still holds exactly the sent text and attachments. The clear
+advances the revision with reason `sent`.
+
+Clients keep a local copy with its base revision and an unsaved-edits flag, and
+reconcile it the same way after a 409 or a load that shows a different revision:
+
+1. A copy without unsaved edits adopts the server draft.
+2. If `sentRevision` is newer than the copy's base, the text was sent from another
+   device: drop the unsaved edits and adopt the server draft. A copy this device
+   sent from, or restored with Discard, keeps its edits, because that clear may be
+   its own send.
+3. Otherwise unsaved edits win. Keep them and save again on the server's revision.
+
+A load older than the copy's base is ignored; a 409 is always the current draft.
+The web client implements this in `src/app/draft-merge.ts` and iOS in
+`Draft.merge` in `Models.swift`. Both save a pending edit at once, instead of
+dropping it, when the person switches assistants or leaves: the web with a
+`keepalive` request on page hide, iOS with a short background task.
+
 ## Household experience
 
 Web and native clients share these authenticated operations. See
