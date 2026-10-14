@@ -728,6 +728,30 @@ describe("reply announcements", () => {
     expect(announcement()).toBe("Shared replied: Checking. All clear.");
   });
 
+  it("reads an unsaved reply once, not again when saved rows replace it", async () => {
+    hold(settled);
+    await render();
+    const prompt = message("u2", "user", "Status?");
+    hold([...settled, prompt, message("session-inflight", "assistant", "All clear.")], "done");
+    await advance(1500);
+    expect(announcement()).toBe("Shared replied: All clear.");
+    const first = container.querySelector('.transcript-frame > [role="status"] > span');
+    hold([...settled, prompt, message("row-41", "assistant", "All clear.")], "done");
+    await advance(3000);
+    expect(container.querySelector('.transcript-frame > [role="status"] > span')).toBe(first);
+  });
+
+  it("stays quiet for a finished unsaved reply on load, and for the rows that later save it", async () => {
+    const prompt = message("u2", "user", "Status?");
+    hold([...settled, prompt, message("session-inflight", "assistant", "Old news.")], "done");
+    await render();
+    await advance(1500);
+    expect(announcement()).toBe("");
+    hold([...settled, prompt, message("row-41", "assistant", "Old news.")], "done");
+    await advance(1500);
+    expect(announcement()).toBe("");
+  });
+
   it("reads a second identical reply as a new announcement", async () => {
     hold(settled);
     await render();
