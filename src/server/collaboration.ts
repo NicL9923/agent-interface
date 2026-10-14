@@ -5,15 +5,15 @@ import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { GroupCatalog, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
+import { visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const uuid = z.string().uuid();
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store) {
-  async function bots(userId: string) {
-    return (await runtime.listBots()).map(bot => ({ ...bot, ...store.presentation(bot.id) }))
-      .filter(bot => bot.shared || !bot.ownerId || bot.ownerId === userId);
-  }
+  // A group with someone else's private assistant does not exist for this person: its
+  // other assistants' replies would quote and answer the private one.
+  const bots = (userId: string) => visibleBots(runtime, store, userId);
   async function profile(userId: string, botId: string) {
     if (!(await bots(userId)).some(bot => bot.id === botId)) throw fail(404, 'Assistant not found');
   }

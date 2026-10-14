@@ -2,6 +2,7 @@ import webpush from "web-push";
 import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
+import { visibleTo } from "./bot-access.js";
 import { createApnsSender, type ApnsSender } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 export type PushSender = (
@@ -129,9 +130,9 @@ export class BackgroundWorker {
         // Security alerts are never batched, so the group payload carries their kind.
         const security = JSON.parse(item.payload).kind === "security";
         if (!security && inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
+        // An assistant made private after this was queued, held by quiet hours or a digest, stays with its owner.
         if (!security) item.items = item.items.filter(row => {
-          const payload = JSON.parse(row.payload); const bot = this.store.presentation(payload.botId);
-          const visible = bot.shared || !bot.ownerId || bot.ownerId === item.user_id;
+          const visible = visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id);
           if (!visible) this.store.finishDelivery(row.id);
           return visible;
         });

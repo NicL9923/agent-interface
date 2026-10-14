@@ -20,7 +20,7 @@ import type {
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
-import { canChange, installBotAccess } from "./bot-access.js";
+import { installBotAccess, visible, visibleTo } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
@@ -75,6 +75,8 @@ const botInput = z.object({
   provider: z.string().min(1).max(200).optional(),
   enabledMcpServers: z.array(id).max(100).optional(),
   shared: z.boolean(),
+  // Making an assistant personal hides it from everyone else, so the person confirms that.
+  confirmPrivate: z.boolean().optional(),
   enabledTools: z.array(id).optional(),
   enabledSkills: z.array(id).optional(),
 });
@@ -142,6 +144,7 @@ export async function createApp(
   await installAuth(app, store, config, options.verifyGoogle);
   installBotAccess(app, store, runtime);
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
+  upgrades.visibleTo = (botId, userId) => visibleTo(store, botId, userId);
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
     const path = routePattern(req);
@@ -201,10 +204,15 @@ export async function createApp(
   ) => ({ ...bot, ...store.presentation(bot.id),
     ...(nativeAvatar ? { avatar: bot.avatar } : {}),
   });
-  // Home previews follow notification visibility: a private assistant's latest
-  // reply appears only for its owner, never ambiently for the rest of the household.
-  const forMember = <T extends { shared: boolean; ownerId?: string; lastMessage?: unknown }>(bots: T[], userId: string) =>
-    bots.map(bot => bot.shared || !bot.ownerId || bot.ownerId === userId ? bot : { ...bot, lastMessage: undefined });
+  // Someone else's private assistant leaves this person's lists, so their saved
+  // preferences stop naming it too.
+  const preferencesFor = (userId: string): Preferences => {
+    const value = store.preferences(userId);
+    const seen = (botId: string) => visibleTo(store, botId, userId);
+    return { ...value, favorites: value.favorites.filter(seen), followBots: value.followBots.filter(seen),
+      sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(seen) })),
+      defaultBotId: value.defaultBotId && seen(value.defaultBotId) ? value.defaultBotId : undefined };
+  };
   app.get("/api/health", async () => ({ ok: true }));
   app.get("/api/hermes/upgrade", async req => upgrades.status(signedIn(req)));
   app.post("/api/hermes/upgrade/check", async req => {
@@ -244,8 +252,8 @@ export async function createApp(
   app.get("/api/bootstrap", async (req) => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
-    preferences: store.preferences(signedIn(req).id),
-    ...await runtimeSnapshot().then(value => ({ ...value, bots: forMember(value.bots, signedIn(req).id) })),
+    preferences: preferencesFor(signedIn(req).id),
+    ...await runtimeSnapshot().then(value => ({ ...value, bots: value.bots.filter(bot => visible(bot, signedIn(req).id)) })),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
   }));
@@ -287,11 +295,11 @@ export async function createApp(
   });
   app.get("/api/bots", async (req) => {
     const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
-    return forMember(bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)), signedIn(req).id);
+    return bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)).filter(bot => visible(bot, signedIn(req).id));
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
-    const input = botInput.parse(req.body);
+    const { confirmPrivate: _, ...input } = botInput.parse(req.body);
     const bot = await runtime.saveBot(input as BotInput);
     store.savePresentation(bot.id, {
       shared: input.shared,
@@ -301,7 +309,12 @@ export async function createApp(
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
-    const input = botInput.parse(req.body);
+    const { confirmPrivate, ...input } = botInput.parse(req.body);
+    // Only its owner reaches a private assistant, so a personal one always belongs to the
+    // person saving it. Claiming one everyone could see hides it from them, so it needs a yes.
+    const previous = store.presentation(params(req).id);
+    if (!input.shared && !(previous.shared === false && previous.ownerId) && !confirmPrivate)
+      throw Object.assign(failure(409, "Confirm making this assistant personal. It will disappear for the rest of the household."), { code: "private_confirmation_required" });
     const bot = await runtime.saveBot(input as BotInput, params(req).id);
     store.savePresentation(bot.id, {
       shared: input.shared,
@@ -595,7 +608,7 @@ export async function createApp(
   app.get("/api/routines", async (req) => {
     await requireCapability("routines");
     const userId = signedIn(req).id;
-    return (await runtime.routines()).filter(r => canChange(store, r.botId, userId)).map((r) => ({
+    return (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
       ...r,
       recipientIds: store.getRoutineRecipients(r.id),
     }));

@@ -5,12 +5,11 @@ import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
+import { visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store) {
-  async function visible(userId: string) {
-    return (await runtime.listBots()).map(bot => ({ ...bot, ...store.presentation(bot.id) })).filter(bot => bot.shared || !bot.ownerId || bot.ownerId === userId);
-  }
+  const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {
     if (!(await visible(userId)).some(row => row.id === botId)) throw fail(404, 'Assistant not found');
   }
@@ -85,7 +84,6 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     return { routines, usage, unavailableBots } satisfies AutomationOverview;
   });
   app.get('/api/bots/:id/starters', async req => {
-    // Opening any listed assistant offers starters, including another member's personal one.
     const botId = z.object({ id }).parse(req.params).id;
     if (!(await runtime.listBots()).some(row => row.id === botId)) throw fail(404, 'Assistant not found');
     const tools = await runtime.tools(botId);

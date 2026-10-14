@@ -15,6 +15,7 @@ import type { ReplyCardState } from "../shared/reply-cards.js";
 import { defaultPreferences } from "../shared/types.js";
 
 import type { SavedItem } from "../shared/discovery.js";
+import { visible } from "./bot-access.js";
 
 // Each entry upgrades the database by one PRAGMA user_version. Keep them additive so the
 // previous release still runs if a deploy rolls back without restoring the database:
@@ -325,6 +326,7 @@ export class Store {
         }
       : {};
   }
+  /** ownerId is written as given, so a shared assistant keeps no stale owner. */
   savePresentation(
     botId: string,
     input: { ownerId?: string; shared: boolean; avatar?: Avatar },
@@ -336,7 +338,7 @@ export class Store {
       )
       .run(
         botId,
-        input.ownerId ?? previous.ownerId ?? null,
+        input.ownerId ?? null,
         +input.shared,
         input.avatar
           ? JSON.stringify(input.avatar)
@@ -478,7 +480,9 @@ export class Store {
     for (const user of this.users())
       if (this.preferences(user.id).followBots.includes(event.botId))
         ids.add(user.id);
-    return [...ids];
+    // A private assistant's news goes only to its owner, whoever else followed or joined in.
+    const bot = this.presentation(event.botId);
+    return [...ids].filter(userId => visible(bot, userId));
   }
   queueNotification(eventId: string, userId: string, payload: object) {
     return this.db

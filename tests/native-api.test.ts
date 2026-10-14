@@ -9,7 +9,7 @@ import { loadConfig, type Config } from "../src/server/config.js";
 import { createApnsSender, apnsPayload } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
-import type { Runtime, RuntimeEvent } from "../src/shared/types.js";
+import { defaultPreferences, type Runtime, type RuntimeEvent } from "../src/shared/types.js";
 
 const origin = "http://127.0.0.1:3000";
 const runtime = { status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} } as unknown as Runtime;
@@ -207,4 +207,39 @@ it("shares durable participant/routine notifications across web/APNs without ret
     store.recordEvents([{ ...event, id: "revoked" }], "cursor2"); config.householdEmails = [];
     await worker.tick(); expect(native).toHaveLength(3);
   } finally { await worker.stop(); store.close(); }
+});
+
+it("sends a private assistant's news only to its owner on web and APNs, even after quiet hours", async () => {
+  const store = new Store(":memory:");
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
+  for (const userId of ["one", "two"]) {
+    store.user({ id: userId, name: userId, email: `${userId}@example.test` });
+    store.nativeSession(userId, userId, Date.now() + 100000);
+    store.registerNativeDevice(userId, userId, userId, userId.repeat(32), "sandbox");
+    store.subscribe(userId, { endpoint: `https://push.test/${userId}`, keys: { p256dh: "key", auth: "auth" } });
+    store.savePreferences(userId, { ...defaultPreferences, followBots: ["mine"] });
+  }
+  // Two joined the run, receives the routine and follows the assistant; none of that reaches past its privacy.
+  store.participate("run", "two");
+  store.routineRecipients("routine", ["two"]);
+  store.savePresentation("mine", { shared: false, ownerId: "one" });
+  const event: RuntimeEvent = { id: "run-done", botId: "mine", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
+  store.recordEvents([event, { ...event, id: "routine-done", routineId: "routine" }], "cursor");
+  expect(store.outbox().map(row => row.user_id)).toEqual(["one", "one"]);
+  // Queued for two while shared and held by quiet hours, then made private before it could go out.
+  const hour = new Date().getUTCHours(), at = (offset: number) => `${String((hour + offset + 24) % 24).padStart(2, "0")}:00`;
+  store.savePreferences("two", { ...defaultPreferences, notifications: { timezone: "UTC", quietStart: at(-1), quietEnd: at(1), batchMinutes: 0 } });
+  store.savePresentation("family", { shared: true });
+  store.recordEvents([{ ...event, id: "family-done", botId: "family" }], "cursor-2");
+  const sent: string[] = [];
+  const worker = new BackgroundWorker(store, runtime, config, async (subscription, payload) => { sent.push(`${subscription.endpoint} ${JSON.parse(payload).tag}`); },
+    async (device, payload) => { sent.push(`apns:${device.deviceId} ${JSON.parse(payload).tag}`); });
+  await worker.tick();
+  expect(sent.filter(row => row.includes("two"))).toEqual([]);
+  store.savePresentation("family", { shared: false, ownerId: "one" });
+  store.savePreferences("two", defaultPreferences);
+  await worker.tick();
+  expect(sent.sort()).toEqual(["apns:one routine-done", "apns:one run-done", "https://push.test/one routine-done", "https://push.test/one run-done"]);
+  expect(store.outbox()).toHaveLength(0);
+  store.close();
 });

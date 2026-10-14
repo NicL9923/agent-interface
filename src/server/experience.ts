@@ -6,6 +6,7 @@ import type { ExperienceRequest, TodayItem, TodayOverview } from '../shared/expe
 import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.js';
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
+import { visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
@@ -44,7 +45,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     // discovered during those reads belongs to the next page, even when its
     // native occurredAt precedes the person's last visit.
     const upperFrontier = store.latestEventFrontier();
-    const bots = (await runtime.listBots()).map(bot => ({...bot,...store.presentation(bot.id)})).filter(bot => bot.shared || !bot.ownerId || bot.ownerId === userId);
+    const bots = await visibleBots(runtime, store, userId);
     const page = store.eventPage(query.since ? 0 : store.todayFrontier(userId), upperFrontier, bots.map(bot => bot.id), query.since || !store.todaySeen(userId) ? since : undefined);
     const eventFiles = new Map<string, typeof page.events[number]['files']>();
     const items: TodayItem[] = [];
