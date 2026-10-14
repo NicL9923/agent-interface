@@ -266,7 +266,25 @@ with contextlib.redirect_stdout(sys.stderr):
     if not lock.acquire(): raise RuntimeError('A native updater already owns Hermes')
     try:
         ensure_tools_for_sync()
+        seed=None
+        if sys.argv[3]:
+            from pm.environments import install_state_dir, runtime_facts_path
+            from pm.lock import Facts
+            facts=Facts(runtime_facts_path(root),strict=True); prior=facts.get('venv') or {}
+            # Only where PM itself would seed from the prior lock; otherwise it uses the
+            # checkout's lock, as qualification did. The cold backup holds the original facts.
+            if prior.get('resolved_lock'):
+                seed=install_state_dir(root)/'agent-interface-qualified-uv.lock'
+                seed.write_bytes(Path(sys.argv[3]).read_bytes()); seed.chmod(0o600)
+                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=seed)
         pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
+        if seed is not None:
+            # A sync with nothing to rebuild leaves the facts naming the temporary seed.
+            facts=Facts(runtime_facts_path(root),strict=True)
+            recorded=(facts.get('venv') or {}).get('resolved_lock')
+            if recorded and Path(recorded).resolve()==seed.resolve():
+                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=Path(prior['resolved_lock']))
+            seed.unlink()
         publish_launchers(root)
     finally: lock.release()
 print(json.dumps({'ok':True,'state':'synced'}))
@@ -274,8 +292,14 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # Build exactly the extras qualification built. Left to its default, Hermes d97007c chose
         # fewer and dropped 38 packages, discord.py among them.
         descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
-        extras = json.loads(private(descriptor).read_text())["extras"] if descriptor else None
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(extras)], capture=True))
+        qualified = json.loads(private(descriptor).read_text()) if descriptor else {}
+        # With plugin members, native PM seeds resolution from the prior generation's lock and
+        # takes the newest release wherever that lock no longer fits: on Oct 14, 2026 live took
+        # nemo-relay 0.10.1 where qualification had built 0.10.0. Seeded from the qualified
+        # lock instead, uv keeps every version it holds.
+        seed = Path(qualified["generation"]).parent / "workspace/uv.lock" if qualified.get("generation") else None
+        if seed is not None and not seed.is_file(): raise RuntimeError("The qualified dependency lock is missing")
+        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or "")], capture=True))
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))

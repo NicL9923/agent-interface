@@ -390,3 +390,12 @@ production receipt and ledger entry, then commits them on `docs/record-NAME` fro
 the docs PR for review. The branch and the ledger check are keyed by the release, so a second
 release of the same commit is recorded separately. Reruns reuse an existing PR, pushed branch or
 recorded entry. A git or gh failure leaves the release recorded and prints the manual steps.
+
+The install resolves exactly the dependencies qualification built. With plugin members, native
+PM seeds an install's resolution from the prior generation's lock and takes the newest release
+wherever that lock no longer fits, while the isolated stage, which has no prior generation,
+seeds from the checkout's `uv.lock`. So during maintenance the install sync points PM's prior
+lock, through PM's own facts writer, at a copy of the stage's resolved lock, and uv keeps every
+version it holds; the cold backup holds the original facts. On Oct 14, 2026 live took
+nemo-relay 0.10.1, released hours earlier, where qualification had built 0.10.0, and every
+install failed its runtime fingerprint and rolled back.
