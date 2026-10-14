@@ -391,10 +391,11 @@ the docs PR for review. The branch and the ledger check are keyed by the release
 release of the same commit is recorded separately. Reruns reuse an existing PR, pushed branch or
 recorded entry. A git or gh failure leaves the release recorded and prints the manual steps.
 
-Qualification resolves dependencies exactly as the install will. With plugin members, native PM
-seeds an install's resolution from the selected generation's resolved lock, not the checkout's
-`uv.lock`, so the stage records live's lock as its own prior lock and both resolve with
-`UV_EXCLUDE_NEWER` set to the moment qualification began. The backup, before downtime, and the
-install sync refuse if live's lock changed since the check. On Oct 14, 2026 the stage took the
-checkout's nemo-relay 0.10.0 while live, seeded from its 0.9.3 lock, took 0.10.1, released hours
-earlier; every install failed its runtime fingerprint and rolled back.
+The install resolves exactly the dependencies qualification built. With plugin members, native
+PM seeds an install's resolution from the prior generation's lock and takes the newest release
+wherever that lock no longer fits, while the isolated stage, which has no prior generation,
+seeds from the checkout's `uv.lock`. So during maintenance the install sync points PM's prior
+lock, through PM's own facts writer, at a copy of the stage's resolved lock, and uv keeps every
+version it holds; the cold backup holds the original facts. On Oct 14, 2026 live took
+nemo-relay 0.10.1, released hours earlier, where qualification had built 0.10.0, and every
+install failed its runtime fingerprint and rolled back.

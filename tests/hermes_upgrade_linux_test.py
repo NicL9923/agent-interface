@@ -545,18 +545,6 @@ class PlatformTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "staged-repair.py"): self.platform.backup()
         self.assertEqual(self.states.read_bytes(), before)
 
-    def test_changed_live_seed_lock_refuses_backup_before_shutdown(self):
-        lock = self.home / "seed.lock"; lock.write_text("seed")
-        facts = self.home / "facts.json"; facts.write_text(json.dumps({"packages": {"venv": {"resolved_lock": str(lock)}}}))
-        descriptor = self.stage / "qualified-runtime.json"
-        descriptor.write_text(json.dumps({"seedLock": {"facts": str(facts), "path": str(lock), "sha256": linux.digest(lock)}})); descriptor.chmod(0o600)
-        self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
-        self.platform.quiescence()
-        before = self.states.read_bytes()
-        lock.write_text("relocked")
-        with self.assertRaisesRegex(RuntimeError, "dependency lock changed"): self.platform.backup()
-        self.assertEqual(self.states.read_bytes(), before)
-
     def test_dependency_change_blocks_before_source_cutover(self):
         self.platform.quiescence(); self.platform.backup()
         (self.target / "uv.lock").write_text("new dependencies")
@@ -629,7 +617,10 @@ class PlatformTests(unittest.TestCase):
         cli = self.source / "hermes_cli"; cli.mkdir()
         calls = self.home / "pm-calls.json"
         record = "import json\nfrom pathlib import Path\np=Path(" + repr(str(calls)) + ")\ndef note(v):\n old=json.loads(p.read_text()) if p.exists() else []\n p.write_text(json.dumps(old+[v]))\n"
-        (pm / "__init__.py").write_text(record + "import os\ndef sync_venv(extras=None, **kwargs):\n note({'extras':extras,'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root']),'cutoff':os.environ.get('UV_EXCLUDE_NEWER')})\n")
+        state = self.home / "installs/key"
+        (pm / "__init__.py").write_text(record + "import json\nfrom pathlib import Path\ndef sync_venv(extras=None, **kwargs):\n f=Path(" + repr(str(state / "facts.json")) + ")\n lock=json.loads(f.read_text())['packages']['venv'].get('resolved_lock') if f.exists() else None\n note({'extras':extras,'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root']),'seed':Path(lock).read_text() if lock else None})\n")
+        (pm / "environments.py").write_text("from pathlib import Path\ndef install_state_dir(root): return Path(" + repr(str(state)) + ")\ndef runtime_facts_path(root): return install_state_dir(root) / 'facts.json'\n")
+        (pm / "lock.py").write_text("import json\nclass Facts:\n def __init__(self, path, strict=False): self.path=path\n def get(self, name): return json.loads(self.path.read_text())['packages'].get(name) if self.path.exists() else None\n def record_state(self, name, stamp, extras, *, environment=None, resolved_lock=None):\n  data=json.loads(self.path.read_text()); data['packages'][name]={'stamp':stamp,'extras':extras,'environment':str(environment),'resolved_lock':str(resolved_lock)}; self.path.write_text(json.dumps(data))\n")
         (pm / "client.py").write_text("from pm import note\ndef ensure_tools_for_sync(): note('tools')\n")
         (cli / "__init__.py").write_text("")
         (cli / "venv_sync.py").write_text("from pm import note\ndef publish_launchers(root): note('publish')\n")
@@ -637,7 +628,7 @@ class PlatformTests(unittest.TestCase):
         (self.source / "hermes_bootstrap.py").write_text("raise RuntimeError('Automatic source updater must never be imported')\n")
         result = linux.Platform.sync(self.platform)
         self.assertEqual(result, {"ok": True, "state": "synced"})
-        self.assertEqual(json.loads(calls.read_text()), [{"handoff": str(os.getpid())}, "tools", {"extras": None, "evict": False, "explicit": True, "root": str(self.source), "cutoff": None}, "publish", "release"])
+        self.assertEqual(json.loads(calls.read_text()), [{"handoff": str(os.getpid())}, "tools", {"extras": None, "evict": False, "explicit": True, "root": str(self.source), "seed": None}, "publish", "release"])
         # A dependency change installs exactly the extras qualification built.
         calls.unlink()
         descriptor = self.stage / "qualified-runtime.json"
@@ -645,41 +636,24 @@ class PlatformTests(unittest.TestCase):
         self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
         linux.Platform.sync(self.platform)
         self.assertEqual(json.loads(calls.read_text())[2]["extras"], ["all", "discord"])
-        # Seeded from live's lock under qualification's cutoff, so both resolve alike.
+        # Where PM seeds from the prior generation's lock, it seeds from the qualified lock instead.
         calls.unlink()
-        lock = self.home / "installs/key/environments/env/workspace/uv.lock"; lock.parent.mkdir(parents=True); lock.write_text("seed")
-        facts = self.home / "installs/key/facts.json"; facts.write_text(json.dumps({"packages": {"venv": {"resolved_lock": str(lock)}}}))
-        seed = {"facts": str(facts), "path": str(lock), "sha256": linux.digest(lock)}
-        descriptor.write_text(json.dumps({"extras": ["all"], "excludeNewer": "2026-10-14T05:03:00Z", "seedLock": seed}))
+        generation = self.stage / "pm-home/installs/g/environments/e/venv"; (generation.parent / "workspace").mkdir(parents=True)
+        (generation.parent / "workspace/uv.lock").write_text("qualified lock")
+        descriptor.write_text(json.dumps({"extras": ["all"], "generation": str(generation)}))
         linux.Platform.sync(self.platform)
-        self.assertEqual(json.loads(calls.read_text())[2]["cutoff"], "2026-10-14T05:03:00Z")
+        self.assertIsNone(json.loads(calls.read_text())[2]["seed"])
         calls.unlink()
-        lock.write_text("relocked by another sync")
-        with self.assertRaisesRegex(RuntimeError, "dependency lock changed since the update check"): linux.Platform.sync(self.platform)
-        self.assertFalse(calls.exists())
-        lock.write_text("seed"); facts.write_text(json.dumps({"packages": {"venv": {"resolved_lock": str(lock) + ".other"}}}))
-        with self.assertRaisesRegex(RuntimeError, "dependency lock changed"): linux.Platform.sync(self.platform)
-
-    def test_dependency_mismatch_keeps_the_failing_inspections_rows_in_the_stage(self):
-        descriptor = self.stage / "qualified-runtime.json"
-        descriptor.write_text("{}"); descriptor.chmod(0o600)
-        self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
-        self.platform.store_python = lambda: "/usr/bin/python3"
-        calls = []
-        def run(argv, **kwargs):
-            calls.append(argv); Path(argv[-1]).write_text("rows")
-            return json.dumps({"interpreterSha256": "same", "dependenciesSha256": "live"})
-        self.platform.run = run
-        with self.assertRaisesRegex(RuntimeError, r"^Managed dependencies differ from the qualified runtime\. Its package rows are in the stage as runtime-rows-[0-9a-f]{8}\.json$"):
-            linux.Platform.runtime(self.platform, {"interpreterSha256": "same", "dependenciesSha256": "qualified"})
-        # One inspection, and its own rows are the evidence.
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(Path(calls[0][-1]).parent, self.stage); self.assertTrue(Path(calls[0][-1]).exists())
-        with self.assertRaisesRegex(RuntimeError, "^The managed interpreter differs"):
-            linux.Platform.runtime(self.platform, {"interpreterSha256": "other", "dependenciesSha256": "live"})
-        # A match leaves nothing behind.
-        self.assertEqual(linux.Platform.runtime(self.platform, {"interpreterSha256": "same", "dependenciesSha256": "live"})["dependenciesSha256"], "live")
-        self.assertFalse(Path(calls[-1][-1]).exists())
+        state.mkdir(parents=True); (state / "old.lock").write_text("baseline lock")
+        prior = {"stamp": "s", "extras": ["all"], "environment": "/env", "resolved_lock": str(state / "old.lock")}
+        (state / "facts.json").write_text(json.dumps({"packages": {"venv": prior}}))
+        linux.Platform.sync(self.platform)
+        self.assertEqual(json.loads(calls.read_text())[2]["seed"], "qualified lock")
+        self.assertFalse((state / "agent-interface-qualified-uv.lock").exists())
+        venv = json.loads((state / "facts.json").read_text())["packages"]["venv"]
+        self.assertEqual({k: venv[k] for k in ("stamp", "extras", "environment")}, {k: prior[k] for k in ("stamp", "extras", "environment")})
+        (generation.parent / "workspace/uv.lock").unlink()
+        with self.assertRaisesRegex(RuntimeError, "qualified dependency lock is missing"): linux.Platform.sync(self.platform)
 
     def test_private_config_and_fixed_stage_paths_are_required(self):
         self.config.chmod(0o644)

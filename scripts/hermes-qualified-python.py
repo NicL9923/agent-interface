@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import datetime
 import csv
 import hashlib
 import importlib.metadata
@@ -237,12 +236,7 @@ def selection(source, home):
     extras = facts.get("packages", {}).get("venv", {}).get("extras")
     if not isinstance(extras, list) or any(not isinstance(extra, str) for extra in extras):
         raise RuntimeError("Native PM extra selection is unknown")
-    # With plugin members, native PM seeds resolution from the selected generation's resolved
-    # lock, not the checkout's uv.lock; qualification must seed from the same lock.
-    lock = facts.get("packages", {}).get("venv", {}).get("resolved_lock")
-    seed = ({"facts": str(runtime_facts_path(source)), "path": lock, "sha256": sha(Path(lock).read_bytes())}
-            if members and isinstance(lock, str) and Path(lock).is_file() else None)
-    return {"python": str(python), "extras": extras, "plugins": [str(path.resolve()) for path in members], "seedLock": seed}
+    return {"python": str(python), "extras": extras, "plugins": [str(path.resolve()) for path in members]}
 
 
 def prepare(source, stage, launcher, installed_source, installed_home):
@@ -279,22 +273,8 @@ def prepare(source, stage, launcher, installed_source, installed_home):
             raise RuntimeError("Native plugin source changed during staging")
         members[original] = str(target)
         copied.append({"identity": original, "path": str(target), "sha256": target_hash})
-    # Resolve as the live install will: from live's seed lock, and only from packages published
-    # by now. On Oct 14, 2026 the checkout's lock gave nemo-relay 0.10.0 here while live, seeded
-    # from its 0.9.3 lock, took 0.10.1, released hours after qualification began.
-    seed = native.get("seedLock")
-    seeding = []
-    if seed:
-        seed_copy = stage / "seed-uv.lock"
-        shutil.copyfile(seed["path"], seed_copy); seed_copy.chmod(0o600)
-        if sha(seed_copy.read_bytes()) != seed["sha256"]: raise RuntimeError("The live dependency lock changed during staging")
-        seeding = ["from pm.environments import runtime_facts_path; from pm.lock import Facts",
-            "facts=runtime_facts_path(Path(" + repr(str(source)) + ")); facts.parent.mkdir(parents=True, exist_ok=True)",
-            "Facts(facts).record_state('venv','agent-interface-seed'," + repr(native["extras"]) + ",resolved_lock=Path(" + repr(str(seed_copy)) + "))"]
-    cutoff = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     code = "\n".join([
         "import sys,json; from pathlib import Path", "sys.path.insert(0," + repr(str(source)) + ")",
-        *seeding,
         "import pm; from pm.plugin_inputs import Members",
         "members=Members({Path(k):Path(v) for k,v in " + repr(members) + ".items()})",
         "pm.sync_venv(" + repr(native["extras"]) + ",explicit=True,project_root=Path(" + repr(str(source)) + "),plugins=members)",
@@ -305,7 +285,7 @@ def prepare(source, stage, launcher, installed_source, installed_home):
     log = stage / "pm-build.log"
     with log.open("w") as output:
         log.chmod(0o600)
-        result = subprocess.run([str(python), "-I", "-c", code], env=dict(clean_environment(home, home / "tools"), UV_EXCLUDE_NEWER=cutoff), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800)
+        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800)
     if result.returncode:
         raise RuntimeError("Candidate native PM dependency build failed; inspect its private build log")
     built = json.loads(result.stdout)
@@ -320,7 +300,7 @@ def prepare(source, stage, launcher, installed_source, installed_home):
     wrapper = stage / "qualified-python"
     wrapper.write_text("#!/bin/sh\nexec " + shlex.join([str(runtime), "-I", "-u", str(frozen_helper), "launch", "--descriptor", str(descriptor), "--"]) + ' "$@"\n')
     wrapper.chmod(0o700)
-    value = {"schemaVersion": 1, "source": str(source), "sourceIdentity": source_identity(source), "home": str(home), "python": str(runtime), "generation": str(generation), "wrapper": str(wrapper), "plugins": copied, "extras": native["extras"], "helperSha256": sha(frozen_helper.read_bytes()), "excludeNewer": cutoff, "seedLock": seed}
+    value = {"schemaVersion": 1, "source": str(source), "sourceIdentity": source_identity(source), "home": str(home), "python": str(runtime), "generation": str(generation), "wrapper": str(wrapper), "plugins": copied, "extras": native["extras"], "helperSha256": sha(frozen_helper.read_bytes())}
     descriptor.write_text(json.dumps(value, sort_keys=True)); descriptor.chmod(0o600)
     value["fingerprint"] = fingerprint(wrapper)
     descriptor.write_text(json.dumps(value, sort_keys=True))
