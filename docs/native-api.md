@@ -73,18 +73,30 @@ Routine-ID routes for its routines answer 404 `Routine not found`. A group chat
 that includes it exists only for its owner. Bootstrap preferences drop it from
 favorites, sections, followed assistants and the default assistant. Treat a 404
 for the open assistant as "no longer available": refresh bootstrap and leave
-that conversation. Shared assistants and personal assistants without a recorded
+that conversation. An assistant that is not in Hermes's roster answers the same
+404, so a private assistant cannot be told from a made-up ID. A read that was
+under way when an assistant became private to the caller answers 404 for that
+assistant's own route, or 503 with `code: "assistants_changed"` for anything
+else; retry it. Inside a shared assistant's conversation, history and search,
+agent exchanges with someone else's private assistant read "Message from another
+member's assistant" without their content. A submission receipt is shown only to
+its sender. Shared assistants and personal assistants without a recorded
 owner stay open to every household member, who may also change them.
 
 `PATCH /api/bots/:id` with `"shared": false` on an assistant everyone can see
 makes it the caller's private assistant. The request needs
 `"confirmPrivate": true`, sent after the person confirms that it will disappear
 for the rest of the household. Without it the server returns 409 with
-`code: "private_confirmation_required"` and changes nothing. Only its owner can
+`code: "private_confirmation_required"` and changes nothing. If someone else
+changed its sharing while the save was under way, it returns 409 with
+`code: "sharing_changed"` and changes nothing. A private assistant's routines
+accept only its owner as a recipient; others return 400 with
+`code: "private_recipients"`. Only its owner can
 reach a private assistant to share it again; sharing clears the recorded owner.
 `DELETE /api/bots/:id` also removes its owner, visibility and each person's
 drafts, read positions, reply choices, saved items and preference references,
-so a new assistant reusing the ID starts clean.
+along with its recorded events, notifications, run participants, submissions and
+trials, so a new assistant reusing the ID starts clean.
 
 Browser APIs continue to require their HttpOnly session cookie, exact app Origin
 for writes, and CSRF token for authenticated writes. A bearer request carrying
@@ -148,7 +160,9 @@ connect to hosts configured for those environments.
 APNs and Web Push share the durable notification outbox and existing rules for
 run participants, routine recipients, and bot followers. A private assistant's
 notifications reach only its owner, including any queued, held for quiet hours or
-batched into a digest before it became private. Each endpoint records
+batched into a digest before it became private, or mid-way through delivery.
+Sharing it again does not send anyone else news from its private period, and
+Today leaves those events out for them too. Each endpoint records
 delivery independently; retrying a failed endpoint does not repeat successful
 deliveries. No registered endpoint keeps an event pending. Native devices are
 removed when their native session expires or APNs reports an invalid token.

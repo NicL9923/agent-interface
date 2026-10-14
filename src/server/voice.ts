@@ -16,7 +16,7 @@ const AUDIO_TTL = 5 * 60_000;
 const MAX_CACHED_AUDIO = 32 * 1024 * 1024;
 
 /** Install after authentication and multipart plugins. Audio never becomes a shared artifact. */
-export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRuntime, options: { now?: () => number } = {}) {
+export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRuntime, options: { now?: () => number; visible?: (botId: string, userId: string) => boolean } = {}) {
   const now = options.now ?? Date.now;
   const audio = new Map<string, { userId: string; botId: string; expires: number; data: Buffer; mime: string }>();
   const busy = new Set<string>();
@@ -24,7 +24,8 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
   const cleanup = setInterval(prune, 30_000); cleanup.unref();
   app.addHook("onClose", async () => { clearInterval(cleanup); audio.clear(); });
   const checkBot = async (req: FastifyRequest, botId: string) => {
-    signedIn(req);
+    // Cached speech outlives the request that made it, so it is checked again when fetched.
+    if (options.visible && !options.visible(botId, signedIn(req).id)) throw failure(404, "This assistant is no longer available.");
     if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw failure(404, "This assistant is no longer available.");
   };
   const operation = async <T>(req: FastifyRequest, fn: () => Promise<T>) => {

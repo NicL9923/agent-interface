@@ -171,9 +171,10 @@ export class HermesUpgrades {
     try {
       const status = await this.runtime.status();
       if (!status.connected) return ["Hermes connection unavailable"];
-      // Another member's private assistant still blocks the update, without its name.
-      return (await this.runtime.listBots()).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity))
-        .map(bot => this.visibleTo(bot.id, user.id) ? bot.name : "Another member's assistant");
+      // Another member's private assistant still blocks the update, as one unnamed entry however many are busy.
+      const busy = (await this.runtime.listBots()).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity));
+      const shown = busy.filter(bot => this.visibleTo(bot.id, user.id)).map(bot => bot.name);
+      return shown.length < busy.length ? [...shown, "An assistant"] : shown;
     } catch { return ["Hermes activity unavailable"]; }
   }
   async status(user: User): Promise<UpgradeStatus> {

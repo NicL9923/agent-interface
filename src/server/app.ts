@@ -20,7 +20,7 @@ import type {
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
-import { installBotAccess, visible, visibleTo } from "./bot-access.js";
+import { installBotAccess, notFound, redactAgents, visible, visibleTo } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
 import { HermesUpgrades } from "./upgrades.js";
@@ -142,7 +142,7 @@ export async function createApp(
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
   await installAuth(app, store, config, options.verifyGoogle);
-  installBotAccess(app, store, runtime);
+  const roster = installBotAccess(app, store, runtime);
   const upgrades = options.upgrades ?? new HermesUpgrades(config, runtime);
   upgrades.visibleTo = (botId, userId) => visibleTo(store, botId, userId);
   app.addHook("onRequest", async (req, reply) => {
@@ -232,11 +232,11 @@ export async function createApp(
     canManage: req => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase())),
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
-  await installExperienceRoutes(app, runtime, store);
-  await installDiscoveryRoutes(app, runtime, store);
-  await installCollaborationRoutes(app, runtime, store);
+  await installExperienceRoutes(app, runtime, store, roster);
+  await installDiscoveryRoutes(app, runtime, store, roster);
+  await installCollaborationRoutes(app, runtime, store, roster);
   await installVaultRoutes(app, runtime);
-  await registerVoiceRoutes(app, runtime);
+  await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId) });
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {
     if (snapshot) return snapshot;
@@ -312,14 +312,19 @@ export async function createApp(
     const { confirmPrivate, ...input } = botInput.parse(req.body);
     // Only its owner reaches a private assistant, so a personal one always belongs to the
     // person saving it. Claiming one everyone could see hides it from them, so it needs a yes.
-    const previous = store.presentation(params(req).id);
+    const id = params(req).id, userId = signedIn(req).id;
+    const previous = store.presentation(id);
+    // Another member may have made it theirs since this request was let in.
+    if (!visible(previous, userId)) throw Object.assign(failure(404, notFound.error), { code: notFound.code });
     if (!input.shared && !(previous.shared === false && previous.ownerId) && !confirmPrivate)
       throw Object.assign(failure(409, "Confirm making this assistant personal. It will disappear for the rest of the household."), { code: "private_confirmation_required" });
-    const bot = await runtime.saveBot(input as BotInput, params(req).id);
-    store.savePresentation(bot.id, {
-      shared: input.shared,
-      ownerId: input.shared ? undefined : signedIn(req).id,
-    });
+    // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
+    const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
+    if (!store.swapPresentation(id, previous, next))
+      throw Object.assign(failure(409, "Someone changed who can see this assistant while you were saving. Review it and try again."), { code: "sharing_changed" });
+    let bot;
+    try { bot = await runtime.saveBot(input as BotInput, id); }
+    catch (error) { store.swapPresentation(id, next, { shared: previous.shared !== false, ownerId: previous.ownerId }); throw error; }
     return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.delete("/api/bots/:id", async (req) => {
@@ -338,11 +343,7 @@ export async function createApp(
       runtime.setAvatar
     )
       await runtime.setAvatar(bot.id, value);
-    store.savePresentation(bot.id, {
-      ...store.presentation(bot.id),
-      shared: store.presentation(bot.id).shared ?? bot.shared,
-      avatar: value,
-    });
+    store.saveAvatar(bot.id, value, bot.shared);
     return value;
   });
   app.post("/api/bots/:id/portrait", async (req) => {
@@ -363,7 +364,8 @@ export async function createApp(
     if (window.start !== undefined || window.turns !== undefined)
       ({ messages: result.messages, earlier } = historyWindow(result.messages, window));
     // Attribution augments the canonical Hermes history, never stores a transcript.
-    result.messages = result.messages.map((message) => {
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    result.messages = result.messages.map(redact.message).map((message) => {
       const attribution =
         store.submissionForMessage(params(req).id, message.id) ??
         store.submission(message.id);
@@ -453,7 +455,11 @@ export async function createApp(
   app.post("/api/bots/:id/steer", async (req) => submit(req, true));
   app.get("/api/submissions/:id", async (req) => {
     const requestId = z.string().uuid().parse(params(req).id);
-    const previous = store.submission(requestId);
+    const recorded = store.submission(requestId);
+    // Only its sender, while they can still see the assistant, learns anything about a recorded
+    // submission. An unrecorded ID is a client's own unguessable pending ID, kept checkable.
+    const previous = recorded && recorded.input.senderId === signedIn(req).id && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
+    if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
     try {
       if ((await runtime.capabilities()).idempotency.supported) {
         const receipt = await runtime.lookupSubmission(requestId);
@@ -641,6 +647,10 @@ export async function createApp(
         400,
         "Routine recipients must be signed-in household members",
       );
+    // Nobody else would ever receive a private assistant's results, so do not pretend they will.
+    const owner = store.presentation(input.botId);
+    if (owner.shared === false && owner.ownerId && input.recipientIds.some(id => id !== owner.ownerId))
+      throw Object.assign(failure(400, "Only you can receive your personal assistant's routine results."), { code: "private_recipients" });
     const routine = await runtime.saveRoutine(input, routineId);
     store.routineRecipients(routine.id, input.recipientIds);
     return { ...routine, recipientIds: input.recipientIds };

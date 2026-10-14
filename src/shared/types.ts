@@ -332,6 +332,8 @@ export interface Runtime {
   ): Promise<FileRef>;
   /** The body never yields more than maxBytes; a larger file is refused with file_too_large. */
   download(id: string, maxBytes: number): Promise<DownloadedFile>;
+  /** The assistant a file ID belongs to, only when its signature is genuine. */
+  fileBotId?(id: string): string | undefined;
   tools(botId: string): Promise<Tool[]>;
   setTools(botId: string, ids: string[]): Promise<void>;
   skills(botId: string): Promise<Skill[]>;

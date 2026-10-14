@@ -5,13 +5,13 @@ import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
-import { visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
-export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store) {
+export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {
-    if (!(await visible(userId)).some(row => row.id === botId)) throw fail(404, 'Assistant not found');
+    if (!(await visible(userId)).some(row => row.id === botId)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
   }
   function experience() {
     if (!runtime.experienceRequest) throw fail(409, 'Search and usage require the current qualified Hermes integration.');
@@ -36,14 +36,16 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
         } catch { if(!unavailableBots.includes(routine.botId))unavailableBots.push(routine.botId); }
       }
     } catch { /* Return successful native search hits during a scheduler outage. */ }
-    return { hits, unavailableBots };
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    return { hits: hits.map(hit => ({ ...hit, title: redact.text(hit.title), snippet: redact.text(hit.snippet) })), unavailableBots };
   });
   app.get('/api/bots/:botId/history/:sessionId', async req => {
     const p = z.object({ botId: id, sessionId: id }).parse(req.params);
     const { offset } = z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0) }).strict().parse(req.query);
     await bot(signedIn(req).id, p.botId);
     const page=await experience()({ operation: 'history', profile: p.botId, sessionId: p.sessionId, offset }) as HistoryPage;
-    return {...page,messages:page.messages.map(message=>{const senderId=(message as typeof message & {app_sender_id?:string}).app_sender_id;const user=senderId&&store.getUser(senderId);return user?{...message,sender:{id:user.id,name:user.name}}:message;})};
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    return {...page,messages:page.messages.map(redact.message).map(message=>{const senderId=(message as typeof message & {app_sender_id?:string}).app_sender_id;const user=senderId&&store.getUser(senderId);return user?{...message,sender:{id:user.id,name:user.name}}:message;})};
   });
   app.get('/api/saved', async req => {
     const allowed = new Set((await visible(signedIn(req).id)).map(bot => bot.id));
@@ -85,7 +87,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   });
   app.get('/api/bots/:id/starters', async req => {
     const botId = z.object({ id }).parse(req.params).id;
-    if (!(await runtime.listBots()).some(row => row.id === botId)) throw fail(404, 'Assistant not found');
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
     const tools = await runtime.tools(botId);
     const enabled = new Set(tools.filter(tool => tool.enabled).map(tool => tool.id));
     const starters: Starter[] = [{ id: 'meals', title: 'Plan dinners', prompt: 'Help me plan five easy dinners. Ask about our preferences, budget and what we already have before making the plan.' }];

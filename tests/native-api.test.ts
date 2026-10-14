@@ -243,3 +243,26 @@ it("sends a private assistant's news only to its owner on web and APNs, even aft
   expect(store.outbox()).toHaveLength(0);
   store.close();
 });
+
+it("stops a delivery mid-way when its assistant turns private, before any other endpoint gets it", async () => {
+  const store = new Store(":memory:");
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
+  for (const userId of ["one", "two"]) store.user({ id: userId, name: userId, email: `${userId}@example.test` });
+  store.nativeSession("two", "two", Date.now() + 100000);
+  store.registerNativeDevice("two", "two", "two", "two".repeat(32), "sandbox");
+  for (const device of ["phone", "laptop"]) store.subscribe("two", { endpoint: `https://push.test/${device}`, keys: { p256dh: "key", auth: "auth" } });
+  store.savePresentation("family", { shared: true });
+  store.participate("run", "two");
+  store.recordEvents([{ id: "done", botId: "family", runId: "run", kind: "completed", title: "Private details", occurredAt: "now" }], "cursor");
+  const sent: string[] = [];
+  const worker = new BackgroundWorker(store, runtime, config, async subscription => {
+    sent.push(subscription.endpoint);
+    // The owner makes it private while this first send is in flight.
+    store.savePresentation("family", { shared: false, ownerId: "one" });
+  }, async device => { sent.push(device.deviceId); });
+  await worker.tick();
+  await worker.tick();
+  expect(sent).toEqual(["https://push.test/phone"]);
+  expect(store.outbox()).toHaveLength(0);
+  store.close();
+});

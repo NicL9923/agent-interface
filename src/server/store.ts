@@ -69,6 +69,10 @@ const migrations: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX notification_batch_items_batch ON notification_batch_items(batch_id);
     `);
   },
+  // 3: when a private assistant was last shared, so news from its private period stays with its owner.
+  db => {
+    db.exec("CREATE TABLE bot_visibility(bot_id TEXT PRIMARY KEY,shared_at INTEGER NOT NULL,owner_id TEXT NOT NULL)");
+  },
 ];
 export const schemaVersion = migrations.length;
 // Exponential backoff spends about an hour on these; later news is stale.
@@ -249,10 +253,20 @@ export class Store {
   markTodaySeen(userId: string, seenAt: string, frontier: number) {
     this.db.prepare("INSERT INTO today_seen VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET seen_at=max(today_seen.seen_at,excluded.seen_at),event_frontier=max(today_seen.event_frontier,excluded.event_frontier)").run(userId, seenAt, frontier);
   }
-  eventPage(frontier: number, upperFrontier: number, botIds: string[], initialSince?: string) {
-    const rows = botIds.length ? this.db.prepare(`SELECT i.id,e.value FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id WHERE i.id>? AND i.id<=? AND json_extract(e.value,'$.botId') IN (${botIds.map(() => '?').join(',')}) AND (? IS NULL OR e.created_at>=?) ORDER BY i.id LIMIT 101`).all(frontier, upperFrontier, ...botIds, initialSince ? Date.parse(initialSince) : null, initialSince ? Date.parse(initialSince) : null) as { id: number; value: string }[] : [];
+  /**
+   * One page of this person's events. Events of assistants they cannot see, or from before a
+   * private assistant was shared, are skipped and never move the returned frontier, so it
+   * reveals nothing about hidden activity.
+   */
+  eventPage(userId: string, frontier: number, upperFrontier: number, botIds: string[], initialSince?: string) {
+    if (!botIds.length) return { events: [], frontier: String(frontier), hasMore: false };
+    const since = initialSince ? Date.parse(initialSince) : null;
+    const mine = `FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id WHERE i.id>? AND i.id<=? AND json_extract(e.value,'$.botId') IN (${botIds.map(() => '?').join(',')}) AND NOT EXISTS(SELECT 1 FROM bot_visibility v WHERE v.bot_id=json_extract(e.value,'$.botId') AND e.created_at<=v.shared_at AND v.owner_id<>?)`;
+    const rows = this.db.prepare(`SELECT i.id,e.value ${mine} AND (? IS NULL OR e.created_at>=?) ORDER BY i.id LIMIT 101`).all(frontier, upperFrontier, ...botIds, userId, since, since) as { id: number; value: string }[];
     const page = rows.slice(0, 100);
-    return { events: page.map(row => JSON.parse(row.value) as RuntimeEvent), frontier: String(rows.length > 100 ? page.at(-1)!.id : Math.max(frontier, upperFrontier)), hasMore: rows.length > 100 };
+    // Older visible events before the recap start are passed over; hidden ones never count.
+    const last = (this.db.prepare(`SELECT max(i.id) AS id ${mine}`).get(frontier, upperFrontier, ...botIds, userId) as { id: number | null }).id ?? frontier;
+    return { events: page.map(row => JSON.parse(row.value) as RuntimeEvent), frontier: String(rows.length > 100 ? page.at(-1)!.id : Math.max(frontier, last)), hasMore: rows.length > 100 };
   }
   cardState(userId: string, botId: string, messageId: string, cardId: string): ReplyCardState {
     const row = this.db.prepare("SELECT value FROM card_state WHERE user_id=? AND bot_id=? AND message_id=? AND card_id=?").get(userId, botId, messageId, cardId) as { value: string } | undefined;
@@ -326,31 +340,75 @@ export class Store {
         }
       : {};
   }
-  /** ownerId is written as given, so a shared assistant keeps no stale owner. */
-  savePresentation(
-    botId: string,
-    input: { ownerId?: string; shared: boolean; avatar?: Avatar },
-  ) {
+  /** Advances whenever an assistant's sharing or owner changes, so a request can tell it changed meanwhile. */
+  privacyVersion = 0;
+  private privacyChanges: { version: number; botId: string }[] = [];
+  /** Assistants whose sharing or owner changed after this version. */
+  changedSince(version: number) {
+    return this.privacyChanges.filter(change => change.version > version).map(change => change.botId);
+  }
+  /** Private assistants and their owners. */
+  privateBots(): { botId: string; ownerId: string }[] {
+    return this.db.prepare("SELECT bot_id AS botId,owner_id AS ownerId FROM bot_presentation WHERE shared=0 AND owner_id IS NOT NULL").all() as { botId: string; ownerId: string }[];
+  }
+  /** When a private assistant was last shared, and who owned it until then. */
+  sharedSince(botId: string): { sharedAt: number; ownerId: string } | undefined {
+    return this.db.prepare("SELECT shared_at AS sharedAt,owner_id AS ownerId FROM bot_visibility WHERE bot_id=?").get(botId) as { sharedAt: number; ownerId: string } | undefined;
+  }
+  private writePresentation(botId: string, next: { ownerId?: string; shared: boolean }, avatar: string | null) {
     const previous = this.presentation(botId);
-    this.db
-      .prepare(
-        "INSERT INTO bot_presentation VALUES(?,?,?,?) ON CONFLICT(bot_id) DO UPDATE SET owner_id=excluded.owner_id,shared=excluded.shared,avatar=excluded.avatar",
-      )
-      .run(
-        botId,
-        input.ownerId ?? null,
-        +input.shared,
-        input.avatar
-          ? JSON.stringify(input.avatar)
-          : previous.avatar
-            ? JSON.stringify(previous.avatar)
-            : null,
-      );
+    this.db.prepare("INSERT INTO bot_presentation VALUES(?,?,?,?) ON CONFLICT(bot_id) DO UPDATE SET owner_id=excluded.owner_id,shared=excluded.shared,avatar=excluded.avatar")
+      .run(botId, next.ownerId ?? null, +next.shared, avatar);
+    const wasPrivate = previous.shared === false && !!previous.ownerId, isPrivate = !next.shared && !!next.ownerId;
+    if (wasPrivate && !isPrivate)
+      this.db.prepare("INSERT INTO bot_visibility VALUES(?,?,?) ON CONFLICT(bot_id) DO UPDATE SET shared_at=excluded.shared_at,owner_id=excluded.owner_id")
+        .run(botId, Date.now(), previous.ownerId!);
+    if ((previous.shared !== false) !== next.shared || (previous.ownerId ?? null) !== (next.ownerId ?? null)) {
+      this.privacyChanges.push({ version: ++this.privacyVersion, botId });
+      if (this.privacyChanges.length > 1000) this.privacyChanges.splice(0, 500);
+    }
+  }
+  /** ownerId is written as given, so a shared assistant keeps no stale owner. */
+  savePresentation(botId: string, input: { ownerId?: string; shared: boolean; avatar?: Avatar }) {
+    this.transaction(() => {
+      const avatar = input.avatar ?? this.presentation(botId).avatar;
+      this.writePresentation(botId, input, avatar ? JSON.stringify(avatar) : null);
+    });
+  }
+  /**
+   * Changes sharing and owner only if they are still what the caller authorized against.
+   * A save that raced another member's change returns false and writes nothing.
+   */
+  swapPresentation(botId: string, expected: { ownerId?: string; shared?: boolean }, next: { ownerId?: string; shared: boolean }) {
+    return this.transaction(() => {
+      const current = this.presentation(botId);
+      if ((current.shared !== false) !== (expected.shared !== false) || (current.ownerId ?? null) !== (expected.ownerId ?? null)) return false;
+      this.writePresentation(botId, next, current.avatar ? JSON.stringify(current.avatar) : null);
+      return true;
+    });
+  }
+  /** Changes only the avatar, never who may see the assistant. */
+  saveAvatar(botId: string, avatar: Avatar, shared: boolean) {
+    this.db.prepare("INSERT INTO bot_presentation(bot_id,owner_id,shared,avatar) VALUES(?,NULL,?,?) ON CONFLICT(bot_id) DO UPDATE SET avatar=excluded.avatar")
+      .run(botId, +shared, JSON.stringify(avatar));
   }
   /** Removes what this app keeps about a deleted assistant, so a new one reusing its ID starts clean. */
+  // Its news, runs and receipts go too: with no owner left on record, anything kept would
+  // reach former participants and followers, or attribute a reused ID's messages.
   forgetBot(botId: string) {
     this.transaction(() => {
-      for (const table of ["bot_presentation", "drafts", "read_positions", "card_state"])
+      const ids = (sql: string) => (this.db.prepare(sql).all(botId, botId) as { id: string | null }[]).flatMap(row => row.id ? [row.id] : []);
+      const runs = ids("SELECT json_extract(value,'$.runId') AS id FROM notification_events WHERE json_extract(value,'$.botId')=? UNION SELECT json_extract(receipt,'$.runId') FROM submissions WHERE bot_id=?");
+      const routines = ids("SELECT json_extract(value,'$.routineId') AS id FROM notification_events WHERE json_extract(value,'$.botId')=? UNION SELECT routine_id FROM routine_trials WHERE bot_id=?");
+      const outbox = "SELECT id FROM outbox WHERE json_extract(payload,'$.botId')=?";
+      this.db.prepare(`DELETE FROM delivered WHERE outbox_id IN (${outbox})`).run(botId);
+      this.db.prepare(`DELETE FROM notification_batch_items WHERE outbox_id IN (${outbox})`).run(botId);
+      this.db.prepare("DELETE FROM outbox WHERE json_extract(payload,'$.botId')=?").run(botId);
+      this.db.prepare("DELETE FROM notification_batches WHERE NOT EXISTS(SELECT 1 FROM notification_batch_items i WHERE i.batch_id=notification_batches.id)").run();
+      this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
+      for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
+      for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
+      for (const table of ["bot_presentation", "bot_visibility", "drafts", "read_positions", "card_state", "submissions", "approval_attribution", "routine_trials"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.users()) {
@@ -481,7 +539,8 @@ export class Store {
         .all(id) as { user_id: string }[]
     ).map((x) => x.user_id);
   }
-  recipients(event: RuntimeEvent): string[] {
+  /** createdAt is when this app recorded the event; news from before a private assistant was shared stays with its owner. */
+  recipients(event: RuntimeEvent, createdAt = Date.now()): string[] {
     const ids = new Set<string>();
     if (event.routineId)
       for (const r of this.db
@@ -497,8 +556,8 @@ export class Store {
       if (this.preferences(user.id).followBots.includes(event.botId))
         ids.add(user.id);
     // A private assistant's news goes only to its owner, whoever else followed or joined in.
-    const bot = this.presentation(event.botId);
-    return [...ids].filter(userId => visible(bot, userId));
+    const bot = this.presentation(event.botId), since = this.sharedSince(event.botId);
+    return [...ids].filter(userId => visible(bot, userId) && (!since || createdAt > since.sharedAt || userId === since.ownerId));
   }
   queueNotification(eventId: string, userId: string, payload: object) {
     return this.db
@@ -507,9 +566,9 @@ export class Store {
   }
   /** Assistant display names for notification titles, refreshed by the background worker. */
   botNames = new Map<string, string>();
-  enqueue(event: RuntimeEvent) {
+  enqueue(event: RuntimeEvent, createdAt = Date.now()) {
     const copy = notificationCopy(event, this.botNames.get(event.botId));
-    for (const userId of this.recipients(event))
+    for (const userId of this.recipients(event, createdAt))
       this.queueNotification(event.id, userId, {
         title: copy.title,
         body: copy.body,
@@ -537,7 +596,8 @@ export class Store {
             .prepare("INSERT OR IGNORE INTO notification_events VALUES(?,?,?)")
             .run(event.id, JSON.stringify(event), Date.now());
           this.db.prepare("INSERT INTO notification_ingestion(event_id) SELECT ? WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion WHERE event_id=?)").run(event.id, event.id);
-          this.enqueue(event);
+          const known = this.db.prepare("SELECT created_at FROM notification_events WHERE id=?").get(event.id) as { created_at: number };
+          this.enqueue(event, known.created_at);
         }
       this.db
         .prepare(
@@ -550,9 +610,9 @@ export class Store {
     this.transaction(() => {
       // Late participants still receive recent events; a new follower never gets a month of history.
       for (const row of this.db
-        .prepare("SELECT value FROM notification_events WHERE created_at>=?")
-        .all(now - 86400000) as { value: string }[])
-        this.enqueue(JSON.parse(row.value));
+        .prepare("SELECT value,created_at FROM notification_events WHERE created_at>=?")
+        .all(now - 86400000) as { value: string; created_at: number }[])
+        this.enqueue(JSON.parse(row.value), row.created_at);
       this.db
         .prepare("DELETE FROM notification_events WHERE created_at<?")
         .run(now - 30 * 86400000);

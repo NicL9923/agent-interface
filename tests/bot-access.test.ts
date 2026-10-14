@@ -51,6 +51,9 @@ function runtimeDouble(calls: string[]) {
     computerRequest: async () => ({ available: true, running: true, browserReady: true, label: "Household computer", control: { kind: "bot", name: secret }, terminal: { available: false, target: "" } }),
     integrationRequest: async (input: { profile: string }) => ({ profile: input.profile, connections: [{ id: "workspace", name: "Google Workspace", profile: input.profile, botIds: [input.profile] }] }),
     modelOptions: async () => ({ provider: "", model: "", providers: [] }),
+    // Like Hermes, only a genuine signature names the file's assistant.
+    fileBotId: (id: string) => id.endsWith(".signature") ? JSON.parse(Buffer.from(id.split(".")[0], "base64url").toString()).botId : undefined,
+    saveRoutine: async (input: { botId: string }) => { calls.push("saveRoutine"); return { ...input, id: "r-new" }; },
     saveBot: async (input: { name: string; shared: boolean }, id: string) => { calls.push("saveBot"); return { id, name: input.name, model: "test", shared: input.shared, activity: "idle" }; },
     close: async () => {},
   };
@@ -77,7 +80,7 @@ async function setup() {
   created.store.savePresentation(secret, { shared: false, ownerId: "local-one" });
   created.store.savePresentation("family", { shared: true });
   created.store.savePresentation("legacy", { shared: false });
-  return { ...created, calls, owner, member: other };
+  return { ...created, calls, owner, member: other, runtime: runtime as unknown as Record<string, unknown> };
 }
 // Kim saved, pinned and followed the assistant while it was shared, before Nicolas made it his.
 function seedMemberHistory(store: Store) {
@@ -107,7 +110,7 @@ describe("private assistants", () => {
     for (const route of api) if (!scoped(route.split(" ")[1])) expect(assistantRoutes[route], route).toBeDefined();
     for (const route of Object.keys(assistantRoutes)) expect(api.has(route), `${route} is listed but not registered`).toBe(true);
     const app = Fastify(), store = new Store(":memory:"); apps.push(app, store);
-    installBotAccess(app, store, { routines: async () => [] });
+    installBotAccess(app, store, { routines: async () => [], listBots: async () => [] });
     expect(() => app.get("/api/new-list", async () => ({}))).toThrow("Classify GET /api/new-list");
     // A route naming an assistant in its path needs no decision: it is always gated.
     expect(() => app.get("/api/bots/:id/new-feature", async () => ({}))).not.toThrow();
@@ -163,7 +166,7 @@ describe("private assistants", () => {
     expect(seen).toEqual(expect.arrayContaining(["/api/bootstrap", "/api/bots", "/api/today", "/api/search", "/api/automations",
       "/api/routines", "/api/groups", "/api/groups/:roomId", "/api/computer", "/api/hermes/upgrade"]));
     const busy = (await s.app.inject({ url: "/api/hermes/upgrade", headers: s.member })).json().busyBots;
-    expect(busy, "a private assistant still blocks an update, without its name").toEqual(["Another member's assistant"]);
+    expect(busy, "a private assistant still blocks an update, without its name").toEqual(["An assistant"]);
     const preferences = (await s.app.inject({ url: "/api/bootstrap", headers: s.member })).json().preferences;
     expect(preferences).toMatchObject({ favorites: ["family"], followBots: [], sections: [{ botIds: ["family"] }] });
     expect(preferences.defaultBotId).toBeUndefined();
@@ -208,5 +211,168 @@ describe("private assistants", () => {
     expect(s.store.savedItems("local-two").map(item => item.botId)).toEqual(["family"]);
     expect(s.store.preferences("local-two")).toMatchObject({ favorites: ["family"], followBots: [], sections: [{ botIds: ["family"] }] });
     expect(s.store.preferences("local-two").defaultBotId).toBeUndefined();
+  });
+});
+
+const deferred = () => { let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve; }); return { wait, release }; };
+const makePrivate = (store: Store, botId: string, ownerId = "local-one") => store.savePresentation(botId, { shared: false, ownerId });
+
+describe("private assistants under concurrency and side channels", () => {
+  it("lets no read that finishes after its assistant turns private carry what it gathered", async () => {
+    const s = await setup();
+    const gate = deferred();
+    const conversation = s.runtime.conversation as (botId: string) => Promise<unknown>;
+    s.runtime.conversation = async (botId: string) => { await gate.wait; return conversation(botId); };
+    const routines = s.runtime.routines as () => Promise<unknown>;
+    s.runtime.routines = async () => { await gate.wait; return routines(); };
+    const reading = s.app.inject({ url: "/api/bots/family/conversation", headers: s.member });
+    const listing = s.app.inject({ url: "/api/routines", headers: s.member });
+    const owners = s.app.inject({ url: "/api/routines", headers: s.owner });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    makePrivate(s.store, "family");
+    gate.release();
+    const [read, list, own] = await Promise.all([reading, listing, owners]);
+    expect([read.statusCode, read.json().code]).toEqual([404, "assistant_not_found"]);
+    expect(read.body).not.toContain("Family Helper");
+    expect([list.statusCode, list.json().code]).toEqual([503, "assistants_changed"]);
+    expect(list.body).not.toContain("r-family");
+    // The owner gained nothing to hide, so their read stands.
+    expect(own.statusCode).toBe(200);
+  });
+
+  it("refuses a save authorized before another member made the assistant theirs", async () => {
+    const s = await setup();
+    const input = { name: "Family", instructions: "", model: "test", shared: true };
+    const gate = deferred();
+    const capabilities = s.runtime.capabilities as () => Promise<unknown>;
+    s.runtime.capabilities = async () => { await gate.wait; return capabilities(); };
+    const delayed = s.app.inject({ method: "PATCH", url: "/api/bots/family", headers: s.member, payload: input });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(s.store.swapPresentation("family", { shared: true }, { shared: false, ownerId: "local-one" })).toBe(true);
+    gate.release();
+    expect((await delayed).statusCode).toBe(404);
+    expect(s.store.presentation("family")).toMatchObject({ shared: false, ownerId: "local-one" });
+    expect(s.calls).not.toContain("saveBot");
+    // A compare-and-set against stale sharing writes nothing.
+    expect(s.store.swapPresentation("family", { shared: true }, { shared: false, ownerId: "local-two" })).toBe(false);
+    expect(s.store.presentation("family")).toMatchObject({ ownerId: "local-one" });
+  });
+
+  it("hides another member's private assistant inside a shared assistant's agent exchanges", async () => {
+    const s = await setup();
+    s.runtime.conversation = async (botId: string) => ({ botId, activity: { state: "idle" }, approvals: [], attention: [], messages: [
+      { id: "in", role: "user", text: `Message from 🤖 ${secretName} (@${secret}): The ledger balance is 42.` },
+      { id: "out", role: "tool", text: "", toolName: "message_agent", toolCall: { id: "c", name: "message_agent", status: "completed", arguments: JSON.stringify({ target: secret, message: "Share the balance" }), result: "Balance 42" } },
+      { id: "plain", role: "assistant", text: "Dinner is at six." },
+    ] });
+    const member = (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member })).body;
+    for (const leak of [secret, secretName, "42", "Share the balance"]) expect(member).not.toContain(leak);
+    expect(member).toContain("another member's assistant");
+    expect(member).toContain("Dinner is at six.");
+    const owner = (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.owner })).body;
+    expect(owner).toContain("The ledger balance is 42.");
+  });
+
+  it("answers a hidden assistant exactly like one that does not exist, including forged files", async () => {
+    const s = await setup();
+    for (const path of ["draft", "read-position", "conversation"]) {
+      const hidden = await s.app.inject({ url: `/api/bots/${secret}/${path}`, headers: s.member });
+      const missing = await s.app.inject({ url: `/api/bots/zz-nobody/${path}`, headers: s.member });
+      expect([missing.statusCode, missing.body]).toEqual([hidden.statusCode, hidden.body]);
+    }
+    const forged = (botId: string) => `${fileId(botId).split(".")[0]}.forged`;
+    const hidden = await s.app.inject({ url: `/api/files/${forged(secret)}`, headers: s.member });
+    const missing = await s.app.inject({ url: `/api/files/${forged("zz-nobody")}`, headers: s.member });
+    expect([missing.statusCode, missing.body]).toEqual([hidden.statusCode, hidden.body]);
+  });
+
+  it("keeps the sender's receipts and remembered trials from anyone who cannot see them", async () => {
+    const s = await setup();
+    const requestId = randomUUID();
+    s.store.intent({ requestId, botId: "family", senderId: "local-one", text: "Hi", attachments: [] });
+    s.store.receipt({ requestId, status: "accepted", runId: "run-x", messageId: "41" });
+    s.runtime.lookupSubmission = async () => ({ requestId, status: "accepted", runId: "run-x", messageId: "41" });
+    const theirs = (await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.member })).json();
+    expect(theirs).toMatchObject({ status: "uncertain" });
+    expect(JSON.stringify(theirs)).not.toContain("run-x");
+    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x" });
+    // Kim ran a trial while the assistant was shared; it became private and the routine was deleted.
+    const trial = randomUUID();
+    s.store.rememberRoutineTrial(trial, "local-two", "r-gone", "family");
+    makePrivate(s.store, "family");
+    s.calls.length = 0;
+    const receipt = await s.app.inject({ url: `/api/routines/r-gone/runs/${trial}`, headers: s.member });
+    expect([receipt.statusCode, receipt.json().error]).toEqual([404, "Routine not found"]);
+    expect(s.calls).toEqual([]);
+  });
+
+  it("names no private assistant's busy state, however many are busy", async () => {
+    const s = await setup();
+    makePrivate(s.store, "legacy");
+    s.runtime.listBots = async () => Object.entries(names).map(([id, name]) => ({ id, name, model: "test", shared: id === "family", activity: id === "family" ? "idle" : "working" }));
+    expect((await s.app.inject({ url: "/api/hermes/upgrade", headers: s.member })).json().busyBots).toEqual(["An assistant"]);
+  });
+
+  it("refuses routine recipients who would never receive a private assistant's results", async () => {
+    const s = await setup();
+    const routine = { botId: secret, name: "Books", prompt: "Reconcile", schedule: "0 8 * * *", enabled: true };
+    const refused = await s.app.inject({ method: "POST", url: "/api/routines", headers: s.owner, payload: { ...routine, recipientIds: ["local-one", "local-two"] } });
+    expect([refused.statusCode, refused.json().code]).toEqual([400, "private_recipients"]);
+    expect(s.calls).not.toContain("saveRoutine");
+    expect((await s.app.inject({ method: "POST", url: "/api/routines", headers: s.owner, payload: { ...routine, recipientIds: ["local-one"] } })).statusCode).toBe(200);
+  });
+});
+
+describe("private assistant notification history", () => {
+  const event = (id: string, botId = secret) => ({ id, botId, runId: "run", kind: "completed" as const, title: `${names[botId]} finished`, occurredAt: new Date().toISOString() });
+  function seeded() {
+    const store = new Store(":memory:"); apps.push(store);
+    for (const id of ["local-one", "local-two"]) store.user({ id, name: id, email: `${id}@example.test` });
+    store.participate("run", "local-two");
+    store.savePreferences("local-two", { ...defaultPreferences, followBots: [secret] });
+    makePrivate(store, secret);
+    return store;
+  }
+  const queuedFor = (store: Store, userId: string) => (store.db.prepare("SELECT event_id FROM outbox WHERE user_id=?").all(userId) as { event_id: string }[]).map(row => row.event_id);
+
+  it("forgets a deleted assistant's events, runs and notifications so nothing reaches former participants", () => {
+    const store = seeded();
+    store.savePresentation(secret, { shared: true });
+    store.recordEvents([event("shared-era")], "1");
+    makePrivate(store, secret);
+    store.recordEvents([event("private-era")], "2");
+    store.forgetBot(secret);
+    store.db.prepare("DELETE FROM outbox").run();
+    store.enqueueKnownEvents();
+    expect(queuedFor(store, "local-two")).toEqual([]);
+    expect(store.db.prepare("SELECT count(*) AS n FROM notification_events").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("SELECT count(*) AS n FROM participants WHERE run_id='run'").get()).toEqual({ n: 0 });
+  });
+
+  it("does not backfill news from the private period when an assistant is shared again", () => {
+    const store = seeded();
+    store.recordEvents([event("private-era")], "1");
+    expect(queuedFor(store, "local-two")).toEqual([]);
+    // Recorded, then shared, then more news, each a few milliseconds apart.
+    store.db.prepare("UPDATE notification_events SET created_at=created_at-10").run();
+    store.savePresentation(secret, { shared: true });
+    store.db.prepare("UPDATE bot_visibility SET shared_at=shared_at-5").run();
+    store.enqueueKnownEvents();
+    expect(queuedFor(store, "local-two")).toEqual([]);
+    store.recordEvents([event("shared-era")], "2");
+    expect(queuedFor(store, "local-two")).toEqual(["shared-era"]);
+    // Today agrees: the private period's events are not news for anyone but the former owner.
+    expect(store.eventPage("local-two", 0, store.latestEventFrontier(), [secret]).events.map(row => row.id)).toEqual(["shared-era"]);
+    expect(store.eventPage("local-one", 0, store.latestEventFrontier(), [secret]).events.map(row => row.id)).toEqual(["private-era", "shared-era"]);
+  });
+
+  it("never moves another member's Today frontier for hidden events", () => {
+    const store = seeded();
+    store.savePresentation("family", { shared: true });
+    store.recordEvents([event("visible", "family")], "1");
+    const before = store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).frontier;
+    store.recordEvents([event("hidden-1"), event("hidden-2")], "2");
+    expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).frontier).toBe(before);
+    expect(Number(store.eventPage("local-one", 0, store.latestEventFrontier(), ["family", secret]).frontier)).toBeGreaterThan(Number(before));
   });
 });

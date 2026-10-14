@@ -146,8 +146,13 @@ export class BackgroundWorker {
         // Keep undelivered events durable until this person has a subscription.
         if (!subscriptions.length && !devices.length) continue;
         let failed: string | undefined;
+        // A send can take a while; an assistant made private meanwhile stops the rest of this
+        // delivery before its frozen payload reaches another endpoint. The next pass drops it.
+        const stillVisible = () => item.items.every(row => security || visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id));
+        let revoked = false;
         for (const subscription of subscriptions) {
           if (item.items.every(row => this.store.delivered(row.id, subscription.endpoint))) continue;
+          if (!stillVisible()) { revoked = true; break; }
           try {
             await this.send!(subscription, deliveryPayload);
             for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
@@ -163,9 +168,10 @@ export class BackgroundWorker {
             }
           }
         }
-        for (const device of devices) {
+        for (const device of revoked ? [] : devices) {
           const endpoint = `apns:${device.environment}:${device.token}`;
           if (item.items.every(row => this.store.delivered(row.id, endpoint))) continue;
+          if (!stillVisible()) { revoked = true; break; }
           try {
             await this.sendApns!(device, deliveryPayload);
             for (const row of item.items) this.store.markDelivered(row.id, endpoint);
@@ -181,6 +187,7 @@ export class BackgroundWorker {
             }
           }
         }
+        if (revoked) continue;
         let abandoned = 0;
         for (const row of item.items) {
           if (failed === undefined) this.store.finishDelivery(row.id);

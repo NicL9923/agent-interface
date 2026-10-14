@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { Bot, Runtime } from "../shared/types.js";
+import { agentEnvelope } from "../shared/collaboration.js";
+import type { Bot, Message, Runtime } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import type { Store } from "./store.js";
+declare module "fastify" { interface FastifyRequest { privacyVersion?: number; assistantId?: string } }
 
 // A personal assistant with a recorded owner is private: for anyone else it does not
 // exist anywhere in WildBots. Shared assistants and older personal ones without a
@@ -24,10 +26,70 @@ export async function visibleBots(runtime: Pick<Runtime, "listBots">, store: Sto
 
 export const notFound = { error: "Assistant not found", code: "assistant_not_found" } as const;
 
-// Signed file IDs carry their assistant in a readable body; Hermes verifies the signature.
-export function fileBotId(fileId: string) {
-  try { return (JSON.parse(Buffer.from(fileId.split(".")[0], "base64url").toString()) as { botId?: unknown }).botId; }
+// Only a genuine signature names a file's assistant, so a forged ID naming a private one
+// fails exactly like any other forged ID. A runtime without signatures, as in tests,
+// falls back to the readable body.
+export function fileBotId(runtime: Pick<Runtime, "fileBotId">, fileId: string) {
+  if (runtime.fileBotId) { const botId = runtime.fileBotId(fileId); return typeof botId === "string" ? botId : undefined; }
+  try { const botId = (JSON.parse(Buffer.from(fileId.split(".")[0], "base64url").toString()) as { botId?: unknown }).botId; return typeof botId === "string" ? botId : undefined; }
   catch { return undefined; }
+}
+
+/**
+ * The last roster Hermes reported. A route naming an assistant that is not on it answers
+ * the same 404 as a hidden one, so nobody can tell a private assistant from a made-up ID.
+ * An ID missing from the cached roster refreshes it first, so a new assistant is never refused.
+ */
+export class Roster {
+  private bots?: Bot[];
+  private refreshing?: Promise<void>;
+  constructor(private runtime: Pick<Runtime, "listBots">) {}
+  note(bots: unknown) {
+    // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
+    if (Array.isArray(bots) && bots.some(bot => bot?.activity !== "disconnected")) this.bots = bots;
+  }
+  private refresh() {
+    this.refreshing ??= (async () => { try { this.note(await this.runtime.listBots()); } catch { /* Keep the last roster. */ } })()
+      .finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
+  }
+  /** False only when Hermes's current roster lacks it. */
+  async exists(botId: string) {
+    if (this.bots?.some(bot => bot.id === botId)) return true;
+    if (typeof this.runtime.listBots !== "function") return true;
+    await this.refresh();
+    return !this.bots || this.bots.some(bot => bot.id === botId);
+  }
+  async names() {
+    if (!this.bots) await this.refresh();
+    return new Map((this.bots ?? []).map(bot => [bot.id, bot.name]));
+  }
+}
+
+const hiddenText = "Message from another member's assistant: This message is private.";
+/**
+ * Removes another member's private assistant from agent exchanges inside an assistant this
+ * person can see: incoming envelopes and message_agent handoffs keep their place, not their content.
+ */
+export async function redactAgents(store: Store, roster: Roster, userId: string) {
+  const hidden = store.privateBots().filter(bot => bot.ownerId !== userId).map(bot => bot.botId);
+  if (!hidden.length) return { message: <T extends Message>(message: T) => message, text: (text: string) => text };
+  const names = await roster.names();
+  const handles = new Set(hidden), labels = new Set(hidden.flatMap(id => [id, names.get(id)]).filter(Boolean).map(name => name!.toLowerCase()));
+  const named = (value: unknown) => typeof value === "string" && (handles.has(value) || labels.has(value.toLowerCase()));
+  const target = (args?: string) => { try { return (JSON.parse(args ?? "") as { target?: unknown }).target; } catch { return undefined; } };
+  return {
+    message: <T extends Message>(message: T): T => {
+      const envelope = agentEnvelope(message);
+      if (envelope && (named(envelope.handle) || named(envelope.name))) return { ...message, text: hiddenText };
+      const call = message.toolCall;
+      if ((call?.name === "message_agent" || message.toolName === "message_agent") && (!call || named(target(call.arguments)) || !target(call.arguments)))
+        return { ...message, text: "", ...(call ? { toolCall: { ...call, arguments: JSON.stringify({ target: "another member's assistant" }), result: undefined, error: undefined } } : {}) };
+      return message;
+    },
+    // Search snippets and previews are fragments, so any mention of a hidden handle or name hides them.
+    text: (text: string) => [...handles].some(id => text.includes(`@${id}`) || text.includes(`'${id}'`)) || [...labels].some(name => name.length > 2 && text.toLowerCase().includes(`message from 🤖 ${name}`) || text.toLowerCase().includes(`message from ${name}`)) ? hiddenText : text,
+  };
 }
 
 // Every route under /api/bots/:id or /api/bots/:botId names one assistant in its path
@@ -129,7 +191,7 @@ const named = (value: unknown) => {
 };
 
 /** Install after authentication and before any assistant route. */
-export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pick<Runtime, "routines">) {
+export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pick<Runtime, "routines" | "listBots" | "fileBotId">, roster = new Roster(runtime)) {
   app.addHook("onRoute", (route) => {
     if (!route.url.startsWith("/api/") || scoped.test(route.url)) return;
     for (const method of [route.method].flat())
@@ -144,10 +206,13 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
     const url = routePattern(req);
     const param = scoped.exec(url)?.[1];
     const scope = assistantRoutes[key(req.method, url)];
+    if (!param && !scope) return;
+    req.privacyVersion = store.privacyVersion;
     const botId = param ? (req.params as Record<string, string>)[param]
       : scope === "query" ? named(req.query)
-      : scope === "file" ? fileBotId((req.params as { id: string }).id) : undefined;
-    if (hidden(req, botId)) return refuse(reply);
+      : scope === "file" ? fileBotId(runtime, (req.params as { id: string }).id) : undefined;
+    req.assistantId = botId;
+    if (hidden(req, botId) || param && !(await roster.exists(botId!))) return refuse(reply);
   });
   // Body and routine checks need the parsed body or the scheduler, so they run just before the handler.
   app.addHook("preHandler", async (req, reply) => {
@@ -155,9 +220,30 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
     if (scope?.startsWith("routine")) {
       const routineId = (req.params as { id?: string }).id;
       const row = (await runtime.routines()).find(routine => routine.id === routineId);
+      // A trial remembers its assistant even after its routine is deleted.
+      const requestId = (req.params as { requestId?: unknown }).requestId ?? (req.body as { requestId?: unknown } | undefined)?.requestId;
+      const trial = typeof requestId === "string" ? store.routineTrial(requestId) : undefined;
       // A missing routine is the handler's 404, worded the same.
-      if (row && hidden(req, row.botId)) return reply.code(404).send({ error: "Routine not found" });
+      if (row && hidden(req, row.botId) || trial && hidden(req, trial.botId)) return reply.code(404).send({ error: "Routine not found" });
     }
-    if ((scope === "body" || scope === "routine and body") && hidden(req, named(req.body))) return refuse(reply);
+    if (scope === "body" || scope === "routine and body") {
+      req.assistantId ??= named(req.body);
+      if (hidden(req, named(req.body))) return refuse(reply);
+    }
   });
+  // Access is decided before awaited reads. If an assistant became private to someone else
+  // while this read ran, nothing it gathered may leave: its own route answers 404 and any
+  // other read asks to be retried, so every list re-filters without each handler remembering.
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (req.privacyVersion === undefined || !["GET", "HEAD"].includes(req.method) || reply.statusCode === 404) return payload;
+    const changed = store.changedSince(req.privacyVersion).filter(botId => hidden(req, botId));
+    if (!changed.length) return payload;
+    (payload as { destroy?: () => void } | null)?.destroy?.();
+    for (const header of ["ETag", "Content-Length", "Content-Disposition"]) reply.removeHeader(header);
+    reply.type("application/json; charset=utf-8");
+    if (req.assistantId && changed.includes(req.assistantId)) return reply.code(404), JSON.stringify(notFound);
+    reply.code(503);
+    return JSON.stringify({ error: "Assistants changed while this loaded. Try again.", code: "assistants_changed" });
+  });
+  return roster;
 }
