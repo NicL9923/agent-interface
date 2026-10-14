@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { precachePlan } from './precache-plan.mjs';
@@ -28,6 +28,8 @@ const version = hash.digest('hex').slice(0, 16);
 const names = files.map((file) => relative(output, file).split('\\').join('/'));
 const manifest = JSON.parse(await readFile(join(output, '.vite/manifest.json'), 'utf8'));
 const plan = precachePlan(manifest, names);
+// Nothing serves or needs it after this, so it does not ship.
+await rm(join(output, '.vite'), { recursive: true });
 const slash = (list) => JSON.stringify(list.map((name) => '/' + name));
 const worker = template.replace('__BUILD_ID__', version).replace('__PRECACHE__', slash(plan.precache)).replace('__ON_DEMAND__', slash(plan.onDemand));
 await writeFile(join(output, 'sw.js'), worker);
