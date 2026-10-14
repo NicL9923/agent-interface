@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 TOOL = Path(__file__).with_name("release-app.py")
-BUSY = re.compile(r'gate\["busy"\]')
+# The guarded preflight's busy-gate fence, or the assert that releases before fences printed.
+BUSY = re.compile(r'Fence: maintenance gate inactive with no busy work|gate\["busy"\]')
 DISCARD = re.compile(r"Discard with: release-app\.py discard (release-[\w-]+)")
 
 

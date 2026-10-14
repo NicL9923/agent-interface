@@ -12,7 +12,7 @@ import { Store } from "../src/server/store.js";
 import type { Runtime, RuntimeEvent } from "../src/shared/types.js";
 
 const origin = "http://127.0.0.1:3000";
-const runtime = { status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ data: Buffer.from("file body"), name: "answer.txt", mime: "text/plain" }), close: async () => {} } as unknown as Runtime;
+const runtime = { status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} } as unknown as Runtime;
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
 afterEach(async () => { for (const { app } of apps.splice(0)) await app.close(); });
 async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), verifyGoogle?: NonNullable<Parameters<typeof createApp>[2]>["verifyGoogle"]) {
@@ -47,11 +47,13 @@ it("uses single-use state and PKCE-bound native codes, hashed sessions, and reta
   expect(started.response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
   const complete = () => app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { member: "one" } });
   const completed = await complete();
-  expect((await complete()).statusCode).toBe(401);
+  const replayed = await complete();
+  expect([replayed.statusCode, replayed.json().code]).toEqual([401, "session_expired"]);
   const callback = new URL(completed.json().callback);
   const payload = { code: callback.searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
   const exchange = (body: Record<string, unknown>, headers = {}) => app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: body, headers });
-  expect((await exchange({ ...payload, codeVerifier: randomBytes(32).toString("base64url") })).statusCode).toBe(401);
+  const wrongVerifier = await exchange({ ...payload, codeVerifier: randomBytes(32).toString("base64url") });
+  expect([wrongVerifier.statusCode, wrongVerifier.json().code]).toEqual([401, "session_expired"]);
   expect((await exchange({ ...payload, state: randomBytes(32).toString("base64url") })).statusCode).toBe(401);
   expect((await exchange(payload, { origin })).statusCode).toBe(403);
   const result = await exchange(payload);

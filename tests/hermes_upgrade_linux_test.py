@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -279,6 +280,22 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.git("config", "--get", "remote.origin.promisor").strip(), "true")
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
 
+    def test_candidate_import_copies_only_objects_the_installed_store_lacks(self):
+        new = [line.split()[0] for line in self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines()]
+        for oid in new[1:]: (self.source / ".git/objects" / oid[:2] / oid[2:]).unlink()
+        self.platform.quiescence(); self.platform.backup()
+        imported = [line.split()[1] for index in (self.source / ".git/objects/pack").glob("*.idx")
+            for line in subprocess.check_output(["git", "show-index"], stdin=index.open("rb")).decode().splitlines()]
+        self.assertEqual(sorted(imported), sorted(new[1:]))
+
+    def test_candidate_import_restores_an_old_object_the_installed_store_lacks(self):
+        # A partial clone can lack an old object that the candidate's history still reaches.
+        blob = self.git("rev-parse", self.old + ":app.py").strip()
+        (self.source / ".git/objects" / blob[:2] / blob[2:]).unlink()
+        self.platform.quiescence(); self.platform.backup()
+        self.git("cat-file", "-e", blob)
+        self.assertEqual(self.platform.load()["phase"], "backed_up")
+
     def test_unreadable_file_refuses_cold_backup_before_service_shutdown(self):
         self.platform.quiescence()
         before = self.states.read_bytes()
@@ -349,22 +366,26 @@ class PlatformTests(unittest.TestCase):
         with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
             self.platform.backup()
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
-        # Each allowance counts: objects twice (imported, then archived) and the install, all checked
-        # before any object is imported.
-        archives = self.platform.readable(self.source) + self.platform.readable(self.home, excluded=self.source)
+        # Each allowance counts: the archives, candidate objects twice (packed in staging, then
+        # imported) and the install, all checked before any object is imported. The live object
+        # store is not archived, so it needs no room.
+        archives = self.platform.readable(self.source, excluded=self.source / ".git/objects") + self.platform.readable(self.home, excluded=self.source)
         objects = linux.tree_bytes(self.target / ".git")
         install = linux.tree_bytes(self.target, excluded=self.target / ".git") + linux.tree_bytes(self.stage / "pm-home/installs")
         self.assertGreater(install, 0)
         imported = []
         self.platform.materialize_candidate = lambda: imported.append(True)
-        for short in (archives + objects + install, archives + 2 * objects):
+        for short in (archives + objects + install, 2 * objects + install, archives + 2 * objects):
             usage.free = reserve + short
             with self.subTest(free=usage.free), patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about"):
                 self.platform.backup()
         self.assertEqual(imported, [])
         self.assertEqual(self.states.read_bytes(), before)
-        self.assertEqual(self.states.read_bytes(), before)
         self.assertEqual(self.platform.load()["phase"], "quiescent")
+        # Exactly enough room is enough.
+        usage.free = reserve + archives + 2 * objects + install
+        with patch.object(linux.shutil, "disk_usage", return_value=usage): self.platform.backup()
+        self.assertEqual(self.platform.load()["phase"], "backed_up")
 
     def test_failed_backup_restarts_hermes_even_when_logging_fails(self):
         self.platform.quiescence()
@@ -478,7 +499,10 @@ class PlatformTests(unittest.TestCase):
         (self.home / "auth.json").write_text("fresh-live-grant")
         (self.home / "installs/selected.json").write_text("new generation")
         (self.home / "config.yaml").write_text("unexpected configuration mutation")
+        # The live object store is kept as is, never rebuilt.
+        packs = sorted((self.source / ".git/objects/pack").iterdir())
         self.platform.rollback()
+        self.assertEqual(sorted((self.source / ".git/objects/pack").iterdir()), packs)
         self.platform.env["HERMES_UPGRADE_ROLLBACK"] = "1"
         self.platform.verify(); self.platform.finish()
         self.assertEqual(self.platform.source_state()[0], self.old)
@@ -488,6 +512,38 @@ class PlatformTests(unittest.TestCase):
         self.assertIn("model: chosen", (self.home / "config.yaml").read_text())
         self.assertIn("repair fixed", (self.source / "repair.py").read_text())
         self.assertEqual(self.git("diff", "--cached", "--name-only", "--", "staged-repair.py").strip(), "staged-repair.py")
+
+    def test_source_archive_leaves_out_git_objects_and_rollback_refuses_an_incomplete_store(self):
+        self.platform.quiescence(); self.platform.backup()
+        with tarfile.open(self.stage / "backup/source.tar.gz") as archive: names = archive.getnames()
+        self.assertIn("hermes-agent/.git/HEAD", names)
+        self.assertFalse([name for name in names if name.startswith("hermes-agent/.git/objects")])
+        self.platform.install()
+        # A lost baseline blob, with no staged copy to restore it from, stops rollback.
+        blob = self.git("rev-parse", self.old + ":app.py").strip()
+        (self.source / ".git/objects" / blob[:2] / blob[2:]).unlink(missing_ok=True)
+        for pack in (self.source / ".git/objects/pack").glob("*"): pack.unlink()
+        shutil.rmtree(self.target / ".git/objects"); (self.target / ".git/objects/pack").mkdir(parents=True)
+        with self.assertRaises((subprocess.CalledProcessError, RuntimeError)): self.platform.rollback()
+        self.assertNotEqual(self.platform.load()["phase"], "restored")
+
+    def test_rollback_rebuilds_a_lost_object_store_and_clears_stale_git_metadata(self):
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        shutil.rmtree(self.source / ".git/objects")
+        (self.source / ".git/index.lock").write_text("stale")
+        self.platform.rollback()
+        self.assertFalse((self.source / ".git/index.lock").exists())
+        self.assertEqual(self.platform.source_state()[0], self.old)
+        # Every index blob reads back, including the repair's staged addition, which is in no commit.
+        self.assertIn("new approved regression", self.git("diff", "--cached"))
+        self.git("fsck", "--no-dangling", "--no-reflogs")
+
+    def test_partially_staged_repair_refuses_backup_before_shutdown(self):
+        self.platform.quiescence()
+        before = self.states.read_bytes()
+        with (self.source / "staged-repair.py").open("a") as output: output.write("unstaged edit\n")
+        with self.assertRaisesRegex(RuntimeError, "staged-repair.py"): self.platform.backup()
+        self.assertEqual(self.states.read_bytes(), before)
 
     def test_dependency_change_blocks_before_source_cutover(self):
         self.platform.quiescence(); self.platform.backup()
@@ -561,7 +617,10 @@ class PlatformTests(unittest.TestCase):
         cli = self.source / "hermes_cli"; cli.mkdir()
         calls = self.home / "pm-calls.json"
         record = "import json\nfrom pathlib import Path\np=Path(" + repr(str(calls)) + ")\ndef note(v):\n old=json.loads(p.read_text()) if p.exists() else []\n p.write_text(json.dumps(old+[v]))\n"
-        (pm / "__init__.py").write_text(record + "def sync_venv(**kwargs):\n note({'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root'])})\n")
+        state = self.home / "installs/key"
+        (pm / "__init__.py").write_text(record + "import json\nfrom pathlib import Path\ndef sync_venv(extras=None, **kwargs):\n f=Path(" + repr(str(state / "facts.json")) + ")\n lock=json.loads(f.read_text())['packages']['venv'].get('resolved_lock') if f.exists() else None\n note({'extras':extras,'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root']),'seed':Path(lock).read_text() if lock else None})\n if f.with_name('rebuild').exists():\n  data=json.loads(f.read_text()); data['packages']['venv']['resolved_lock']='new generation lock'; f.write_text(json.dumps(data))\n")
+        (pm / "environments.py").write_text("from pathlib import Path\ndef install_state_dir(root): return Path(" + repr(str(state)) + ")\ndef runtime_facts_path(root): return install_state_dir(root) / 'facts.json'\n")
+        (pm / "lock.py").write_text("import json\nclass Facts:\n def __init__(self, path, strict=False): self.path=path\n def get(self, name): return json.loads(self.path.read_text())['packages'].get(name) if self.path.exists() else None\n def record_state(self, name, stamp, extras, *, environment=None, resolved_lock=None):\n  data=json.loads(self.path.read_text()); data['packages'][name]={'stamp':stamp,'extras':extras,'environment':str(environment),'resolved_lock':str(resolved_lock.resolve())}; self.path.write_text(json.dumps(data))\n")
         (pm / "client.py").write_text("from pm import note\ndef ensure_tools_for_sync(): note('tools')\n")
         (cli / "__init__.py").write_text("")
         (cli / "venv_sync.py").write_text("from pm import note\ndef publish_launchers(root): note('publish')\n")
@@ -569,7 +628,38 @@ class PlatformTests(unittest.TestCase):
         (self.source / "hermes_bootstrap.py").write_text("raise RuntimeError('Automatic source updater must never be imported')\n")
         result = linux.Platform.sync(self.platform)
         self.assertEqual(result, {"ok": True, "state": "synced"})
-        self.assertEqual(json.loads(calls.read_text()), [{"handoff": str(os.getpid())}, "tools", {"evict": False, "explicit": True, "root": str(self.source)}, "publish", "release"])
+        self.assertEqual(json.loads(calls.read_text()), [{"handoff": str(os.getpid())}, "tools", {"extras": None, "evict": False, "explicit": True, "root": str(self.source), "seed": None}, "publish", "release"])
+        # A dependency change installs exactly the extras qualification built.
+        calls.unlink()
+        descriptor = self.stage / "qualified-runtime.json"
+        descriptor.write_text(json.dumps({"extras": ["all", "discord"]})); descriptor.chmod(0o600)
+        self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
+        linux.Platform.sync(self.platform)
+        self.assertEqual(json.loads(calls.read_text())[2]["extras"], ["all", "discord"])
+        # Where PM seeds from the prior generation's lock, it seeds from the qualified lock instead.
+        calls.unlink()
+        generation = self.stage / "pm-home/installs/g/environments/e/venv"; (generation.parent / "workspace").mkdir(parents=True)
+        (generation.parent / "workspace/uv.lock").write_text("qualified lock")
+        descriptor.write_text(json.dumps({"extras": ["all"], "generation": str(generation)}))
+        linux.Platform.sync(self.platform)
+        self.assertIsNone(json.loads(calls.read_text())[2]["seed"])
+        calls.unlink()
+        state.mkdir(parents=True); (state / "old.lock").write_text("baseline lock")
+        prior = {"stamp": "s", "extras": ["all"], "environment": "/env", "resolved_lock": str((state / "old.lock").resolve())}
+        (state / "facts.json").write_text(json.dumps({"packages": {"venv": prior}}))
+        linux.Platform.sync(self.platform)
+        self.assertEqual(json.loads(calls.read_text())[2]["seed"], "qualified lock")
+        self.assertFalse((state / "agent-interface-qualified-uv.lock").exists())
+        # Nothing rebuilt: the original facts come back, naming a lock that still exists.
+        venv = json.loads((state / "facts.json").read_text())["packages"]["venv"]
+        self.assertEqual(venv, prior); self.assertTrue(Path(venv["resolved_lock"]).is_file())
+        # Rebuilt: PM's new facts stand.
+        (state / "rebuild").touch()
+        linux.Platform.sync(self.platform)
+        self.assertEqual(json.loads((state / "facts.json").read_text())["packages"]["venv"]["resolved_lock"], "new generation lock")
+        (state / "rebuild").unlink(); (state / "facts.json").write_text(json.dumps({"packages": {"venv": prior}}))
+        (generation.parent / "workspace/uv.lock").unlink()
+        with self.assertRaisesRegex(RuntimeError, "qualified dependency lock is missing"): linux.Platform.sync(self.platform)
 
     def test_private_config_and_fixed_stage_paths_are_required(self):
         self.config.chmod(0o644)

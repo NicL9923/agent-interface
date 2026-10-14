@@ -5,7 +5,7 @@ The native implementation uses the web client's settled scope in
 means the native control and authenticated request path exist. The validation
 ledger remains the repository's single source for tested code-state hashes.
 
-The native unit run passed 43 tests on Xcode 27 and iOS 27. The subsequent Today
+The native unit run passed 79 tests on Xcode 27 and iOS 27. The subsequent Today
 frontier update passed eight focused unit tests and two phone UI flows. October 1 focused
 simulator UI checks covered account health, the real Calendar permission prompt
 and denial, confirmed service recovery, and disconnect followed by a refreshed
@@ -32,7 +32,7 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Feature | Native implementation | Validation |
 | --- | --- | --- |
 | Agent messages | Incoming native envelope and outgoing `message_agent` handoff render separately and remain visible in Simple mode; attributed household messages retain their sender | Swift envelope, sender and visible-history regressions; web envelope tests |
-| Composer model switch | Advanced presentation lists the profile's Hermes model catalog in the composer, saves through the existing assistant update and asks before a model Hermes wants confirmed; disabled when the assistant's instructions are unknown | Phone fixture UI switches the model; web unit tests cover the full-field resend, confirmation and late-answer handling. Not exercised against a real Hermes catalog from iOS |
+| Composer model switch (model only) | Advanced presentation lists the profile's Hermes model catalog in the composer, saves through the existing assistant update and asks before a model Hermes wants confirmed; disabled when the assistant's instructions are unknown. The web composer's reasoning-level and speed controls and model favorites are not native yet (see Known gaps) | Phone fixture UI switches the model; web unit tests cover the full-field resend, confirmation and late-answer handling. Not exercised against a real Hermes catalog from iOS |
 | Routine results | Saved run picker and output in settings and Today; routine push links open the results sheet | Native decoding and phone fixture flow; real native profile-scoped output probe and server access checks in the main ledger |
 | Group chats | Local 2–6 member room creation, thread replies, persistent send retry, polled native messages/status, approval and stop controls; coordinator availability gates sending | Native protocol decoding and phone creation/send fixture flow; real native coordinator admission, deduplication, log and stop probe in the main ledger |
 | Today overview | Recent canonical events and date-filtered replies, pending decisions, live status and files, per-assistant read failure, canonical conversation links, explicit account-level Mark caught up acknowledges the exact returned ingestion frontier, with page-by-page catch-up for queued results | Native recency tests reject old and undated summaries; phone and iPad fixture UI exercised recent event/reply and conversation navigation; affected native unit and phone UI checks verified exact snapshot acknowledgment, queued pages, and late imported events dated before the prior recap marker |
@@ -40,13 +40,13 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Passwords and logins | Native Hermes profile vault metadata, masked add form, confirmed local removal, installed external source controls; inline login, code, unlock and named-secret requests bound to the current native owner; ephemeral fields clear on submit/background/dismissal, uncertain requests become read-only with explicit refresh | Ten focused unit checks; phone and iPad fixture management, secure request and background clearing flows; final uncertainty checks on both devices assert disabled fields and no replay. Real native storage and browser guards are recorded separately in the main ledger |
 | Voice messages and replies | Explicit microphone permission, two-minute AAC recording, authenticated 8 MB transcription bound, editable transcript before adding to draft, draft remains unsent, recording stops on dismissal/background; Read aloud and Stop use the device's iOS voice and omit interactive JSON | Native multipart/authentication/bound tests; phone and iPad voice review sheet, phone simulated iOS speech start/Stop controls; real microphone audio and provider transcription remain external acceptance |
 | Interactive reply cards | Opt-in editable assistant instructions; strict agent-ui v1 cards; per-account saved checklist choices and itinerary notes; rejected blocks remain readable code; calendar proposals open Apple's event editor for review and explicit Save | Native invalid URL/date/schema/duplicate-ID parsing tests; phone and iPad saved checklist UI; physical calendar Save remains external acceptance |
-| Connection onboarding | Pasted/bare HTTPS address, origin normalization, compatibility check, retry, change server | Simulator address validation; native origin/PKCE contract tests |
-| Household sign-in | System browser handoff, S256 PKCE and callback state validation, Keychain bearer, proactive expiry, revoking sign-out | Real ad hoc signed simulator system-browser/local-member handoff and Keychain storage; native token/header/expiry/revocation tests |
+| Connection onboarding | Pasted/bare HTTPS address, origin normalization, compatibility check, Retry connection that also runs when the app returns to the foreground, change server that still works when the server is unreachable (clears the local token and warns the server-side session stays valid until it expires). A saved sign-in opens without `/auth/config`, which sign-in fetches when needed | Simulator address validation; native origin/PKCE contract tests; native tests for outage then recovery at launch and for offline change server |
+| Household sign-in | System browser handoff, S256 PKCE and callback state validation, Keychain bearer, proactive expiry, revoking sign-out. Only a 401 with the server's `session_expired` code signs the person out; other 401s are ordinary errors | Real ad hoc signed simulator system-browser/local-member handoff and Keychain storage; native token/header/expiry/revocation tests; native tests that only the `session_expired` code clears the Keychain token |
 | Personal and shared bots | Persistent roster, attribution, per-user personalization, create/edit/delete | Native forms and roster-to-conversation simulator path; server configuration integration in main ledger |
 | Conversation and activity | Canonical transcript polling, Markdown/code/tables, read-only task lists, inline live animated avatar, Advanced exposed reasoning and actual tool arguments/status/results, deduplicated current calls, nine activity states | Native real-Hermes chat simulator path; Markdown/date/geometry and current-tool deduplication tests; focused live activity/details fixture UI pass |
 | Steering and stop | Active-work guidance default, explicit stop confirmation | Same tested server admission/steering/stop routes; native controls implemented |
 | Approvals and clarification | Household approve/deny, stale-server errors, answer options and text, official-interface fallback | Native controls implemented; server enforcement and clarification integration in main ledger |
-| Interrupted/uncertain work | Per-run review, durable request IDs, lookup, reviewed same-ID retry, definitive-rejection recovery | Native unit tests for rejection vs uncertainty, new interruptions, identity changes and accepted-draft clearing |
+| Interrupted/uncertain work | Per-run review, durable request IDs, lookup, reviewed same-ID retry, definitive-rejection recovery. An unconfirmed send can always be discarded: its text and attachments return to that assistant's draft, with a warning that the message may still arrive | Native unit tests for rejection vs uncertainty, new interruptions, identity changes, accepted-draft clearing, and discarding into the same, an edited, an emptied and another assistant's draft |
 | Offline recovery | Loaded roster/transcript cache in memory, scoped local drafts/read positions, backoff, manual reconnect, no automatic message replay | Native disconnect, canonical-read outage, read-anchor and identity-race tests |
 | Uploads and delivery | Images, PDFs and text, ten attachments, 20 MB bound, authenticated image/Quick Look preview and share | Native multipart transport and identity-race tests; server upload/download integration in main ledger |
 | Model/provider/instructions/MCP | Shared-model confirmation, existing model choices/identifiers, instructions, existing MCP identifiers | Native forms implemented; server configuration integration in main ledger |
@@ -88,6 +88,14 @@ establish an actual external password-manager unlock or physical-device behavior
 The [cancelled login-save review](evidence/native-vault-add-cancel-phone-review.png)
 shows a fixture that saves before losing its response: the form clears and blocks
 another Save, then dismissal refreshes metadata to reveal the stored login.
+
+## Known gaps
+
+Web composer features that the native app does not have yet:
+
+- Reasoning level and speed controls (`PATCH /bots/:id/inference`). The native
+  composer switches the model only.
+- Model favorites in the picker (`preferences.modelFavorites`).
 
 ## External acceptance
 

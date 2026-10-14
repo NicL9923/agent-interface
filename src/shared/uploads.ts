@@ -2,6 +2,9 @@
 export const UPLOAD_MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"] as const;
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 10;
+// Files stream to the person, so this bounds one transfer rather than server memory:
+// five attachments' worth, room for generated archives and recordings.
+export const MAX_DOWNLOAD_BYTES = 5 * MAX_UPLOAD_BYTES;
 export const UPLOAD_KINDS = "PNG, JPEG, WebP or GIF images, PDFs, or plain text";
 // The picker also offers common text formats, which the composer sends as plain text.
 const TEXT_EXTENSIONS = ["txt", "md", "markdown", "csv", "log"];

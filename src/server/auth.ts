@@ -8,6 +8,9 @@ import type { Store } from "./store.js";
 import type { User } from "../shared/types.js";
 import { installNativeAuth } from "./native-auth.js";
 import { isApiRequest, routePattern } from "./route-path.js";
+// The only 401 that means this person's session is gone. Clients clear a stored
+// credential on this code alone, never on a bare 401.
+const signInRequired = { error: "Sign in required", code: "session_expired" };
 export const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 declare module "fastify" {
@@ -63,7 +66,7 @@ export async function installAuth(
       const user = session ? store.getUser(session.userId) : undefined;
       if (!user || !allowedIdentity(config, user)) {
         if (session) store.deleteNativeSession(sessionHash);
-        return reply.code(401).send({ error: "Sign in required" });
+        return reply.code(401).send(signInRequired);
       }
       req.user = user;
       req.nativeSessionHash = sessionHash;
@@ -82,7 +85,7 @@ export async function installAuth(
     }
     const publicRoute = publicApiRoutes.includes(route);
     if (!publicRoute && !req.user)
-      return reply.code(401).send({ error: "Sign in required" });
+      return reply.code(401).send(signInRequired);
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       if (route === "/api/auth/native/exchange") {
         if (req.headers.origin !== undefined || req.headers.cookie !== undefined)

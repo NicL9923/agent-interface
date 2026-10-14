@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import type { Avatar, Capabilities, Runtime, Submission } from "../src/shared/types.js";
+import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
 function runtimeDouble() {
@@ -79,7 +80,7 @@ function runtimeDouble() {
     approve: async () => {},
     upload: async () => ({ id: "file", name: "test", mime: "text/plain" }),
     download: async () => ({
-      data: Buffer.from("hello"),
+      body: new Blob(["hello"]).stream(),
       name: "test",
       mime: "text/plain",
     }),
@@ -609,6 +610,44 @@ it("accepts long signed file identifiers in uploads, drafts, and authenticated d
   expect(
     (await app.inject({ url: `/api/files/${fileId}`, headers })).statusCode,
   ).toBe(200);
+  await app.close();
+});
+it("streams downloads under the shared cap and explains a file that is too large", async () => {
+  const fake = runtimeDouble();
+  const limits: number[] = [];
+  fake.runtime.download = async (_id, maxBytes) => {
+    limits.push(maxBytes);
+    if (limits.length > 1) throw Object.assign(new Error("huge.zip is larger than 100 MB, the most this app opens."), { statusCode: 502, code: "file_too_large", expose: true });
+    return { name: "notes.txt", mime: "text/plain", size: 11, body: new Blob(["hello ", "world"]).stream() };
+  };
+  const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fake.runtime, { background: false });
+  const headers = await login(app);
+  const file = await app.inject({ url: "/api/files/a.b", headers });
+  expect([file.statusCode, file.body, file.headers["content-length"]]).toEqual([200, "hello world", "11"]);
+  const tooLarge = await app.inject({ url: "/api/files/a.b", headers });
+  expect(tooLarge.statusCode).toBe(502);
+  expect(tooLarge.json()).toMatchObject({ code: "file_too_large", error: "huge.zip is larger than 100 MB, the most this app opens." });
+  expect(limits).toEqual([MAX_DOWNLOAD_BYTES, MAX_DOWNLOAD_BYTES]);
+  await app.close();
+});
+it("answers HEAD without reading the file and reports a stream that fails before its first byte", async () => {
+  const fake = runtimeDouble();
+  const cancel = vi.fn();
+  let fail = false;
+  fake.runtime.download = async () => ({ name: "notes.txt", mime: "text/plain", size: 5, body: new ReadableStream({
+    pull: controller => fail ? controller.error(Object.assign(new Error("notes.txt is larger than 100 MB, the most this app opens."), { statusCode: 502, code: "file_too_large", expose: true })) : new Promise(() => {}),
+    cancel,
+  }) });
+  const { app } = await createApp(config(), fake.runtime, { background: false });
+  const headers = await login(app);
+  // The response returns either way; the stalled Hermes read must also be cancelled.
+  const head = await app.inject({ method: "HEAD", url: "/api/files/a.b", headers });
+  expect([head.statusCode, head.headers["content-length"], head.body]).toEqual([200, "5", ""]);
+  expect(cancel.mock.calls).toEqual([[undefined]]);
+  fail = true;
+  const failed = await app.inject({ url: "/api/files/a.b", headers });
+  expect([failed.statusCode, failed.headers["content-type"], failed.headers["content-disposition"]]).toEqual([502, "application/json; charset=utf-8", undefined]);
+  expect(failed.json()).toMatchObject({ code: "file_too_large", error: "notes.txt is larger than 100 MB, the most this app opens." });
   await app.close();
 });
 it("preserves a native model confirmation request until the user explicitly confirms", async () => {

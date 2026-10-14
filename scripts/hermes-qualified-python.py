@@ -115,7 +115,7 @@ def activate_readonly(source, home):
     return python, selected
 
 
-def active_fingerprint():
+def active_fingerprint(dump=None):
     """Inspect metadata from the actual activated import path, including editable snapshots."""
     source = os.environ.get("HERMES_QUALIFIED_SOURCE")
     identity = source_identity(Path(source)) if source else None
@@ -209,7 +209,11 @@ def active_fingerprint():
             rows.append([relative, sha(data), len(data)])
         distributions.append([name.lower().replace("_", "-"), distribution.version, sorted(rows)])
     binary = Path(sys._base_executable).resolve()
-    return {"interpreterSha256": sha(binary.read_bytes()), "dependenciesSha256": sha(json.dumps(sorted(distributions), separators=(",", ":")).encode())}
+    rows = json.dumps(sorted(distributions), separators=(",", ":")).encode()
+    if dump is not None:
+        # Exactly the hashed rows, so two dumps diff to the package and file that differ.
+        with os.fdopen(os.open(dump, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output: output.write(rows)
+    return {"interpreterSha256": sha(binary.read_bytes()), "dependenciesSha256": sha(rows)}
 
 
 def fingerprint(python):
@@ -355,6 +359,7 @@ def main():
         command = sub.add_parser(name)
         command.add_argument("--source", required=True, type=Path)
         command.add_argument("--home", required=True, type=Path)
+        if name == "fingerprint": command.add_argument("--dump", type=Path)
     command = sub.add_parser("prepare")
     for name in ("source", "stage", "launcher", "installed-source", "installed-home"):
         command.add_argument("--" + name, required=True, type=Path)
@@ -365,7 +370,7 @@ def main():
     if args.action == "prepare": result = prepare(args.source, args.stage, args.launcher, args.installed_source, args.installed_home)
     elif args.action == "selection": result = selection(args.source, args.home)
     elif args.action == "fingerprint":
-        activate_readonly(args.source, args.home); result = active_fingerprint()
+        activate_readonly(args.source, args.home); result = active_fingerprint(args.dump)
     else:
         launch(args.descriptor, args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments); return
     print(json.dumps(result, sort_keys=True))

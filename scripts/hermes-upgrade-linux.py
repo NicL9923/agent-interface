@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -103,6 +104,7 @@ class Platform:
         for key in ("source", "hermesHome", "managedLauncher", "managedPython", "serviceEnvFile", "qualificationReceipt", "maintenanceFile", "stageRoot", "systemctl"):
             if not isinstance(self.config.get(key), str) or not Path(self.config[key]).is_absolute(): raise RuntimeError("Installer paths must be fixed and absolute: " + key)
         self.source, self.home = Path(self.config["source"]), Path(self.config["hermesHome"])
+        self.objects = self.source / ".git/objects"
         if self.source.is_symlink() or self.home.is_symlink(): raise RuntimeError("Source and Hermes home must be real directories")
         if not self.source.is_relative_to(self.home): raise RuntimeError("Managed source must be inside the shared Hermes home")
         if Path(self.config["stageRoot"]).is_relative_to(self.home): raise RuntimeError("Staging and backups must be outside the live Hermes home")
@@ -226,9 +228,14 @@ class Platform:
         return record
 
     def runtime(self, expected=None):
-        if self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR"):
+        descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
+        if descriptor:
             utility = Path(__file__).with_name("hermes-qualified-python.py")
-            value = json.loads(self.run([self.store_python(), "-I", str(utility), "fingerprint", "--source", str(self.source), "--home", str(self.home)], capture=True, timeout=180))
+            # The inspection keeps its hashed rows (package and file hashes only) to diff against the
+            # stage's on a mismatch. Every faithful copy of the Oct 14 install matched; only the
+            # real hook's rows could show why.
+            dump = self.stage / ("runtime-rows-" + uuid.uuid4().hex[:8] + ".json")
+            value = json.loads(self.run([self.store_python(), "-I", str(utility), "fingerprint", "--source", str(self.source), "--home", str(self.home), "--dump", str(dump)], capture=True, timeout=180))
         else:
             tested = self.env.get("HERMES_UPGRADE_QUALIFICATION_PYTHON")
             if not tested or not Path(tested).is_absolute(): raise RuntimeError("The tested managed interpreter must be fixed")
@@ -237,7 +244,10 @@ class Platform:
             spec = importlib.util.spec_from_file_location("upgrade_worker", Path(__file__).with_name("hermes-upgrade-worker.py"))
             worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
             value = worker.runtime_fingerprint(selected)
-        if expected is not None and value != expected: raise RuntimeError("Managed interpreter or dependencies differ from the qualified runtime")
+        if expected is not None and value != expected:
+            if value.get("interpreterSha256") != expected.get("interpreterSha256"): raise RuntimeError("The managed interpreter differs from the qualified runtime")
+            raise RuntimeError("Managed dependencies differ from the qualified runtime" + (". Its package rows are in the stage as " + dump.name if descriptor else ""))
+        if descriptor: dump.unlink(missing_ok=True)
         return value
 
     def sync(self):
@@ -256,12 +266,40 @@ with contextlib.redirect_stdout(sys.stderr):
     if not lock.acquire(): raise RuntimeError('A native updater already owns Hermes')
     try:
         ensure_tools_for_sync()
-        pm.sync_venv(explicit=True,project_root=root,evict_incompatible_plugins=False)
+        seed=None
+        if sys.argv[3]:
+            from pm.environments import install_state_dir, runtime_facts_path
+            from pm.lock import Facts
+            facts=Facts(runtime_facts_path(root),strict=True); prior=facts.get('venv') or {}
+            # Only where PM itself would seed from the prior lock; otherwise it uses the
+            # checkout's lock, as qualification did. The cold backup holds the original facts.
+            if prior.get('resolved_lock'):
+                seed=install_state_dir(root)/'agent-interface-qualified-uv.lock'
+                seed.write_bytes(Path(sys.argv[3]).read_bytes()); seed.chmod(0o600)
+                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=seed)
+        pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
+        if seed is not None:
+            # A sync with nothing to rebuild leaves the facts naming the temporary seed.
+            facts=Facts(runtime_facts_path(root),strict=True)
+            recorded=(facts.get('venv') or {}).get('resolved_lock')
+            if recorded and Path(recorded).resolve()==seed.resolve():
+                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=Path(prior['resolved_lock']))
+            seed.unlink()
         publish_launchers(root)
     finally: lock.release()
 print(json.dumps({'ok':True,'state':'synced'}))
 """
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source)], capture=True))
+        # Build exactly the extras qualification built. Left to its default, Hermes d97007c chose
+        # fewer and dropped 38 packages, discord.py among them.
+        descriptor = self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR")
+        qualified = json.loads(private(descriptor).read_text()) if descriptor else {}
+        # With plugin members, native PM seeds resolution from the prior generation's lock and
+        # takes the newest release wherever that lock no longer fits: on Oct 14, 2026 live took
+        # nemo-relay 0.10.1 where qualification had built 0.10.0. Seeded from the qualified
+        # lock instead, uv keeps every version it holds.
+        seed = Path(qualified["generation"]).parent / "workspace/uv.lock" if qualified.get("generation") else None
+        if seed is not None and not seed.is_file(): raise RuntimeError("The qualified dependency lock is missing")
+        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or "")], capture=True))
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
@@ -357,7 +395,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 if "ActiveState=inactive" not in state or "MainPID=0" not in state: raise RuntimeError("Native service did not stop cleanly")
 
     def archive(self, path, source, excluded=None):
-        with tarfile.open(path, "w:gz", dereference=False) as archive:
+        # Fast compression: most bytes are packages and binaries that barely shrink at higher levels.
+        with tarfile.open(path, "w:gz", compresslevel=1, dereference=False) as archive:
             archive.add(source, arcname=source.name, filter=lambda entry: None if excluded and (entry.name == excluded or entry.name.startswith(excluded + "/")) else entry)
         path.chmod(0o600)
         with tarfile.open(path) as archive: archive.getmembers()
@@ -369,11 +408,16 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.gateway(draining=True)
         # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
         # room, before anything is written: on Oct 13, 2026 a full disk stopped a backup mid-archive.
-        # The budget errs high. Candidate objects land in the live repository and then in the source
-        # archive, so they count twice; the checkout and dependency generation, as built in staging,
-        # land in the live home; a reserve covers Hermes's own writes. Archives and the temporary
-        # object pack use the staging filesystem, which may differ from the live one.
-        archives = self.readable(self.source) + self.readable(self.home, excluded=self.source)
+        # The budget errs high. Candidate objects are packed in staging, then land in the live
+        # repository; the checkout and
+        # dependency generation, as built in staging, land in the live home; a reserve covers
+        # Hermes's own writes. Archives and the temporary object pack use the staging filesystem,
+        # which may differ from the live one.
+        # Rollback can rebuild a staged repair blob from its working file only if they match.
+        staged = set(self.git(self.source, "diff", "--cached", "--name-only", "-z").split("\0")) - {""}
+        mixed = sorted(staged & set(self.git(self.source, "diff", "--name-only", "-z").split("\0")))
+        if mixed: raise RuntimeError("Staged Hermes repair files have further unstaged edits: " + ", ".join(mixed) + ". Stage or unstage them fully before updating")
+        archives = self.readable(self.source, excluded=self.objects) + self.readable(self.home, excluded=self.source)
         objects = tree_bytes(self.target / ".git")
         install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
         staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
@@ -389,7 +433,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.control("stop")
             self.save(dict(record, phase="stopped"))
             self.backup_dir.mkdir(mode=0o700)
-            hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source),
+            # Git's object store stays out of the archive: installation only adds objects, so the
+            # live store still holds the baseline at rollback. It was 6 GB of a 29-minute backup.
+            hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source, str(self.objects.relative_to(self.source.parent))),
                 "home.tar.gz": self.archive(self.backup_dir / "home.tar.gz", self.home, str(self.source.relative_to(self.home.parent)))}
             protected = {}
             for filename, expected in record["baseline"]["settings"].items():
@@ -447,22 +493,42 @@ print(json.dumps({'ok':True,'state':'synced'}))
             return rows
         before = metadata()
         if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate: raise RuntimeError("Qualified candidate changed before object preparation")
-        pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
-        try:
-            with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-                def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
-                subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"],
-                    input=(self.candidate + "\n").encode(), stdout=output, stderr=subprocess.PIPE, env=offline,
-                    check=True, timeout=180, preexec_fn=bounded_pack)
-                output.flush(); os.fsync(output.fileno())
-            with pack.open("rb") as payload:
-                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
-            subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
-            if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
-        finally:
-            pack.unlink(missing_ok=True)
+        # Copy exactly what the installed store lacks: a full copy each time grew it by 1 GB per
+        # update, and a partial clone can lack old objects the candidate's history still reaches.
+        # Enumerate what the installed store holds rather than look objects up: git 2.43 dies on
+        # a lookup of an object a promisor clone lacks when lazy fetch is off, instead of
+        # reporting it missing. Names are held as 20-byte keys, about 70 MB for a million.
+        def listed(repository, *args):
+            process = subprocess.Popen(["git", "-C", str(repository), *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+            timer = threading.Timer(600, process.kill); timer.start()
+            try:
+                yield from (bytes.fromhex(line.strip().decode()) for line in process.stdout)
+                if process.wait(timeout=30): raise RuntimeError("Listing the qualified candidate's objects failed")
+            finally:
+                timer.cancel()
+                if process.poll() is None: process.kill(); process.wait(timeout=10)
+                process.stdout.close()
+        present = set(listed(self.source, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"))
+        # On the Hermes host: 564,000 objects present, 295 missing, 10 seconds, before any downtime.
+        missing = [name.hex().encode() + b"\n" for name in listed(self.target, "rev-list", "--objects", "--no-object-names", self.candidate) if name not in present]
+        del present
+        if missing:
+            pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
+            try:
+                with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                    def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
+                    subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout"],
+                        input=b"".join(missing), stdout=output, stderr=subprocess.PIPE, env=offline,
+                        check=True, timeout=180, preexec_fn=bounded_pack)
+                    output.flush(); os.fsync(output.fileno())
+                with pack.open("rb") as payload:
+                    subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+            finally:
+                pack.unlink(missing_ok=True)
+        subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=600)
+        if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
 
     def install(self):
         record = self.load()
@@ -531,8 +597,15 @@ print(json.dumps({'ok':True,'state':'synced'}))
         for name, expected in record["archives"].items():
             if digest(private(self.backup_dir / name)) != expected: raise RuntimeError("Cold recovery archive integrity failed before restoring")
         self.control("stop")
-        if self.source.exists(): shutil.rmtree(self.source)
+        if self.source.exists():
+            git_dir = self.objects.parent
+            keep_git = git_dir.is_dir() and not git_dir.is_symlink()
+            for path in [*self.source.iterdir(), *(git_dir.iterdir() if keep_git else ())]:
+                if path == self.objects or path == git_dir and keep_git: continue
+                if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
+                else: path.unlink()
         self.extract("source.tar.gz", self.source.parent)
+        self.restore_baseline_objects(record["baseline"]["source"][0])
         # Restore managed generations/selections and tool binaries only. Never
         # restore .env, auth.json, profile OAuth files or sessions from home.tar.gz.
         for name in ("installs", "tools"):
@@ -554,6 +627,36 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if self.source_state() != tuple(record["baseline"]["source"]): raise RuntimeError("Rollback source or repair does not match the cold snapshot")
         self.save(dict(record, phase="restored"))
         self.control("start")
+
+    def restore_baseline_objects(self, revision):
+        """The kept object store must hold the whole baseline tree, offline. A crash or a damaged
+        store can lose objects; the staged repository holds the baseline's full history."""
+        offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+        check = ["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", "--no-walk", revision]
+        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180).returncode != 0:
+            for name in ("pack", "info"): (self.objects / name).mkdir(parents=True, exist_ok=True)
+            packer = subprocess.Popen(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+            try:
+                packer.stdin.write((revision + "\n").encode()); packer.stdin.close()
+                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=packer.stdout,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=900)
+                if packer.wait(timeout=60): raise RuntimeError("The staged repository cannot supply the baseline's objects")
+            finally:
+                if packer.poll() is None: packer.kill(); packer.wait(timeout=10)
+                packer.stdout.close()
+            subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+        # The repair's staged additions are in no commit. Their blobs equal the archived working
+        # files, because the repair is applied to the index and working tree together.
+        entries = [row.partition(b"\t") for row in subprocess.check_output(["git", "-C", str(self.source), "ls-files", "-s", "-z"],
+            env=offline, timeout=180).split(b"\0") if row]
+        entries = [(meta.split()[1].decode(), path.decode()) for meta, _, path in entries if not meta.startswith(b"160000")]
+        found = subprocess.run(["git", "-C", str(self.source), "cat-file", "--batch-check=%(objectname)"], input="".join(oid + "\n" for oid, _ in entries).encode(),
+            capture_output=True, env=offline, check=True, timeout=180).stdout.decode().splitlines()
+        for (oid, path), line in zip(entries, found, strict=True):
+            if line != oid + " missing": continue
+            if self.git(self.source, "hash-object", "-w", "--", path).strip() != oid:
+                raise RuntimeError("A staged repair file is missing from Git and its working copy differs: " + path)
 
     def recovery_guard(self):
         record = self.load()

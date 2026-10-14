@@ -5,9 +5,10 @@
                    configuration from the last successful release and live state,
                    then run the guarded tool's no-change preflight.
   activate NAME    Run the guarded activation for a prepared release, then record it.
-  record NAME      Verify an activated release and write the production receipt and
-                   ledger entry for a docs PR. Activation runs this; rerun it if a
-                   post-release check failed and the cause is fixed.
+  record NAME      Verify an activated release, write the production receipt and
+                   ledger entry, then open their docs PR from a temporary worktree of
+                   origin/main. Activation runs this; rerun it if a post-release check
+                   failed and the cause is fixed, or to retry an unopened docs PR.
   verify NAME      Read-only public and service checks for an activated release.
   discard NAME     Remove a prepared release that was never activated.
   recover NAME     After an outside Hermes update disabled the add-on, install the fresh
@@ -23,7 +24,6 @@ import argparse
 import contextlib
 import datetime
 import fcntl
-import hashlib
 import json
 import re
 import shlex
@@ -32,6 +32,8 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
+
+from deploy_common import OPTIMIZED_REFUSAL, fence
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = ROOT / ".private/releases"
@@ -151,9 +153,46 @@ maintenance was clear. A signed-in household session was not exercised.
 """
 
 
+LEDGER_HEADING = "# Validation ledger\n"
+
+
+def insert_ledger_entry(ledger, entry, receipt_name):
+    """Add a release entry under the ledger heading, once per release.
+
+    Keyed by the release's receipt, not its heading: two releases of one commit on one
+    day share a heading but each has its own receipt and entry.
+    """
+    text = ledger.read_text()
+    fence(text.startswith(LEDGER_HEADING), "validation ledger starts with its heading")
+    if f"(evidence/{receipt_name})" in text:
+        return False
+    ledger.write_text(LEDGER_HEADING + "\n" + entry + text[len(LEDGER_HEADING):])
+    return True
+
+
+def docs_branch(manifest):
+    # One branch per release, so a second release of the same commit gets its own PR.
+    return f"docs/record-{manifest['name']}"
+
+
+def docs_pull_request(manifest):
+    """Title and body of the PR that records an activated release, shaped like earlier ones."""
+    pull = f"#{manifest['pullRequest']}" if manifest.get("pullRequest") else f"`{manifest['commit'][:7]}`"
+    title = f"Record the {pull.strip('`')} deployment"
+    qualification = ("It activated a fresh qualification receipt." if manifest["qualification"] == "new"
+                     else "It reused the existing qualification receipt.")
+    helper = (" It was prepared with `--accept-helper-change`, so the worker hooks now run this release's helper."
+              if manifest.get("helperChanged") else "")
+    body = (f"Records the production release of {pull} (`{manifest['name']}`). It is the activation receipt "
+            f"and validation ledger entry written by `release-app.py activate`.\n\n"
+            f"{qualification}{helper} Hermes stayed at `{manifest['hermesRevision'][:8]}`.\n\n"
+            "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n")
+    return title, body
+
+
 # Host and repository steps.
 
-REMOTE_PRELUDE = """
+REMOTE_PRELUDE = OPTIMIZED_REFUSAL + """
 import hashlib, json, os, runpy, shutil, subprocess, sys
 from pathlib import Path
 os.umask(0o077)
@@ -247,7 +286,12 @@ base = Path(PAYLOAD["appBase"]); operations = base / "operations"
 release = (base / "current").resolve(strict=True)
 tools = release / ".agents/tools"
 helper = tools / "recover-app-after-native-update.py"
-fingerprint = runpy.run_path(str(helper))["fingerprint"]
+# The helper imports its shared host steps from its own directory.
+sys.path.insert(0, str(tools))
+helper_globals = runpy.run_path(str(helper))
+fingerprint = helper_globals["fingerprint"]
+# Pin the shared steps the live helper runs; releases before deploy_common.py exec'd these.
+shared_functions = helper_globals.get("SHARED_FUNCTIONS", "deploy-app-release.py")
 # The live release's own deploy configuration carries every installer setting.
 prior = json.loads((operations / release.name / "deploy-config.json").read_text())
 assert prior["release"] == str(release), "The live release has no deploy configuration of its own."
@@ -270,7 +314,7 @@ else:
         newQualificationReceipt=PAYLOAD["receipt"],
         profileHashes={item: fingerprint(item) for item in prior["profileHashes"]},
         preservedFiles={str(item): fingerprint(item) for item in preserved if os.path.lexists(item)},
-        deployFunctionsSha256=fingerprint(tools / "deploy-app-release.py"))
+        deployFunctionsSha256=fingerprint(tools / shared_functions))
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps(config, indent=2) + "\\n"); path.chmod(0o600)
 
@@ -330,10 +374,14 @@ finish({"discarded": [str(release), str(operation)]})
 """
 
 
+def remote_source(program, payload):
+    """The exact Python source a host program runs as, with its prelude and payload."""
+    return REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
+
+
 def remote(host, program, payload, timeout=900):
     """Run a Python program on the host with a JSON payload; return its final JSON line."""
-    source = REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python3", "-"], input=source,
+    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python3", "-"], input=remote_source(program, payload),
                           capture_output=True, text=True, timeout=timeout)
     if done.returncode:
         raise SystemExit(f"Host step failed:\n{(done.stderr or done.stdout).strip()[-3000:]}")
@@ -352,8 +400,9 @@ def guarded(host, manifest, check):
     return json.loads(output.splitlines()[-1])
 
 
-def git(*args, cwd=ROOT):
-    return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
+def git(*args, cwd=None):
+    # ROOT is read per call, never bound as a default, so a test's checkout is the one used.
+    return subprocess.check_output(["git", *args], cwd=cwd or ROOT, text=True).strip()
 
 
 def manifest_path(name):
@@ -395,7 +444,7 @@ def build_locally(commit, work):
             raise SystemExit("The local build failed:\n" + (log.stdout + log.stderr)[-3000:])
         return archive["sha256"], built_web_version(log.stdout)
     finally:
-        git("worktree", "remove", "--force", str(checkout))
+        git("worktree", "remove", "--force", "--force", str(checkout))
 
 
 def prepare(args):
@@ -432,7 +481,7 @@ def prepare(args):
         "qualificationReceipt": prior["qualificationReceipt"], "hermesRevision": facts["hermesRevision"],
         "repairSha256": facts["repairSha256"]})
     built["webBuild"] = built_web_version(built["buildLog"])
-    manifest["webBuild"] = built["webBuild"]
+    manifest.update(webBuild=built["webBuild"], helperChanged=built["helperSha256"] != prior["fixedHelperSha256"])
     save_manifest(manifest)
     problems = preparation_problems(facts, built, local_web_build=local_web_build,
                                     qualification=args.qualification, accept_helper_change=args.accept_helper_change)
@@ -516,36 +565,101 @@ def activate(args):
         raise SystemExit(held_for_review())
     manifest.update(status="activated", guardedResult=result)
     save_manifest(manifest)
-    record_release(manifest)
+    record_release(manifest, docs_pr=not args.no_docs_pr)
 
 
-def record_release(manifest):
-    """Verify an activated release, then write its receipt and ledger entry once."""
+def write_records(root, manifest):
+    """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing."""
+    (root / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
+    insert_ledger_entry(root / "docs/ValidationLedger.md", manifest["ledgerEntry"], manifest["receiptName"])
+
+
+def record_release(manifest, docs_pr=True):
+    """Verify an activated release, write its receipt and ledger entry once, then open its docs PR."""
     checks, _ = verify_release(manifest)
     print(json.dumps(checks, indent=2))
     if not all(checks.values()):
         raise SystemExit(f"Activated, but a post-release check failed. Investigate, then run: "
                          f"release-app.py record {manifest['name']}")
-    day = datetime.datetime.now(datetime.timezone.utc).date()
-    receipt_name = f"production-{manifest['name']}.json"
-    (ROOT / "docs/evidence" / receipt_name).write_text(
-        json.dumps(production_receipt(manifest, manifest["guardedResult"], checks), indent=2) + "\n")
-    ledger = ROOT / "docs/ValidationLedger.md"
-    text = ledger.read_text()
-    heading = "# Validation ledger\n"
-    assert text.startswith(heading)
-    ledger.write_text(heading + "\n" + ledger_entry(manifest, receipt_name, day) + text[len(heading):])
+    if "ledgerEntry" not in manifest:
+        # Saved before writing, so a rerun on a later day keeps the same ledger heading,
+        # and the docs PR and any retry use these exact records.
+        day = datetime.datetime.now(datetime.timezone.utc).date()
+        receipt_name = f"production-{manifest['name']}.json"
+        manifest.update(receiptName=receipt_name, ledgerEntry=ledger_entry(manifest, receipt_name, day),
+                        productionReceipt=json.dumps(production_receipt(manifest, manifest["guardedResult"], checks), indent=2) + "\n")
+        save_manifest(manifest)
+    receipt_name = manifest["receiptName"]
+    write_records(ROOT, manifest)
     manifest["status"] = "recorded"
     save_manifest(manifest)
-    print(f"Wrote docs/evidence/{receipt_name} and a ledger entry. Open a docs PR to record the release.")
+    print(f"Wrote docs/evidence/{receipt_name} and a ledger entry.")
+    if docs_pr:
+        open_docs_pull_request(manifest)
+
+
+def gh(*args):
+    return subprocess.run(["gh", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def open_docs_pull_request(manifest):
+    """Commit the records on a branch from the latest origin/main and open, never merge, its PR.
+
+    Works in a temporary worktree under .private, so the operator's checkout is untouched. Safe to rerun: an
+    existing PR, pushed branch or recorded entry on main is reused. Failure only warns; the
+    release stays recorded.
+    """
+    branch = docs_branch(manifest)
+    title, body = docs_pull_request(manifest)
+    try:
+        existing = gh("pr", "list", "--head", branch, "--state", "all", "--json", "url", "--jq", ".[].url")
+        if existing:
+            print(f"The docs PR already exists: {existing.splitlines()[0]}")
+            return
+        git("fetch", "--quiet", "origin", "main")
+        if not git("ls-remote", "--heads", "origin", branch):
+            # Inside the checkout's ignored .private, so it lands on the checkout's own disk.
+            worktrees = ROOT / ".private/docs-pr-worktrees"
+            worktrees.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=worktrees) as temporary:
+                checkout = Path(temporary) / "records"
+                git("worktree", "add", "--quiet", "--detach", str(checkout), "origin/main")
+                try:
+                    write_records(checkout, manifest)
+                    git("add", "docs/ValidationLedger.md", "docs/evidence/" + manifest["receiptName"], cwd=checkout)
+                    if not git("status", "--porcelain", cwd=checkout):
+                        print("origin/main already records this release; no docs PR is needed.")
+                        return
+                    git("commit", "--quiet", "-m", title, cwd=checkout)
+                    git("push", "--quiet", "origin", "HEAD:refs/heads/" + branch, cwd=checkout)
+                finally:
+                    # A second --force also removes a worktree git left locked by an interrupted add.
+                    git("worktree", "remove", "--force", "--force", str(checkout))
+        url = gh("pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body)
+        print(f"Opened the docs PR: {url.splitlines()[-1]}")
+    except Exception as error:
+        detail = (getattr(error, "stderr", None) or str(error)).strip().splitlines()
+        print(f"Warning: the docs PR was not opened ({detail[-1] if detail else type(error).__name__}). "
+              f"The release is recorded and its records are in this checkout.\n"
+              f"Retry with: release-app.py record {manifest['name']}\n"
+              f"Or by hand:\n"
+              f"  git fetch origin main && git switch -c {branch} origin/main\n"
+              f"  git add docs/ValidationLedger.md docs/evidence/{manifest['receiptName']}\n"
+              f"  git commit -m {shlex.quote(title)} && git push -u origin {branch}\n"
+              f"  gh pr create --base main --head {branch} --title {shlex.quote(title)}")
 
 
 def record(args):
     manifest = load_manifest(args.name)
+    if manifest["status"] == "recorded" and "ledgerEntry" in manifest:
+        # Already verified and written; only its docs PR can be outstanding.
+        if not args.no_docs_pr:
+            open_docs_pull_request(manifest)
+        return
     if manifest["status"] != "activated":
         raise SystemExit(f"{args.name} is {manifest['status']}; only activated releases are recorded.")
     manifest["host"] = args.host or manifest["host"]
-    record_release(manifest)
+    record_release(manifest, docs_pr=not args.no_docs_pr)
 
 
 def verify(args):
@@ -627,6 +741,9 @@ def main(argv=None):
         if name == "discard":
             step.add_argument("--include-qualification", action="store_true",
                               help="also discard a qualification receipt the stage holds")
+        if name in ("activate", "record"):
+            step.add_argument("--no-docs-pr", action="store_true",
+                              help="write the records locally without opening their docs PR")
         step.set_defaults(run=run)
     step = commands.add_parser("recover", help="restore the add-on after an outside Hermes update")
     step.add_argument("name", help="staged release of the live commit, qualified against the installed Hermes")

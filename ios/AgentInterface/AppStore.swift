@@ -23,6 +23,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var appUnavailable = false
   @Published var interruptionReviewed = false
   @Published var authConfig: AuthConfig?
+  @Published var restoring = false
   @Published var sessionExpired = false
   @Published var notificationStatus = "Notifications are off"
   @Published var openedFile: PreviewFile?
@@ -31,6 +32,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var upgradeError: String?
   @Published var upgradeInstallUncertain = false
   private var upgradeRequest: UpgradeInstallRequest?
+  /// Builds the client for a server address. Tests substitute a client with a mock transport.
+  var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
   private var draftTask: Task<Void, Never>?
@@ -80,22 +83,46 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
 
+  /// Reopens the saved server. A stored sign-in goes straight to bootstrap, because
+  /// `/auth/config` only matters for signing in and an outage there must not strand the person.
   func restore() async {
-    guard !host.isEmpty else { return }
+    guard !host.isEmpty, !restoring else { return }
+    restoring = true
+    defer { restoring = false }
     do {
-      let url = try ConnectionAddress.parse(host)
-      api = APIClient(baseURL: url)
-      authConfig = try await api?.publicGet("/auth/config")
-      guard authConfig?.nativeAuthVersion == 1 else {
-        throw APIError(
-          message: "Update this app server to a version with native iOS sign-in support.",
-          status: 409)
-      }
+      if api == nil { api = makeClient(try ConnectionAddress.parse(host)) }
+      error = nil
       if api?.token != nil {
         await refreshBootstrap()
-        startPolling()
+        if api?.token != nil { startPolling() }
+      } else {
+        try await ensureAuthConfig()
       }
     } catch { report(error) }
+  }
+  /// Retries a launch that could not reach the server. Called when the app returns to the foreground.
+  func resume() async {
+    if bootstrap != nil {
+      if !sessionExpired { startPolling() }
+    } else if api != nil, !sessionExpired {
+      await restore()
+    }
+  }
+  /// Sign-in needs the server's native-auth version. Fetch it when needed instead of at launch.
+  @discardableResult func ensureAuthConfig() async throws -> AuthConfig {
+    if let authConfig { return authConfig }
+    guard let requested = api else {
+      throw APIError(message: "Connect to an app server first.", status: 0)
+    }
+    let config: AuthConfig = try await requested.publicGet("/auth/config")
+    guard api === requested else { throw CancellationError() }
+    guard config.nativeAuthVersion == 1 else {
+      throw APIError(
+        message: "Update this app server to a version with native iOS sign-in support.",
+        status: 409)
+    }
+    authConfig = config
+    return config
   }
   func connect() async {
     guard !loading else { return }
@@ -132,9 +159,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     let authGeneration = generation
     do {
-      guard authConfig?.nativeAuthVersion == 1 else {
-        throw APIError(message: "Update the app server to support native iOS sign-in.", status: 409)
-      }
+      try await ensureAuthConfig()
       let pkce = try PKCE()
       var url = URLComponents(url: try api.url("/native/sign-in"), resolvingAgainstBaseURL: false)!
       url.queryItems = [
@@ -276,8 +301,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     do {
       let remote: Draft? = try await api.get("/bots/\(APIClient.component(id))/draft")
       guard selectionGeneration == selectedGeneration else { return }
-      if cached?.dirty != true { draft = remote ?? cached ?? Draft() }
+      draft = loadedDraft(remote, botId: id)
       draftReady = true
+      syncRecoveredDraft(botId: id)
       await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
@@ -299,8 +325,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       conversation = value
       conversationCache[id] = value
       if !draftReady {
-        draft = value.draft ?? Draft()
+        draft = loadedDraft(value.draft, botId: id)
         draftReady = true
+        syncRecoveredDraft(botId: id)
       }
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration {
@@ -330,6 +357,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         let _: Draft = try await api.write(
           "/bots/\(APIClient.component(botId))/draft", snapshot, method: "PUT")
         guard currentGeneration == self.generation else { return }
+        self.save(Optional<Bool>.none, self.key("recovered", botId))
         if self.draft == snapshot && self.selectedBotId == botId {
           self.draft.dirty = false
           self.persistDraft()
@@ -422,11 +450,55 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
   }
-  func acknowledgeInterruptedSubmission() {
+  /// Gives up on a send the server never confirmed, for example one that was lost before it
+  /// arrived. The message may still show up, so its text and attachments go back into the
+  /// draft of the assistant it was written for, where the person decides whether to send again.
+  func discardUnconfirmedSubmission() {
+    guard let old = pending, !sending, let localKey = key("draft", old.botId) else { return }
+    let open = selectedBotId == old.botId
+    // While the open assistant's draft is still loading, the in-memory draft is not its draft.
+    var target = Self.draft(
+      restoring: old, into: open && draftReady ? draft : read(localKey) ?? Draft())
+    target.dirty = true
+    // Durable first: a dirty local draft wins over any draft read still in flight.
+    save(target, localKey)
+    save(true, key("recovered", old.botId))
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
-    interruptionReviewed = true
+    if open {
+      if draftReady { updateDraft(target) } else { draft = target }
+    } else if let api {
+      // Best effort: the dirty local draft already wins the next time that assistant opens.
+      let recoveredKey = key("recovered", old.botId)
+      Task {
+        let saved: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", target, method: "PUT")
+        if saved != nil { self.save(Optional<Bool>.none, recoveredKey) }
+      }
+    }
+  }
+  /// A draft recovered by Discard is unsent work that may not have reached the server. Sync it
+  /// once loaded. Any other leftover dirty draft is shown but never pushed on its own, because
+  /// the server's copy may be newer, for example emptied by a send from another device.
+  private func syncRecoveredDraft(botId: String) {
+    let marked: Bool? = read(key("recovered", botId))
+    if marked == true, draft.dirty == true { updateDraft(draft) }
+  }
+  /// The draft to show once a read returns: unsent local edits win over the server's copy.
+  private func loadedDraft(_ remote: Draft?, botId: String) -> Draft {
+    let local: Draft? = read(key("draft", botId))
+    if let local, local.dirty == true { return local }
+    return remote ?? local ?? Draft()
+  }
+  /// Puts a pending message back in front of whatever the person has typed since.
+  static func draft(restoring old: PendingSubmission, into current: Draft) -> Draft {
+    var next = current
+    if !next.text.contains(old.text) {
+      next.text = [old.text, next.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+    next.attachments =
+      old.attachments + next.attachments.filter { file in !old.attachments.contains { $0.id == file.id } }
+    return next
   }
   func reconnect() async {
     guard let api else { return }
@@ -568,17 +640,29 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       } catch { if currentGeneration == generation { report(error) } }
     }
   }
-  @discardableResult func signOut() async -> Bool {
+  /// Revokes this device's server session, then clears it locally. If the server cannot be
+  /// reached the token is kept and this returns false, unless `localOnly` accepts that the
+  /// server-side session stays valid until it expires.
+  @discardableResult func signOut(localOnly: Bool = false) async -> Bool {
     persistDraft()
     if let api, api.token != nil {
+      var revoked = true
       do { let _: EmptyResponse = try await api.write("/auth/logout", [String: String]()) } catch {
-        self.error =
-          "Sign-out could not be completed. Reconnect and retry so this device's server session and notifications can be revoked. \(error.localizedDescription)"
-        return false
+        // A session the server already rejected has nothing left to revoke.
+        if !((error as? APIError)?.isSessionExpired ?? false) { revoked = false }
+        if !revoked && !localOnly {
+          self.error =
+            "Sign-out could not be completed. Reconnect and retry so this device's server session and notifications can be revoked. \(error.localizedDescription)"
+          return false
+        }
       }
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
       api.token = nil
       api.csrf = nil
+      if !revoked {
+        self.error =
+          "Signed out on this device only. The server could not be reached, so this device's session stays valid there until it expires, and notifications may still be delivered. Sign in on that server again to revoke it."
+      }
     }
     pollTask?.cancel()
     draftTask?.cancel()
@@ -664,16 +748,18 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
   }
-  func changeConnection() async {
-    if await signOut() {
-      api = nil
-      authConfig = nil
-    }
+  /// Returns false when the server could not be reached to revoke the session. The caller
+  /// then asks before repeating with `localOnly`, which still lets the person leave.
+  @discardableResult func changeConnection(localOnly: Bool = false) async -> Bool {
+    guard await signOut(localOnly: localOnly) else { return false }
+    api = nil
+    authConfig = nil
+    return true
   }
   func report(_ error: Error) {
     if error is CancellationError { return }
     self.error = error.localizedDescription
-    if let apiError = error as? APIError, apiError.status == 401 {
+    if let apiError = error as? APIError, apiError.isSessionExpired {
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
       pollTask?.cancel()

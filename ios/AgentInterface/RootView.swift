@@ -89,6 +89,7 @@ struct RootView: View {
 struct ConnectionView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
+  @State private var changeServerOffline = false
   var body: some View {
     NavigationStack {
       ScrollView {
@@ -135,13 +136,32 @@ struct ConnectionView: View {
               }
             }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.signingIn)
               .accessibilityIdentifier("householdSignIn")
+            Button {
+              Task { await store.restore() }
+            } label: {
+              HStack {
+                if store.restoring { ProgressView() }
+                Text(store.restoring ? "Checking server…" : "Retry connection").frame(
+                  maxWidth: .infinity)
+              }
+            }.buttonStyle(.bordered).controlSize(.large).disabled(store.restoring || store.signingIn)
+              .accessibilityIdentifier("retryConnection")
             if store.authConfig?.localDevAuth == true {
               Text(
                 "This development server also offers local test accounts in the sign-in browser."
               ).font(.footnote).foregroundStyle(.secondary)
             }
-            Button("Change server") { Task { await store.changeConnection() } }.disabled(
-              store.signingIn)
+            Button("Change server") {
+              Task { if !(await store.changeConnection()) { changeServerOffline = true } }
+            }.disabled(store.signingIn).accessibilityIdentifier("changeServer")
+              .confirmationDialog(
+                "The server didn't confirm sign-out, so it may be unreachable. If you change servers anyway, this device forgets its sign-in, but the session stays valid on the server until it expires.",
+                isPresented: $changeServerOffline, titleVisibility: .visible
+              ) {
+                Button("Change server anyway", role: .destructive) {
+                  Task { await store.changeConnection(localOnly: true) }
+                }
+              }
           }
           if let error = store.error { ErrorBanner(message: error, dismiss: { store.error = nil }) }
           Text(
