@@ -634,6 +634,25 @@ class PlatformTests(unittest.TestCase):
         linux.Platform.sync(self.platform)
         self.assertEqual(json.loads(calls.read_text())[2]["extras"], ["all", "discord"])
 
+    def test_dependency_mismatch_saves_the_live_package_rows_in_the_stage(self):
+        descriptor = self.stage / "qualified-runtime.json"
+        descriptor.write_text("{}"); descriptor.chmod(0o600)
+        self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
+        self.platform.store_python = lambda: "/usr/bin/python3"
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return json.dumps({"interpreterSha256": "same", "dependenciesSha256": "live"})
+        self.platform.run = run
+        with self.assertRaisesRegex(RuntimeError, r"^Managed dependencies differ from the qualified runtime\. Its package rows are in the stage as runtime-mismatch-[0-9a-f]{8}\.json$"):
+            linux.Platform.runtime(self.platform, {"interpreterSha256": "same", "dependenciesSha256": "qualified"})
+        self.assertEqual(calls[1][:-2], calls[0])
+        self.assertEqual(Path(calls[1][-1]).parent, self.stage)
+        calls.clear()
+        with self.assertRaisesRegex(RuntimeError, "^The managed interpreter differs"):
+            linux.Platform.runtime(self.platform, {"interpreterSha256": "other", "dependenciesSha256": "live"})
+        self.assertEqual(len(calls), 1)
+
     def test_private_config_and_fixed_stage_paths_are_required(self):
         self.config.chmod(0o644)
         with self.assertRaises(RuntimeError): linux.Platform(self.config, self.environment)
