@@ -219,10 +219,10 @@ class Activation(unittest.TestCase):
     def evidence(self):
         return list((self.root / "docs/evidence").iterdir())
 
-    def activate(self, guarded, checks):
+    def activate(self, guarded, checks, *options):
         release_app.guarded = guarded
         release_app.verify_release = lambda manifest: (checks, None)
-        release_app.main(["activate", self.NAME])
+        release_app.main(["activate", self.NAME, *(options or ["--no-docs-pr"])])
 
     def test_records_a_verified_release(self):
         self.activate(lambda host, manifest, check: {"webBuild": "b" * 16}, {"maintenanceCleared": True})
@@ -259,11 +259,40 @@ class Activation(unittest.TestCase):
             self.activate(lambda *_, **__: {"webBuild": "b" * 16}, {"maintenanceCleared": False})
         self.assertEqual((self.status(), self.evidence()), ("activated", []))
         release_app.verify_release = lambda manifest: ({"maintenanceCleared": True}, None)
-        release_app.main(["record", self.NAME])
+        release_app.main(["record", self.NAME, "--no-docs-pr"])
         self.assertEqual(self.status(), "recorded")
         self.assertEqual(len(self.evidence()), 1)
+        # Recording again only retries the docs PR; it never writes a second entry.
+        release_app.main(["record", self.NAME, "--no-docs-pr"])
+        self.assertEqual(len(self.evidence()), 1)
+        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text().count("app release 7fac68e"), 1)
+
+    def test_rerecording_an_interrupted_record_keeps_one_ledger_entry(self):
+        # A record that wrote its files but died before saving its status reruns as activated.
         with self.assertRaises(SystemExit):
-            release_app.main(["record", self.NAME])
+            self.activate(lambda *_, **__: {"webBuild": "b" * 16}, {"maintenanceCleared": False})
+        release_app.verify_release = lambda manifest: ({"maintenanceCleared": True}, None)
+        original = release_app.save_manifest
+        def crash_on_recorded(manifest):
+            original(manifest)
+            if manifest["status"] == "recorded":
+                raise KeyboardInterrupt
+        release_app.save_manifest = crash_on_recorded
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                release_app.main(["record", self.NAME, "--no-docs-pr"])
+        finally:
+            release_app.save_manifest = original
+        release_app.save_manifest({**release_app.load_manifest(self.NAME), "status": "activated"})
+        # Rerun on a later day: the saved entry keeps its heading instead of adding a new one.
+        original_entry = release_app.ledger_entry
+        release_app.ledger_entry = lambda *args: "## October 2 app release 7fac68e\n"
+        try:
+            release_app.main(["record", self.NAME, "--no-docs-pr"])
+        finally:
+            release_app.ledger_entry = original_entry
+        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text().count("app release 7fac68e"), 1)
+        self.assertEqual(self.status(), "recorded")
 
 
 class RecoveryCommand(unittest.TestCase):

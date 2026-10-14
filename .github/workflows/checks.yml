@@ -64,6 +64,7 @@ jobs:
           python3 tests/recovery_app_test.py
           python3 tests/deploy_common_test.py
           python3 tests/host_programs_test.py
+          python3 tests/release_docs_pr_test.py
   native:
     name: iOS unit tests
     runs-on: macos-26

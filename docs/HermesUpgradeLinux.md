@@ -377,3 +377,9 @@ Cutover guards in the release tools are `fence(condition, why)` calls, not `asse
 line ends with `Stopped at fence: why`. Host programs sent as source keep their `assert`
 guards, and the shared refusal that starts each one exits before any work when assertions are
 disabled. Native one-line calls run with `-I`, which already ignores `PYTHONOPTIMIZE`.
+
+After a successful activation, `release-app.py` records the release itself. It writes the
+production receipt and ledger entry, then commits them on `docs/record-SHORTSHA-release` from
+the latest `origin/main` in a temporary worktree, pushes and opens the docs PR for review.
+Reruns reuse an existing PR, pushed branch or recorded entry. A git or gh failure leaves the
+release recorded and prints the manual steps.
