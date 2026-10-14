@@ -360,3 +360,33 @@ adds objects, so rollback keeps the live store, replaces everything else from th
 then proves the baseline tree is complete offline. If a crash or damage lost objects, rollback
 copies the baseline's history back from the staged repository first. On Oct 14, 2026 the backup
 archived a 6.3 GB object store at full compression, which took 29 of the 31 minutes Hermes was down.
+
+## App release tooling
+
+App releases and native recovery run from `.agents/tools`. The bootstrap, guarded deploy
+and recovery tools share one module, `deploy_common.py`, for commands under the held update
+claim, user systemd, readiness, Google and gateway checks. Each tool imports it from its own
+directory. Recovery refuses unless its SHA256 matches the `deployFunctionsSha256` that its
+read-only check pinned. Every native call sets `HERMES_HOME` to the configured home before
+Hermes bootstrap pins the process identity, as the gateway wrapper does, so an inherited value
+cannot send a drain request to another home.
+
+Host programs travel as Python source in `REMOTE*` string constants, which `compileall`
+cannot see. `tests/host_programs_test.py` finds every such constant, composes it exactly as
+it is sent, including `release-app.py`'s prelude and payload line, compiles it and refuses a
+name that is read but never bound. A program sent to `remote()` under any other name fails
+that test, and every tool script gets the same undefined-name check.
+
+Cutover guards in the release tools are `fence(condition, why)` calls, not `assert`, which
+`python -O` or `PYTHONOPTIMIZE` would remove. A tripped fence raises `Fence`, a subclass of
+`AssertionError`, so existing review paths treat it as before, and the operator's failure
+line ends with `Stopped at fence: why`. Host programs sent as source keep their `assert`
+guards, and the shared refusal that starts each one exits before any work when assertions are
+disabled. Native one-line calls run with `-I`, which already ignores `PYTHONOPTIMIZE`.
+
+After a successful activation, `release-app.py` records the release itself. It writes the
+production receipt and ledger entry, then commits them on `docs/record-NAME` from the latest
+`origin/main` in a temporary worktree under the checkout's ignored `.private`, pushes and opens
+the docs PR for review. The branch and the ledger check are keyed by the release, so a second
+release of the same commit is recorded separately. Reruns reuse an existing PR, pushed branch or
+recorded entry. A git or gh failure leaves the release recorded and prints the manual steps.
