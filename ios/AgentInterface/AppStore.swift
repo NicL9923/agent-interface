@@ -447,11 +447,35 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
   }
-  func acknowledgeInterruptedSubmission() {
+  /// Gives up on a send the server never confirmed, for example one that was lost before it
+  /// arrived. The message may still show up, so its text and attachments go back into the
+  /// draft of the assistant it was written for, where the person decides whether to send again.
+  func discardUnconfirmedSubmission() {
+    guard let old = pending, !sending else { return }
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
-    interruptionReviewed = true
+    if selectedBotId == old.botId {
+      updateDraft(Self.draft(restoring: old, into: draft))
+    } else if let localKey = key("draft", old.botId) {
+      // Local first, so this works offline. A dirty local draft wins when that assistant opens.
+      var target = Self.draft(restoring: old, into: read(localKey) ?? Draft())
+      target.dirty = true
+      save(target, localKey)
+      guard let api else { return }
+      let snapshot = target
+      Task { let _: Draft? = try? await api.write("/bots/\(APIClient.component(old.botId))/draft", snapshot, method: "PUT") }
+    }
+  }
+  /// Puts a pending message back in front of whatever the person has typed since.
+  static func draft(restoring old: PendingSubmission, into current: Draft) -> Draft {
+    var next = current
+    if !next.text.contains(old.text) {
+      next.text = [old.text, next.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+    next.attachments =
+      old.attachments + next.attachments.filter { file in !old.attachments.contains { $0.id == file.id } }
+    return next
   }
   func reconnect() async {
     guard let api else { return }

@@ -377,6 +377,41 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertTrue(changed); XCTAssertNil(value.api); XCTAssertNil(value.error)
     }
 
+    func testDiscardingAnUnconfirmedSendReturnsItsTextToThatAssistantsDraft() async throws {
+        // The draft still holds the text, or the person kept editing, or emptied it.
+        for edit in [nil, "Send this and more", ""] as [String?] {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            server.sendStatus = 503; await value.send()
+            XCTAssertNotNil(value.pending)
+            if let edit { value.draft.text = edit }
+            value.discardUnconfirmedSubmission()
+            XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
+            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
+            XCTAssertEqual(value.draft.text, edit == "Send this and more" ? "Send this and more" : "Send this")
+            try await Task.sleep(for: .milliseconds(800))
+            let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }
+            XCTAssertEqual(saved.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, value.draft.text)
+        }
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.draft.text = "Typed after"
+        value.pending = PendingSubmission(requestId: "lost", botId: "bot", text: "Lost message", attachments: [FileRef(id: "a", name: "a.txt", mime: "text/plain")], reviewedInterruption: false)
+        value.discardUnconfirmedSubmission()
+        XCTAssertEqual(value.draft.text, "Lost message\n\nTyped after"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
+    }
+
+    func testDiscardingAnotherAssistantsUnconfirmedSendWorksOfflineAndLandsInItsDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.pending = PendingSubmission(requestId: "lost", botId: "other", text: "Lost message", attachments: [], reviewedInterruption: false)
+        server.setOffline(true)
+        value.discardUnconfirmedSubmission()
+        XCTAssertNil(value.pending); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
+        let saved = UserDefaults.standard.data(forKey: value.key("draft", "other")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(saved?.text, "Lost message"); XCTAssertEqual(saved?.dirty, true)
+        server.setOffline(false)
+        await value.select("other")
+        XCTAssertEqual(value.draft.text, "Lost message")
+    }
+
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-contract-\(UUID().uuidString).txt")
