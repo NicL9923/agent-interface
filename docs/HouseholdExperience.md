@@ -20,6 +20,22 @@ WildBots hides the assistant; Hermes does not. The Hermes dashboard is
 household-wide, so anyone with dashboard access can still reach its profile's
 memory and logins.
 
+### Privacy limits
+
+Privacy here keeps a personal assistant out of other members' everyday use of
+WildBots. It does not stop someone deliberately probing the server.
+
+- A save, upload or download already under way when an assistant becomes
+  personal can still finish for the person who started it.
+- The shared computer is one household desktop. Anyone watching it can see a
+  personal assistant using it; WildBots only leaves out the assistant's name.
+- Someone guessing assistant IDs can still tell some hidden assistants apart
+  from IDs that never existed.
+- After an assistant is deleted, a former sender can still look up the receipt
+  of their own message.
+- While a Hermes update is waiting, "An assistant" in the busy list shows that
+  some assistant is working, without saying which.
+
 ## Today
 
 Open Today in the assistant navigation. It shows pending approvals and questions,
