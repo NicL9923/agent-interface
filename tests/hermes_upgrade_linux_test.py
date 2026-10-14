@@ -280,6 +280,22 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.git("config", "--get", "remote.origin.promisor").strip(), "true")
         self.assertFalse(list(self.stage.glob("qualified-objects-*.pack")))
 
+    def test_candidate_import_copies_only_objects_the_installed_history_lacks(self):
+        self.git("cat-file", "-e", self.candidate)
+        self.platform.quiescence(); self.platform.backup()
+        imported = sum(len(subprocess.check_output(["git", "show-index"], stdin=index.open("rb")).splitlines())
+            for index in (self.source / ".git/objects/pack").glob("*.idx"))
+        new = len(self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines())
+        self.assertEqual(imported, new)
+
+    def test_candidate_import_copies_everything_when_installed_history_lacks_an_object(self):
+        # A partial clone can lack an old object that the candidate's history still reaches.
+        blob = self.git("rev-parse", self.old + ":app.py").strip()
+        (self.source / ".git/objects" / blob[:2] / blob[2:]).unlink()
+        self.platform.quiescence(); self.platform.backup()
+        self.git("cat-file", "-e", blob)
+        self.assertEqual(self.platform.load()["phase"], "backed_up")
+
     def test_unreadable_file_refuses_cold_backup_before_service_shutdown(self):
         self.platform.quiescence()
         before = self.states.read_bytes()

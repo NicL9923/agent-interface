@@ -456,22 +456,28 @@ print(json.dumps({'ok':True,'state':'synced'}))
             return rows
         before = metadata()
         if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate: raise RuntimeError("Qualified candidate changed before object preparation")
-        pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
-        try:
-            with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-                def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
-                subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"],
-                    input=(self.candidate + "\n").encode(), stdout=output, stderr=subprocess.PIPE, env=offline,
-                    check=True, timeout=180, preexec_fn=bounded_pack)
-                output.flush(); os.fsync(output.fileno())
-            with pack.open("rb") as payload:
-                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
-            subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
-            if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
-        finally:
-            pack.unlink(missing_ok=True)
+        def transfer(revisions):
+            pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
+            try:
+                with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                    def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
+                    subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"],
+                        input="".join(line + "\n" for line in revisions).encode(), stdout=output, stderr=subprocess.PIPE, env=offline,
+                        check=True, timeout=180, preexec_fn=bounded_pack)
+                    output.flush(); os.fsync(output.fileno())
+                with pack.open("rb") as payload:
+                    subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+            finally:
+                pack.unlink(missing_ok=True)
+            return subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, timeout=180).returncode == 0
+        # Only what the installed history lacks: a full copy each time grew the store by 1 GB per
+        # update. A partial clone can lack old objects the candidate reuses; then copy everything.
+        try: complete = transfer([self.candidate, "^" + before[0].strip()])
+        except subprocess.CalledProcessError: complete = False
+        if not complete and not transfer([self.candidate]): raise RuntimeError("Qualified candidate objects are still incomplete after the transfer")
+        if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
 
     def install(self):
         record = self.load()
