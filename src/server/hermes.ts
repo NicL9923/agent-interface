@@ -1,4 +1,4 @@
-import { reasoningLevels, serviceTiers } from "../shared/types.js";
+import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
@@ -679,7 +679,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       rosterRequest = request;
       try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }
     },
-    async saveBot(input:BotInput,id?:string){await connect();const name=id??input.name.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-|-$/g,'');if(!name)throw new Error('Bot name needs letters or numbers.');
+    async saveBot(input:BotInput,id?:string){await connect();const name=id??botIdFor(input.name);if(!name)throw new Error('Bot name needs letters or numbers.');
       let created=false;try{if(!id){await rpc('profiles.create',{name,description:input.description,soul:input.instructions,mirror_credentials:true,no_alias:true});created=true;}
       const rosterBefore=await rpc('profiles.list',{include_sessions:false});const previous=rosterBefore.profiles.find((x:Wire)=>x.name===name);
       const config:Wire={name,soul:input.instructions,description:input.description??'',ui_meta:{'hermes-bots':{...previous?.ui_meta?.['hermes-bots'],title:input.name},agent_interface:{...previous?.ui_meta?.agent_interface,name:input.name,shared:input.shared}},ui_meta_expected_revisions:{'hermes-bots':previous?.ui_meta_revisions?.['hermes-bots']??0,agent_interface:previous?.ui_meta_revisions?.agent_interface??0}};

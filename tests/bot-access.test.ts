@@ -266,7 +266,7 @@ describe("private assistants under concurrency and side channels", () => {
     s.runtime.capabilities = async () => { await gate.wait; return capabilities(); };
     const delayed = s.app.inject({ method: "PATCH", url: "/api/bots/family", headers: s.member, payload: input });
     await new Promise(resolve => setTimeout(resolve, 20));
-    expect(s.store.swapPresentation("family", { shared: true }, { shared: false, ownerId: "local-one" })).toBe(true);
+    expect(s.store.swapPresentation("family", { shared: true }, { shared: false, ownerId: "local-one" })).not.toBe(false);
     gate.release();
     expect((await delayed).statusCode).toBe(404);
     expect(s.store.presentation("family")).toMatchObject({ shared: false, ownerId: "local-one" });
@@ -367,21 +367,32 @@ describe("private assistant notification history", () => {
     expect(store.db.prepare("SELECT count(*) AS n FROM participants WHERE run_id='run'").get()).toEqual({ n: 0 });
   });
 
-  it("does not backfill news from the private period when an assistant is shared again", () => {
+  it("sends each event only to whoever could see the assistant when it happened, by its own time", () => {
+    const store = new Store(":memory:"); apps.push(store);
+    for (const id of ["alice", "bob", "carol"]) {
+      store.user({ id, name: id, email: `${id}@example.test` });
+      store.savePreferences(id, { ...defaultPreferences, followBots: ["books"] });
+    }
+    const at = (offset: number) => new Date(Date.now() + offset).toISOString();
+    // Alice's private period, shared, Bob's private period, shared again.
+    const periods = (rows: [number, string | null][]) => { store.db.prepare("DELETE FROM bot_visibility_periods").run(); for (const [offset, owner] of rows) store.db.prepare("INSERT INTO bot_visibility_periods VALUES('books',?,?)").run(Date.now() + offset, owner); };
+    store.savePresentation("books", { shared: true });
+    periods([[-100_000, "alice"], [-80_000, null], [-60_000, "bob"], [-40_000, null]]);
+    const event = (id: string, occurredAt: string) => ({ id, botId: "books", runId: "run", kind: "completed" as const, title: "Books finished", occurredAt });
+    // Discovery reports these late, after the last share, so ingestion time would mislead.
+    store.recordEvents([event("alice-era", at(-90_000)), event("shared-era", at(-70_000)), event("bob-era", at(-50_000)), event("now", at(-1_000)), event("undated", "soon")], "1");
+    const queued = (userId: string) => (store.db.prepare("SELECT event_id FROM outbox WHERE user_id=? ORDER BY event_id").all(userId) as { event_id: string }[]).map(row => row.event_id);
+    expect(queued("alice")).toEqual(["alice-era", "now", "shared-era"]);
+    expect(queued("bob")).toEqual(["bob-era", "now", "shared-era"]);
+    expect(queued("carol")).toEqual(["now", "shared-era"]);
+    // Today agrees.
+    expect(store.eventPage("carol", 0, store.latestEventFrontier(), ["books"]).events.map(row => row.id)).toEqual(["shared-era", "now"]);
+  });
+
+  it("records the private period when an assistant first changes hands", () => {
     const store = seeded();
-    store.recordEvents([event("private-era")], "1");
-    expect(queuedFor(store, "local-two")).toEqual([]);
-    // Recorded, then shared, then more news, each a few milliseconds apart.
-    store.db.prepare("UPDATE notification_events SET created_at=created_at-10").run();
-    store.savePresentation(secret, { shared: true });
-    store.db.prepare("UPDATE bot_visibility SET shared_at=shared_at-5").run();
-    store.enqueueKnownEvents();
-    expect(queuedFor(store, "local-two")).toEqual([]);
-    store.recordEvents([event("shared-era")], "2");
-    expect(queuedFor(store, "local-two")).toEqual(["shared-era"]);
-    // Today agrees: the private period's events are not news for anyone but the former owner.
-    expect(store.eventPage("local-two", 0, store.latestEventFrontier(), [secret]).events.map(row => row.id)).toEqual(["shared-era"]);
-    expect(store.eventPage("local-one", 0, store.latestEventFrontier(), [secret]).events.map(row => row.id)).toEqual(["private-era", "shared-era"]);
+    // Shared from the beginning until local-one made it theirs.
+    expect(store.visibilityPeriods(secret).map(period => [period.startedAt === 0, period.ownerId])).toEqual([[true, null], [false, "local-one"]]);
   });
 
   it("never moves another member's Today frontier for hidden events", () => {
@@ -392,5 +403,58 @@ describe("private assistant notification history", () => {
     store.recordEvents([event("hidden-1"), event("hidden-2")], "2");
     expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).frontier).toBe(before);
     expect(Number(store.eventPage("local-one", 0, store.latestEventFrontier(), ["family", secret]).frontier)).toBeGreaterThan(Number(before));
+  });
+});
+
+describe("private assistant saves and agent traffic", () => {
+  it("records a new personal assistant as private before Hermes creates it, and forgets it if Hermes fails", async () => {
+    const s = await setup();
+    const during: unknown[] = [];
+    let fail = false;
+    s.runtime.saveBot = async (input: { name: string; shared: boolean }) => {
+      during.push(s.store.presentation("night-ledger"));
+      if (fail) throw Object.assign(new Error("Hermes refused"), { statusCode: 502 });
+      return { id: "night-ledger", name: input.name, model: "test", shared: input.shared, activity: "idle" };
+    };
+    const create = { name: "Night Ledger", instructions: "", model: "test", shared: false };
+    expect((await s.app.inject({ method: "POST", url: "/api/bots", headers: s.owner, payload: create })).statusCode).toBe(200);
+    expect(during[0]).toMatchObject({ shared: false, ownerId: "local-one" });
+    s.store.forgetBot("night-ledger");
+    fail = true;
+    expect((await s.app.inject({ method: "POST", url: "/api/bots", headers: s.owner, payload: create })).statusCode).toBe(502);
+    expect(during[1]).toMatchObject({ shared: false, ownerId: "local-one" });
+    expect(s.store.presentation("night-ledger")).toEqual({});
+    // An existing assistant's record is never overwritten by a create that Hermes would refuse.
+    const existing = await s.app.inject({ method: "POST", url: "/api/bots", headers: s.member, payload: { ...create, name: "Family" } });
+    expect(existing.statusCode).toBe(409);
+    expect(s.store.presentation("family")).toMatchObject({ shared: true });
+  });
+
+  it("rolls back only its own sharing write, never a later save's", () => {
+    const store = new Store(":memory:"); apps.push(store);
+    store.savePresentation("books", { shared: true });
+    const first = store.swapPresentation("books", { shared: true }, { shared: false, ownerId: "one" });
+    // A second save writes the same values; Hermes accepts it.
+    expect(store.swapPresentation("books", { shared: false, ownerId: "one" }, { shared: false, ownerId: "one" })).not.toBe(false);
+    // The first save's Hermes call then fails.
+    expect(store.restorePresentation("books", first as number, { shared: true })).toBe(false);
+    expect(store.presentation("books")).toMatchObject({ shared: false, ownerId: "one" });
+  });
+
+  it("hides another member's private assistant in calls still running and after it is renamed", async () => {
+    const s = await setup();
+    let name = secretName;
+    const listBots = s.runtime.listBots as () => Promise<{ id: string; name: string }[]>;
+    s.runtime.listBots = async () => (await listBots()).map(bot => bot.id === secret ? { ...bot, name } : bot);
+    s.runtime.conversation = async (botId: string) => ({ botId, activity: { state: "working" }, approvals: [], attention: [], messages: [
+      { id: "in", role: "user", text: `Message from 🤖 ${name}: The ledger balance is 42.` },
+    ], toolCalls: [{ id: "live", name: "message_agent", status: "running", arguments: JSON.stringify({ target: secret, message: "Share the balance" }), result: "Balance 42" }] });
+    const read = async () => (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member })).body;
+    for (const leak of [secret, secretName, "42", "Share the balance"]) expect(await read()).not.toContain(leak);
+    // The owner renames it; the next read already knows the new name.
+    s.runtime.saveBot = async () => { name = "Midnight Tally"; return { id: secret, name, model: "test", shared: false, activity: "idle" }; };
+    expect((await s.app.inject({ method: "PATCH", url: `/api/bots/${secret}`, headers: s.owner, payload: { name: "Midnight Tally", instructions: "", model: "test", shared: false } })).statusCode).toBe(200);
+    const after = await read();
+    for (const leak of ["Midnight Tally", "42"]) expect(after).not.toContain(leak);
   });
 });

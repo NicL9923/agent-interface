@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { agentEnvelope } from "../shared/collaboration.js";
-import type { Bot, Message, Runtime } from "../shared/types.js";
+import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import type { Store } from "./store.js";
 declare module "fastify" { interface FastifyRequest { privacyVersion?: number; assistantId?: string } }
@@ -36,33 +36,50 @@ export function fileBotId(runtime: Pick<Runtime, "fileBotId">, fileId: string) {
 }
 
 /**
+ * Body and query routes still answer a hidden ID differently from a made-up one; telling
+ * them apart takes deliberate probing, a documented privacy limit.
  * The last roster Hermes reported. A route naming an assistant that is not on it answers
  * the same 404 as a hidden one, so nobody can tell a private assistant from a made-up ID.
  * An ID missing from the cached roster refreshes it first, so a new assistant is never refused.
  */
 export class Roster {
   private bots?: Bot[];
+  private at = 0;
   private refreshing?: Promise<void>;
+  // Every name an assistant has had, so an old agent message still matches after a rename.
+  private seen = new Map<string, Set<string>>();
   constructor(private runtime: Pick<Runtime, "listBots">) {}
   note(bots: unknown) {
     // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
-    if (Array.isArray(bots) && bots.some(bot => bot?.activity !== "disconnected")) this.bots = bots;
+    if (!Array.isArray(bots) || !bots.some(bot => bot?.activity !== "disconnected")) return;
+    this.bots = bots;
+    this.at = Date.now();
+    for (const bot of bots as Bot[]) this.seen.set(bot.id, (this.seen.get(bot.id) ?? new Set()).add(bot.name));
   }
+  /** After this app creates, renames or deletes an assistant, the next check reads Hermes again. */
+  forget() { this.at = 0; }
   private refresh() {
     this.refreshing ??= (async () => { try { this.note(await this.runtime.listBots()); } catch { /* Keep the last roster. */ } })()
       .finally(() => { this.refreshing = undefined; });
     return this.refreshing;
   }
+  private fresh() { return this.bots && Date.now() - this.at < 10_000; }
   /** False only when Hermes's current roster lacks it. */
   async exists(botId: string) {
-    if (this.bots?.some(bot => bot.id === botId)) return true;
+    if (this.fresh() && this.bots!.some(bot => bot.id === botId)) return true;
     if (typeof this.runtime.listBots !== "function") return true;
     await this.refresh();
     return !this.bots || this.bots.some(bot => bot.id === botId);
   }
+  /** True only when Hermes's current roster has it. */
+  async has(botId: string) {
+    if (typeof this.runtime.listBots === "function") await this.refresh();
+    return !!this.bots?.some(bot => bot.id === botId);
+  }
+  /** Each assistant's current and earlier names. */
   async names() {
-    if (!this.bots) await this.refresh();
-    return new Map((this.bots ?? []).map(bot => [bot.id, bot.name]));
+    if (!this.fresh()) await this.refresh();
+    return this.seen;
   }
 }
 
@@ -73,20 +90,24 @@ const hiddenText = "Message from another member's assistant: This message is pri
  */
 export async function redactAgents(store: Store, roster: Roster, userId: string) {
   const hidden = store.privateBots().filter(bot => bot.ownerId !== userId).map(bot => bot.botId);
-  if (!hidden.length) return { message: <T extends Message>(message: T) => message, text: (text: string) => text };
+  if (!hidden.length) return { message: <T extends Message>(message: T) => message, call: (call: ToolCall) => call, text: (text: string) => text };
   const names = await roster.names();
-  const handles = new Set(hidden), labels = new Set(hidden.flatMap(id => [id, names.get(id)]).filter(Boolean).map(name => name!.toLowerCase()));
+  const handles = new Set(hidden), labels = new Set(hidden.flatMap(id => [id, ...names.get(id) ?? []]).map(name => name.toLowerCase()));
   const named = (value: unknown) => typeof value === "string" && (handles.has(value) || labels.has(value.toLowerCase()));
   const target = (args?: string) => { try { return (JSON.parse(args ?? "") as { target?: unknown }).target; } catch { return undefined; } };
+  // A handoff whose target cannot be read counts as one to a hidden assistant.
+  const hides = (call: ToolCall) => call.name === "message_agent" && (named(target(call.arguments)) || !target(call.arguments));
+  const call = (call: ToolCall): ToolCall => hides(call) ? { ...call, arguments: JSON.stringify({ target: "another member's assistant" }), result: undefined, error: undefined } : call;
   return {
     message: <T extends Message>(message: T): T => {
       const envelope = agentEnvelope(message);
       if (envelope && (named(envelope.handle) || named(envelope.name))) return { ...message, text: hiddenText };
-      const call = message.toolCall;
-      if ((call?.name === "message_agent" || message.toolName === "message_agent") && (!call || named(target(call.arguments)) || !target(call.arguments)))
-        return { ...message, text: "", ...(call ? { toolCall: { ...call, arguments: JSON.stringify({ target: "another member's assistant" }), result: undefined, error: undefined } } : {}) };
+      if (message.toolCall ? hides(message.toolCall) : message.toolName === "message_agent")
+        return { ...message, text: "", ...(message.toolCall ? { toolCall: call(message.toolCall) } : {}) };
       return message;
     },
+    // Calls still running are listed beside the messages.
+    call,
     // Search snippets and previews are fragments, so any mention of a hidden handle or name hides them.
     text: (text: string) => [...handles].some(id => text.includes(`@${id}`) || text.includes(`'${id}'`)) || [...labels].some(name => name.length > 2 && text.toLowerCase().includes(`message from 🤖 ${name}`) || text.toLowerCase().includes(`message from ${name}`)) ? hiddenText : text,
   };
@@ -234,6 +255,7 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
   // Access is decided before awaited reads. If an assistant became private to someone else
   // while this read ran, nothing it gathered may leave: its own route answers 404 and any
   // other read asks to be retried, so every list re-filters without each handler remembering.
+  // Writes and streamed downloads already under way are not recalled: a documented privacy limit.
   app.addHook("onSend", async (req, reply, payload) => {
     if (req.privacyVersion === undefined || !["GET", "HEAD"].includes(req.method) || reply.statusCode === 404) return payload;
     const changed = store.changedSince(req.privacyVersion).filter(botId => hidden(req, botId));

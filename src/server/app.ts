@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { Readable } from "node:stream";
 import { resolve } from "node:path";
 import { z } from "zod";
+import { botIdFor } from "../shared/types.js";
 import type {
   Avatar,
   BotInput,
@@ -302,11 +303,20 @@ export async function createApp(
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
     const { confirmPrivate: _, ...input } = botInput.parse(req.body);
-    const bot = await runtime.saveBot(input as BotInput);
-    store.savePresentation(bot.id, {
-      shared: input.shared,
-      ownerId: input.shared ? undefined : signedIn(req).id,
-    });
+    const next = { shared: input.shared, ownerId: input.shared ? undefined : signedIn(req).id };
+    // Its sharing is recorded before Hermes creates it, so a personal one is never briefly
+    // public and a recreated ID never inherits an old record. An existing assistant's is never touched.
+    const id = botIdFor(input.name);
+    if (id && await roster.has(id))
+      throw failure(409, "An assistant with this name already exists. Choose another name.");
+    const prior = id ? store.presentation(id) : {};
+    const version = id ? store.swapPresentation(id, prior, next) : false;
+    let bot;
+    try { bot = await runtime.saveBot(input as BotInput); }
+    catch (error) { if (version !== false) store.restorePresentation(id, version, prior); throw error; }
+    roster.forget();
+    // A runtime that names it differently still gets its record.
+    if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
     return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
@@ -322,11 +332,14 @@ export async function createApp(
       throw Object.assign(failure(409, "Confirm making this assistant personal. It will disappear for the rest of the household."), { code: "private_confirmation_required" });
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
-    if (!store.swapPresentation(id, previous, next))
+    const version = store.swapPresentation(id, previous, next);
+    if (version === false)
       throw Object.assign(failure(409, "Someone changed who can see this assistant while you were saving. Review it and try again."), { code: "sharing_changed" });
     let bot;
+    // A failed save puts sharing back only if no later save has changed it since.
     try { bot = await runtime.saveBot(input as BotInput, id); }
-    catch (error) { store.swapPresentation(id, next, { shared: previous.shared !== false, ownerId: previous.ownerId }); throw error; }
+    catch (error) { store.restorePresentation(id, version, previous); throw error; }
+    roster.forget();
     return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.delete("/api/bots/:id", async (req) => {
@@ -334,6 +347,7 @@ export async function createApp(
     await runtime.deleteBot(params(req).id);
     // A new assistant that reuses this ID starts with no owner, visibility or per-person state.
     store.forgetBot(params(req).id);
+    roster.forget();
     return { ok: true };
   });
   app.put("/api/bots/:id/avatar", async (req) => {
@@ -371,6 +385,7 @@ export async function createApp(
     }
     // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
+    if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
     result.messages = result.messages.map(redact.message).map((message) => {
       const attribution =
         store.submissionForMessage(params(req).id, message.id) ??
@@ -525,7 +540,8 @@ export async function createApp(
     const requestId = z.string().uuid().parse(params(req).id);
     const recorded = store.submission(requestId);
     // Only its sender, while they can still see the assistant, learns anything about a recorded
-    // submission. An unrecorded ID is a client's own unguessable pending ID, kept checkable.
+    // submission. An unrecorded ID is a client's own unguessable pending ID, kept checkable,
+    // which lets a former sender check their own message after its assistant is deleted.
     const previous = recorded && recorded.input.senderId === signedIn(req).id && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
     if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
     try {

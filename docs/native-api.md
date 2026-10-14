@@ -96,7 +96,9 @@ owner stay open to every household member, who may also change them.
 makes it the caller's private assistant. The request needs
 `"confirmPrivate": true`, sent after the person confirms that it will disappear
 for the rest of the household. Without it the server returns 409 with
-`code: "private_confirmation_required"` and changes nothing. If someone else
+`code: "private_confirmation_required"` and changes nothing. `POST /api/bots`
+records a personal assistant's owner before Hermes creates it, and returns 409
+when an assistant with that name already exists. If someone else
 changed its sharing while the save was under way, it returns 409 with
 `code: "sharing_changed"` and changes nothing. A private assistant's routines
 accept only its owner as a recipient; others return 400 with
@@ -170,8 +172,9 @@ APNs and Web Push share the durable notification outbox and existing rules for
 run participants, routine recipients, and bot followers. A private assistant's
 notifications reach only its owner, including any queued, held for quiet hours or
 batched into a digest before it became private, or mid-way through delivery.
-Sharing it again does not send anyone else news from its private period, and
-Today leaves those events out for them too. Each endpoint records
+Each event reaches only whoever could see the assistant when it happened, judged
+by the event's own time; an event without a readable time counts as private.
+Today applies the same rule. Each endpoint records
 delivery independently; retrying a failed endpoint does not repeat successful
 deliveries. No registered endpoint keeps an event pending. Native devices are
 removed when their native session expires or APNs reports an invalid token.

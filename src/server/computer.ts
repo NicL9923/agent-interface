@@ -87,7 +87,8 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
       try { native = await runtime.computerRequest({action: "status", ...actor(req)}) as ComputerStatus; }
       catch { native.reason = "Hermes is disconnected. The system terminal is independent of that connection."; }
     }
-    // Hermes names the acting assistant by its profile, the assistant's ID.
+    // Hermes names the acting assistant by its profile, the assistant's ID. The desktop itself
+    // is one household screen, so a private assistant at work can still be watched there.
     if (native.control?.kind === "bot" && !visibleTo(store, native.control.name, signedIn(req).id))
       native = {...native, control: {kind: "bot"}};
     const denied = shellDenial(req);
