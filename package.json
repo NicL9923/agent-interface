@@ -19,15 +19,15 @@
     "doctor": "tsx scripts/setup.ts --check"
   },
   "dependencies": {
-    "@fastify/cookie": "11.1.2",
-    "@fastify/multipart": "10.1.2",
-    "@fastify/static": "10.1.5",
-    "@fastify/websocket": "11.3.1",
+    "@fastify/cookie": "11.1.3",
+    "@fastify/multipart": "10.1.3",
+    "@fastify/static": "10.1.6",
+    "@fastify/websocket": "11.3.4",
     "@novnc/novnc": "1.7.0",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "fastify": "5.12.5",
-    "google-auth-library": "11.1.0",
+    "google-auth-library": "11.2.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
@@ -37,16 +37,16 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/node": "26.6.3",
+    "@types/node": "26.6.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.2",
-    "@vitejs/plugin-react": "6.1.1",
-    "jsdom": "30.1.1",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "30.1.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "vite": "8.3.1",
-    "vitest": "5.0.2"
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
   }
 }
