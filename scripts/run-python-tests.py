@@ -47,7 +47,7 @@ def classify(returncode, summary, ci):
     """
     if returncode != 0:
         return "FAIL", ""
-    final = re.findall(r"^Ran (\d+) tests? in [^\n]*\n+([^\n]*)", summary, re.MULTILINE)
+    final = re.findall(r"^Ran (\d+) tests? in [^\n]*(?:\n+([^\n]*))?", summary, re.MULTILINE)
     if not final:
         return "FAIL", "no unittest tests ran; test files must define unittest tests"
     ran, outcome = int(final[-1][0]), final[-1][1].strip()

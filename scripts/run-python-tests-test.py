@@ -40,6 +40,8 @@ class Classification(unittest.TestCase):
 
     def test_ran_line_without_an_ok_outcome_fails_even_with_exit_zero(self):
         self.assertEqual(runner.classify(0, "Ran 4 tests in 1s\n\nFAILED (failures=1)\n", False)[0], "FAIL")
+        # A final summary cut off before its outcome cannot borrow an earlier OK.
+        self.assertEqual(runner.classify(0, "Ran 1 test in 0s\n\nOK\nRan 4 tests in 1s", False)[0], "FAIL")
         self.assertEqual(runner.classify(0, "Ran 4 tests in 1s\n", False)[0], "FAIL")
         self.assertEqual(runner.classify(0, "Ran 1 test in 0s\n\nOK (skipped=1)\nRan 4 tests in 1s\n", False)[0], "FAIL")
 
