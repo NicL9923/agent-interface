@@ -27,6 +27,16 @@ describe('client request recovery',()=>{
     expect(transport.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('reads once more when an assistant turned private mid-read, and only once',async()=>{
+    const changed={ok:false,status:503,headers:new Headers(),text:async()=>JSON.stringify({error:'Assistants changed',code:'assistants_changed'})};
+    const fetch=vi.fn().mockResolvedValueOnce(changed).mockResolvedValueOnce({ok:true,status:200,headers:new Headers(),text:async()=>'{"bots":[]}'});
+    vi.stubGlobal('fetch',fetch);
+    await expect(api('/bootstrap')).resolves.toEqual({bots:[]});
+    fetch.mockReset().mockResolvedValue(changed);
+    await expect(api('/bots')).rejects.toMatchObject({status:503,code:'assistants_changed'});
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('preserves caller cancellation while reading the body instead of reporting a connection failure',async()=>{
     const transport=stalledBody(),caller=new AbortController(),reason=new Error('Identity changed');
     const pending=api('/bootstrap',{signal:caller.signal});

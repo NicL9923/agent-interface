@@ -40,7 +40,7 @@ export class ApiError extends Error {
     super(message);
   }
 }
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json");
@@ -83,6 +83,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     catch {
       if (response.ok) throw new ApiError("The app returned an unreadable response. Check the connection before trying again.", 502, "INVALID_RESPONSE");
     }
+    // An assistant turned private while this read ran; the server dropped it, so read again.
+    if (get && response.status === 503 && data?.code === "assistants_changed" && !retried) return api<T>(path, init, true);
     if (!response.ok)
       throw new ApiError(
         data?.detail || data?.error || `Request failed (${response.status})`,

@@ -472,3 +472,17 @@ it("shows saving and saved on the avatar button itself, then resets", async () =
     expect(save().textContent).toBe("Save avatar");
   } finally { vi.useRealTimers(); }
 });
+
+it("offers only the owner as a recipient of a private assistant's routines", async () => {
+  const household = [{ id: "one", name: "One", email: "one@example.test" }, { id: "two", name: "Two", email: "two@example.test" }];
+  const recipients = async (assistant: Bot) => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    vi.mocked(api).mockImplementation(async (path: string) => (path === "/routines" ? [] : { providers: [], provider: "", model: "" }) as never);
+    await act(async () => root.render(createElement(BotSettings, { bot: assistant, bootstrap: { ...bootstrap, household, bots: [assistant] }, onClose, onSaved })));
+    await click("routines");
+    return Array.from(container.querySelectorAll("fieldset label")).map(label => label.textContent);
+  };
+  expect(await recipients({ ...bot, id: "mine", shared: false, ownerId: "one" })).toEqual(["One"]);
+  expect(await recipients(bot)).toEqual(["One", "Two"]);
+});

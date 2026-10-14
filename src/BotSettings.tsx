@@ -751,6 +751,11 @@ function RoutineManager({
   const [deleteId, setDeleteId] = useState("");
   const [previewedSchedule, setPreviewedSchedule] = useState("");
   const supported = bootstrap.capabilities.routines.supported;
+  // Only its owner can receive a private assistant's results.
+  const bot = bootstrap.bots.find((b) => b.id === botId);
+  const recipients = bot && !bot.shared && bot.ownerId
+    ? bootstrap.household.filter((user) => user.id === bot.ownerId)
+    : bootstrap.household;
   const refresh = async () =>
     setRoutines(
       (await api<Routine[]>("/routines")).filter((r) => r.botId === botId),
@@ -846,7 +851,7 @@ function RoutineManager({
               editing
                 ? `/routines/${encodeURIComponent(editing)}`
                 : "/routines",
-              form,
+              { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)) },
               editing ? "PUT" : "POST",
             );
             setEditing(null);
@@ -899,7 +904,7 @@ function RoutineManager({
         </label>
         <fieldset>
           <legend>Notify these household members</legend>
-          {bootstrap.household.map((user) => (
+          {recipients.map((user) => (
             <label className="checkbox-label" key={user.id}>
               <input
                 type="checkbox"
