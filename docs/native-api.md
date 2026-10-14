@@ -64,8 +64,12 @@ reports one for an uncompressed body, and the cap counts decoded bytes. A file o
 to show. If Hermes understated the length, the transfer stops at the cap instead,
 so treat a truncated body as a failed download.
 
-`GET /api/bots/:id/events` is a server-sent event stream for readers of
-`GET /api/bots/:id/conversation`: each `change` message means the
+`GET /api/bots/:id/conversation` without a query returns the whole history and
+every file. With `turns` or `start`, it returns that window, `earlier` messages
+before it, and only the window's `files`; `earlierFiles` counts files that only
+earlier messages carry, and `GET /api/bots/:id/files?before=MESSAGE_ID` lists
+those messages with their files. `GET /api/bots/:id/events` is a server-sent
+event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
 

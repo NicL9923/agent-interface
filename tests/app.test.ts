@@ -305,6 +305,35 @@ describe("authentication and household state", () => {
     expect((await app.inject({ url: "/api/bots/shared/conversation?turns=-1", headers: one })).statusCode).toBe(400);
     await app.close();
   });
+  it("sends signed file references only for the window and lists earlier ones on demand", async () => {
+    const fake = runtimeDouble();
+    const conversation = await fake.runtime.conversation("shared");
+    const file = (n: number) => ({ id: `f${n}`, name: `file-${n}.txt`, mime: "text/plain", url: `/api/files/f${n}` });
+    const messages = Array.from({ length: 30 }, (_, turn) => [
+      { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}`, ...(turn === 2 ? { files: [file(2)] } : {}) },
+      // The newest reply passes along a file first shared in an early turn.
+      { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}`, files: turn === 29 ? [file(turn), file(0)] : [file(turn)] },
+    ]).flat();
+    const files = messages.flatMap(message => message.files ?? []);
+    fake.runtime.conversation = async () => ({ ...conversation, messages, files });
+    const { app } = await createApp(config(), fake.runtime, { background: false });
+    const one = await login(app);
+    const read = async (url: string) => (await app.inject({ url, headers: one })).json();
+    // The native app reads the whole history and keeps every reference.
+    expect((await read("/api/bots/shared/conversation")).files).toEqual(files);
+    const page = await read("/api/bots/shared/conversation?turns=20");
+    const ids = (list: { id: string }[]) => [...new Set(list.map(item => item.id))];
+    expect(ids(page.files)).toEqual(["f0", ...Array.from({ length: 20 }, (_, n) => `f${n + 10}`)]);
+    // Earlier turns hold f1 to f9 and the user's f2; f0 is also in the window.
+    expect(page.earlierFiles).toBe(9);
+    const earlier = await read("/api/bots/shared/files?before=p10");
+    expect(earlier.messages.map((message: { id: string }) => message.id)).toEqual(["a0", "a1", "p2", "a2", ...Array.from({ length: 7 }, (_, n) => `a${n + 3}`)]);
+    expect(earlier.messages[2]).toEqual({ id: "p2", role: "user", files: [file(2)] });
+    // A window start that left the history lists every file-bearing message.
+    expect((await read("/api/bots/shared/files?before=gone")).messages).toHaveLength(31);
+    expect((await read("/api/bots/shared/conversation?start=p0")).earlierFiles).toBe(0);
+    await app.close();
+  });
   it("keeps personal drafts and read positions separate while bots stay shared", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {
       background: false,

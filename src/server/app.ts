@@ -37,7 +37,7 @@ import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { isApiRequest, routePattern } from "./route-path.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
-import { historyWindow, MAX_HISTORY_TURNS } from "../shared/history.js";
+import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 const id = z.string().min(1).max(200);
 const avatar = z.discriminatedUnion("mode", [
   z.object({
@@ -344,9 +344,13 @@ export async function createApp(
       start: z.string().min(1).max(512).optional(),
       turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
     }).parse(req.query);
-    let earlier: number | undefined;
-    if (window.start !== undefined || window.turns !== undefined)
-      ({ messages: result.messages, earlier } = historyWindow(result.messages, window));
+    let earlier: number | undefined, earlierFiles: number | undefined;
+    if (window.start !== undefined || window.turns !== undefined) {
+      const all = result.messages;
+      ({ messages: result.messages, earlier } = historyWindow(all, window));
+      // Signed file references scale with the window too. The rest load on demand.
+      ({ files: result.files, earlierFiles } = windowFiles(all, earlier, result.files));
+    }
     // Attribution augments the canonical Hermes history, never stores a transcript.
     result.messages = result.messages.map((message) => {
       const attribution =
@@ -361,7 +365,7 @@ export async function createApp(
     });
     return {
       ...result,
-      ...(earlier !== undefined ? { earlier } : {}),
+      ...(earlier !== undefined ? { earlier, earlierFiles } : {}),
       draft: store.personal("drafts", signedIn(req).id, params(req).id),
       readPosition: store.personal(
         "read_positions",
@@ -369,6 +373,11 @@ export async function createApp(
         params(req).id,
       ),
     };
+  });
+  // Files of the history before a window, for the artifacts list.
+  app.get("/api/bots/:id/files", async (req) => {
+    const { before } = z.object({ before: z.string().min(1).max(512).optional() }).parse(req.query);
+    return filesBefore((await runtime.conversation(params(req).id)).messages, before);
   });
   // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.

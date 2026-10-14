@@ -1,4 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { api } from "../client-api";
+import type { EarlierFiles } from "../shared/history";
 import type { Bot, Conversation, FileRef } from "../shared/types";
 import { Icon } from "./Icon";
 import "./artifacts.css";
@@ -25,11 +27,15 @@ function fileKind(file: FileRef): FileKind {
   if (videoTypes.has(mime)) return "video";
   return "other";
 }
-function artifactsFor(conversation?: Conversation | null): Artifact[] {
+/** A conversation window, which may count files that only its earlier, unloaded messages carry. */
+type ConversationWindow = Conversation & { earlierFiles?: number };
+function artifactsFor(conversation?: ConversationWindow | null, earlier: EarlierFiles["messages"] = []): Artifact[] {
   if (!conversation) return [];
   const files = new Map<string, Artifact>();
-  for (const file of conversation.files) files.set(file.id, { file, source: "Artifact" });
-  for (const message of conversation.messages) for (const file of message.files || []) {
+  // Earlier files go first, keeping the list in conversation order.
+  for (const message of earlier) for (const file of message.files || []) files.set(file.id, { file, source: "Artifact" });
+  for (const file of conversation.files) if (!files.has(file.id)) files.set(file.id, { file, source: "Artifact" });
+  for (const message of [...earlier, ...conversation.messages]) for (const file of message.files || []) {
     const previous = files.get(file.id);
     const source = message.role === "user" || previous?.source === "Shared" ? "Shared"
       : message.role === "assistant" || message.role === "tool" ? "Generated" : previous?.source || "Artifact";
@@ -61,25 +67,37 @@ function fileSize(size?: number) {
 }
 
 export function ArtifactsButton({ bot, conversation, unavailable = false }: {
-  bot: Bot; conversation?: Conversation | null; unavailable?: boolean;
+  bot: Bot; conversation?: ConversationWindow | null; unavailable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // Files of history before the loaded window, fetched when the list first opens.
+  const [earlier, setEarlier] = useState<{ messages?: EarlierFiles["messages"]; loading?: boolean; failed?: boolean }>({});
   const current = conversation?.botId === bot.id ? conversation : undefined;
-  const artifacts = useMemo(() => artifactsFor(current), [current]);
+  const artifacts = useMemo(() => artifactsFor(current, earlier.messages), [current, earlier.messages]);
+  const count = artifacts.length + (earlier.messages ? 0 : current?.earlierFiles ?? 0);
+  const show = () => {
+    setOpen(true);
+    if (!current?.earlierFiles || earlier.messages || earlier.loading) return;
+    setEarlier({ loading: true });
+    const before = current.messages[0]?.id;
+    api<EarlierFiles>(`/bots/${encodeURIComponent(bot.id)}/files${before ? `?before=${encodeURIComponent(before)}` : ""}`)
+      .then(value => setEarlier({ messages: value.messages }), () => setEarlier({ failed: true }));
+  };
   return <>
-    <button className="icon-button artifacts-button" aria-label={`Artifacts (${artifacts.length})`}
-      title="Browse artifacts" aria-haspopup="dialog" onClick={() => setOpen(true)}>
+    <button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
+      title="Browse artifacts" aria-haspopup="dialog" onClick={show}>
       <Icon name="file" />
       <span className="artifacts-button-label">Artifacts</span>
-      {!!artifacts.length && <span className="artifacts-count" aria-hidden="true">{artifacts.length}</span>}
+      {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
     </button>
     {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
+      earlier={earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
       unavailable={unavailable} onClose={() => setOpen(false)} />}
   </>;
 }
 
-function ArtifactsView({ bot, artifacts, loading, unavailable, onClose }: {
-  bot: Bot; artifacts: Artifact[]; loading: boolean; unavailable: boolean; onClose: () => void;
+function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose }: {
+  bot: Bot; artifacts: Artifact[]; loading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -113,6 +131,9 @@ function ArtifactsView({ bot, artifacts, loading, unavailable, onClose }: {
     {unavailable && <p className="artifacts-notice" role="status">{artifacts.length
       ? "The connection is unavailable. These are the last reported files; opening one may need a reconnect."
       : "Files are unavailable until your assistant reconnects."}</p>}
+    {earlier && <p className="artifacts-notice" role="status">{earlier === "loading"
+      ? "Loading files from earlier in the conversation…"
+      : "Files from earlier in the conversation could not be loaded. Close and reopen this list to try again."}</p>}
     {loading ? <div className="artifacts-empty" role="status">Loading your conversation’s files…</div>
       : !artifacts.length ? <div className="artifacts-empty"><Icon name="file" size={36} />
         <h3>No artifacts yet</h3><p>Generated outputs and files shared in this conversation will appear here.</p></div>

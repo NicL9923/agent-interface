@@ -41,6 +41,31 @@ async function enter(input: HTMLInputElement, value: string) {
 }
 
 describe("conversation artifacts", () => {
+  it("counts files of earlier, unloaded history and lists them when opened", async () => {
+    const old = file("old", "fence-survey.pdf", "application/pdf"), shared = file("shared", "brands.csv", "text/csv"), recent = file("recent", "gate.png", "image/png");
+    const window = { ...conversation, files: [recent], earlierFiles: 2,
+      messages: [{ id: "p9", role: "user" as const, text: "Again" }, { id: "a9", role: "assistant" as const, text: "Done", files: [recent] }] };
+    let finish!: (response: Response) => void;
+    fetchFile.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await render(window);
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    await open();
+    expect(String(fetchFile.mock.calls[0][0])).toBe("/api/bots/ranch/files?before=p9");
+    expect(container.textContent).toContain("Loading files from earlier in the conversation");
+    await act(async () => finish(Response.json({ messages: [{ id: "a1", role: "assistant", files: [old] }, { id: "p2", role: "user", files: [shared] }] })));
+    expect([...container.querySelectorAll(".artifact-item small")].map(item => item.textContent)).toEqual(["Generated", "Shared", "Generated"]);
+    expect([...container.querySelectorAll(".artifact-item strong")].map(item => item.textContent)).toEqual(["fence-survey.pdf", "brands.csv", "gate.png"]);
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    expect(container.textContent).not.toContain("Loading files from earlier");
+  });
+
+  it("does not fetch when the window already holds every file", async () => {
+    conversation.files = [file("pasture", "pasture.png", "image/png")];
+    await render({ ...conversation, earlierFiles: 0 } as Conversation);
+    await open();
+    expect(fetchFile).not.toHaveBeenCalled();
+  });
+
   it("deduplicates discovered/message files, reports their origin, and filters by filename and type", async () => {
     const plan = file("plan", "grazing-plan.md", "text/markdown"), image = file("image", "pasture.png", "image/png"), shared = file("csv", "sensor-history.csv", "text/csv");
     conversation.files = [plan, image, shared];

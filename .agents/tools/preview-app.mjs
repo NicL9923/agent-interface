@@ -9,7 +9,7 @@ import { tsImport } from 'tsx/esm/api';
 const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
-const { historyWindow } = await tsImport('../../src/shared/history.ts', import.meta.url);
+const { filesBefore, historyWindow, windowFiles } = await tsImport('../../src/shared/history.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
@@ -389,8 +389,9 @@ const server = createServer(async (request, response) => {
       const start = url.searchParams.get('start') ?? undefined, turns = url.searchParams.get('turns');
       if (start === undefined && turns === null) return json(response, conversation);
       const page = historyWindow(conversation.messages, { start, turns: Number(turns ?? 0) });
-      return json(response, { ...conversation, messages: page.messages, earlier: page.earlier });
+      return json(response, { ...conversation, messages: page.messages, earlier: page.earlier, ...windowFiles(conversation.messages, page.earlier, conversation.files) });
     }
+    if (/^\/bots\/[^/]+\/files$/.test(path)) return json(response, filesBefore(conversationFor(decodeURIComponent(path.split('/')[2])).messages, url.searchParams.get('before') ?? undefined));
     if (/^\/bots\/[^/]+\/events$/.test(path)) {
       const botId = decodeURIComponent(path.split('/')[2]), streams = changeStreams.get(botId) ?? new Set();
       changeStreams.set(botId, streams.add(response));
