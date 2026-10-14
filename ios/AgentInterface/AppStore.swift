@@ -364,14 +364,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     do {
       var value: Conversation = try await api.get(conversationPath(id, query: query))
       // A saved reading position older than the latest page is opened by loading the page that
-      // ends at it, so it can be restored instead of falling back to the latest message.
+      // ends at it, so it can be restored instead of falling back to the latest message. A
+      // failure here throws, so nothing is applied or pinned and the next poll tries again.
       if historyStarts[id] == nil, (value.earlier ?? 0) > 0,
         let saved = savedAnchor(value, botId: id),
-        !value.messages.contains(where: { $0.id == saved }),
-        let anchored: Conversation = try? await api.get(
-          conversationPath(id, query: "start=\(APIClient.component(saved))&turns=\(Self.historyPageTurns)"))
+        !value.messages.contains(where: { $0.id == saved })
       {
-        value = anchored
+        value = try await api.get(
+          conversationPath(id, query: "start=\(APIClient.component(saved))&turns=\(Self.historyPageTurns)"))
       }
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration else {
         return
