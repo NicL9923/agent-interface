@@ -326,8 +326,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
       conversation = value
       conversationCache[id] = value
-      // Polling also brings in a draft changed on another device, or a send made there.
-      if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) {
+      // Polling also brings in a draft changed on another device, or a send made there, and
+      // settles a copy kept unsaved while saves were in flight.
+      if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) || draft.dirty == true && settled(id) {
         loadDraft(value.draft, botId: id)
       }
     } catch is CancellationError {} catch {
@@ -339,80 +340,89 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   func updateDraft(_ value: Draft) {
-    // Callers change the words and files. The revision bookkeeping stays this copy's.
+    // Callers change the words and files. The revision bookkeeping stays this copy's, and each
+    // edit gets the next sequence, so a response to an older save is never taken for this one.
     draft.text = value.text
     draft.attachments = value.attachments
     draft.dirty = true
+    draft.seq = (draft.seq ?? 0) + 1
     persistDraft()
     draftTask?.cancel()
     scheduledDraftSave = nil
     guard draftReady, let botId = selectedBotId else { return }
-    scheduleDraftSave(draft, botId: botId, after: .milliseconds(600))
-  }
-  /// Saves the open draft after `delay`, unless a newer edit or a send of the same text replaces it.
-  private func scheduleDraftSave(_ snapshot: Draft, botId: String, after delay: Duration) {
     let token = UUID()
-    let currentGeneration = generation
     scheduledDraftSave = token
     draftTask = Task {
-      defer {
-        if self.scheduledDraftSave == token { self.scheduledDraftSave = nil }
-        self.endDraftBackgroundTask(ifToken: token)
-      }
-      do {
-        if delay > .zero { try await Task.sleep(for: delay) }
-        guard !Task.isCancelled,
-          self.pending?.botId != botId || self.pending?.text != snapshot.text
-            || self.pending?.attachments != snapshot.attachments
-        else { return }
-        try await self.saveDraft(snapshot, botId: botId)
-      } catch is CancellationError {} catch {
+      try? await Task.sleep(for: .milliseconds(600))
+      guard !Task.isCancelled, self.scheduledDraftSave == token else { return }
+      self.startDraftSave(botId: botId)
+    }
+  }
+  /// Sends the open draft's save now, unless it is the text being sent. A save in flight is
+  /// never cancelled: it may already have reached the server, and its response must be merged.
+  @discardableResult private func startDraftSave(botId: String) -> Bool {
+    scheduledDraftSave = nil
+    let snapshot = draft
+    guard pending?.botId != botId || pending?.text != snapshot.text || pending?.attachments != snapshot.attachments
+    else { return false }
+    let currentGeneration = generation
+    Task {
+      do { try await self.saveDraft(snapshot, botId: botId) } catch is CancellationError {} catch {
         if currentGeneration == self.generation { self.report(error) }
       }
     }
+    return true
   }
   /// Sends a waiting edit now, when switching assistants or leaving the app, instead of
-  /// cancelling it. Leaving gets a short background task to finish the request.
+  /// dropping it. Leaving gets a short background task to finish the saves in flight.
   private func flushDraft(inBackground: Bool = false) {
     draftTask?.cancel()
-    guard scheduledDraftSave != nil, draftReady, let botId = selectedBotId else {
-      scheduledDraftSave = nil
-      return
-    }
-    scheduleDraftSave(draft, botId: botId, after: .zero)
-    guard inBackground, let token = scheduledDraftSave else { return }
-    endDraftBackgroundTask(ifToken: nil)
-    draftBackgroundToken = token
+    var started = false
+    if scheduledDraftSave != nil, draftReady, let botId = selectedBotId { started = startDraftSave(botId: botId) }
+    scheduledDraftSave = nil
+    guard inBackground, started || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return }
     draftBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save draft") { [weak self] in
-      self?.endDraftBackgroundTask(ifToken: nil)
+      self?.endDraftBackgroundTask()
     }
   }
-  private var draftBackgroundToken: UUID?
-  /// Ends the background task, if it belongs to this save, or any one when `token` is nil.
-  private func endDraftBackgroundTask(ifToken token: UUID?) {
-    guard draftBackgroundTask != .invalid, token == nil || token == draftBackgroundToken else { return }
+  private func endDraftBackgroundTask() {
+    guard draftBackgroundTask != .invalid else { return }
     UIApplication.shared.endBackgroundTask(draftBackgroundTask)
     draftBackgroundTask = .invalid
-    draftBackgroundToken = nil
   }
-  /// Saves a draft on its base revision, then updates the open copy and the cached copy. A
-  /// conflict merges the server's copy in and saves kept edits again on the new base.
+  /// Saves in flight per cached draft. A copy is not marked saved while an older save may land.
+  private var draftSavesInFlight: [String: Int] = [:]
+  private func settled(_ botId: String) -> Bool { key("draft", botId).map { draftSavesInFlight[$0] == nil } ?? true }
+  /// Saves a draft on its base revision, then merges the response into the open copy and the
+  /// cached copy as they are now. Kept edits after a conflict save again on the new base.
   private func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 2) async throws {
     guard let api, let localKey = key("draft", botId) else { return }
     let currentGeneration = generation
-    let update: (Draft) -> Draft
+    draftSavesInFlight[localKey, default: 0] += 1
+    let server: SavedDraft
     var conflict = false
     do {
-      let server: SavedDraft = try await api.write(
-        "/bots/\(APIClient.component(botId))/draft", DraftSave(snapshot), method: "PUT")
-      update = { $0.saved(snapshot, as: server) }
-    } catch let error as APIError where error.code == DraftConflict.code {
-      guard let body = error.body, let refused = try? JSONDecoder().decode(DraftConflict.self, from: body)
-      else { throw error }
-      update = { Draft.merge($0, with: refused.draft, conflict: true).draft }
-      conflict = true
+      defer {
+        let left = (draftSavesInFlight[localKey] ?? 1) - 1
+        draftSavesInFlight[localKey] = left > 0 ? left : nil
+        if draftSavesInFlight.isEmpty { endDraftBackgroundTask() }
+      }
+      do {
+        server = try await api.write(
+          "/bots/\(APIClient.component(botId))/draft", DraftSave(snapshot), method: "PUT")
+      } catch let error as APIError where error.code == DraftConflict.code {
+        guard let body = error.body, let refused = try? JSONDecoder().decode(DraftConflict.self, from: body)
+        else { throw error }
+        server = refused.draft
+        conflict = true
+      }
     }
     guard currentGeneration == generation else { return }
+    let settled = draftSavesInFlight[localKey] == nil
+    // A 409 answering the latest edit is the server's word, even if older than the copy.
+    let update = { (local: Draft) in
+      Draft.merge(local, with: server, authoritative: conflict && settled && local.seq == snapshot.seq, settled: settled).draft
+    }
     var next: Draft?
     if let cached: Draft = read(localKey) {
       next = update(cached)
@@ -447,6 +457,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     pending = submission
     save(submission, key("pending"))
+    // Until the server shows the send, a save of the sent text from this copy is not new work.
+    markSent(submission, true)
     sending = true
     error = nil
     let currentGeneration = generation
@@ -464,6 +476,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       {
         pending = nil
         save(Optional<PendingSubmission>.none, key("pending"))
+        markSent(submission, false)
         receipt = Receipt(
           requestId: submission.requestId, status: "rejected", message: failure.message)
       } else {
@@ -504,8 +517,21 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         if let cached: Draft = read(draftKey) { save(cached.sent(original), draftKey) }
       }
     }
+    if value.status == "rejected" || value.status == "interrupted" { markSent(original, false) }
     pending = nil
     save(Optional<PendingSubmission>.none, key("pending"))
+  }
+  /// Records or forgets, on the copy it came from, the text this device sent.
+  private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
+    let hash = sent ? Draft.contentHash(submission.text, submission.attachments) : nil
+    if let localKey = key("draft", submission.botId), var cached: Draft = read(localKey) {
+      cached.sentHash = hash
+      save(cached, localKey)
+    }
+    if selectedBotId == submission.botId {
+      draft.sentHash = hash
+      persistDraft()
+    }
   }
   /// Gives up on a send the server never confirmed, for example one that was lost before it
   /// arrived. The message may still show up, so its text and attachments go back into the
@@ -517,6 +543,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     var target = Self.draft(
       restoring: old, into: open && draftReady ? draft : read(localKey) ?? Draft())
     target.dirty = true
+    // Taken back: no longer text this device sent.
+    target.sentHash = nil
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
     save(true, key("recovered", old.botId))
@@ -524,7 +552,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     save(Optional<PendingSubmission>.none, key("pending"))
     receipt = nil
     if open {
-      if draftReady { updateDraft(target) } else { draft = target }
+      if draftReady {
+        draft.sentHash = nil
+        updateDraft(target)
+      } else { draft = target }
     } else {
       // Best effort: the dirty local draft already wins the next time that assistant opens.
       Task { try? await self.saveDraft(target, botId: old.botId) }
@@ -535,7 +566,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// reached the server, so it syncs once loaded. Any other leftover edit on an unchanged
   /// server copy is shown, and saves with the next change.
   private func loadDraft(_ remote: SavedDraft?, botId: String) {
-    let merged = Draft.merge(draftReady ? draft : read(key("draft", botId)) ?? draft, with: remote)
+    let merged = Draft.merge(draftReady ? draft : read(key("draft", botId)) ?? draft, with: remote, settled: settled(botId))
     let changed = merged.draft != draft
     draft = merged.draft
     draftReady = true

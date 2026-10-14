@@ -31,6 +31,9 @@ private final class NativeMockServer: @unchecked Sendable {
     private var recorded: [URLRequest] = []
     private var held: [String: NativeMockProtocol] = [:]
     private var heldPaths: Set<String> = []
+    /// Paths the server acts on at once but answers only when released, like a slow response.
+    private var delayedPaths: Set<String> = []
+    private var delayed: [String: () -> Void] = [:]
     private var currentUser = "one"
     private var messageStatus = 200
     private var run = "run-one"
@@ -124,6 +127,15 @@ private final class NativeMockServer: @unchecked Sendable {
         if lock.withLock({ offline }) { protocolInstance.fail(URLError(.notConnectedToInternet)); return }
         if !delay { finish(protocolInstance) }
     }
+    func delayResponse(_ path: String) { _ = lock.withLock { delayedPaths.insert(path) } }
+    func releaseResponse(_ path: String) { lock.withLock { delayed.removeValue(forKey: path) }?() }
+    func waitForDelayed(_ path: String) async throws {
+        for _ in 0..<200 {
+            if lock.withLock({ delayed[path] != nil }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw URLError(.timedOut)
+    }
     func release(_ path: String) {
         let pending = lock.withLock { () -> NativeMockProtocol? in
             heldPaths.remove(path); return held.removeValue(forKey: path)
@@ -171,6 +183,8 @@ private final class NativeMockServer: @unchecked Sendable {
         else if path.hasSuffix("/draft") {
             let bot = request.url!.pathComponents.dropLast().last ?? ""
             if let versioned = versionedDraft(request, bot: bot) { (status, data) = versioned }
+            // An older server answers a save with the draft it saved.
+            else if request.httpMethod == "PUT", let body = Self.body(request) { data = body }
             else { data = Self.json(["text": "server draft for \(user)", "attachments": []]) }
         }
         else if path.hasSuffix("/messages") {
@@ -202,7 +216,12 @@ private final class NativeMockServer: @unchecked Sendable {
             protocolInstance.respond(status: validation.notModified ? 304 : 200, data: validation.notModified ? Data() : data, headers: ["ETag": validation.etag])
             return
         }
-        protocolInstance.respond(status: status, data: data)
+        let answer = { protocolInstance.respond(status: status, data: data) }
+        let park = lock.withLock { () -> Bool in
+            guard delayedPaths.contains(path) else { return false }
+            delayedPaths.remove(path); delayed[path] = answer; return true
+        }
+        if !park { answer() }
     }
     static func errorBody(_ message: String, code: String?) -> Data {
         json(code.map { ["error": message, "code": $0] } ?? ["error": message])
@@ -567,6 +586,25 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft, Draft(text: "Phone again", attachments: [], dirty: false, baseRevision: 4, baseHash: Draft.contentHash("Phone again", [])))
     }
 
+    func testTextSentWhileItsSaveWasInFlightIsNotRestoredByARetry() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts()
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let draftPath = "/api/bots/bot/draft", sendPath = "/api/bots/bot/messages"
+        server.hold(draftPath); server.delayResponse(sendPath)
+        value.updateDraft(Draft(text: "Hello", attachments: []))
+        try await server.waitForHeld(draftPath)
+        let sending = Task { await value.send() }
+        try await server.waitForDelayed(sendPath)
+        XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent", "Accepted while its receipt is still on the way")
+        server.release(draftPath)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.draftSaves().count, 1, "The stale save's 409 is not retried")
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "")
+        XCTAssertEqual(value.draft.text, "")
+        server.releaseResponse(sendPath); await sending.value
+    }
+
     func testAMessageTypedRightAfterSendingSurvivesTheClearForThatSend() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts(text: "Send this", revision: 1)
@@ -810,13 +848,12 @@ private final class NativeMockServer: @unchecked Sendable {
 }
 
 final class DraftMergeTests: XCTestCase {
-    private let local = Draft(text: "Typed here", attachments: [])
     private func hash(_ text: String) -> String { Draft.contentHash(text, []) }
     private func server(_ text: String, _ revision: Int, sent: Int = 0) -> SavedDraft {
         SavedDraft(text: text, attachments: [], revision: revision, reason: sent == revision && revision > 0 ? "sent" : "edit", sentRevision: sent)
     }
-    private func copy(_ text: String = "Typed here", dirty: Bool? = true, base: Int? = 2, baseHash: String? = nil, sentHere: Bool? = nil) -> Draft {
-        Draft(text: text, attachments: [], dirty: dirty, baseRevision: base, baseHash: baseHash, sentHere: sentHere)
+    private func copy(_ text: String = "Typed here", dirty: Bool? = true, base: Int? = 2, baseHash: String? = nil, sentHash: String? = nil) -> Draft {
+        Draft(text: text, attachments: [], dirty: dirty, baseRevision: base, baseHash: baseHash, sentHash: sentHash)
     }
 
     func testACleanCopyAdoptsTheServerDraft() {
@@ -832,13 +869,21 @@ final class DraftMergeTests: XCTestCase {
 
     func testWorkChangedSinceItsBaseSurvivesASendElsewhere() {
         let offline = copy("Offline note", baseHash: hash("Shared plan"))
-        let merged = Draft.merge(offline, with: server("", 3, sent: 3), conflict: true)
+        let merged = Draft.merge(offline, with: server("", 3, sent: 3), authoritative: true)
         XCTAssertEqual(merged.draft, copy("Offline note", base: 3, baseHash: hash(""))); XCTAssertTrue(merged.push)
-        XCTAssertEqual(Draft.merge(copy(base: nil), with: server("", 1, sent: 1), conflict: true).draft.text, "Typed here", "A copy without a fingerprint is kept")
+        XCTAssertEqual(Draft.merge(copy(base: nil), with: server("", 1, sent: 1)).draft.text, "Typed here", "A copy without a fingerprint is kept")
+    }
+
+    func testTheTextThisDeviceSentIsDroppedOnceTheServerShowsTheSend() {
+        let sending = copy(base: 0, baseHash: hash(""), sentHash: hash("Typed here"))
+        XCTAssertEqual(Draft.merge(sending, with: server("", 1, sent: 1)).draft, Draft(dirty: false, baseRevision: 1, baseHash: hash("")))
+        let cleared = copy("", dirty: false, base: 0, sentHash: hash("Typed here"))
+        XCTAssertEqual(Draft.merge(cleared, with: server("Typed here", 1)).draft, cleared, "A save from before the send is not adopted")
+        XCTAssertEqual(Draft.merge(cleared, with: server("", 2, sent: 2)).draft.baseRevision, 2)
     }
 
     func testEditsHereWinOverANewerEditAndSaveOnItsRevision() {
-        let merged = Draft.merge(copy(), with: server("Phone edit", 5, sent: 1), conflict: true)
+        let merged = Draft.merge(copy(), with: server("Phone edit", 5, sent: 1))
         XCTAssertEqual(merged.draft, copy(base: 5, baseHash: hash("Phone edit"))); XCTAssertTrue(merged.push)
     }
 
@@ -848,35 +893,29 @@ final class DraftMergeTests: XCTestCase {
         XCTAssertEqual(Draft.merge(copy(base: nil), with: SavedDraft(text: "Old server")).draft, copy(base: nil), "A server without revisions is revision 0")
     }
 
-    func testMatchingTextIsMarkedSaved() {
-        let merged = Draft.merge(copy(base: 1), with: server("Typed here", 4), conflict: true)
-        XCTAssertEqual(merged.draft, copy(dirty: false, base: 4, baseHash: hash("Typed here"))); XCTAssertFalse(merged.push)
+    func testMatchingTextIsMarkedSavedOnlyOnceNoOlderSaveIsInFlight() {
+        XCTAssertEqual(Draft.merge(copy(base: 1), with: server("Typed here", 4)).draft, copy(dirty: false, base: 4, baseHash: hash("Typed here")))
+        let waiting = Draft.merge(copy(base: 1), with: server("Typed here", 4), settled: false)
+        XCTAssertEqual(waiting.draft, copy(base: 4, baseHash: hash("Typed here"))); XCTAssertFalse(waiting.push)
     }
 
-    func testAnOlderLoadIsIgnoredButAConflictAnswerIsNot() {
+    func testAnOlderResponseIsIgnoredUnlessItAnswersTheLatestEdit() {
         XCTAssertEqual(Draft.merge(copy(dirty: nil, base: 7), with: server("Older read", 6)).draft, copy(dirty: nil, base: 7))
-        let restored = Draft.merge(copy(base: 7), with: server("Restored", 2), conflict: true)
+        XCTAssertEqual(Draft.merge(copy(dirty: false, base: 3, baseHash: hash("Newer")), with: server("Older", 2)).draft.text, "Typed here",
+                       "A late 409 from an older save leaves the newer copy")
+        let restored = Draft.merge(copy(base: 7), with: server("Restored", 2), authoritative: true)
         XCTAssertEqual(restored.draft, copy(base: 2, baseHash: hash("Restored"))); XCTAssertTrue(restored.push, "After a database restore, edits still save")
     }
 
     func testASaveKeepsEditsTypedWhileItWasInFlight() {
-        let sent = Draft(text: "Typed", attachments: [])
-        XCTAssertEqual(copy("Typed", base: 1).saved(sent, as: server("Typed", 2)), copy("Typed", dirty: false, base: 2, baseHash: hash("Typed")))
-        XCTAssertEqual(copy(base: 1).saved(sent, as: server("Typed", 2)), copy(base: 2, baseHash: hash("Typed")))
-        XCTAssertEqual(copy(dirty: nil, base: 5).saved(sent, as: server("Typed", 2)), copy(dirty: nil, base: 5))
-    }
-
-    func testAnAcknowledgmentFromBeforeThisCopysSendIsIgnored() {
-        let next = copy("Next message", base: 1, sentHere: true)
-        XCTAssertEqual(next.saved(Draft(text: "Sent message"), as: server("Sent message", 2)), next)
-        XCTAssertEqual(copy("Sent message", base: 1, sentHere: true).saved(Draft(text: "Sent message"), as: server("Sent message", 2)).dirty, false,
-                       "The server holding exactly this copy is still recorded")
+        XCTAssertEqual(Draft.merge(copy("Typed", base: 1), with: server("Typed", 2)).draft, copy("Typed", dirty: false, base: 2, baseHash: hash("Typed")))
+        XCTAssertEqual(Draft.merge(copy(base: 1), with: server("Typed", 2)).draft, copy(base: 2, baseHash: hash("Typed")))
     }
 
     func testASentCopyEmptiesButKeepsItsBase() {
         let submission = PendingSubmission(requestId: "r", botId: "bot", text: "Typed here", attachments: [], reviewedInterruption: false)
-        XCTAssertEqual(copy(dirty: nil, base: 3, baseHash: "h").sent(submission), Draft(dirty: false, baseRevision: 3, baseHash: "h", sentHere: true))
+        XCTAssertEqual(copy(dirty: nil, base: 3, baseHash: "h", sentHash: "s").sent(submission), Draft(dirty: false, baseRevision: 3, baseHash: "h", sentHash: "s"))
         let more = copy("More", base: 3)
-        XCTAssertEqual(more.sent(submission).sentHere, true); XCTAssertEqual(more.sent(submission).text, "More")
+        XCTAssertEqual(more.sent(submission), more)
     }
 }

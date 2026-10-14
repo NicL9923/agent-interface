@@ -116,20 +116,27 @@ empty draft, so a save dispatched before the send conflicts instead of restoring
 the sent text.
 
 Clients keep a local copy with its base revision, a fingerprint of the content at
-that revision, and an unsaved-edits flag. They reconcile it the same way after a
-409 or a load that shows a different revision:
+that revision, an unsaved-edits flag, and a sequence number that increases with
+every local edit. Each save records the sequence it carries. Every server draft
+that reaches the client, from a load, a save acknowledgment or a 409, is merged
+into the copy as it is now, never applied as the request's snapshot:
 
-1. A copy without unsaved edits adopts the server draft.
-2. If `sentRevision` is newer than the copy's base and the copy still holds its
-   base content, that content was sent: adopt the server draft.
-3. Otherwise unsaved edits are new work and win, including text typed offline
+1. A read older than the copy's base is ignored, unless it is the 409 answering
+   the copy's latest edit with no other save in flight, as after a database restore.
+2. A copy without unsaved edits adopts the server draft. While the text this device
+   sent is still on the server and not yet cleared, it waits for that clear.
+3. If `sentRevision` is newer than the copy's base, and the copy still holds its
+   base content or the text this device sent, that text was sent: adopt the
+   server draft. A retry after a 409 goes through the same rule.
+4. Matching content is saved, but only once no other save of that draft is in
+   flight, because an older save may still land.
+5. Otherwise unsaved edits are new work and win, including text typed offline
    while another device sent the shared draft. Keep them and save again on the
    server's revision.
 
-A load older than the copy's base is ignored; a 409 is always the current draft.
-A save acknowledgment carries the revision it saved. It is ignored if the copy
-already has a newer base, or if this device's own send from the copy was accepted
-after the save went out and the copy no longer matches what was saved.
+A save in flight is never cancelled; its response is merged like any other.
+Fingerprints use a fixed attachment field order.
+
 The web client implements this in `src/app/draft-merge.ts` and iOS in
 `Draft.merge` in `Models.swift`. Both save a pending edit at once, instead of
 dropping it, when the person switches assistants or leaves: the web with a

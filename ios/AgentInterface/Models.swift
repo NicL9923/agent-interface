@@ -233,9 +233,10 @@ struct Draft: Codable, Equatable {
   var baseRevision: Int? = nil
   /// Fingerprint of the content at `baseRevision`, to tell whether this copy changed since.
   var baseHash: String? = nil
-  /// This device's send from this copy was accepted since its base, so older save
-  /// acknowledgments are stale.
-  var sentHere: Bool? = nil
+  /// Increases with every local edit; a save records the one it carries.
+  var seq: Int? = nil
+  /// Fingerprint of the text this device sent from this copy, until the server shows the send.
+  var sentHash: String? = nil
 
   /// A fingerprint of draft content, kept with a cached copy.
   static func contentHash(_ text: String, _ attachments: [FileRef]) -> String {
@@ -246,58 +247,49 @@ struct Draft: Codable, Equatable {
     return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
   }
 
-  /// Reconciles this copy with the server's after a load, or after a save the server refused
-  /// because the base revision was stale. `conflict` marks the server's current copy from a 409;
-  /// a load may be an older read than this copy, and is then ignored. The web client's
-  /// `mergeDraft` in src/app/draft-merge.ts applies the same rule.
+  /// Reconciles this copy with a server draft: a load, a save's acknowledgment, or the current
+  /// draft from a 409. Every response goes through here and is applied to the copy as it is now,
+  /// never as it was when the request went out. The web client's `mergeDraft` in
+  /// src/app/draft-merge.ts applies the same rule.
   ///
-  /// - A clean copy adopts the server draft.
-  /// - A send cleared the server draft after this copy's base, and this copy still holds the
-  ///   content of its base: that content was sent, so adopt the server draft.
+  /// - A server read older than the copy is ignored, unless `authoritative`: the 409 answering
+  ///   the copy's latest save, with no other save in flight, as after a database restore.
+  /// - A clean copy adopts the server draft. While this device's sent text is still on the
+  ///   server, not yet cleared, the copy keeps waiting for that clear.
+  /// - A send cleared the server draft after this copy's base, and the copy still holds its base
+  ///   content or the text this device sent: that text was sent, so adopt the server draft.
+  /// - Matching content is clean, but only once no other save is in flight (`settled`): an older
+  ///   save may still land and change the server copy.
   /// - Otherwise unsaved edits here are new work and win. `push` asks the caller to save them
   ///   on the new base.
-  static func merge(_ local: Draft, with server: SavedDraft?, conflict: Bool = false) -> (draft: Draft, push: Bool) {
+  static func merge(_ local: Draft, with server: SavedDraft?, authoritative: Bool = false, settled: Bool = true)
+    -> (draft: Draft, push: Bool)
+  {
     let server = server ?? SavedDraft()
     let base = local.baseRevision ?? 0
     let revision = server.revision ?? 0
-    if !conflict && revision < base { return (local, false) }
+    if !authoritative && revision < base { return (local, false) }
     let hash = contentHash(server.text, server.attachments)
-    let same = local.text == server.text && local.attachments == server.attachments
-    if local.dirty != true || same
-      || (server.sentRevision ?? 0) > base && local.baseHash == contentHash(local.text, local.attachments)
-    {
-      return (Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash), false)
+    let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash)
+    if local.dirty != true {
+      if local.sentHash == hash && server.reason != "sent" { return (local, false) }
+      return (adopt, false)
     }
-    if revision == base { return (local, false) }
+    let mine = contentHash(local.text, local.attachments)
+    if (server.sentRevision ?? 0) > base && (mine == local.baseHash || mine == local.sentHash) { return (adopt, false) }
     var kept = local
     kept.baseRevision = revision
     kept.baseHash = hash
-    kept.sentHere = nil
+    if local.text == server.text && local.attachments == server.attachments {
+      return settled ? (adopt, false) : (kept, false)
+    }
+    if revision == base { return (local, false) }
     return (kept, true)
-  }
-  /// This copy after the server saved `sent` as `server`. Edits typed since stay unsaved. An
-  /// acknowledgment older than the copy is ignored: one from before a later save, or from a save
-  /// that went out before this copy's own send was accepted.
-  func saved(_ sent: Draft, as server: SavedDraft) -> Draft {
-    let revision = server.revision ?? 0
-    guard revision >= baseRevision ?? 0,
-      sentHere != true || text == server.text && attachments == server.attachments
-    else { return self }
-    var next = self
-    next.baseRevision = revision
-    next.baseHash = Self.contentHash(server.text, server.attachments)
-    next.sentHere = nil
-    if text == sent.text && attachments == sent.attachments { next.dirty = false }
-    return next
   }
   /// This copy once its send was accepted: emptied if it still holds the sent text.
   func sent(_ submission: PendingSubmission) -> Draft {
-    guard text == submission.text && attachments == submission.attachments else {
-      var next = self
-      next.sentHere = true
-      return next
-    }
-    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, sentHere: true)
+    guard text == submission.text && attachments == submission.attachments else { return self }
+    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash)
   }
 }
 /// The server's copy of a draft. Older servers omit the revision fields, which read as 0.

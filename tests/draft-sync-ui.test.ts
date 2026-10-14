@@ -67,7 +67,66 @@ async function type(text:string){
 }
 const open=(name:string)=>act(async()=>[...container.querySelectorAll<HTMLButtonElement>('.bot-item')].find(button=>button.textContent?.includes(name))!.click());
 
+// Holds the next matching request. `apply` decides whether the server acts on it before or after the hold.
+function holdNext(match:(path:string,method?:string)=>boolean,apply:'before'|'after'){
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  const serve=vi.mocked(write).getMockImplementation()!;
+  let taken=false;
+  vi.mocked(write).mockImplementation(async (...args)=>{
+    if(taken||!match(args[0],args[2]))return serve(...args);
+    taken=true;
+    if(apply==='after'){await held;return serve(...args);}
+    const response=serve(...args);
+    await held.then(()=>response.catch(()=>{}));
+    return response;
+  });
+  return ()=>act(async()=>release());
+}
+const isDraftSave=(path:string,method?:string)=>path==='/bots/shared/draft'&&method==='PUT';
+
 describe('draft sync across devices',()=>{
+  it('keeps a reverted edit unsaved until an older save lands, then saves the revert',async()=>{
+    phone.edit('shared','A');
+    await renderApp();
+    const release=holdNext(isDraftSave,'after');
+    await type('AB');await advance(400);
+    await type('A');await advance(1600);
+    await release();
+    await advance(400);await advance(400);await advance(1600);
+    expect(textarea().value).toBe('A');
+    expect(draft('shared')).toMatchObject({text:'A'});
+  });
+
+  it('drops text sent while its save was in flight, without a retry restoring it',async()=>{
+    await renderApp();
+    const releaseSave=holdNext(isDraftSave,'after');
+    await type('Hello');await advance(400);
+    const releaseSend=holdNext(path=>path==='/bots/shared/messages','before');
+    await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+    expect(draft('shared')).toMatchObject({text:'',reason:'sent',revision:1});
+    await open('Other');
+    await releaseSave();await advance(400);
+    expect(draft('shared')).toMatchObject({text:'',revision:1});
+    expect(draftPuts('shared')).toHaveLength(1);
+    expect(cached('shared')).toMatchObject({text:'',dirty:false});
+    await releaseSend();
+  });
+
+  it('ignores a late 409 from an older save after a newer save landed',async()=>{
+    phone.edit('shared','Start');
+    await renderApp();
+    phone.edit('shared','Phone words');
+    const release=holdNext(isDraftSave,'before');
+    await type('Older');await advance(400);
+    await type('Newer');await advance(400);await advance(400);
+    expect(draft('shared')).toMatchObject({text:'Newer',revision:3});
+    await release();await advance(0);
+    expect(textarea().value).toBe('Newer');
+    expect(cached('shared')).toMatchObject({text:'Newer',baseRevision:3});
+  });
+
+
   it('saves an edit at once when switching assistants, then shows it was sent from the phone',async()=>{
     await renderApp();
     await type('Pick up feed');await advance(100);

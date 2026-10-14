@@ -29,38 +29,49 @@ export function contentHash(draft: Pick<Draft, "text" | "attachments">): string 
 }
 
 /**
- * Reconciles this device's copy with the server's after a load, or after a save the server
- * refused because the copy's base revision was stale. `conflict` marks the server's current
- * copy from a 409; a load may be an older read than this copy, and is then ignored.
+ * Reconciles this device's copy with a server draft: a load, a save's acknowledgment, or the
+ * current draft from a 409. Every response goes through here and is applied to the copy as it is
+ * now, never as it was when the request went out.
  *
- * - A clean copy adopts the server draft.
- * - A send cleared the server draft after this copy's base, and this copy still holds the
- *   content of its base: that content was sent, so adopt the server draft.
+ * - A server read older than the copy is ignored, unless `authoritative`: the 409 answering the
+ *   copy's latest save, with no other save in flight, as after a database restore.
+ * - A clean copy adopts the server draft. While this device's sent text is still on the server,
+ *   not yet cleared, the copy keeps waiting for that clear.
+ * - A send cleared the server draft after this copy's base, and the copy still holds its base
+ *   content or the text this device sent: that text was sent, so adopt the server draft.
+ * - Matching content is clean, but only once no other save is in flight (`settled`): an older
+ *   save may still land and change the server copy.
  * - Otherwise unsaved edits here are new work and win. `push` asks the caller to save them on
  *   the new base.
  */
-export function mergeDraft(local: Draft, server: SavedDraft, conflict = false): { draft: Draft; push: boolean } {
+export function mergeDraft(local: Draft, server: SavedDraft, { authoritative = false, settled = true } = {}): { draft: Draft; push: boolean } {
   const base = local.baseRevision ?? 0;
-  if (!conflict && server.revision < base) return { draft: local, push: false };
+  if (!authoritative && server.revision < base) return { draft: local, push: false };
   const hash = contentHash(server);
-  // Nothing changed: the same object lets a refresh skip rendering.
-  if (!local.dirty && !local.sentHere && local.baseRevision === server.revision && local.baseHash === hash && sameDraft(local, server))
-    return { draft: local, push: false };
-  if (!local.dirty || sameDraft(local, server) || server.sentRevision > base && local.baseHash === contentHash(local))
-    return {
-      draft: { text: server.text, attachments: server.attachments, botId: local.botId, userId: local.userId, baseRevision: server.revision, baseHash: hash, dirty: false },
-      push: false,
-    };
+  const adopt = {
+    draft: { text: server.text, attachments: server.attachments, botId: local.botId, userId: local.userId, baseRevision: server.revision, baseHash: hash, dirty: false },
+    push: false,
+  };
+  if (!local.dirty) {
+    if (local.sentHash === hash && server.reason !== "sent") return { draft: local, push: false };
+    // Nothing changed: the same object lets a refresh skip rendering.
+    if (local.baseRevision === server.revision && local.baseHash === hash && !local.sentHash && sameDraft(local, server))
+      return { draft: local, push: false };
+    return adopt;
+  }
+  const mine = contentHash(local);
+  if (server.sentRevision > base && (mine === local.baseHash || mine === local.sentHash)) return adopt;
+  if (sameDraft(local, server)) {
+    if (settled) return adopt;
+    return { draft: server.revision === base ? local : { ...local, baseRevision: server.revision, baseHash: hash }, push: false };
+  }
   if (server.revision === base) return { draft: local, push: false };
-  return { draft: { ...local, baseRevision: server.revision, baseHash: hash, sentHere: undefined }, push: true };
+  return { draft: { ...local, baseRevision: server.revision, baseHash: hash }, push: true };
 }
 
-/**
- * This device's copy after the server saved `sent` as `server`. Edits typed since stay unsaved.
- * An acknowledgment older than the copy is ignored: one from before a later save, or from a save
- * that went out before this copy's own send was accepted.
- */
-export function savedCopy(local: Draft, sent: Pick<Draft, "text" | "attachments">, server: SavedDraft): Draft {
-  if (server.revision < (local.baseRevision ?? 0) || local.sentHere && !sameDraft(local, server)) return local;
-  return { ...local, baseRevision: server.revision, baseHash: contentHash(server), sentHere: undefined, dirty: sameDraft(local, sent) ? false : local.dirty };
+/** A sequence for a local edit, increasing across reloads, so responses can tell the newest edit. */
+let lastSeq = 0;
+export function nextSeq() {
+  lastSeq = Math.max(Date.now(), lastSeq + 1);
+  return lastSeq;
 }

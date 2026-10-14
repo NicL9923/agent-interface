@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { api, ApiError, uploadFile, write } from "../client-api";
-import { contentHash, mergeDraft, savedCopy, savedDraft } from "./draft-merge";
+import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
 import { draftKey, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
@@ -12,6 +12,8 @@ const draftPath = (botId: string) => `/bots/${encodeURIComponent(botId)}/draft`;
 // save that does not fit is sent as an ordinary request instead.
 const KEEPALIVE_BYTES = 60_000;
 let keepaliveBytes = 0;
+// Saves in flight per draft. A copy is not marked saved while an older save may still land.
+const inFlight = new Map<string, number>();
 /**
  * Saves a draft on its base revision, then updates the open copy and the cached copy. A conflict
  * merges the server's copy in. Kept edits on an open draft save again from the persistence
@@ -29,29 +31,34 @@ async function saveDraft(options: {
 }, retries = 2): Promise<void> {
   const { userId, botId, draft, setDraft, live, shown, keepalive } = options;
   if (!live()) return;
-  const sent = { text: draft.text, attachments: draft.attachments };
-  const body = { ...sent, baseRevision: draft.baseRevision ?? 0 };
-  let update: (local: Draft) => Draft;
+  const key = draftKey(userId, botId);
+  const seq = draft.seq ?? 0;
+  const body = { text: draft.text, attachments: draft.attachments, baseRevision: draft.baseRevision ?? 0 };
+  let server: SavedDraft;
   let conflict = false;
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
   const bytes = keepalive ? new Blob([JSON.stringify(body)]).size : 0;
   const budgeted = keepalive && keepaliveBytes + bytes <= KEEPALIVE_BYTES;
   if (budgeted) keepaliveBytes += bytes;
   try {
-    const server = savedDraft(await (budgeted
+    server = savedDraft(await (budgeted
       ? write<SavedDraft>(draftPath(botId), body, "PUT", { keepalive: true })
       : write<SavedDraft>(draftPath(botId), body, "PUT")));
-    update = local => savedCopy(local, sent, server);
   } catch (e) {
     // Any other failure leaves the draft dirty, to save with the next change or reconnect.
     if (!(e instanceof ApiError && e.code === "draft_conflict")) return;
-    const server = savedDraft(e.data?.draft);
-    update = local => mergeDraft(local, server, true).draft;
+    server = savedDraft(e.data?.draft);
     conflict = true;
   } finally {
     if (budgeted) keepaliveBytes -= bytes;
+    const left = (inFlight.get(key) ?? 1) - 1;
+    if (left > 0) inFlight.set(key, left); else inFlight.delete(key);
   }
   if (!live()) return;
-  const key = draftKey(userId, botId);
+  const settled = !inFlight.has(key);
+  // Applied to the copy as it is now. A 409 for the latest edit is the server's word, even if older.
+  const update = (local: Draft) =>
+    mergeDraft(local, server, { settled, authoritative: conflict && settled && (local.seq ?? 0) === seq }).draft;
   const cached = localRead<Draft>(key);
   const next = cached ? update(cached) : undefined;
   if (next) localSave(key, next);
@@ -65,7 +72,12 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   identityEpoch: Epoch;
   setError(update: string | ((previous: string) => string)): void;
 }) {
-  const [draft, setDraft] = useState<Draft>({ text: "", attachments: [] });
+  const [draft, setDraftState] = useState<Draft>({ text: "", attachments: [] });
+  // A change that leaves the copy unsaved with new content is a local edit and gets a new sequence.
+  const setDraft = useCallback((update: Draft | ((current: Draft) => Draft)) => setDraftState(current => {
+    const next = typeof update === "function" ? update(current) : update;
+    return next !== current && next.dirty && !sameDraft(next, current) ? { ...next, seq: nextSeq() } : next;
+  }), []);
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => {
     if (!botId || !userId) return;
@@ -86,7 +98,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         const saved = savedDraft(await api<SavedDraft | null>(draftPath(botId)));
         if (!live) return;
         draftLoaded = true;
-        setDraft(current => mergeDraft(current, saved).draft);
+        setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
         setDraftReady(true);
         setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
       } catch (e) {

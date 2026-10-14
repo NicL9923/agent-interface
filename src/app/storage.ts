@@ -16,8 +16,10 @@ export type Draft = {
   baseRevision?: number;
   /** Fingerprint of the content at `baseRevision`, to tell whether this copy changed since. */
   baseHash?: string;
-  /** This device's send from this copy was accepted since its base, so older save acknowledgments are stale. */
-  sentHere?: boolean;
+  /** Increases with every local edit; a save records the one it carries. */
+  seq?: number;
+  /** Fingerprint of the text this device sent from this copy, until the server shows the send. */
+  sentHash?: string;
 };
 // A file still on its way to Hermes. It joins the draft's attachments once uploaded.
 export type LocalUpload = {
@@ -70,8 +72,8 @@ export const sameDraft = (a: Pick<Draft, "text" | "attachments">, b: Pick<Draft,
 /** This device's copy once its send was accepted: emptied if it still holds the sent text. */
 export function sentCopy(draft: Draft, submission: Pick<Pending, "text" | "attachments">): Draft {
   return sameDraft(draft, submission)
-    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, baseHash: draft.baseHash, sentHere: true }
-    : { ...draft, sentHere: true };
+    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, baseHash: draft.baseHash, sentHash: draft.sentHash, seq: draft.seq }
+    : draft;
 }
 export function clearSavedDraft(user: string, submission: Pending) {
   const key = draftKey(user, submission.botId);
