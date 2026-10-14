@@ -108,8 +108,11 @@ it("blocks new work during maintenance while retaining personal drafts and read 
   await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/install", headers, payload: { candidateRevision: revision, requestId: randomUUID() } });
   const message = await installation.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { requestId: randomUUID(), text: "Wait" } });
   expect(message.statusCode).toBe(409); expect(message.json().code).toBe("hermes_maintenance");
+  const encoded = await installation.app.inject({ method: "POST", url: "/%61pi/bots/shared/messages", headers, payload: { requestId: randomUUID(), text: "Wait" } });
+  expect(encoded.statusCode).toBe(409);
   expect(installation.runtime.submit).not.toHaveBeenCalled();
   expect((await installation.app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Saved for later", attachments: [] } })).statusCode).toBe(200);
+  expect((await installation.app.inject({ method: "PUT", url: "/api/bots/shared/read-position", headers, payload: { messageId: "m1" } })).statusCode).toBe(200);
   expect((await installation.app.inject({ url: "/api/bots/shared/draft", headers })).json().text).toBe("Saved for later");
   expect((await installation.app.inject({ url: "/api/hermes/upgrade", headers })).statusCode).toBe(200);
 });

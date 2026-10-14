@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { isApiRequest, routePattern } from "./route-path.js";
 
 /** The policy for app pages and static files. The preview fixture serves the same one. */
 export function contentSecurityPolicy(origin: string) {
@@ -55,9 +56,8 @@ export function installSecurityHeaders(app: FastifyInstance, origin: string) {
   app.addHook("onSend", async (req, reply, payload) => {
     // Native sign-in and the OAuth callback set their own nonce policies.
     if (reply.hasHeader("content-security-policy")) return payload;
-    const path = req.url.split("?")[0];
-    if (!path.startsWith("/api/")) reply.header("Content-Security-Policy", documentPolicy);
-    else if (!path.startsWith("/api/files/") && String(reply.getHeader("content-type") ?? "").startsWith("application/json"))
+    if (!isApiRequest(req)) reply.header("Content-Security-Policy", documentPolicy);
+    else if (!routePattern(req).startsWith("/api/files/") && String(reply.getHeader("content-type") ?? "").startsWith("application/json"))
       reply.header("Content-Security-Policy", apiPolicy);
     return payload;
   });
