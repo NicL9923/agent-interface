@@ -36,6 +36,8 @@ export class ApiError extends Error {
     public status: number,
     public code?: string,
     public confirmRequired?: boolean,
+    /** The error response body, such as the current draft with a draft conflict. */
+    public data?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -91,6 +93,7 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
         response.status,
         data?.code,
         data?.confirmRequired,
+        data,
       );
     if (get && scope === generation) remember(path, { etag: response.headers.get("ETag"), text: body, data });
     return data as T;
@@ -105,8 +108,8 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
     init.signal?.removeEventListener("abort", abort);
   }
 }
-export function write<T>(path: string, value: unknown, method = "POST") {
-  return api<T>(path, { method, body: JSON.stringify(value) });
+export function write<T>(path: string, value: unknown, method = "POST", init?: RequestInit) {
+  return api<T>(path, { ...init, method, body: JSON.stringify(value) });
 }
 /**
  * Runs refresh every intervalMs while the page is visible. A hidden page pauses it,

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum ActivityState: String, Codable, CaseIterable {
@@ -230,10 +231,108 @@ struct ReadPosition: Codable {
   var messageId: String?
   var scrollTop: Double? = nil
 }
+/// This device's copy of a draft, as cached on the device.
 struct Draft: Codable, Equatable {
   var text = ""
   var attachments: [FileRef] = []
   var dirty: Bool? = nil
+  /// The server revision this copy was loaded from or last saved as. Missing means 0.
+  var baseRevision: Int? = nil
+  /// Fingerprint of the content at `baseRevision`, to tell whether this copy changed since.
+  var baseHash: String? = nil
+  /// Increases with every local edit; a save records the one it carries.
+  var seq: Int? = nil
+  /// Fingerprint of the text this device sent from this copy, until the server shows the send.
+  var sentHash: String? = nil
+  /// The revision that send was written on; a `sentRevision` past it shows the send completed.
+  var sentBase: Int? = nil
+
+  /// A fingerprint of draft content, kept with a cached copy.
+  static func contentHash(_ text: String, _ attachments: [FileRef]) -> String {
+    struct Content: Encodable { var text: String; var attachments: [FileRef] }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    let data = (try? encoder.encode(Content(text: text, attachments: attachments))) ?? Data(text.utf8)
+    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Reconciles this copy with a server draft: a load, a save's acknowledgment, or the current
+  /// draft from a 409. Every response goes through here and is applied to the copy as it is now,
+  /// never as it was when the request went out. The web client's `mergeDraft` in
+  /// src/app/draft-merge.ts applies the same rule.
+  ///
+  /// - A server read older than the copy is ignored, unless `authoritative`: the 409 answering
+  ///   the copy's latest save, with no other save in flight, as after a database restore.
+  /// - A clean copy adopts the server draft. While this device's sent text is still on the
+  ///   server, not yet cleared, the copy keeps waiting for that clear.
+  /// - A send cleared the server draft after this copy's base, and the copy still holds its base
+  ///   content or the text this device sent: that text was sent, so adopt the server draft.
+  /// - Matching content is clean, but only once no other save is in flight (`settled`): an older
+  ///   save may still land and change the server copy.
+  /// - Otherwise unsaved edits here are new work and win. `push` asks the caller to save them
+  ///   on the new base.
+  static func merge(_ local: Draft, with server: SavedDraft?, authoritative: Bool = false, settled: Bool = true)
+    -> (draft: Draft, push: Bool)
+  {
+    let server = server ?? SavedDraft()
+    let base = local.baseRevision ?? 0
+    let revision = server.revision ?? 0
+    if !authoritative && revision < base { return (local, false) }
+    let hash = contentHash(server.text, server.attachments)
+    let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash)
+    // The guard for this device's send lasts until the server shows that send completed.
+    let sendShown = local.sentHash != nil && (server.sentRevision ?? 0) > (local.sentBase ?? 0)
+    if local.dirty != true {
+      if local.sentHash == hash && !sendShown { return (local, false) }
+      return (adopt, false)
+    }
+    let mine = contentHash(local.text, local.attachments)
+    if (server.sentRevision ?? 0) > base && (mine == local.baseHash || sendShown && mine == local.sentHash) { return (adopt, false) }
+    var current = local
+    if sendShown {
+      current.sentHash = nil
+      current.sentBase = nil
+    }
+    var kept = current
+    kept.baseRevision = revision
+    kept.baseHash = hash
+    if local.text == server.text && local.attachments == server.attachments {
+      return settled ? (adopt, false) : (kept, false)
+    }
+    if revision == base { return (current, false) }
+    return (kept, true)
+  }
+  /// This copy once its send was accepted: emptied if it still holds the sent text.
+  func sent(_ submission: PendingSubmission) -> Draft {
+    guard text == submission.text && attachments == submission.attachments else { return self }
+    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash, sentBase: sentBase)
+  }
+}
+/// The server's copy of a draft. Older servers omit the revision fields, which read as 0.
+struct SavedDraft: Codable, Equatable {
+  var text = ""
+  var attachments: [FileRef] = []
+  var revision: Int? = nil
+  /// `edit`, or `sent` when the latest change was the clear after an accepted message.
+  var reason: String? = nil
+  /// The revision of the latest send clear, or 0.
+  var sentRevision: Int? = nil
+}
+/// A draft save. Sending the base revision lets the server refuse an edit made on a stale copy.
+struct DraftSave: Encodable {
+  var text: String
+  var attachments: [FileRef]
+  var baseRevision: Int
+  init(_ draft: Draft) {
+    text = draft.text
+    attachments = draft.attachments
+    baseRevision = draft.baseRevision ?? 0
+  }
+}
+/// The 409 body for a stale draft save, carrying the server's current copy.
+struct DraftConflict: Decodable {
+  static let code = "draft_conflict"
+  var draft: SavedDraft
 }
 /// The files of the history before a window, from `GET /bots/:id/files?before=`.
 struct EarlierFiles: Decodable {
@@ -255,7 +354,7 @@ struct Conversation: Codable {
   var activity: Activity
   var approvals: [Approval]
   var files: [FileRef]
-  var draft: Draft?
+  var draft: SavedDraft?
   var readPosition: ReadPosition?
   var toolCalls: [ToolCall]?
   var activityMessages: [Message] {
@@ -388,6 +487,9 @@ struct PendingSubmission: Codable, Equatable {
   var attachments: [FileRef]
   var reviewedInterruption: Bool
   var reviewedUncertain = false
+  /// The draft revision this message was written on, so the server clears a draft whose final
+  /// edits were never saved.
+  var draftBaseRevision: Int? = nil
   var draft: Draft { Draft(text: text, attachments: attachments) }
 }
 struct AuthConfig: Codable {

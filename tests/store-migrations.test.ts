@@ -29,6 +29,7 @@ function legacyDatabase() {
       .run(id, "ranch", "one", JSON.stringify({ requestId: id, botId: "ranch", senderId: "one", text: id }), JSON.stringify({ requestId: id, ...receipt }), 1);
   submission("accepted-request", { status: "accepted", messageId: "message-1" });
   submission("uncertain-request", { status: "uncertain" });
+  db.prepare("INSERT INTO drafts VALUES(?,?,?)").run("one", "ranch", JSON.stringify({ text: "Unsent before the upgrade", attachments: [] }));
   db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-1", "event-1", "one", JSON.stringify({ queuedAt: 1234 }));
   db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-untimed", "event-untimed", "one", "{}");
   db.close();
@@ -57,6 +58,9 @@ describe("store migrations", () => {
     const created = Object.fromEntries((store.db.prepare("SELECT id,created_at FROM outbox").all() as { id: string; created_at: number }[]).map(row => [row.id, row.created_at]));
     expect(created["outbox-1"]).toBe(1234);
     expect(created["outbox-untimed"]).toBeGreaterThan(Date.now() - 60_000);
+    // Drafts saved before revisions start at revision 0, so a client's first base matches.
+    expect(store.draft("one", "ranch")).toEqual({ text: "Unsent before the upgrade", attachments: [], revision: 0, reason: "edit", sentRevision: 0 });
+    expect(store.saveDraft("one", "ranch", { text: "Edited after", attachments: [] }, 0)).toMatchObject({ saved: true, draft: { revision: 1 } });
   });
 
   it("serves polling lookups from indexes", () => {
@@ -95,6 +99,60 @@ describe("store migrations", () => {
       expect({ table, columns: columns(store.db, table) }).toEqual({ table, columns: columns(legacy, table) });
     legacy.close();
     expect(() => store.db.prepare("INSERT INTO sessions VALUES(?,?,?,?)").run("rollback-session", "one", "csrf", Date.now())).not.toThrow();
+    expect(() => store.db.prepare("INSERT INTO drafts VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value").run("one", "ranch", "{}")).not.toThrow();
     expect(() => store.db.prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload) VALUES(?,?,?,?)").run("outbox-2", "event-2", "one", "{}")).not.toThrow();
+  });
+});
+
+// The schema the previous release creates and accepts. Regenerate it only with a deliberate
+// schema bump, which also ends rollback to that release.
+const previousRelease = JSON.parse(readFileSync(new URL("./fixtures/previous-release-schema.json", import.meta.url), "utf8")) as
+  { schemaVersion: number; objects: { type: string; name: string; tableName: string; sql: string }[] };
+const objects = (db: DatabaseSync) =>
+  db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all() as typeof previousRelease.objects;
+
+describe("rollback to the previous release", () => {
+  it("never raises the schema version past what the previous release accepts", () => {
+    expect(schemaVersion).toBeLessThanOrEqual(previousRelease.schemaVersion);
+    expect(version(open(legacyDatabase()).db)).toBeLessThanOrEqual(previousRelease.schemaVersion);
+  });
+
+  it("keeps every object of the previous schema and only adds new tables beside them", () => {
+    const current = objects(open(legacyDatabase()).db);
+    for (const object of previousRelease.objects) expect(current).toContainEqual(object);
+    const known = new Set(previousRelease.objects.map(object => object.name));
+    const oldTables = new Set(previousRelease.objects.filter(object => object.type === "table").map(object => object.name));
+    for (const added of current.filter(object => !known.has(object.name))) {
+      expect(added.type, added.name).toBe("table");
+      expect(added.sql, added.name).toMatch(/^CREATE TABLE/);
+      expect(oldTables.has(added.tableName), added.name).toBe(false);
+    }
+  });
+
+  it("returns a database that briefly versioned the assistant visibility tables to version 2, keeping their rows", () => {
+    const path = legacyDatabase();
+    open(path).close(); stores.pop();
+    const db = new DatabaseSync(path);
+    db.prepare("INSERT INTO bot_visibility_periods VALUES(?,?,?)").run("ranch", 0, "one");
+    db.exec("PRAGMA user_version=3");
+    db.close();
+    const store = open(path);
+    expect(version(store.db)).toBe(previousRelease.schemaVersion);
+    expect(store.visibilityPeriods("ranch")).toEqual([{ startedAt: 0, ownerId: "one" }]);
+  });
+
+  it("opens a database the previous release wrote", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-store-"));
+    directories.push(directory);
+    const path = join(directory, "app.sqlite");
+    const db = new DatabaseSync(path);
+    for (const object of [...previousRelease.objects].sort((a, b) => +(a.type === "index") - +(b.type === "index"))) db.exec(object.sql);
+    db.exec(`PRAGMA user_version=${previousRelease.schemaVersion}`);
+    db.prepare("INSERT INTO users VALUES(?,?,?,?)").run("one", "one@example.test", "One", null);
+    db.prepare("INSERT INTO drafts VALUES(?,?,?)").run("one", "ranch", JSON.stringify({ text: "Written before the upgrade", attachments: [] }));
+    db.close();
+    const store = open(path);
+    expect(store.draft("one", "ranch")).toEqual({ text: "Written before the upgrade", attachments: [], revision: 0, reason: "edit", sentRevision: 0 });
+    expect(store.saveDraft("one", "ranch", { text: "Edited", attachments: [] }, 0)).toMatchObject({ saved: true, draft: { revision: 1 } });
   });
 });

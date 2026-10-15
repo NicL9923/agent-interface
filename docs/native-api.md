@@ -120,6 +120,71 @@ because clearing only local storage cannot revoke the server session. When the
 server stays unreachable, the app lets the person clear the local session anyway
 after warning that the server-side session remains valid until it expires.
 
+## Drafts
+
+Each person has one draft per assistant, shared by their devices.
+`GET /api/bots/:id/draft` returns it, or `null` if they never saved one there. The
+conversation response carries the same object as `draft`:
+
+```json
+{ "text": "Add basil", "attachments": [], "revision": 4, "reason": "edit", "sentRevision": 2 }
+```
+
+`revision` grows with every change. `reason` is `edit`, or `sent` when the latest
+change was the clear after an accepted message. `sentRevision` is the revision of
+the latest such clear, or 0. A draft saved before revisions existed is at revision 0.
+
+`PUT /api/bots/:id/draft` takes `{ "text": "...", "attachments": [], "baseRevision": 4 }`
+and returns the saved draft. `baseRevision` is the revision the edit was made on.
+If the draft has changed since, the server returns 409 with `code: "draft_conflict"`
+and the current draft as `draft`, and saves nothing. Without `baseRevision`, as from
+older app builds, the edit always applies. Content the server already has is not a
+conflict and does not advance the revision, so a retried save is harmless.
+
+A message submission may carry `draftBaseRevision`, the revision of the draft the
+message was written on. When Hermes accepts the message, the server clears the
+sender's draft for that assistant if it is empty or missing, still holds exactly
+the sent text and attachments, or has a revision at or below `draftBaseRevision`.
+The last rule clears a draft whose final edits were never saved because the
+person sent first. An edit saved from another device after that base keeps the
+draft. Without `draftBaseRevision`, as from older app builds, the base rule does
+not apply. A clear always advances the revision with reason `sent`, even for an
+empty draft, so a save dispatched before the send conflicts instead of restoring
+the sent text.
+
+Clients keep a local copy with its base revision, a fingerprint of the content at
+that revision, an unsaved-edits flag, and a sequence number that increases with
+every local edit. Each save records the sequence it carries. Every server draft
+that reaches the client, from a load, a save acknowledgment or a 409, is merged
+into the copy as it is now, never applied as the request's snapshot:
+
+1. A read older than the copy's base is ignored, unless it is the 409 answering
+   the copy's latest edit with no other save in flight, as after a database restore.
+2. A copy without unsaved edits adopts the server draft. While the text this device
+   sent is still on the server and `sentRevision` does not yet show that send, it
+   waits for the clear. Once it does, the guard ends, so a later draft with the
+   same text is adopted.
+3. If `sentRevision` is newer than the copy's base, and the copy still holds its
+   base content or the text this device sent, that text was sent: adopt the
+   server draft. A retry after a 409 goes through the same rule.
+4. Matching content is saved, but only once no other save of that draft is in
+   flight, because an older save may still land.
+5. Otherwise unsaved edits are new work and win, including text typed offline
+   while another device sent the shared draft. Keep them and save again on the
+   server's revision.
+
+A save in flight is never cancelled; its response is merged like any other. Saves
+of one draft go one at a time, except that leaving sends the latest edit at once.
+After every response or merge, a copy left unsaved with no save in flight or
+waiting saves again. A failed or timed-out save does the same after a backoff of
+1, 2 and 4 seconds, up to 30, reset by the next answered save.
+Fingerprints use a fixed attachment field order.
+
+The web client implements this in `src/app/draft-merge.ts` and iOS in
+`Draft.merge` in `Models.swift`. Both save a pending edit at once, instead of
+dropping it, when the person switches assistants or leaves: the web with a
+`keepalive` request on page hide, iOS with a short background task.
+
 ## Household experience
 
 Web and native clients share these authenticated operations. See

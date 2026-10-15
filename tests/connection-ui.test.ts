@@ -348,9 +348,11 @@ describe('setup and recovery interface',()=>{
     expect(write).not.toHaveBeenCalled();
     await act(async()=>root.unmount());root=createRoot(container);await renderApp();
     expect(container.querySelector('textarea')?.value).toBe('Written while offline');
+    // The server answers a save with the draft it now holds.
+    vi.mocked(write).mockImplementation(async <T>(_path:string,value:unknown)=>({...value as object,revision:1,reason:'edit',sentRevision:0}) as T);
     Object.defineProperty(navigator,'onLine',{configurable:true,value:true});
     await act(async()=>window.dispatchEvent(new Event('online')));await advance(400);
-    expect(write).toHaveBeenCalledExactlyOnceWith('/bots/shared/draft',{text:'Written while offline',attachments:[],botId:'shared',userId:'one',dirty:true},'PUT');
+    expect(write).toHaveBeenCalledExactlyOnceWith('/bots/shared/draft',{text:'Written while offline',attachments:[],baseRevision:0},'PUT');
     expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({text:'Written while offline',dirty:false});
     expect(container.querySelector('textarea')?.value).toBe('Written while offline');
   });

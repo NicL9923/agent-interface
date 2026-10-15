@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { SubmissionReceipt } from "../shared/types";
 import { api, ApiError, write } from "../client-api";
-import { clearSavedDraft, localRead, localRemove, localSave, sameDraft, submissionKey } from "./storage";
+import { clearSavedDraft, draftKey, localRead, localRemove, localSave, sentCopy, submissionKey } from "./storage";
 import type { Draft, Pending } from "./storage";
+import { contentHash } from "./draft-merge";
 // A submission whose outcome is unknown stays pending (and blocks sending) until Hermes confirms it.
 export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError }: {
   botId: string;
@@ -23,17 +24,18 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
   activeBotRef.current = botId;
   const clearSent = (user: string, request: Pending) =>
     setDraft((current) =>
-      current.botId === request.botId &&
-      current.userId === user &&
-      sameDraft(current, request)
-        ? {
-            text: "",
-            attachments: [],
-            botId: current.botId,
-            userId: current.userId,
-          }
+      current.botId === request.botId && current.userId === user
+        ? sentCopy(current, request)
         : current,
     );
+  // Until the server shows the send, a save of the sent text from this copy is not new work.
+  const markSent = (user: string, request: Pending, sent: boolean) => {
+    const mark = sent ? { sentHash: contentHash(request), sentBase: request.draftBaseRevision ?? 0 } : { sentHash: undefined, sentBase: undefined };
+    const key = draftKey(user, request.botId);
+    const saved = localRead<Draft>(key);
+    if (saved) localSave(key, { ...saved, ...mark });
+    setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, ...mark } : current);
+  };
   useEffect(() => {
     if (!botId || !userId) return;
     setReceipt(null);
@@ -63,6 +65,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
           result.status === "rejected" ||
           result.status === "interrupted"
         ) {
+          markSent(userId, pending, false);
           setPending(null);
           localRemove(key);
         }
@@ -97,8 +100,10 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       text: draft.text,
       attachments: draft.attachments,
       reviewedInterruption: reviewed,
+      draftBaseRevision: draft.baseRevision ?? 0,
     };
     localSave(submissionKey(userId, botId), request);
+    markSent(userId, request, true);
     setPending(request);
     setSending(true);
     try {
@@ -117,12 +122,14 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
         result.status === "rejected" ||
         result.status === "interrupted"
       ) {
+        markSent(userId, request, false);
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
       }
     } catch (e) {
       if (epoch !== identityEpoch.current) return;
       if (e instanceof ApiError && e.status < 500) {
+        markSent(userId, request, false);
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
       }

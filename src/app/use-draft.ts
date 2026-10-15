@@ -1,40 +1,126 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
-import type { FileRef } from "../shared/types";
-import { api, uploadFile, write } from "../client-api";
+import type { FileRef, SavedDraft } from "../shared/types";
+import { api, ApiError, uploadFile, write } from "../client-api";
+import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
 import { draftKey, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
+type SetDraft = (update: (current: Draft) => Draft) => void;
+const draftPath = (botId: string) => `/bots/${encodeURIComponent(botId)}/draft`;
+// Keepalive requests in flight share a 64 KiB budget, and the browser rejects one over it. A
+// save that does not fit is sent as an ordinary request instead.
+const KEEPALIVE_BYTES = 60_000;
+let keepaliveBytes = 0;
+// Saves in flight per draft. A copy is not marked saved while an older save may still land.
+const inFlight = new Map<string, number>();
+// Consecutive failed saves per draft, for the retry backoff: 1 s, 2 s, 4 s, up to 30 s.
+const failures = new Map<string, number>();
+/**
+ * Saves a draft on its base revision, then merges the response into the open copy and the cached
+ * copy. Afterwards one rule holds: a copy left unsaved with no save in flight saves again, from
+ * the persistence effect for the open draft (`settle`), or here for a draft no longer shown.
+ */
+async function saveDraft(options: {
+  userId: string;
+  botId: string;
+  draft: Draft;
+  setDraft: SetDraft;
+  /** False once the identity changed, so nothing is written for the wrong person. */
+  live(): boolean;
+  shown(): boolean;
+  /** Lets the open draft's persistence effect check the rule again. */
+  settle?(): void;
+  keepalive?: boolean;
+}, retries = 3): Promise<void> {
+  const { userId, botId, draft, setDraft, live, shown, keepalive } = options;
+  if (!live()) return;
+  const key = draftKey(userId, botId);
+  const seq = draft.seq ?? 0;
+  const body = { text: draft.text, attachments: draft.attachments, baseRevision: draft.baseRevision ?? 0 };
+  let server: SavedDraft;
+  let conflict = false;
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
+  const bytes = keepalive ? new Blob([JSON.stringify(body)]).size : 0;
+  const budgeted = keepalive && keepaliveBytes + bytes <= KEEPALIVE_BYTES;
+  if (budgeted) keepaliveBytes += bytes;
+  try {
+    server = savedDraft(await (budgeted
+      ? write<SavedDraft>(draftPath(botId), body, "PUT", { keepalive: true })
+      : write<SavedDraft>(draftPath(botId), body, "PUT")));
+  } catch (e) {
+    if (!(e instanceof ApiError && e.code === "draft_conflict")) {
+      // A failed or timed-out save leaves the copy unsaved: check the rule again after a backoff.
+      const count = (failures.get(key) ?? 0) + 1;
+      failures.set(key, count);
+      setTimeout(() => {
+        if (!live()) return;
+        options.settle?.();
+        const cached = localRead<Draft>(key);
+        if (cached?.dirty && !inFlight.has(key) && !shown()) void saveDraft({ ...options, draft: cached }, retries);
+      }, Math.min(30_000, 1000 * 2 ** (count - 1)));
+      return;
+    }
+    server = savedDraft(e.data?.draft);
+    conflict = true;
+  } finally {
+    if (budgeted) keepaliveBytes -= bytes;
+    const left = (inFlight.get(key) ?? 1) - 1;
+    if (left > 0) inFlight.set(key, left); else inFlight.delete(key);
+  }
+  failures.delete(key);
+  if (!live()) return;
+  const settled = !inFlight.has(key);
+  // Applied to the copy as it is now. A 409 for the latest edit is the server's word, even if older.
+  const update = (local: Draft) =>
+    mergeDraft(local, server, { settled, authoritative: conflict && settled && (local.seq ?? 0) === seq }).draft;
+  const cached = localRead<Draft>(key);
+  const next = cached ? update(cached) : undefined;
+  if (next) localSave(key, next);
+  setDraft(current => current.botId === botId && current.userId === userId ? update(current) : current);
+  options.settle?.();
+  if (next?.dirty && !inFlight.has(key) && retries > 0 && !shown())
+    await saveDraft({ ...options, draft: next }, retries - 1);
+}
 export function useDraft({ botId, userId, identityEpoch, setError }: {
   botId: string;
   userId?: string;
   identityEpoch: Epoch;
   setError(update: string | ((previous: string) => string)): void;
 }) {
-  const [draft, setDraft] = useState<Draft>({ text: "", attachments: [] });
+  const [draft, setDraftState] = useState<Draft>({ text: "", attachments: [] });
+  // A change that leaves the copy unsaved with new content is a local edit and gets a new sequence.
+  const setDraft = useCallback((update: Draft | ((current: Draft) => Draft)) => setDraftState(current => {
+    const next = typeof update === "function" ? update(current) : update;
+    return next !== current && next.dirty && !sameDraft(next, current) ? { ...next, seq: nextSeq() } : next;
+  }), []);
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => {
     if (!botId || !userId) return;
     let live = true;
     setDraftReady(false);
     const cached = localRead<Draft>(draftKey(userId, botId));
-    let draftLoaded = !!cached?.dirty;
+    // A cached copy is shown at once, but the server's copy is still read, and read again while
+    // the page is shown: it may have been edited or sent from another device since.
+    let draftLoaded = false;
     let loadingDraft = false;
     setDraft({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
-      if (draftLoaded || loadingDraft) return;
+      if (loadingDraft) return;
       loadingDraft = true;
       try {
-        const saved = await api<Draft | null>(`/bots/${encodeURIComponent(botId)}/draft`);
+        const saved = savedDraft(await api<SavedDraft | null>(draftPath(botId)));
         if (!live) return;
         draftLoaded = true;
-        setDraft(current => current.dirty ? current : { ...(saved || { text: "", attachments: [] }), botId, userId });
+        setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
         setDraftReady(true);
         setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
       } catch (e) {
-        if (live) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
+        // Unsaved text on screen is already the person's draft, and a loaded draft stays usable;
+        // keep retrying quietly.
+        if (live && !draftLoaded && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
         loadingDraft = false;
       }
@@ -86,17 +172,17 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     const key = draftKey(uploadUser, uploadBot);
     let saved = localRead<Draft>(key);
     if (!saved) {
-      const loaded = await api<Draft | null>(`/bots/${encodeURIComponent(uploadBot)}/draft`);
+      const loaded = savedDraft(await api<SavedDraft | null>(draftPath(uploadBot)));
       // They may have come back while the saved draft loaded.
       await settle();
       if (!live()) return false;
       if (visible()) return true;
-      saved = localRead<Draft>(key) ?? loaded ?? { text: "", attachments: [] };
+      saved = localRead<Draft>(key) ?? { text: loaded.text, attachments: loaded.attachments, baseRevision: loaded.revision, baseHash: contentHash(loaded) };
     }
     const target = { ...saved, attachments: [...saved.attachments, result], dirty: true };
     if (!live()) return false;
     localSave(key, target);
-    void write(`/bots/${encodeURIComponent(uploadBot)}/draft`, target, "PUT").catch(() => {});
+    void saveDraft({ userId: uploadUser, botId: uploadBot, draft: target, setDraft, live, shown });
     return true;
   };
   const run = async (item: LocalUpload, controller: AbortController, epoch: number) => {
@@ -177,7 +263,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
 }
 export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending }: {
   draft: Draft;
-  setDraft(update: (current: Draft) => Draft): void;
+  setDraft: SetDraft;
   draftReady: boolean;
   botId: string;
   userId?: string;
@@ -186,6 +272,11 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
   appUnavailable: boolean;
   pending: Pending | null;
 }) {
+  // Assigned during render, so an effect cleanup sees where the person is going.
+  const open = useRef({ botId, userId });
+  open.current = { botId, userId };
+  // Advanced after every save response, so the effect checks again whether the draft needs one.
+  const [settled, setSettled] = useState(0);
   useEffect(() => {
     if (
       !userId ||
@@ -199,22 +290,34 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
     localSave(draftKey(user, botId), draft);
     if (!draft.dirty || offline || appUnavailable || pending && pending.botId === botId && sameDraft(pending, draft)) return;
     const epoch = identityEpoch.current;
-    const timer = setTimeout(
-      () =>
-        void write(
-          `/bots/${encodeURIComponent(botId)}/draft`,
-          draft,
-          "PUT",
-        ).then(() => {
-          if (epoch !== identityEpoch.current) return;
-          const key = draftKey(user, botId);
-          const cached = localRead<Draft>(key);
-          if (cached && sameDraft(cached, draft))
-            localSave(key, {...cached, dirty: false});
-          setDraft(current => current === draft ? {...current, dirty: false} : current);
-        }).catch(() => {}),
-      350,
-    );
-    return () => clearTimeout(timer);
-  }, [draft, botId, draftReady, userId, offline, appUnavailable, pending]);
+    let saved = false;
+    const save = (keepalive = false) => {
+      if (saved) return;
+      saved = true;
+      stop();
+      void saveDraft({
+        userId: user, botId, draft, setDraft, keepalive,
+        live: () => epoch === identityEpoch.current,
+        shown: () => open.current.botId === botId && open.current.userId === user,
+        settle: () => setSettled(count => count + 1),
+      });
+    };
+    // A closing or hidden page may never run the timer.
+    const leave = () => save(true);
+    const hide = () => { if (document.visibilityState === "hidden") save(true); };
+    // One save at a time: a save in flight checks again when its response is merged.
+    const timer = inFlight.has(draftKey(user, botId)) ? undefined : setTimeout(save, 350);
+    window.addEventListener("pagehide", leave);
+    document.addEventListener("visibilitychange", hide);
+    function stop() {
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", leave);
+      document.removeEventListener("visibilitychange", hide);
+    }
+    return () => {
+      stop();
+      // Leaving this assistant sends the pending edit now. A newer edit here replaces it instead.
+      if (open.current.botId !== botId || open.current.userId !== user) save(true);
+    };
+  }, [draft, botId, draftReady, userId, offline, appUnavailable, pending, settled]);
 }

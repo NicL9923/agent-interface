@@ -7,6 +7,7 @@ import type {
   Avatar,
   Preferences,
   RuntimeEvent,
+  SavedDraft,
   Submission,
   SubmissionReceipt,
   User,
@@ -69,14 +70,19 @@ const migrations: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX notification_batch_items_batch ON notification_batch_items(batch_id);
     `);
   },
-  // 3: who could see each assistant over time, so news stays with whoever could see it then.
-  // owner_id is null while it was visible to everyone.
-  db => {
-    db.exec("CREATE TABLE bot_visibility_periods(bot_id TEXT NOT NULL,started_at INTEGER NOT NULL,owner_id TEXT,PRIMARY KEY(bot_id,started_at))");
-    // Every name each assistant has had, so a renamed private one stays hidden in old agent messages.
-    db.exec("CREATE TABLE bot_names(bot_id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(bot_id,name))");
-  },
 ];
+// Tables the previous release ignores. They are created on every start without raising
+// user_version, because the previous release refuses a newer schema and must still open this
+// database after a rollback. Rows it never writes here read as defaults.
+const additions = `
+  -- Who could see each assistant over time, so news stays with whoever could see it then.
+  -- owner_id is null while it was visible to everyone. Periods are recorded on the first change.
+  CREATE TABLE IF NOT EXISTS bot_visibility_periods(bot_id TEXT NOT NULL,started_at INTEGER NOT NULL,owner_id TEXT,PRIMARY KEY(bot_id,started_at));
+  -- Every name each assistant has had, so a renamed private one stays hidden in old agent messages.
+  CREATE TABLE IF NOT EXISTS bot_names(bot_id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(bot_id,name));
+  -- Draft revisions: a draft without a row here is at revision 0.
+  CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
+`;
 export const schemaVersion = migrations.length;
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
@@ -84,7 +90,16 @@ function addColumn(db: DatabaseSync, table: string, column: string, definition: 
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (!columns.some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
+// A release briefly versioned bot_visibility_periods and bot_names as migration 3. Those tables
+// are now additions, so such a database returns to version 2, which the previous release opens.
+function unversionAdditions(db: DatabaseSync) {
+  const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(row => row.name));
+  if (version === 3 && migrations.length === 2 && tables.has("bot_visibility_periods") && tables.has("bot_names"))
+    db.exec("PRAGMA user_version=2");
+}
 function migrate(db: DatabaseSync) {
+  unversionAdditions(db);
   const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
   if (current > migrations.length)
     throw new Error(`The app database uses schema version ${current}, but this release supports up to ${migrations.length}. Run a matching release or restore a backup.`);
@@ -110,6 +125,7 @@ export class Store {
     if (path !== ":memory:") chmodSync(path, 0o600);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
     migrate(this.db);
+    this.db.exec(additions);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
     // Today pages filter in SQL with the same rule notifications use.
     this.db.function("may_receive", (value, userId) => this.mayReceive(JSON.parse(String(value)), String(userId)) ? 1 : 0);
@@ -304,14 +320,15 @@ export class Store {
       )
       .run(id, JSON.stringify(value));
   }
-  personal(table: "drafts" | "read_positions", userId: string, botId: string) {
+  // Drafts go through draft() and saveDraft() so every change advances the revision.
+  personal(table: "read_positions", userId: string, botId: string) {
     const row = this.db
       .prepare(`SELECT value FROM ${table} WHERE user_id=? AND bot_id=?`)
       .get(userId, botId) as { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
   }
   savePersonal(
-    table: "drafts" | "read_positions",
+    table: "read_positions",
     userId: string,
     botId: string,
     value: unknown,
@@ -322,9 +339,60 @@ export class Store {
       )
       .run(userId, botId, JSON.stringify(value));
   }
-  clearSubmittedDraft(userId: string, botId: string, expected: unknown) {
-    return this.db.prepare("UPDATE drafts SET value=? WHERE user_id=? AND bot_id=? AND value=?")
-      .run(JSON.stringify({text: "", attachments: []}), userId, botId, JSON.stringify(expected)).changes > 0;
+  /** The person's saved draft, or null if they never saved one for this assistant. */
+  draft(userId: string, botId: string): SavedDraft | null {
+    const row = this.db
+      .prepare("SELECT d.value,r.revision,r.reason,r.sent_revision AS sentRevision FROM drafts d LEFT JOIN draft_revisions r ON r.user_id=d.user_id AND r.bot_id=d.bot_id WHERE d.user_id=? AND d.bot_id=?")
+      .get(userId, botId) as { value: string; revision: number | null; reason: SavedDraft["reason"] | null; sentRevision: number | null } | undefined;
+    if (!row) return null;
+    const { text, attachments } = JSON.parse(row.value) as Pick<SavedDraft, "text" | "attachments">;
+    return { text, attachments, revision: row.revision ?? 0, reason: row.reason ?? "edit", sentRevision: row.sentRevision ?? 0 };
+  }
+  /**
+   * Saves a draft edit. With `baseRevision`, the edit applies only to that revision; otherwise the
+   * current draft comes back unsaved. Without it, as from older clients, the edit always applies.
+   * Content the server already has is never a conflict and does not advance the revision.
+   */
+  saveDraft(userId: string, botId: string, value: Pick<SavedDraft, "text" | "attachments">, baseRevision?: number) {
+    return this.transaction((): { saved: boolean; draft: SavedDraft } => {
+      const current = this.draft(userId, botId);
+      const content = JSON.stringify({ text: value.text, attachments: value.attachments });
+      if (current && JSON.stringify({ text: current.text, attachments: current.attachments }) === content)
+        return { saved: true, draft: current };
+      if (baseRevision !== undefined && baseRevision !== (current?.revision ?? 0))
+        return { saved: false, draft: current ?? { text: "", attachments: [], revision: 0, reason: "edit", sentRevision: 0 } };
+      this.db
+        .prepare("INSERT INTO drafts(user_id,bot_id,value) VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value")
+        .run(userId, botId, content);
+      this.advanceDraft(userId, botId, "edit");
+      return { saved: true, draft: this.draft(userId, botId)! };
+    });
+  }
+  /**
+   * Clears the sender's draft once their message is accepted, if it still holds the sent text, or
+   * if nothing changed it after the revision the message was written on. The second catches a
+   * send made before the last edits were saved. Runs inside the receipt transaction.
+   */
+  clearSubmittedDraft(userId: string, botId: string, expected: Pick<SavedDraft, "text" | "attachments">, baseRevision?: number) {
+    const current = this.draft(userId, botId);
+    const empty = JSON.stringify({ text: "", attachments: [] });
+    const content = current ? JSON.stringify({ text: current.text, attachments: current.attachments }) : empty;
+    // An empty draft still records the send, so a save dispatched before it cannot restore the text.
+    if (content !== empty && content !== JSON.stringify(expected) && (baseRevision === undefined || current!.revision > baseRevision))
+      return false;
+    this.db
+      .prepare("INSERT INTO drafts(user_id,bot_id,value) VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value")
+      .run(userId, botId, empty);
+    this.advanceDraft(userId, botId, "sent");
+    return true;
+  }
+  private advanceDraft(userId: string, botId: string, reason: SavedDraft["reason"]) {
+    const previous = this.db.prepare("SELECT revision,sent_revision AS sentRevision FROM draft_revisions WHERE user_id=? AND bot_id=?")
+      .get(userId, botId) as { revision: number; sentRevision: number } | undefined;
+    const revision = (previous?.revision ?? 0) + 1;
+    this.db
+      .prepare("INSERT INTO draft_revisions(user_id,bot_id,revision,reason,sent_revision) VALUES(?,?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET revision=excluded.revision,reason=excluded.reason,sent_revision=excluded.sent_revision")
+      .run(userId, botId, revision, reason, reason === "sent" ? revision : previous?.sentRevision ?? 0);
   }
   presentation(botId: string | undefined) {
     // Alerts and test pushes have no assistant; node:sqlite on Node 24 refuses to bind undefined.
@@ -461,7 +529,7 @@ export class Store {
       this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
       for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
-      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "read_positions", "card_state", "submissions", "approval_attribution", "routine_trials"])
+      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "card_state", "submissions", "approval_attribution", "routine_trials"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.users()) {
@@ -547,7 +615,7 @@ export class Store {
       if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
         this.clearSubmittedDraft(row.input.senderId, row.input.botId, {
           text: row.input.text, attachments: row.input.attachments ?? [],
-        });
+        }, row.input.draftBaseRevision);
       if (row && receipt.runId)
         this.participate(receipt.runId, row.input.senderId);
     });

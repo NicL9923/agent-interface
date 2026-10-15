@@ -31,6 +31,9 @@ private final class NativeMockServer: @unchecked Sendable {
     private var recorded: [URLRequest] = []
     private var held: [String: NativeMockProtocol] = [:]
     private var heldPaths: Set<String> = []
+    /// Paths the server acts on at once but answers only when released, like a slow response.
+    private var delayedPaths: Set<String> = []
+    private var delayed: [String: () -> Void] = [:]
     private var currentUser = "one"
     private var messageStatus = 200
     private var run = "run-one"
@@ -54,6 +57,8 @@ private final class NativeMockServer: @unchecked Sendable {
     private var etags = false
     private var forcedNotModified = 0
     private var notModifiedCount = 0
+    /// Per assistant, once `versionDrafts` is called: drafts then follow the app server's revision rules.
+    private var draftRecords: [String: [String: Any]]?
     let origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).example.test")!
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
@@ -76,11 +81,63 @@ private final class NativeMockServer: @unchecked Sendable {
     func answerAssistantsChanged(times: Int) { lock.withLock { assistantsChanged = times } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
+    /// Answers the held request with a server error, without acting on it.
+    /// Answers every draft save with a server error, without acting on it.
+    func failDraftSaves(_ fail: Bool = true) { lock.withLock { draftSavesFail = fail } }
+    private var draftSavesFail = false
+    func failHeld(_ path: String) {
+        lock.withLock { () -> NativeMockProtocol? in heldPaths.remove(path); return held.removeValue(forKey: path) }?
+            .respond(status: 500, data: Self.json(["error": "Synthetic save failure"]))
+    }
     /// Mirrors the server: GET JSON carries a weak ETag, and a matching If-None-Match gets an empty 304.
     func serveETags() { lock.withLock { etags = true } }
     /// Answers the next GETs with 304 regardless of validators, like a confused intermediary.
     func replyNotModified(times: Int) { lock.withLock { forcedNotModified = times } }
     var notModified: Int { lock.withLock { notModifiedCount } }
+    /// Versions drafts like the app server, starting this assistant's draft at `revision`.
+    func versionDrafts(_ bot: String = "bot", text: String = "", revision: Int = 0, sentRevision: Int = 0) {
+        lock.withLock {
+            var records = draftRecords ?? [:]
+            records[bot] = ["text": text, "attachments": [], "revision": revision, "reason": sentRevision == revision && revision > 0 ? "sent" : "edit", "sentRevision": sentRevision]
+            draftRecords = records
+        }
+    }
+    /// Another device saves an edit, or sends the draft and the server clears it.
+    func otherDevice(_ bot: String = "bot", edits text: String) { changeDraft(bot, text: text, reason: "edit") }
+    func otherDevice(_ bot: String = "bot", sends text: String) { clearDraft(bot, sent: text) }
+    /// Accepting a message clears the sender's draft while it still holds that text, or while
+    /// nothing changed it after the revision the message was written on.
+    private func clearDraft(_ bot: String, sent text: String, base: Int? = nil) {
+        guard let record = draftRecord(bot), let current = record["text"] as? String else { return }
+        if current.isEmpty || current == text || base.map({ (record["revision"] as? Int ?? 0) <= $0 }) == true { changeDraft(bot, text: "", reason: "sent") }
+    }
+    func draftRecord(_ bot: String = "bot") -> [String: Any]? { lock.withLock { draftRecords?[bot] } }
+    func draftSaves(_ bot: String = "bot") -> [DraftSaveBody] {
+        requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/\(bot)/draft" }
+            .compactMap { Self.body($0).flatMap { try? JSONDecoder().decode(DraftSaveBody.self, from: $0) } }
+    }
+    struct DraftSaveBody: Decodable, Equatable { var text: String; var baseRevision: Int? }
+    private func changeDraft(_ bot: String, text: String, reason: String) {
+        lock.withLock {
+            guard let previous = draftRecords?[bot] else { return }
+            let revision = (previous["revision"] as? Int ?? 0) + 1
+            draftRecords?[bot] = ["text": text, "attachments": [], "revision": revision, "reason": reason,
+                                  "sentRevision": reason == "sent" ? revision : previous["sentRevision"] ?? 0]
+        }
+    }
+    /// The app server's PUT rules: same content is no change, a stale base is a 409.
+    private func versionedDraft(_ request: URLRequest, bot: String) -> (status: Int, data: Data)? {
+        guard let record = draftRecord(bot) else { return nil }
+        guard request.httpMethod == "PUT",
+            let body = Self.body(request).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }),
+            let text = body["text"] as? String, text != record["text"] as? String
+        else { return (200, Self.json(record)) }
+        if let base = body["baseRevision"] as? Int, base != record["revision"] as? Int {
+            return (409, Self.json(["error": "This draft changed on another device.", "code": "draft_conflict", "draft": record]))
+        }
+        changeDraft(bot, text: text, reason: "edit")
+        return (200, Self.json(draftRecord(bot)!))
+    }
     func receive(_ protocolInstance: NativeMockProtocol) {
         let path = protocolInstance.request.url!.path
         let delay = lock.withLock {
@@ -90,6 +147,15 @@ private final class NativeMockServer: @unchecked Sendable {
         }
         if lock.withLock({ offline }) { protocolInstance.fail(URLError(.notConnectedToInternet)); return }
         if !delay { finish(protocolInstance) }
+    }
+    func delayResponse(_ path: String) { _ = lock.withLock { delayedPaths.insert(path) } }
+    func releaseResponse(_ path: String) { lock.withLock { delayed.removeValue(forKey: path) }?() }
+    func waitForDelayed(_ path: String) async throws {
+        for _ in 0..<200 {
+            if lock.withLock({ delayed[path] != nil }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw URLError(.timedOut)
     }
     func release(_ path: String) {
         let pending = lock.withLock { () -> NativeMockProtocol? in
@@ -113,12 +179,12 @@ private final class NativeMockServer: @unchecked Sendable {
                    "capabilities": ["uploads": ["supported": true], "chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
                    "connection": ["connected": isConnected], "csrfToken": NSNull()])
     }
-    func conversationData(query: String? = nil) -> Data {
+    func conversationData(_ bot: String = "bot", query: String? = nil) -> Data {
         let state: String = lock.withLock { self.state }
         let run: String = lock.withLock { self.run }
         let history: [String]? = lock.withLock { self.history }
         let activity: [String: String] = ["state": state, "runId": run]
-        let draft: [String: Any] = ["text": "server draft for \(user)", "attachments": [String]()]
+        let draft: [String: Any] = draftRecord(bot) ?? ["text": "server draft for \(user)", "attachments": [String]()]
         let readPosition: [String: Any] = ["messageId": lock.withLock { readAnchor }, "scrollTop": 12.5]
         var body: [String: Any] = [:]
         body["botId"] = "bot"
@@ -225,12 +291,24 @@ private final class NativeMockServer: @unchecked Sendable {
                 return true
             }
             if anchored { status = 503 }
-            data = status == 200 ? conversationData(query: request.url?.query) : Self.json(["error": "Synthetic conversation outage"])
+            data = status == 200 ? conversationData(request.url!.pathComponents.dropLast().last ?? "bot", query: request.url?.query) : Self.json(["error": "Synthetic conversation outage"])
         }
-        else if path.hasSuffix("/draft") { data = Self.json(["text": "server draft for \(user)", "attachments": []]) }
+        else if path.hasSuffix("/draft") && request.httpMethod == "PUT" && lock.withLock({ draftSavesFail }) {
+            status = 500; data = Self.json(["error": "Synthetic save failure"])
+        }
+        else if path.hasSuffix("/draft") {
+            let bot = request.url!.pathComponents.dropLast().last ?? ""
+            if let versioned = versionedDraft(request, bot: bot) { (status, data) = versioned }
+            // An older server answers a save with the draft it saved.
+            else if request.httpMethod == "PUT", let body = Self.body(request) { data = body }
+            else { data = Self.json(["text": "server draft for \(user)", "attachments": []]) }
+        }
         else if path.hasSuffix("/messages") {
             status = sendStatus
             let payload = Self.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if status == 200, let text = payload?["text"] as? String {
+                clearDraft(request.url!.pathComponents.dropLast().last ?? "", sent: text, base: payload?["draftBaseRevision"] as? Int)
+            }
             data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"]) : Self.json(["error": "Synthetic admission failure"])
         } else if path.hasSuffix("/uploads") { data = Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
@@ -254,7 +332,12 @@ private final class NativeMockServer: @unchecked Sendable {
             protocolInstance.respond(status: validation.notModified ? 304 : 200, data: validation.notModified ? Data() : data, headers: ["ETag": validation.etag])
             return
         }
-        protocolInstance.respond(status: status, data: data)
+        let answer = { protocolInstance.respond(status: status, data: data) }
+        let park = lock.withLock { () -> Bool in
+            guard delayedPaths.contains(path) else { return false }
+            delayedPaths.remove(path); delayed[path] = answer; return true
+        }
+        if !park { answer() }
     }
     static func errorBody(_ message: String, code: String?) -> Data {
         json(code.map { ["error": message, "code": $0] } ?? ["error": message])
@@ -613,11 +696,13 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.conversationFiles.map(\.id), ["old.txt", "new.txt"])
         XCTAssertTrue(value.hasConversationFiles)
         await value.loadEarlierFiles()
-        XCTAssertEqual(server.requests.last?.url?.query, "before=m11")
+        // The unsaved draft also saves meanwhile, so only file requests count here.
+        let files = { server.requests.filter { $0.url?.path == "/api/bots/bot/files" } }
+        XCTAssertEqual(files().last?.url?.query, "before=m11")
         XCTAssertEqual(value.conversationFiles.map(\.id).sorted(), ["new.txt", "old.txt", "older.txt"], "Merged by ID")
-        let requests = server.requests.count
+        let requests = files().count
         await value.loadEarlierFiles()
-        XCTAssertEqual(server.requests.count, requests, "A fetched list is not fetched again")
+        XCTAssertEqual(files().count, requests, "A fetched list is not fetched again")
         await value.loadEarlier()
         XCTAssertEqual(value.conversation?.earlierFiles, 0)
         XCTAssertEqual(value.conversationFiles.map(\.id).sorted(), ["new.txt", "old.txt", "older.txt"])
@@ -780,15 +865,220 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!), "The recovery mark clears once the server has the draft")
     }
 
-    func testALeftoverDirtyDraftIsShownOnLoadButNeverPushedOverTheServersCopy() async throws {
+    func testALeftoverDirtyDraftSavesOnItsBaseOnceLoaded() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        let stale = Draft(text: "Old unsent text", attachments: [], dirty: true)
-        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key("draft", "bot")!)
+        server.versionDrafts(text: "Server copy", revision: 1)
+        let leftover = Draft(text: "Old unsent text", attachments: [], dirty: true, baseRevision: 1)
+        UserDefaults.standard.set(try JSONEncoder().encode(leftover), forKey: value.key("draft", "bot")!)
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Old unsent text"); XCTAssertTrue(value.draftReady)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Old unsent text", baseRevision: 1)], "Saved on its base, so a changed server copy refuses it")
+    }
+
+    func testARevertSavesAgainAfterAnOlderSaveLands() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "A", revision: 1)
+        value.draft = Draft(text: "A", attachments: [], dirty: false, baseRevision: 1, baseHash: Draft.contentHash("A", []))
+        let path = "/api/bots/bot/draft"; server.hold(path)
+        value.updateDraft(Draft(text: "AB", attachments: []))
+        try await server.waitForHeld(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await Task.sleep(for: .milliseconds(800))
+        server.release(path)
+        try await Task.sleep(for: .milliseconds(300))
+        await value.refreshConversation()
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "A", "Another device sees the revert")
+        XCTAssertEqual(value.draft.dirty, false)
+    }
+
+    func testAStaleDraftFromAnEarlierSessionIsDroppedOnceAnotherDeviceSentIt() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Old unsent text", revision: 1)
+        server.otherDevice(sends: "Old unsent text")
+        // Marked unsaved, but unchanged since the revision it was loaded on.
+        let stale = Draft(text: "Old unsent text", attachments: [], dirty: true, baseRevision: 1, baseHash: Draft.contentHash("Old unsent text", []))
+        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key("draft", "bot")!)
+        value.draftReady = false
+        await value.select("bot")
+        XCTAssertEqual(value.draft, Draft(text: "", attachments: [], dirty: false, baseRevision: 2, baseHash: Draft.contentHash("", [])))
+        value.updateDraft(Draft(text: "Fresh", attachments: []))
         try await Task.sleep(for: .milliseconds(900))
-        XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }.isEmpty)
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Fresh", baseRevision: 2)], "The sent text is never saved back")
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Fresh")
+    }
+
+    func testDifferentTextTypedOfflineSurvivesASendOfTheSharedDraftElsewhere() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Shared plan", revision: 1)
+        server.otherDevice(sends: "Shared plan")
+        let offline = Draft(text: "Offline note", attachments: [], dirty: true, baseRevision: 1, baseHash: Draft.contentHash("Shared plan", []))
+        UserDefaults.standard.set(try JSONEncoder().encode(offline), forKey: value.key("draft", "bot")!)
+        value.draftReady = false
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, "Offline note")
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Offline note", baseRevision: 2)])
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Offline note")
+    }
+
+    func testSwitchingAssistantsOrLeavingSavesAPendingEditAtOnce() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("other")
+        value.draft = Draft(baseRevision: 0)
+        value.updateDraft(Draft(text: "Pick up feed", attachments: []))
+        await value.select("other")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Pick up feed", baseRevision: 0)])
+        let cached = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(cached?.dirty, false); XCTAssertEqual(cached?.baseRevision, 1)
+        // Another device sends the saved text.
+        server.otherDevice(sends: "Pick up feed")
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, ""); XCTAssertEqual(value.draft.baseRevision, 2)
+        value.updateDraft(Draft(text: "Before leaving", attachments: []))
+        value.suspend()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.draftSaves().last, .init(text: "Before leaving", baseRevision: 2))
+        XCTAssertEqual(value.draft.dirty, false)
+    }
+
+    func testAnEditTypedHereWinsOverANewerEditFromAnotherDevice() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Start", revision: 1)
+        value.draft = Draft(text: "Start", attachments: [], dirty: false, baseRevision: 1)
+        server.otherDevice(edits: "Phone words")
+        value.updateDraft(Draft(text: "Typed here", attachments: []))
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Typed here", baseRevision: 1), .init(text: "Typed here", baseRevision: 2)])
+        XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 3)
+        XCTAssertEqual(value.draft, Draft(text: "Typed here", attachments: [], dirty: false, baseRevision: 3, baseHash: Draft.contentHash("Typed here", [])))
+        // While idle, polling brings in the next edit from the other device.
+        server.otherDevice(edits: "Phone again")
+        await value.refreshConversation()
+        XCTAssertEqual(value.draft, Draft(text: "Phone again", attachments: [], dirty: false, baseRevision: 4, baseHash: Draft.contentHash("Phone again", [])))
+    }
+
+    func testLeavingSendsAnEditTypedDuringASlowSaveThatThenFails() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("other")
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let path = "/api/bots/bot/draft"; server.holdNext(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await server.waitForHeld(path)
+        value.updateDraft(Draft(text: "AB", attachments: []))
+        try await Task.sleep(for: .milliseconds(700))
+        await value.select("other")
+        try await Task.sleep(for: .milliseconds(200))
+        server.failHeld(path)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
+    }
+
+    func testPollingWaitsForTheBackoffOfAFailingSave() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.failDraftSaves()
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(server.draftSaves().count, 1)
+        for _ in 0..<3 { await value.refreshConversation(); try await Task.sleep(for: .milliseconds(80)) }
+        XCTAssertEqual(server.draftSaves().count, 1, "Polls do not retry before the backoff")
+        try await Task.sleep(for: .milliseconds(1000))
+        XCTAssertEqual(server.draftSaves().count, 2, "The backoff retries once")
+    }
+
+    func testANewEditAfterAdoptingTheServerDraftNeverReusesAnInFlightSequence() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("other")
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let path = "/api/bots/bot/draft"; server.holdNext(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await server.waitForHeld(path)
+        await value.send()
+        await value.refreshConversation()
+        XCTAssertEqual(value.draft.baseRevision, 1, "Adopted the send's clear")
+        value.updateDraft(Draft(text: "B", attachments: []))
+        await value.select("other")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.draftSaves().last?.text, "B", "Leaving sends the new edit")
+        server.failHeld(path)
+    }
+
+    func testAnEditTypedDuringAFailedSaveSavesAfterABackoff() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts()
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let path = "/api/bots/bot/draft"; server.holdNext(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await server.waitForHeld(path)
+        value.updateDraft(Draft(text: "AB", attachments: []))
+        try await Task.sleep(for: .milliseconds(700))
+        server.failHeld(path)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 0, "Nothing saved yet")
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
+        XCTAssertEqual(value.draft.dirty, false)
+    }
+
+    func testTextSentWhileItsSaveWasInFlightIsNotRestoredByARetry() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts()
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let draftPath = "/api/bots/bot/draft", sendPath = "/api/bots/bot/messages"
+        server.hold(draftPath); server.delayResponse(sendPath)
+        value.updateDraft(Draft(text: "Hello", attachments: []))
+        try await server.waitForHeld(draftPath)
+        let sending = Task { await value.send() }
+        try await server.waitForDelayed(sendPath)
+        XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent", "Accepted while its receipt is still on the way")
+        server.release(draftPath)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.draftSaves().count, 1, "The stale save's 409 is not retried")
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "")
+        XCTAssertEqual(value.draft.text, "")
+        server.releaseResponse(sendPath); await sending.value
+    }
+
+    func testAMessageTypedRightAfterSendingSurvivesTheClearForThatSend() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Send this", revision: 1)
+        value.draft = Draft(text: "Send this", attachments: [], dirty: false, baseRevision: 1)
+        await value.send()
+        XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent")
+        value.updateDraft(Draft(text: "Second message", attachments: []))
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Second message")
+        XCTAssertEqual(value.draft.text, "Second message"); XCTAssertEqual(value.draft.dirty, false)
+    }
+
+    func testASendBeforeTheLastEditsSavedStillClearsTheServerDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Pick up fe", revision: 1)
+        value.draft = Draft(text: "Pick up fe", attachments: [], dirty: false, baseRevision: 1)
+        value.updateDraft(Draft(text: "Pick up feed", attachments: []))
+        await value.send()
+        XCTAssertEqual(server.draftSaves(), [], "The send went out before the edit was saved")
+        XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent")
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, "")
+    }
+
+    func testARecoveredDraftSyncsOnItsBaseEvenAfterItsOwnSendCleared() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // The discarded message did arrive and cleared the draft.
+        server.versionDrafts(text: "Lost message", revision: 2)
+        server.otherDevice(sends: "Lost message")
+        value.pending = PendingSubmission(requestId: "lost", botId: "bot", text: "Lost message", attachments: [], reviewedInterruption: false)
+        value.draft = Draft(text: "", attachments: [], dirty: false, baseRevision: 2); value.draftReady = false
+        value.discardUnconfirmedSubmission()
+        await value.select("bot")
+        XCTAssertEqual(value.draft.text, "Lost message")
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(server.draftSaves(), [.init(text: "Lost message", baseRevision: 3)])
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!))
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {
@@ -991,5 +1281,86 @@ private final class NativeMockServer: @unchecked Sendable {
         server.release(path); await operation.value
         XCTAssertNil(value.upgradeStatus)
         XCTAssertNil(value.upgradeError)
+    }
+}
+
+final class DraftMergeTests: XCTestCase {
+    private func hash(_ text: String) -> String { Draft.contentHash(text, []) }
+    private func server(_ text: String, _ revision: Int, sent: Int = 0) -> SavedDraft {
+        SavedDraft(text: text, attachments: [], revision: revision, reason: sent == revision && revision > 0 ? "sent" : "edit", sentRevision: sent)
+    }
+    private func copy(_ text: String = "Typed here", dirty: Bool? = true, base: Int? = 2, baseHash: String? = nil, sentHash: String? = nil) -> Draft {
+        Draft(text: text, attachments: [], dirty: dirty, baseRevision: base, baseHash: baseHash, sentHash: sentHash)
+    }
+
+    func testACleanCopyAdoptsTheServerDraft() {
+        let merged = Draft.merge(copy(dirty: nil), with: server("From the phone", 3))
+        XCTAssertEqual(merged.draft, Draft(text: "From the phone", attachments: [], dirty: false, baseRevision: 3, baseHash: hash("From the phone"))); XCTAssertFalse(merged.push)
+        XCTAssertEqual(Draft.merge(copy(dirty: nil, base: nil), with: nil).draft, Draft(dirty: false, baseRevision: 0, baseHash: hash("")))
+    }
+
+    func testAnUnsavedCopyStillHoldingItsBaseContentIsDroppedAfterASend() {
+        let merged = Draft.merge(copy(baseHash: hash("Typed here")), with: server("", 4, sent: 3))
+        XCTAssertEqual(merged.draft, Draft(dirty: false, baseRevision: 4, baseHash: hash(""))); XCTAssertFalse(merged.push)
+    }
+
+    func testWorkChangedSinceItsBaseSurvivesASendElsewhere() {
+        let offline = copy("Offline note", baseHash: hash("Shared plan"))
+        let merged = Draft.merge(offline, with: server("", 3, sent: 3), authoritative: true)
+        XCTAssertEqual(merged.draft, copy("Offline note", base: 3, baseHash: hash(""))); XCTAssertTrue(merged.push)
+        XCTAssertEqual(Draft.merge(copy(base: nil), with: server("", 1, sent: 1)).draft.text, "Typed here", "A copy without a fingerprint is kept")
+    }
+
+    func testTheTextThisDeviceSentIsDroppedOnceTheServerShowsTheSend() {
+        let sending = copy(base: 0, baseHash: hash(""), sentHash: hash("Typed here"))
+        XCTAssertEqual(Draft.merge(sending, with: server("", 1, sent: 1)).draft, Draft(dirty: false, baseRevision: 1, baseHash: hash("")))
+        let cleared = copy("", dirty: false, base: 0, sentHash: hash("Typed here"))
+        XCTAssertEqual(Draft.merge(cleared, with: server("Typed here", 1)).draft, cleared, "A save from before the send is not adopted")
+        XCTAssertEqual(Draft.merge(cleared, with: server("", 2, sent: 2)).draft.baseRevision, 2)
+    }
+
+    func testALaterDraftWithTheLastSentTextIsAdoptedOnceTheServerShowsThatSend() {
+        // Sent "Continue" on revision 5 and missed the empty revision 6.
+        var cleared = copy("", dirty: false, base: 5, sentHash: hash("Continue")); cleared.sentBase = 5
+        let merged = Draft.merge(cleared, with: server("Continue", 7, sent: 6)).draft
+        XCTAssertEqual(merged.text, "Continue"); XCTAssertNil(merged.sentHash)
+        XCTAssertEqual(Draft.merge(cleared, with: server("Continue", 6, sent: 0)).draft, cleared, "Before the send shows, the guard holds")
+    }
+
+    func testEditsHereWinOverANewerEditAndSaveOnItsRevision() {
+        let merged = Draft.merge(copy(), with: server("Phone edit", 5, sent: 1))
+        XCTAssertEqual(merged.draft, copy(base: 5, baseHash: hash("Phone edit"))); XCTAssertTrue(merged.push)
+    }
+
+    func testUnsavedEditsOnAnUnchangedServerCopyAreLeftAlone() {
+        let merged = Draft.merge(copy(), with: server("Older text", 2))
+        XCTAssertEqual(merged.draft, copy()); XCTAssertFalse(merged.push)
+        XCTAssertEqual(Draft.merge(copy(base: nil), with: SavedDraft(text: "Old server")).draft, copy(base: nil), "A server without revisions is revision 0")
+    }
+
+    func testMatchingTextIsMarkedSavedOnlyOnceNoOlderSaveIsInFlight() {
+        XCTAssertEqual(Draft.merge(copy(base: 1), with: server("Typed here", 4)).draft, copy(dirty: false, base: 4, baseHash: hash("Typed here")))
+        let waiting = Draft.merge(copy(base: 1), with: server("Typed here", 4), settled: false)
+        XCTAssertEqual(waiting.draft, copy(base: 4, baseHash: hash("Typed here"))); XCTAssertFalse(waiting.push)
+    }
+
+    func testAnOlderResponseIsIgnoredUnlessItAnswersTheLatestEdit() {
+        XCTAssertEqual(Draft.merge(copy(dirty: nil, base: 7), with: server("Older read", 6)).draft, copy(dirty: nil, base: 7))
+        XCTAssertEqual(Draft.merge(copy(dirty: false, base: 3, baseHash: hash("Newer")), with: server("Older", 2)).draft.text, "Typed here",
+                       "A late 409 from an older save leaves the newer copy")
+        let restored = Draft.merge(copy(base: 7), with: server("Restored", 2), authoritative: true)
+        XCTAssertEqual(restored.draft, copy(base: 2, baseHash: hash("Restored"))); XCTAssertTrue(restored.push, "After a database restore, edits still save")
+    }
+
+    func testASaveKeepsEditsTypedWhileItWasInFlight() {
+        XCTAssertEqual(Draft.merge(copy("Typed", base: 1), with: server("Typed", 2)).draft, copy("Typed", dirty: false, base: 2, baseHash: hash("Typed")))
+        XCTAssertEqual(Draft.merge(copy(base: 1), with: server("Typed", 2)).draft, copy(base: 2, baseHash: hash("Typed")))
+    }
+
+    func testASentCopyEmptiesButKeepsItsBase() {
+        let submission = PendingSubmission(requestId: "r", botId: "bot", text: "Typed here", attachments: [], reviewedInterruption: false)
+        XCTAssertEqual(copy(dirty: nil, base: 3, baseHash: "h", sentHash: "s").sent(submission), Draft(dirty: false, baseRevision: 3, baseHash: "h", sentHash: "s"))
+        let more = copy("More", base: 3)
+        XCTAssertEqual(more.sent(submission), more)
     }
 }

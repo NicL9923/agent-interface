@@ -89,7 +89,7 @@ function seedMemberHistory(store: Store) {
     sections: [{ id: "work", name: "Work", botIds: [secret, "family"] }], defaultBotId: secret });
   store.saveItem("local-two", { kind: "session", botId: secret, sessionId: "session", title: "Ledger notes" });
   store.saveItem("local-two", { kind: "session", botId: "family", sessionId: "session", title: "Family notes" });
-  store.savePersonal("drafts", "local-two", secret, { text: "Half a thought", attachments: [] });
+  store.saveDraft("local-two", secret, { text: "Half a thought", attachments: [] });
   store.recordEvents([{ id: "e-secret", botId: secret, runId: "run", kind: "completed", title: `${secretName} finished`, occurredAt: new Date().toISOString() }], "1");
 }
 const values: Record<string, string> = { approvalId: "approval", messageId: "m1", cardId: "card", target: "memory", itemId: "item", source: "onepassword", requestId: randomUUID(), sessionId: "session", routineId: "r-family", resultId: "result", roomId: "ledger-room", flowId: "f".repeat(24), audioId: "audio" };
@@ -210,7 +210,7 @@ describe("private assistants", () => {
     expect((await s.app.inject({ method: "DELETE", url: `/api/bots/${secret}`, headers: s.owner })).statusCode).toBe(200);
     expect(s.calls).toContain("deleteBot");
     expect(s.store.presentation(secret)).toEqual({});
-    expect(s.store.personal("drafts", "local-two", secret)).toBeNull();
+    expect(s.store.draft("local-two", secret)).toBeNull();
     expect(s.store.cardState("local-one", secret, "m1", "card")).toEqual({ checkedIds: [], notes: {} });
     expect(s.store.savedItems("local-one")).toEqual([]);
     expect(s.store.savedItems("local-two").map(item => item.botId)).toEqual(["family"]);
@@ -298,6 +298,17 @@ describe("private assistants under concurrency and side channels", () => {
       const missing = await s.app.inject({ url: `/api/bots/zz-nobody/${path}`, headers: s.member });
       expect([missing.statusCode, missing.body]).toEqual([hidden.statusCode, hidden.body]);
     }
+    // A save, even a stale one that would conflict, answers the same 404 and reveals no revision.
+    for (const baseRevision of [0, 7]) {
+      const hidden = await s.app.inject({ method: "PUT", url: `/api/bots/${secret}/draft`, headers: s.member, payload: { text: "Probe", attachments: [], baseRevision } });
+      const missing = await s.app.inject({ method: "PUT", url: "/api/bots/zz-nobody/draft", headers: s.member, payload: { text: "Probe", attachments: [], baseRevision } });
+      expect([missing.statusCode, missing.body]).toEqual([hidden.statusCode, hidden.body]);
+      expect(hidden.statusCode).toBe(404);
+    }
+    // The owner's drafts keep their revisions.
+    const put = (text: string, baseRevision: number) => s.app.inject({ method: "PUT", url: `/api/bots/${secret}/draft`, headers: s.owner, payload: { text, attachments: [], baseRevision } });
+    expect((await put("Owner note", 0)).json()).toMatchObject({ text: "Owner note", revision: 1 });
+    expect((await put("Owner note on an old copy", 0)).json()).toMatchObject({ code: "draft_conflict", draft: { text: "Owner note", revision: 1 } });
     const forged = (botId: string) => `${fileId(botId).split(".")[0]}.forged`;
     const hidden = await s.app.inject({ url: `/api/files/${forged(secret)}`, headers: s.member });
     const missing = await s.app.inject({ url: `/api/files/${forged("zz-nobody")}`, headers: s.member });
