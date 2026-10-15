@@ -77,9 +77,12 @@ function holdNext(match:(path:string,method?:string)=>boolean,apply:'before'|'af
     if(taken||!match(args[0],args[2]))return serve(...args);
     taken=true;
     if(apply==='after'){await held;return serve(...args);}
-    const response=serve(...args);
-    await held.then(()=>response.catch(()=>{}));
-    return response;
+    // The server answers now; the answer, a 409 included, reaches the app on release, as a slow network delivers it.
+    const answer=serve(...args).then(value=>({value}),(error:unknown)=>({error}));
+    await held;
+    const result=await answer;
+    if('error' in result)throw result.error;
+    return result.value;
   });
   return ()=>act(async()=>release());
 }
