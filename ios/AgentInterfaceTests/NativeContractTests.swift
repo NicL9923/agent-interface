@@ -68,6 +68,14 @@ private final class NativeMockServer: @unchecked Sendable {
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
+    /// Holds only the next request to `path`; later ones are answered normally.
+    func holdOnce(_ path: String) { _ = lock.withLock { heldOnce.insert(path) } }
+    private var heldOnce: Set<String> = []
+    /// Answers the held request with a server error, without acting on it.
+    func failHeld(_ path: String) {
+        lock.withLock { () -> NativeMockProtocol? in heldPaths.remove(path); return held.removeValue(forKey: path) }?
+            .respond(status: 500, data: Self.json(["error": "Synthetic save failure"]))
+    }
     /// Mirrors the server: GET JSON carries a weak ETag, and a matching If-None-Match gets an empty 304.
     func serveETags() { lock.withLock { etags = true } }
     /// Answers the next GETs with 304 regardless of validators, like a confused intermediary.
@@ -122,6 +130,7 @@ private final class NativeMockServer: @unchecked Sendable {
         let delay = lock.withLock {
             recorded.append(protocolInstance.request)
             if heldPaths.contains(path) { held[path] = protocolInstance; return true }
+            if heldOnce.contains(path) { heldOnce.remove(path); held[path] = protocolInstance; return true }
             return false
         }
         if lock.withLock({ offline }) { protocolInstance.fail(URLError(.notConnectedToInternet)); return }
@@ -601,6 +610,39 @@ private final class NativeMockServer: @unchecked Sendable {
         server.otherDevice(edits: "Phone again")
         await value.refreshConversation()
         XCTAssertEqual(value.draft, Draft(text: "Phone again", attachments: [], dirty: false, baseRevision: 4, baseHash: Draft.contentHash("Phone again", [])))
+    }
+
+    func testLeavingSendsAnEditTypedDuringASlowSaveThatThenFails() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("other")
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let path = "/api/bots/bot/draft"; server.holdOnce(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await server.waitForHeld(path)
+        value.updateDraft(Draft(text: "AB", attachments: []))
+        try await Task.sleep(for: .milliseconds(700))
+        await value.select("other")
+        try await Task.sleep(for: .milliseconds(200))
+        server.failHeld(path)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
+    }
+
+    func testAnEditTypedDuringAFailedSaveSavesAfterABackoff() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts()
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let path = "/api/bots/bot/draft"; server.holdOnce(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await server.waitForHeld(path)
+        value.updateDraft(Draft(text: "AB", attachments: []))
+        try await Task.sleep(for: .milliseconds(700))
+        server.failHeld(path)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 0, "Nothing saved yet")
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
+        XCTAssertEqual(value.draft.dirty, false)
     }
 
     func testTextSentWhileItsSaveWasInFlightIsNotRestoredByARetry() async throws {

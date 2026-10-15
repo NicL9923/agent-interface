@@ -139,7 +139,8 @@ into the copy as it is now, never applied as the request's snapshot:
 A save in flight is never cancelled; its response is merged like any other. Saves
 of one draft go one at a time, except that leaving sends the latest edit at once.
 After every response or merge, a copy left unsaved with no save in flight or
-waiting saves again.
+waiting saves again. A failed or timed-out save does the same after a backoff of
+1, 2 and 4 seconds, up to 30, reset by the next answered save.
 Fingerprints use a fixed attachment field order.
 
 The web client implements this in `src/app/draft-merge.ts` and iOS in

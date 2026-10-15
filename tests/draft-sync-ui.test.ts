@@ -110,6 +110,22 @@ describe('draft sync across devices',()=>{
     expect(cached('shared')).toMatchObject({text:'A',dirty:false,baseRevision:3});
   });
 
+  it('saves an edit typed during a save that fails, after a backoff',async()=>{
+    await renderApp();
+    let release!:()=>void;
+    const held=new Promise<void>(resolve=>{release=resolve;});
+    const serve=vi.mocked(write).getMockImplementation()!;
+    vi.mocked(write).mockImplementationOnce(async ()=>{await held;throw new ApiError('Request failed (500)',500);});
+    await type('A');await advance(400);
+    await type('AB');await advance(400);
+    await act(async()=>release());await advance(0);
+    expect(draft('shared').text).toBe('');
+    await advance(1000);await advance(400);
+    expect(draft('shared')).toMatchObject({text:'AB',revision:1});
+    expect(cached('shared')).toMatchObject({dirty:false});
+    vi.mocked(write).mockImplementation(serve);
+  });
+
   it('drops text sent while its save was in flight, without a retry restoring it',async()=>{
     await renderApp();
     const releaseSave=holdNext(isDraftSave,'after');

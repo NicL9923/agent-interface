@@ -14,6 +14,8 @@ const KEEPALIVE_BYTES = 60_000;
 let keepaliveBytes = 0;
 // Saves in flight per draft. A copy is not marked saved while an older save may still land.
 const inFlight = new Map<string, number>();
+// Consecutive failed saves per draft, for the retry backoff: 1 s, 2 s, 4 s, up to 30 s.
+const failures = new Map<string, number>();
 /**
  * Saves a draft on its base revision, then merges the response into the open copy and the cached
  * copy. Afterwards one rule holds: a copy left unsaved with no save in flight saves again, from
@@ -47,8 +49,18 @@ async function saveDraft(options: {
       ? write<SavedDraft>(draftPath(botId), body, "PUT", { keepalive: true })
       : write<SavedDraft>(draftPath(botId), body, "PUT")));
   } catch (e) {
-    // Any other failure leaves the draft dirty, to save with the next change or reconnect.
-    if (!(e instanceof ApiError && e.code === "draft_conflict")) return;
+    if (!(e instanceof ApiError && e.code === "draft_conflict")) {
+      // A failed or timed-out save leaves the copy unsaved: check the rule again after a backoff.
+      const count = (failures.get(key) ?? 0) + 1;
+      failures.set(key, count);
+      setTimeout(() => {
+        if (!live()) return;
+        options.settle?.();
+        const cached = localRead<Draft>(key);
+        if (cached?.dirty && !inFlight.has(key) && !shown()) void saveDraft({ ...options, draft: cached }, retries);
+      }, Math.min(30_000, 1000 * 2 ** (count - 1)));
+      return;
+    }
     server = savedDraft(e.data?.draft);
     conflict = true;
   } finally {
@@ -56,6 +68,7 @@ async function saveDraft(options: {
     const left = (inFlight.get(key) ?? 1) - 1;
     if (left > 0) inFlight.set(key, left); else inFlight.delete(key);
   }
+  failures.delete(key);
   if (!live()) return;
   const settled = !inFlight.has(key);
   // Applied to the copy as it is now. A 409 for the latest edit is the server's word, even if older.

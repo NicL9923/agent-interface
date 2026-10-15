@@ -380,7 +380,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func flushDraft(inBackground: Bool = false) {
     draftTask?.cancel()
     var started = false
-    if scheduledDraftSave != nil, draftReady, let botId = selectedBotId { started = startDraftSave(botId: botId, force: true) }
+    // The latest edit always goes, unless a save of exactly that edit is already in flight.
+    if draftReady, draft.dirty == true, let botId = selectedBotId, let localKey = key("draft", botId),
+      draftSavesInFlight[localKey]?.contains(draft.seq ?? 0) != true
+    {
+      started = startDraftSave(botId: botId, force: true)
+    }
     scheduledDraftSave = nil
     guard inBackground, started || !draftSavesInFlight.isEmpty, draftBackgroundTask == .invalid else { return }
     draftBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save draft") { [weak self] in
@@ -393,20 +398,25 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     draftBackgroundTask = .invalid
   }
   /// Saves in flight per cached draft. A copy is not marked saved while an older save may land.
-  private var draftSavesInFlight: [String: Int] = [:]
+  /// The edit sequences of the saves in flight, per cached draft.
+  private var draftSavesInFlight: [String: [Int]] = [:]
+  /// Consecutive failed saves per cached draft, for the retry backoff: 1 s, 2 s, 4 s, up to 30 s.
+  private var draftSaveFailures: [String: Int] = [:]
   private func settled(_ botId: String) -> Bool { key("draft", botId).map { draftSavesInFlight[$0] == nil } ?? true }
   /// Saves a draft on its base revision, then merges the response into the open copy and the
   /// cached copy as they are now. Kept edits after a conflict save again on the new base.
   private func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 3) async throws {
     guard let api, let localKey = key("draft", botId) else { return }
     let currentGeneration = generation
-    draftSavesInFlight[localKey, default: 0] += 1
+    let seq = snapshot.seq ?? 0
+    draftSavesInFlight[localKey, default: []].append(seq)
     let server: SavedDraft
     var conflict = false
     do {
       defer {
-        let left = (draftSavesInFlight[localKey] ?? 1) - 1
-        draftSavesInFlight[localKey] = left > 0 ? left : nil
+        var left = draftSavesInFlight[localKey] ?? []
+        if let index = left.firstIndex(of: seq) { left.remove(at: index) }
+        draftSavesInFlight[localKey] = left.isEmpty ? nil : left
         if draftSavesInFlight.isEmpty { endDraftBackgroundTask() }
       }
       do {
@@ -418,7 +428,21 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         server = refused.draft
         conflict = true
       }
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      // A failed or timed-out save leaves the copy unsaved: check the rule again after a backoff.
+      guard currentGeneration == generation else { throw error }
+      let count = (draftSaveFailures[localKey] ?? 0) + 1
+      draftSaveFailures[localKey] = count
+      Task {
+        try? await Task.sleep(for: .seconds(min(30, pow(2, Double(count - 1)))))
+        guard currentGeneration == self.generation else { return }
+        self.ensureDraftSaved(botId)
+      }
+      throw error
     }
+    draftSaveFailures[localKey] = nil
     guard currentGeneration == generation else { return }
     let settled = draftSavesInFlight[localKey] == nil
     // A 409 answering the latest edit is the server's word, even if older than the copy.
