@@ -1,5 +1,20 @@
 # Validation ledger
 
+## October 15 app release cae0d2d
+
+PR #126 merged at `cae0d2da811019f8252c85f600be7716b7cf67de`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `c229c9a8afdba23d`, from the archive with SHA256
+`a5cd20c67b7839d96f7d0bd96b31f9085e73b1457eaaea0eedbdcd34704a48a2`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-cae0d2da-20261015T022618Z.json) records the result. Hermes remains
+at `6ebd92d93852`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
 ## October 14 coordination message presentation
 
 Implementation by GPT-6.1 Sol. The optional message origin separates model roles
