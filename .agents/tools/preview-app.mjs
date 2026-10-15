@@ -73,6 +73,18 @@ const conversations = {
   ledger: { messages: [{ id: 'l1', role: 'assistant', text: 'September is reconciled except for one charge I cannot match.', createdAt: at(10) }], activity: { state: 'blocked', detail: 'Waiting for you to identify a $48.20 charge from “TX FEED CO”.' }, attention: [{ id: 'ask', kind: 'clarify', title: 'Which category is the TX FEED CO charge?', detail: 'It does not match a receipt in the shared folder.', questions: [{ id: 'category', prompt: 'Category', options: ['Livestock feed', 'Garden supplies', 'Something else'] }] }] },
   guide: { messages: [{ id: 'g1', role: 'assistant', text: 'I could not reach the trail conditions service. Your request is saved.', createdAt: at(12) }], activity: { state: 'failed', detail: 'The trail conditions service did not respond.' } },
 };
+// Synthetic coordination fixture for source-aware presentation and disclosure checks.
+if (process.env.PREVIEW_COORDINATION === '1') {
+  conversations.ranch = { activity: { state: 'idle' }, approvals: [], messages: [
+    { id: 'cron', role: 'user', text: '[Cronjob "Bunny care & gentle daily plan" output — scheduled job, not the user. Review it, act on anything that needs action, and summarize for the chat.]\n\nTop up hay, refresh water, and check each bunny.', createdAt: at(1), origin: { kind: 'scheduled', visibility: 'activity', title: 'Bunny care & gentle daily plan' } },
+    { id: 'schedule-reply', role: 'assistant', text: 'Good morning! Start with the bunnies, then pick one small task that fits your energy.\n\n- Top up hay and refresh water.\n- Check each bunny is eating.\n- Choose one small first step for your day.', createdAt: at(2), origin: { kind: 'scheduled', visibility: 'conversation' } },
+    { id: 'agent', role: 'user', text: 'Message from 🤖 Garden planner (@garden): The peppers are covered for tonight.', origin: { kind: 'agent', visibility: 'activity', name: 'Garden planner', handle: 'garden' } },
+    { id: 'agent-reply', role: 'assistant', text: 'Thanks, I will include that in the household plan.', origin: { kind: 'agent', visibility: 'activity', name: 'Garden planner', handle: 'garden' } },
+    { id: 'child', role: 'user', text: 'Subagent Task Completed: Check supplies\nHay and pellets are stocked.', origin: { kind: 'subagent', visibility: 'activity', title: 'Check supplies completed' } },
+    { id: 'process', role: 'user', text: 'Background Process Completed: inventory-check\nExit code: 0', origin: { kind: 'process', visibility: 'activity', title: 'Inventory check completed' } },
+    { id: 'diagnostic', role: 'assistant', text: 'Internal delivery retry diagnostic. No action needed.', origin: { kind: 'diagnostic', visibility: 'activity' } },
+  ] };
+}
 // A long history pages in earlier turns. PREVIEW_ARRIVALS=1 adds a reply every eight seconds.
 const meals = ['pot roast', 'chili', 'enchiladas', 'brisket tacos', 'chicken spaghetti', 'King Ranch casserole', 'migas', 'gumbo'];
 conversations.kitchen = { activity: { state: 'idle' }, messages: Array.from({ length: 64 }, (_, turn) => [

@@ -1,5 +1,45 @@
 # Validation ledger
 
+## October 14 coordination message presentation
+
+Implementation by GPT-6.1 Sol. The optional message origin separates model roles
+from display purpose. Scheduled answers remain visible; recognized bot, cron,
+subagent, process and diagnostic traffic moves into collapsed activity groups.
+Trusted human attribution overrides display hints, and privacy filtering clears
+private origin labels, attachments and reasoning.
+
+Source fingerprint: `sha256:e904bf6edeeeef2324ddf1a2f793c0cf200b71ddfdc7dc1e4a9c82391a1bfb04`.
+The full Node suite passed 694 tests, including speech authorization, actual
+adapter/history privacy, resumed work, and inflight provenance regressions. The web build and typecheck
+passed. Xcode 27 on the Mac mini passed 121 native unit tests and the focused
+coordination UI test on an isolated iPhone 17 Pro simulator running iOS 27.
+The UI test checked the scheduled answer, collapsed diagnostics, all five activity
+groups and expansion of the original scheduled input. Its screenshots and a
+baseline fixture screenshot were inspected. No physical iPhone signing identity
+is installed, so native device distribution remains unverified.
+
+Claude Opus 5.5 independently reviewed the full diff. Findings led to an explicit
+history-field allowlist, speech and interactive-card source authorization, cached
+speech revalidation, visible resumed answers, iOS activity grouping beside each
+turn with ordinary receipts preserved, broader native delegation recognition,
+and correct provenance for a newer streaming prompt. Follow-up findings also corrected older attachment-list redaction and made
+internal iOS reply cards read-only. The final focused independent review found
+no remaining defects. The last affected backend/privacy/history/voice/contract
+checks passed 38 tests.
+
+The Python runner passed 18 files and skipped the Linux-only system-terminal file;
+its upgrade test initially failed because Git discovered the enclosing repository
+when a fixture deleted its own object store. The unchanged upgrade suite passed
+all 39 tests with scratch on the external SSD outside the checkout. The added
+scheduled-delivery regression passed with 14 other delivery checks, one skipped.
+
+T3 browser interactions at 390 and 1280 CSS pixels confirmed that only the scheduled
+answer appears in chat, all five groups start collapsed, the original cron payload
+remains expandable, and the page has no horizontal overflow. The baseline web
+fixture reproduced the mislabeled Household member messages. T3 screenshot capture
+failed repeatedly, so web visual coverage is limited to rendered DOM and interaction
+checks; the native screenshots supply the visual before/after evidence.
+
 ## October 15 app release 341e046
 
 PR #124 merged at `341e04696df97ee5e27696af6b9aaa0d23fa5169`. The release is live at `https://agentui.wildflowersranch.com`,

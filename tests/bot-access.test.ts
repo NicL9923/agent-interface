@@ -281,12 +281,19 @@ describe("private assistants under concurrency and side channels", () => {
     s.runtime.conversation = async (botId: string) => ({ botId, activity: { state: "idle" }, approvals: [], attention: [], messages: [
       { id: "in", role: "user", text: `Message from 🤖 ${secretName} (@${secret}): The ledger balance is 42.` },
       { id: "out", role: "tool", text: "", toolName: "message_agent", toolCall: { id: "c", name: "message_agent", status: "completed", arguments: JSON.stringify({ target: secret, message: "Share the balance" }), result: "Balance 42" } },
+      { id: "metadata", role: "assistant", text: "Private answer", origin: { kind: "agent", visibility: "activity", name: secretName, handle: secret, title: "Balance 42" }, reasoning: "Balance 42", files: [{ id: "private-file", name: "Balance 42", mime: "text/plain" }] },
       { id: "plain", role: "assistant", text: "Dinner is at six." },
-    ] });
+    ], files: [{ id: "private-file", name: "Balance 42", mime: "text/plain" }] });
     const member = (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.member })).body;
-    for (const leak of [secret, secretName, "42", "Share the balance"]) expect(member).not.toContain(leak);
+    for (const leak of [secret, secretName, "42", "Share the balance", "private-file"]) expect(member).not.toContain(leak);
     expect(member).toContain("another member's assistant");
     expect(member).toContain("Dinner is at six.");
+    for (const suffix of ["", "?before=plain"]) {
+      const files = await s.app.inject({url:`/api/bots/family/files${suffix}`,headers:s.member});
+      expect(files.statusCode).toBe(200);
+      expect(files.body).not.toContain("private-file");
+      expect(files.body).not.toContain("Balance 42");
+    }
     const owner = (await s.app.inject({ url: "/api/bots/family/conversation", headers: s.owner })).body;
     expect(owner).toContain("The ledger balance is 42.");
   });

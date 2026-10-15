@@ -1,3 +1,4 @@
+import { isConversationReply } from "../shared/message-origin";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ActivityState, Bootstrap, Bot, SubmissionReceipt } from "../shared/types";
@@ -285,7 +286,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           <div className="composer-voice">
             {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
             <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
-              reply={!active ? conversation?.messages.findLast(message => message.role === "assistant") : undefined}
+              reply={!active ? conversation?.messages.findLast(isConversationReply) : undefined}
               disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />

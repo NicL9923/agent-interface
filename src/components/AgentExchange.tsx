@@ -1,13 +1,16 @@
 import type { Message } from '../shared/types';
 import { agentEnvelope } from '../shared/collaboration';
+import { messageOrigin } from '../shared/message-origin';
 import './collaboration.css';
 
 export function isAgentExchange(message: Message) {
-  return !!agentEnvelope(message) || message.toolCall?.name === 'message_agent' || message.toolName === 'message_agent';
+  return messageOrigin(message)?.kind === 'agent';
 }
 export function AgentExchange({ message, recipient }: { message: Message; recipient: string }) {
-  const incoming = agentEnvelope(message);
-  let target = 'another assistant', body = '';
+  const envelope = agentEnvelope(message);
+  const origin = messageOrigin(message);
+  const incoming = envelope || (message.role === 'user' && origin?.name ? { name: origin.name, text: message.text } : null);
+  let target = origin?.name || 'another assistant', body = '';
   if (!incoming) {
     try { const args = JSON.parse(message.toolCall?.arguments || '{}'); if (typeof args.target === 'string') target = args.target; if (typeof args.message === 'string') body = args.message; } catch { /* Keep the native result available. */ }
   }

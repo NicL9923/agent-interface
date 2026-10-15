@@ -164,6 +164,13 @@ struct Sender: Codable {
   var id: String
   var name: String
 }
+struct MessageOrigin: Codable, Equatable {
+  var kind: String
+  var visibility: String
+  var title: String?
+  var name: String?
+  var handle: String?
+}
 struct Message: Codable, Identifiable {
   var id: String
   var role: String
@@ -174,6 +181,44 @@ struct Message: Codable, Identifiable {
   var reasoning: String?
   var toolName: String?
   var toolCall: ToolCall?
+  var origin: MessageOrigin?
+  var presentationOrigin: MessageOrigin? {
+    if role == "user", sender != nil { return nil }
+    if let origin { return origin }
+    if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name) }
+    if role == "user" {
+      if text.range(of: #"^\[Cronjob "[^\n]+" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]"#, options: .regularExpression) != nil {
+        return MessageOrigin(kind: "scheduled", visibility: "activity")
+      }
+      if text.range(of: #"^\[Cron delivery: [^\n\]]+\]"#, options: .regularExpression) != nil {
+        return MessageOrigin(kind: "scheduled", visibility: "conversation")
+      }
+      if text.range(of: #"^(Subagent Tasks? (Completed|Failed|Interrupted|Incomplete):|\[IMPORTANT: (Background )?[Ss]ubagent|\[ASYNC (DELEGATION )?(BATCH )?COMPLETE\b|A background (subagent|fan-out of \d+ subagent\(s\)) you dispatched earlier has finished\.)"#, options: .regularExpression) != nil {
+        return MessageOrigin(kind: "subagent", visibility: "activity")
+      }
+      if text.range(of: #"^(Background Process (Completed|Failed|Output|Interrupted)|\[IMPORTANT: Background process |\[Background process \S+ heartbeat #)"#, options: .regularExpression) != nil {
+        return MessageOrigin(kind: "process", visibility: "activity")
+      }
+    }
+    let names = displayToolName.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    if role == "tool" || text.isEmpty {
+      if names.contains("message_agent") { return MessageOrigin(kind: "agent", visibility: "activity") }
+      if names.contains(where: { ["delegate_task", "spawn_agent", "subagent", "task"].contains($0) }) { return MessageOrigin(kind: "subagent", visibility: "activity") }
+    }
+    return nil
+  }
+  var isInternalActivity: Bool { presentationOrigin?.visibility == "activity" }
+  var activityGroup: String {
+    switch presentationOrigin?.kind {
+    case "agent": return "Bot messages"
+    case "scheduled": return "Scheduled jobs"
+    case "subagent": return "Subagents"
+    case "process": return "Background processes"
+    case "diagnostic": return "Diagnostics"
+    default: return "Tool calls"
+    }
+  }
+  var isConversationVisible: Bool { !isInternalActivity && (!isToolActivity || toolCall != nil || !(files?.isEmpty ?? true)) }
   var agentEnvelope: (name: String, body: String)? {
     guard role == "user", sender == nil else { return nil }
     let pattern = #"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#
@@ -342,6 +387,22 @@ struct EarlierFiles: Decodable {
   }
   var messages: [Entry]
 }
+struct CoordinationGroup: Identifiable {
+  var id: String
+  var messages: [Message]
+}
+struct ConversationTurn: Identifiable {
+  var id: String
+  var messages: [Message]
+  var coordinationGroups: [CoordinationGroup] {
+    var groups: [CoordinationGroup] = []
+    for message in messages where message.isInternalActivity {
+      if let index = groups.firstIndex(where: { $0.id == message.activityGroup }) { groups[index].messages.append(message) }
+      else { groups.append(CoordinationGroup(id: message.activityGroup, messages: [message])) }
+    }
+    return groups
+  }
+}
 struct Conversation: Codable {
   var attention: [Attention]?
   var botId: String
@@ -358,21 +419,34 @@ struct Conversation: Codable {
   var readPosition: ReadPosition?
   var toolCalls: [ToolCall]?
   var activityMessages: [Message] {
-    let canonical = messages.filter { $0.isToolActivity || $0.toolCall != nil }
+    let canonical = messages.filter { $0.isInternalActivity || $0.isToolActivity || $0.toolCall != nil }
     let known = Set(canonical.compactMap { $0.toolCall?.id })
     return canonical + (toolCalls ?? []).filter { !known.contains($0.id) }.map {
       Message(id: "tool-call-" + $0.id, role: "tool", text: $0.result ?? "", toolCall: $0)
     }
   }
+  var presentationTurns: [ConversationTurn] {
+    var turns: [ConversationTurn] = []
+    for message in messages {
+      if turns.isEmpty || message.role == "user" { turns.append(ConversationTurn(id: message.id, messages: [])) }
+      turns[turns.count - 1].messages.append(message)
+    }
+    let known = Set(messages.compactMap { $0.toolCall?.id })
+    for message in activityMessages where message.isInternalActivity && message.toolCall != nil && !known.contains(message.toolCall!.id) {
+      if turns.isEmpty { turns.append(ConversationTurn(id: "live-activity", messages: [])) }
+      turns[turns.count - 1].messages.append(message)
+    }
+    return turns
+  }
   var visibleMessages: [Message] {
-    messages.filter { !$0.isToolActivity || $0.toolCall != nil || $0.isAgentExchange || !($0.files?.isEmpty ?? true) }
+    messages.filter { $0.isConversationVisible }
   }
   func restorableReadAnchor(_ saved: String?) -> String? {
     guard let saved else { return nil }
     if visibleMessages.contains(where: { $0.id == saved }) { return saved }
     guard let index = messages.firstIndex(where: { $0.id == saved }) else { return nil }
     return messages.dropFirst(index + 1).first {
-      !$0.isToolActivity || !($0.files?.isEmpty ?? true)
+      $0.isConversationVisible
     }?.id
   }
 }

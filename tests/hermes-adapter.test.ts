@@ -1,3 +1,5 @@
+import { Store } from "../src/server/store.js";
+import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -876,4 +878,59 @@ it('scopes reasoning and service tier controls to the canonical assistant sessio
   ]);
   rpcErrors.set('config.set', {code:4002,message:'Fast mode is unavailable'});
   await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toThrow();
+});
+
+it('preserves native event provenance and inherits scheduled replies without changing roles', async () => {
+  snapshot.messages = [
+    {role:'user',row_id:1,text:'Native scheduled input',display_metadata:{origin:{kind:'scheduled',visibility:'activity',title:'Bunny care'}}},
+    {role:'assistant',row_id:2,text:'Hay and water.'},
+    {role:'user',row_id:3,text:'Desktop question'},
+    {role:'assistant',row_id:4,text:'Answer'},
+    {role:'user',row_id:5,text:'Diagnostic input',display_metadata:{notification_category:'diagnostic'}},
+    {role:'assistant',row_id:6,text:'Internal output'},
+    {role:'user',row_id:7,text:'Subagent result',display_kind:'async_delegation_complete',display_metadata:{display_text:'Subagent Task Completed: Review'}},
+    {role:'assistant',row_id:8,text:'Review found one issue.'},
+  ];
+  const rows=(await runtime.conversation('shared')).messages;
+  expect(rows.map(row=>row.role)).toEqual(snapshot.messages.map((row:any)=>row.role));
+  expect(rows.map(row=>row.origin?.visibility)).toEqual(['activity','conversation',undefined,undefined,'activity','activity','activity','conversation']);
+  expect(rows[1].origin).toMatchObject({kind:'scheduled',title:'Bunny care'});
+  expect(rows[6].origin?.kind).toBe('subagent');
+});
+
+it('carries preceding prompt provenance into a history page that starts with a reply',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',messages:[{id:'a',role:'assistant',text:'The reminder is ready.'}],app_tool_result:'internal wire value',app_prior_prompt:{role:'user',text:'Scheduled input',display_metadata:{origin:{kind:'scheduled',visibility:'activity'}}}})));
+  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:100}) as any;
+  expect(page.messages[0].origin).toEqual({kind:'scheduled',visibility:'conversation'});
+  expect(page).not.toHaveProperty('app_prior_prompt');
+  expect(page.messages[0]).not.toHaveProperty('display_metadata');
+});
+
+it('does not give a newer inflight human reply the previous bot prompt origin',async()=>{
+  snapshot.info={running:true};
+  snapshot.messages=[{role:'user',row_id:1,text:'Message from 🤖 Planner (@planner): Internal question'},{role:'assistant',row_id:2,text:'Reply to Planner'}];
+  snapshot.inflight={user:'A new Desktop question',assistant:'A new human answer'};
+  const rows=(await runtime.conversation('shared')).messages;
+  expect(rows[1].origin?.visibility).toBe('activity');
+  expect(rows.at(-1)?.origin).toEqual({kind:'human',visibility:'conversation'});
+});
+
+it('allowlists history fields before redacting a private bot handoff and its inherited reply',async()=>{
+  const privateId='private-bot',canary='private-canary';
+  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',messages:[
+    {id:'prompt',role:'user',text:canary,display_metadata:{origin:{kind:'agent',visibility:'activity',handle:privateId,name:'Private bot'}},content:canary,labels:{secret:canary}},
+    {id:'reply',role:'assistant',text:canary,reasoning_content:canary,codex_message_items:[canary]},
+    {id:'tool',role:'tool',name:'message_agent',text:canary,args:{target:privateId,message:canary},context:canary,app_tool_result:canary,content:canary},
+  ]})));
+  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:0}) as any;
+  expect(page.messages[1].origin?.handle).toBe(privateId);
+  const store=new Store(':memory:');
+  try {
+    store.savePresentation(privateId,{shared:false,ownerId:'other'});
+    const redact=await redactAgents(store,new Roster(runtime,store),'reader');
+    const publicRows=page.messages.map(redact.message);
+    expect(JSON.stringify(publicRows)).not.toContain(canary);
+    expect(JSON.stringify(publicRows)).not.toContain(privateId);
+    expect(publicRows[0].origin).toEqual({kind:'agent',visibility:'activity'});
+  } finally {store.close();}
 });

@@ -156,8 +156,12 @@ named group, address assistants with `@handle`, reply in a thread, approve a
 pending action or stop the discussion. Hermes owns the persistent coordinator.
 If that coordinator is unavailable, rooms remain readable and sending is disabled.
 After an uncertain send or creation, retry the saved request to check its status
-without creating a duplicate. Agent handoffs also have a distinct rendering in
-ordinary conversations, including Simple mode.
+without creating a duplicate. Conversation activity keeps bot messages, scheduled-job handoffs, subagents,
+background processes, and diagnostics in separate collapsed sections in both
+presentations. Expand them to inspect the original input and results. Scheduled
+answers stay in the conversation with a Scheduled label. Decisions and requests
+for input stay visible. Unknown messages from other clients remain in chat;
+only recognized automation sources move into activity.
 
 Assistant settings > **Logins** manages the selected Hermes profile's encrypted
 login vault. Native login, code, vault-unlock and secret requests appear inline

@@ -13,6 +13,7 @@ import { SecureRequestCard } from "../components/SecureRequestCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
+import { activityLabels, isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
 import type { SavedConversation } from "./storage";
 import type { useConversation } from "./use-conversation";
 export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
@@ -236,14 +237,14 @@ function HistoryEdge({ history, scroll, name, disabled }: {
 type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[] };
 function turns(conversation: SavedConversation | null, advanced: boolean) {
   const blocks: Turn[] = [];
-  for (const message of conversation?.messages || []) {
+  for (const message of withMessageOrigins(conversation?.messages || [])) {
     if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map(), reasoning: [] });
     const block = blocks.at(-1)!;
     // A turn's reasoning parts share one accordion instead of a block per reply row.
-    if (advanced && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
-    if (message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
+    if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
+    if (isActivityMessage(message) || message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
     // A tool-call row with no reply text would render as an empty bubble.
-    if (message.role !== "tool" && visibleMessage(message)) block.messages.push(message);
+    if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) block.messages.push(message);
   }
   for (const call of conversation?.toolCalls || []) {
     // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
@@ -268,9 +269,10 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
       {block.messages.flatMap((message, position) => {
         // The conversation is with one assistant, so its replies need no name, and
         // consecutive reply parts in a turn share the first part's timestamp.
-        const reply = message.role === "assistant";
+        const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
         const continued = reply && block.messages[position - 1]?.role === "assistant";
-        const label = message.role === "user" ? message.sender?.name || "Household member"
+        const scheduled = messageOrigin(message)?.kind === "scheduled";
+        const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
           : reply ? "" : message.toolName || message.role;
         // Reasoning follows the prompt and precedes the reply.
         const opensReply = !!block.reasoning.length && message.role !== "user" && block.messages.slice(0, position).every(item => item.role === "user");
@@ -283,7 +285,7 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
             {label}
             {message.createdAt && <When value={message.createdAt} />}
           </div>}
-          {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : message.role === "assistant" ? (
+          {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
             <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} />
           ) : message.role !== "tool" && (
             <div className="message-text">{message.text}</div>
@@ -332,9 +334,11 @@ function ApprovalCard({ approval, botId, supported, report }: { approval: Approv
   </article>;
 }
 function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }) {
-  const delegated = (message: Message) => isAgentExchange(message) || /^(delegate_task|spawn_agent|subagent|task)$/.test(message.toolCall?.name || message.toolName || "");
-  const groups = [{ label: "Tool calls", items: messages.filter(message => !delegated(message)) },
-    { label: "Subagents", items: messages.filter(delegated) }];
+  const label = (message: Message) => {
+    const origin = messageOrigin(message);
+    return origin && origin.visibility === "activity" ? activityLabels[origin.kind] : "Tool calls";
+  };
+  const groups = [...new Set(messages.map(label))].map(name => ({ label: name, items: messages.filter(message => label(message) === name) }));
   return groups.filter(group => group.items.length).map(group => <details className="tool-calls" key={group.label}>
     <summary><Icon name={group.label === "Subagents" ? "robot" : "terminal"} size={16} /><span>{group.label}</span><span className="tool-count">{group.items.length}</span>
       {group.items.some(message => message.toolCall?.status === "running") && <span className="muted">{disconnected ? "Last seen running" : "Running"}</span>}
@@ -342,7 +346,7 @@ function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: 
     <div className="tool-calls-content">{group.items.map(message => <div key={message.id}>
       {isAgentExchange(message) ? <AgentExchange message={message} recipient={recipient} /> : message.toolCall
         ? advanced ? <ToolCallDetail call={message.toolCall} disconnected={disconnected} /> : <ActionReceipt call={message.toolCall} />
-        : <details className="message-detail"><summary>{message.toolName || "Tool result"}</summary><pre>{message.text || "No result was exposed by Hermes."}</pre></details>}
+        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || label(message)}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre>{message.text || "No result was exposed by Hermes."}</pre></details>}
       {message.files?.map(file => <FileLink key={file.id} file={file} />)}
     </div>)}</div>
   </details>);

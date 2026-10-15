@@ -184,6 +184,15 @@ export interface Message {
   reasoning?: string;
   toolName?: string;
   toolCall?: ToolCall;
+  /** Display provenance, independent of the model-facing role. Never grants access. */
+  origin?: MessageOrigin;
+}
+export interface MessageOrigin {
+  kind: "human" | "agent" | "scheduled" | "subagent" | "process" | "diagnostic";
+  visibility: "conversation" | "activity";
+  title?: string;
+  name?: string;
+  handle?: string;
 }
 export interface ToolCall {
   id: string;

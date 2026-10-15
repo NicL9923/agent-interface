@@ -41,8 +41,8 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(conversation.activityMessages.compactMap { $0.toolCall?.id }, ["call-one", "call-two"])
     XCTAssertEqual(conversation.activityMessages.first?.toolCall?.result, "Saved note")
     XCTAssertEqual(conversation.activityMessages.first?.toolCall?.arguments, "{\"path\":\"note.txt\"}")
-    XCTAssertEqual(conversation.visibleMessages.map(\.id),["assistant"])
-    XCTAssertEqual(conversation.restorableReadAnchor("assistant"),"assistant")
+    XCTAssertEqual(conversation.visibleMessages.map(\.id), ["assistant"])
+    XCTAssertEqual(conversation.restorableReadAnchor("assistant"), "assistant")
     var mixed = conversation
     mixed.messages[0].text = "Here is the answer."
     XCTAssertEqual(mixed.visibleMessages.map(\.id), ["assistant"])
@@ -116,7 +116,7 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(NotificationController.botId(from: "//evil.example/?bot=a", origin: origin))
     XCTAssertNil(NotificationController.botId(from: "/api/files/a?bot=b", origin: origin))
   }
-  func testAgentMessagesAndHandoffsStayVisibleInSimplePresentation() {
+  func testAgentMessagesAndHandoffsMoveToActivityInSimplePresentation() {
     let incoming = Message(id: "in", role: "user", text: "Message from 🤖 Ledger (@ledger): Check the gate battery.")
     XCTAssertEqual(incoming.agentEnvelope?.name, "Ledger")
     XCTAssertEqual(incoming.agentEnvelope?.body, "Check the gate battery.")
@@ -124,7 +124,31 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(human.agentEnvelope)
     let handoff = Message(id: "out", role: "tool", text: "Delivered", toolCall: ToolCall(id: "call", name: "message_agent", status: "completed"))
     let conversation = Conversation(botId: "ranch", messages: [incoming, handoff], activity: Activity(state: .idle), approvals: [], files: [])
-    XCTAssertEqual(conversation.visibleMessages.map(\.id), ["in", "out"])
+    XCTAssertTrue(conversation.visibleMessages.isEmpty)
+    XCTAssertEqual(conversation.activityMessages.map(\.id), ["in", "out"])
+    XCTAssertEqual(incoming.activityGroup, "Bot messages")
+  }
+  func testScheduledAnswersAndUnknownMessagesRemainVisibleAndAnchorsSkipCoordination() throws {
+    let json = #"{"botId":"kimberly","messages":[{"id":"cron","role":"user","text":"Native scheduled input","origin":{"kind":"scheduled","visibility":"activity","title":"Bunny care"}},{"id":"answer","role":"assistant","text":"Hay and water.","origin":{"kind":"scheduled","visibility":"conversation"}},{"id":"desktop","role":"user","text":"Desktop question"},{"id":"diagnostic","role":"assistant","text":"Internal failure","origin":{"kind":"diagnostic","visibility":"activity"}}],"activity":{"state":"idle"},"approvals":[],"files":[]}"#
+    let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
+    XCTAssertEqual(conversation.visibleMessages.map(\.id), ["answer", "desktop"])
+    XCTAssertEqual(conversation.activityMessages.map(\.id), ["cron", "diagnostic"])
+    XCTAssertEqual(conversation.restorableReadAnchor("cron"), "answer")
+    XCTAssertNil(conversation.restorableReadAnchor("diagnostic"))
+    var human = conversation.messages[0]
+    human.sender = Sender(id: "one", name: "Nicolas")
+    XCTAssertTrue(human.isConversationVisible)
+    XCTAssertEqual(conversation.messages[0].activityGroup, "Scheduled jobs")
+  }
+  func testCoordinationStaysWithItsTurnAndOrdinaryReceiptsRemainVisible() {
+    let prompt = Message(id: "human", role: "user", text: "Check supplies")
+    let receipt = Message(id: "receipt", role: "tool", text: "Done", toolCall: ToolCall(id: "check", name: "read_file", status: "completed"))
+    let event = Message(id: "subagent", role: "user", text: "Stocked", origin: MessageOrigin(kind: "subagent", visibility: "activity"))
+    let answer = Message(id: "answer", role: "assistant", text: "All stocked")
+    let conversation = Conversation(botId: "ranch", messages: [prompt, receipt, event, answer], activity: Activity(state: .idle), approvals: [], files: [])
+    XCTAssertEqual(conversation.presentationTurns.map(\.id), ["human", "subagent"])
+    XCTAssertEqual(conversation.presentationTurns[1].coordinationGroups.map(\.id), ["Subagents"])
+    XCTAssertEqual(conversation.visibleMessages.map(\.id), ["human", "receipt", "answer"])
   }
   func testNativeGroupAndRoutineOutputContractsDecodeWithoutInventingAttribution() throws {
     let page = try JSONDecoder().decode(GroupPage.self, from: Data(#"{"events":[{"event_id":"e1","seq":1,"kind":"message.user","created_at":1790935200,"actor":{"kind":"user","id":"desktop"},"payload":{"text":"Check the gates","thread_id":"thread-1"}}],"cursor":1,"has_more":false}"#.utf8))

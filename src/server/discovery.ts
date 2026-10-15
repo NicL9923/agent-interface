@@ -45,7 +45,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     await bot(signedIn(req).id, p.botId);
     const page=await experience()({ operation: 'history', profile: p.botId, sessionId: p.sessionId, offset }) as HistoryPage;
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return {...page,messages:page.messages.map(redact.message).map(message=>{const senderId=(message as typeof message & {app_sender_id?:string}).app_sender_id;const user=senderId&&store.getUser(senderId);return user?{...message,sender:{id:user.id,name:user.name}}:message;})};
+    return {...page,messages:page.messages.map(message=>{const senderId=(message as typeof message & {app_sender_id?:string}).app_sender_id;const user=senderId&&store.getUser(senderId);return user?{...message,origin:undefined,sender:{id:user.id,name:user.name}}:message;}).map(redact.message)};
   });
   app.get('/api/saved', async req => {
     const allowed = new Set((await visible(signedIn(req).id)).map(bot => bot.id));

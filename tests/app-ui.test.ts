@@ -584,6 +584,28 @@ describe("conversation state", () => {
     await type(" "); expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
   });
 
+  it("collapses coordination by source and keeps the scheduled answer and decisions visible", async () => {
+    conversation = { ...conversation, messages: [
+      { id: "cron", role: "user", text: '[Cronjob "Bunny care" output — scheduled job, not the user. Review it, act on anything that needs action, and summarize for the chat.]\n\nHay and water.' },
+      { id: "reminder", role: "assistant", text: "Start with the bunnies." },
+      { id: "dm", role: "user", text: "Message from 🤖 Planner (@planner): Check the gate." },
+      { id: "bot-reply", role: "assistant", text: "I will check it." },
+      { id: "human", role: "user", text: "Hello from Desktop" },
+      { id: "handoff", role: "tool", text: "", toolCall: { id: "worker", name: "delegate_task", status: "running" } },
+    ], approvals: [{ id: "decision", title: "Open the gate?", detail: "Your decision needed", status: "pending" }] };
+    await render();
+    const bubbles = [...container.querySelectorAll(".message[data-message-id]")];
+    expect(bubbles.map(row => row.getAttribute("data-message-id"))).toEqual(["reminder", "human"]);
+    expect(bubbles[0].querySelector(".message-attribution")?.textContent).toContain("Scheduled");
+    expect(bubbles[1].textContent).toContain("Hello from Desktop");
+    const groups = [...container.querySelectorAll(".tool-calls")];
+    expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Bot messages2", "Subagents1Running"]);
+    expect(groups.every(group => !group.hasAttribute("open"))).toBe(true);
+    expect(container.querySelector(".approval-card")?.textContent).toContain("Open the gate?");
+    await act(async () => { groups[0].setAttribute("open", ""); });
+    expect(groups[0].textContent).toContain("Hay and water.");
+  });
+
   it("counts history and live tools once and groups delegated work separately", async () => {
     const call = { id: "lookup", name: "web", status: "completed" as const, result: "Found it" };
     conversation = { ...conversation, activity: { state: "working" }, messages: [

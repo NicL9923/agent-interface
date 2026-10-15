@@ -250,9 +250,11 @@ class HistoryDiscoveryTests(unittest.TestCase):
     def test_page_boundary_uses_nearest_native_user_and_leaves_old_artifacts_unattributed(self):
         result=self.history(True)
         self.assertNotIn('app_artifacts',result['messages'][0])
+        self.assertEqual(result['app_prior_prompt']['text'], 'Native desktop question')
     def test_page_boundary_clone_resolves_exact_old_run_in_display_order(self):
         result=self.history(False)
         self.assertEqual(result['messages'][0]['app_artifacts'],[{'path':'/fixture/old.pdf'}])
+        self.assertEqual(result['app_prior_prompt']['app_sender_id'], 'one')
     def test_unwritten_profile_store_reads_as_empty_history(self):
         # A new bot's store stays empty until its first session; Hermes no longer creates it on read.
         self.store.write_text('')

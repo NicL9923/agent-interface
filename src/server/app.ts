@@ -239,7 +239,8 @@ export async function createApp(
   await installDiscoveryRoutes(app, runtime, store, roster);
   await installCollaborationRoutes(app, runtime, store, roster);
   await installVaultRoutes(app, runtime);
-  await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId) });
+  await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId),
+    redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message) });
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {
     if (snapshot) return snapshot;
@@ -381,6 +382,23 @@ export async function createApp(
   });
   app.get("/api/bots/:id/conversation", async (req) => {
     const result = await runtime.conversation(params(req).id);
+    // Attribution augments the canonical Hermes history, never stores a transcript.
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
+    const originalFileIds = new Set(result.messages.flatMap(message => message.files ?? []).map(file => file.id));
+    result.messages = result.messages.map((message) => {
+      const attribution =
+        store.submissionForMessage(params(req).id, message.id) ??
+        store.submission(message.id);
+      const user = attribution
+        ? store.getUser(attribution.input.senderId)
+        : undefined;
+      return user
+        ? { ...message, origin: undefined, sender: { id: user.id, name: user.name } }
+        : message;
+    }).map(redact.message);
+    const visibleFileIds = new Set(result.messages.flatMap(message => message.files ?? []).map(file => file.id));
+    result.files = result.files?.filter(file => !originalFileIds.has(file.id) || visibleFileIds.has(file.id));
     // Without a window, as for the native app, the whole history is returned.
     const window = z.object({
       start: z.string().min(1).max(512).optional(),
@@ -393,20 +411,6 @@ export async function createApp(
       // Signed file references scale with the window too. The rest load on demand.
       ({ files: result.files, earlierFiles } = windowFiles(all, earlier, result.files));
     }
-    // Attribution augments the canonical Hermes history, never stores a transcript.
-    const redact = await redactAgents(store, roster, signedIn(req).id);
-    if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
-    result.messages = result.messages.map(redact.message).map((message) => {
-      const attribution =
-        store.submissionForMessage(params(req).id, message.id) ??
-        store.submission(message.id);
-      const user = attribution
-        ? store.getUser(attribution.input.senderId)
-        : undefined;
-      return user
-        ? { ...message, sender: { id: user.id, name: user.name } }
-        : message;
-    });
     return {
       ...result,
       ...(earlier !== undefined ? { earlier, earlierFiles } : {}),
@@ -421,7 +425,8 @@ export async function createApp(
   // Files of the history before a window, for the artifacts list.
   app.get("/api/bots/:id/files", async (req) => {
     const { before } = z.object({ before: z.string().min(1).max(512).optional() }).parse(req.query);
-    return filesBefore((await runtime.conversation(params(req).id)).messages, before);
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    return filesBefore((await runtime.conversation(params(req).id)).messages.map(redact.message), before);
   });
   // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.

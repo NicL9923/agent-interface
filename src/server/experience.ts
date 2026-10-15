@@ -6,6 +6,7 @@ import type { ExperienceRequest, TodayItem, TodayOverview } from '../shared/expe
 import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.js';
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
+import { isConversationReply } from '../shared/message-origin.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const target = z.enum(['memory', 'user']);
@@ -54,14 +55,15 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
       const batch = await Promise.all(bots.slice(index, index + 4).map(async bot => {
         try {
           const conversation = await runtime.conversation(bot.id);
-          const latest = conversation.messages.findLast(message => message.role === 'assistant');
+          const messages = conversation.messages.map(redact.message);
+          const latest = messages.findLast(isConversationReply);
           const unreadRuns = new Set<string>();
           for (const event of page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId)) {
             unreadRuns.add(event.runId!);
-            const files = conversation.messages.filter(message => message.runId === event.runId && message.role !== 'user').flatMap(message => message.files ?? []);
+            const files = messages.filter(message => message.runId === event.runId && message.role !== 'user').flatMap(message => message.files ?? []);
             if (files.length) eventFiles.set(event.id, [...new Map(files.map(file => [file.id, file])).values()]);
           }
-          const files = conversation.messages.filter(message => message.createdAt && Date.parse(message.createdAt) > Date.parse(since) || message.runId && unreadRuns.has(message.runId) && message.role !== 'user').flatMap(message => message.files ?? []);
+          const files = messages.filter(message => message.createdAt && Date.parse(message.createdAt) > Date.parse(since) || message.runId && unreadRuns.has(message.runId) && message.role !== 'user').flatMap(message => message.files ?? []);
           return { botId: bot.id, botName: bot.name, activity: conversation.activity,
             approvals: conversation.approvals.filter(approval => approval.status === 'pending'),
             attention: conversation.attention ?? [],
@@ -132,7 +134,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   for (const method of ['GET', 'PUT'] as const) app.route({ method, url: '/api/bots/:id/messages/:messageId/cards/:cardId/state', handler: async req => {
     const params = z.object({ id, messageId: id, cardId: id }).parse(req.params);
     await bot(params.id);
-    const message = (await runtime.conversation(params.id)).messages.find(message => message.id === params.messageId && message.role === 'assistant');
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    const message = (await runtime.conversation(params.id)).messages.map(redact.message).find(message => message.id === params.messageId && isConversationReply(message));
     const card = message && replyCardsFromText(message.text).find(card => card.id === params.cardId);
     if (!card) throw failure(404, 'This interactive reply is no longer in the Hermes conversation');
     const userId = signedIn(req).id;
