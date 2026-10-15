@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, cachedResponse, write } from "../client-api";
+import { api, ApiError, cachedResponse, changeStream, pollWhileVisible, write } from "../client-api";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import type { Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
@@ -11,7 +11,10 @@ const firstPage = (botId: string) =>
   `/bots/${encodeURIComponent(botId)}/conversation?turns=${HISTORY_PAGE_TURNS}`;
 const countsAsNew = (message: Message) =>
   message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length);
-export function useConversation(botId: string, userId?: string) {
+/** onMissing hears that this person may no longer see the assistant, so polling stops. */
+export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void) {
+  const missing = useRef(onMissing);
+  missing.current = onMissing;
   const [conversation, setConversation] = useState<SavedConversation | null>(
     null,
   );
@@ -62,12 +65,13 @@ export function useConversation(botId: string, userId?: string) {
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
     let start: string | undefined;
     const cachedStart = cached?.botId === botId ? cached.messages[0]?.id : undefined;
-    let loading = false, again = false, more = false;
+    let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;
     let watch: ReplyWatch = {};
     let announced = 0;
     let secureRequestIds = new Set<string>();
     const load = async () => {
+      if (gone) return;
       if (loading) { again = true; return; }
       loading = true;
       const earlierPage = more;
@@ -102,8 +106,11 @@ export function useConversation(botId: string, userId?: string) {
         setConversation(result);
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
-      } catch {
-        if (live) {
+      } catch (error) {
+        if (live && error instanceof ApiError && error.code === "assistant_not_found") {
+          gone = true;
+          missing.current?.(botId);
+        } else if (live) {
           setDisconnected(true);
           if (earlierPage) setEarlier({ loading: false, failed: true });
         }
@@ -122,20 +129,28 @@ export function useConversation(botId: string, userId?: string) {
       void load();
     };
     void load();
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events`, () => void load());
+    if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
-      if (navigator.onLine !== false && document.visibilityState !== "hidden") void load();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      stream.open();
+      void load();
     };
-    const timer = setInterval(wake, 1500);
+    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
+    const stopPolling = pollWhileVisible(wake, 30_000);
+    // A hidden page holds no stream; showing it again reloads and reopens one.
+    const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
     window.addEventListener("online", wake);
     window.addEventListener("agent-interface:reconnect", wake);
-    document.addEventListener("visibilitychange", wake);
+    document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
       requestEarlier.current = () => {};
-      clearInterval(timer);
+      stopPolling();
+      stream.close();
       window.removeEventListener("online", wake);
       window.removeEventListener("agent-interface:reconnect", wake);
-      document.removeEventListener("visibilitychange", wake);
+      document.removeEventListener("visibilitychange", hide);
     };
   }, [botId, userId]);
   // Only messages with something to read count as seen, so a reply that was still

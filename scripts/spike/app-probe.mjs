@@ -70,6 +70,7 @@ const scopeFiles = [
   "src/hermes/service_auth.py",
   "src/hermes/qualification.py",
   "src/hermes/gateway_guard.py",
+  "src/hermes/bot_delivery.py",
   "src/shared/types.ts",
   "src/shared/upgrades.ts",
   "src/shared/integrations.ts",
@@ -363,9 +364,16 @@ try {
       .all(discovered.id)
       .map((x) => x.user_id);
     assert.deepEqual(recipients, ["local-two"]);
-    const after = (
-      await call("GET", `/api/bots/${botId}/conversation`)
-    ).data.messages.filter((x) => x.role === "assistant").length;
+    // Delivery is a queued handoff to the bot's chat, not part of the run. Under the
+    // unified gateway runtime the gateway drains a newly created bot's outbox on its
+    // housekeeping tick, so allow one tick before requiring the reply.
+    let after = 0;
+    for (let i = 0; i < 600 && after <= before; i++) {
+      if (i) await pause(250);
+      after = (
+        await call("GET", `/api/bots/${botId}/conversation`)
+      ).data.messages.filter((x) => x.role === "assistant").length;
+    }
     assert(
       after > before,
       "Native routine result must appear in the canonical conversation",

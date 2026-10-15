@@ -10,7 +10,7 @@ import { installCollaborationRoutes } from '../src/server/collaboration.js';
 import type { Runtime } from '../src/shared/types.js';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.close())); });
-async function fixture() {
+async function fixture(privateOwner = 'someone-else') {
   const app = Fastify(); apps.push(app); const store = new Store(':memory:');
   const origin = 'https://collaboration.invalid';
   await app.register(cookie); await installAuth(app, store, loadConfig({ NODE_ENV:'production', APP_ORIGIN:origin, GOOGLE_CLIENT_ID:'fixture', HOUSEHOLD_EMAILS:'one@example.invalid' }));
@@ -25,7 +25,7 @@ async function fixture() {
     : input.operation === 'state' ? {room: rooms.find(room => room.room_id === input.roomId)}
     : input.operation === 'log' ? {events:[],cursor:0,has_more:false,latest_seq:0} : {accepted:true});
   const routineResults = vi.fn(async () => []), routineOutput = vi.fn(async () => ({messages:[],previewOnly:false}));
-  const runtime = { groupRequest, routineResults, routineOutput, listBots:async () => [{id:'ranch',shared:true},{id:'planner',shared:true},{id:'private-bot',shared:false,ownerId:'someone-else'}] } as unknown as Runtime;
+  const runtime = { groupRequest, routineResults, routineOutput, listBots:async () => [{id:'ranch',shared:true},{id:'planner',shared:true},{id:'private-bot',shared:false,ownerId:privateOwner}] } as unknown as Runtime;
   await installCollaborationRoutes(app,runtime,store);
   store.user({id:'one',name:'One',email:'one@example.invalid'}); const token=randomBytes(32).toString('hex'),csrf=randomBytes(32).toString('hex');store.session(hash(token),'one',csrf,Date.now()+600000);
   app.addHook('onClose',async () => store.close());
@@ -40,6 +40,13 @@ it('filters private and peer rooms and checks the full roster on every read and 
     expect((await s.app.inject({method:'POST',url:`/api/groups/${roomId}/messages`,headers:s.headers,payload:{requestId:crypto.randomUUID(),threadId:crypto.randomUUID(),text:'Message'}})).statusCode).toBe(404);
   }
   expect(s.groupRequest.mock.calls.every(([input])=>!['send','log'].includes(input.operation))).toBe(true);
+});
+it('lets only the owner put a private assistant in a group, which nobody else can see or reach', async () => {
+  const s = await fixture('one');
+  expect((await s.app.inject({url:'/api/groups',headers:s.headers})).json().rooms.map((room:any)=>room.room_id)).toEqual(['shared','private']);
+  expect((await s.app.inject({method:'POST',url:'/api/groups',headers:s.headers,payload:{requestId:crypto.randomUUID(),name:'Books',botIds:['ranch','private-bot']}})).statusCode).toBe(200);
+  for (const tail of ['', '/log?since=0']) expect((await s.app.inject({url:`/api/groups/private${tail}`,headers:s.headers})).statusCode).toBe(200);
+  // The first test covers everyone else: the room, its log and its actions answer 404.
 });
 it('requires CSRF, bounded unique local membership, and exact message payloads',async () => {
   const s = await fixture(), requestId=crypto.randomUUID(), threadId='thread-1';

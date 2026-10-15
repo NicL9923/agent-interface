@@ -6,6 +6,7 @@ import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
 import { api, cachedResponse, clearResponseCache, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
+import { FakeEventSource } from './fake-event-source';
 
 vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
@@ -15,6 +16,7 @@ let pendingBootstrap:Promise<Bootstrap>|undefined;
 let hermesDown:boolean;
 beforeEach(()=>{
   vi.useFakeTimers();vi.clearAllMocks();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+  FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
   vi.mocked(write).mockReset().mockResolvedValue({});
   vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
   localStorage.clear();history.replaceState(null,'','/');
@@ -33,6 +35,10 @@ beforeEach(()=>{
 afterEach(async()=>{await act(async()=>root.unmount());container.remove();localStorage.clear();vi.useRealTimers();vi.unstubAllGlobals();Reflect.deleteProperty(window,'google');Reflect.deleteProperty(navigator,'onLine');});
 async function renderApp(){await act(async()=>root.render(createElement(App)));}
 async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync(ms));}
+// The server reports a change, as Hermes frames or a write would.
+async function changed(){await act(async()=>FakeEventSource.notifyAll());await advance(1500);}
+// Screens such as preferences load on first use.
+async function loaded(){await act(async()=>{await vi.dynamicImportSettled();});}
 // jsdom has no layout, so the transcript reports a fixed 2000px history in a 300px view.
 const transcriptSize=()=>{
   const height=vi.spyOn(Element.prototype,'scrollHeight','get').mockImplementation(function(this:Element){return this.classList.contains('transcript')?2000:0;});
@@ -72,7 +78,7 @@ describe('setup and recovery interface',()=>{
       return {top,bottom:top+100} as DOMRect;
     });
     try{
-      await renderApp();await advance(1500);
+      await renderApp();await changed();
       expect(paths.slice(0,2)).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p1']);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
@@ -83,7 +89,7 @@ describe('setup and recovery interface',()=>{
       expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
       expect(transcript.scrollTop).toBe(800);
       expect(container.textContent).toContain('This is the start of your conversation with Shared.');
-      await advance(1500);
+      await changed();
       expect(paths.at(-1)).toBe('/bots/shared/conversation?start=p0');
     }finally{size.mockRestore();rects.mockRestore();}
   });
@@ -142,7 +148,7 @@ describe('setup and recovery interface',()=>{
       transcript.scrollTop=300;
       await act(async()=>transcript.dispatchEvent(new Event('scroll')));
       conversation={...conversation,messages:[conversation.messages[0],{id:'live',role:'assistant',text:'Pot roast tonight'}]};
-      await advance(1500);
+      await changed();
       expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
     }finally{size.mockRestore();}
   });
@@ -156,7 +162,7 @@ describe('setup and recovery interface',()=>{
       await act(async()=>transcript.dispatchEvent(new Event('scroll')));
       expect(container.querySelector('.jump-latest')!.textContent).toBe('Jump to latest');
       conversation={...conversation,messages:[...conversation.messages,{id:'fresh',role:'assistant',text:'Fresh reply'}]};
-      await advance(1500);
+      await changed();
       expect(transcript.scrollTop).toBe(300);
       expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
       await act(async()=>container.querySelector<HTMLButtonElement>('.jump-latest')!.click());
@@ -165,7 +171,7 @@ describe('setup and recovery interface',()=>{
       expect(container.querySelector('.jump-latest')).toBeNull();
       conversation={...conversation,messages:[...conversation.messages,{id:'followed',role:'assistant',text:'Followed reply'}]};
       transcript.scrollTop=1700;
-      await advance(1500);
+      await changed();
       expect(transcript.scrollTop).toBe(2000);
     }finally{size.mockRestore();}
   });
@@ -377,6 +383,7 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+  await loaded();
   await act(async()=>button('Sign out').click());
   expect(container.querySelector('.sign-in')).not.toBeNull();
   await act(async()=>button('Enter local workspace').click());
@@ -398,4 +405,68 @@ it('fits a restored multi-line draft when returning to the conversation',async()
     await act(async()=>container.querySelector<HTMLButtonElement>('.bot-item')!.click());
     expect(container.querySelector('textarea')!.style.height).toBe('96px');
   }finally{Reflect.deleteProperty(HTMLTextAreaElement.prototype,'scrollHeight');}
+});
+describe('pushed conversation updates',()=>{
+  const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
+  const opened=async()=>{
+    await renderApp();await advance(20);
+    expect(FakeEventSource.created).toEqual(['/api/bots/shared/events']);
+    const [stream]=FakeEventSource.streams;
+    // A change between the first read and the subscription would be lost, so connecting reloads.
+    const before=reads();
+    await act(async()=>stream.connect());await advance(0);
+    expect(reads()).toBe(before+1);
+    return stream;
+  };
+  it('refetches on each change notice and otherwise polls only every 30 seconds',async()=>{
+    const stream=await opened();
+    const first=reads();
+    await advance(29_000);
+    expect(reads()).toBe(first);
+    conversation={...conversation,messages:[...conversation.messages,{id:'answer-two',role:'assistant',text:'Pushed answer'}]};
+    await act(async()=>stream.emit('message','change'));await advance(20);
+    expect(reads()).toBe(first+1);
+    expect(container.textContent).toContain('Pushed answer');
+    // Pings only show the stream is alive.
+    await act(async()=>stream.emit('ping','ping'));await advance(20);
+    expect(reads()).toBe(first+1);
+    await advance(1_000);
+    expect(reads()).toBe(first+2);
+  });
+  it('reloads after a dropped stream reconnects and replaces a refused or silent one at the next poll',async()=>{
+    const stream=await opened();
+    const first=reads();
+    // EventSource reconnects a drop by itself. Notices sent meanwhile are lost, so it reloads.
+    await act(async()=>stream.connect());await advance(20);
+    expect(reads()).toBe(first+1);
+    // A refusal is never retried by EventSource itself.
+    await act(async()=>stream.fail());
+    await advance(30_000);
+    expect(FakeEventSource.created).toHaveLength(2);
+    const [replacement]=FakeEventSource.streams;
+    const replaced=reads();
+    await act(async()=>replacement.connect());await advance(0);
+    expect(reads()).toBe(replaced+1);
+    // A minute without a ping looks like a dead connection; the next poll after that replaces it.
+    await advance(59_000);expect(FakeEventSource.created).toHaveLength(2);await advance(31_000);
+    expect(FakeEventSource.created).toHaveLength(3);
+    expect(FakeEventSource.streams.size).toBe(1);
+  });
+  it('closes the stream and stops polling while hidden, then refreshes at once when shown',async()=>{
+    let visibility:DocumentVisibilityState='visible';
+    Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibility});
+    try{
+      await opened();
+      const shown=async(state:DocumentVisibilityState)=>{visibility=state;await act(async()=>document.dispatchEvent(new Event('visibilitychange')));};
+      await shown('hidden');
+      expect(FakeEventSource.streams.size).toBe(0);
+      const hidden=reads();
+      await advance(120_000);
+      expect(reads()).toBe(hidden);
+      await shown('visible');await advance(0);
+      expect(reads()).toBe(hidden+1);
+      expect(FakeEventSource.created).toHaveLength(2);
+      expect(FakeEventSource.streams.size).toBe(1);
+    }finally{Reflect.deleteProperty(document,'visibilityState');}
+  });
 });

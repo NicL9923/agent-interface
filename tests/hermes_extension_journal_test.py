@@ -26,8 +26,9 @@ def image_text(text, images):
 
 class FakeHermes:
     """Just enough of tui_gateway for install() and agent-interface.open."""
-    def __init__(self, messages):
+    def __init__(self, messages, bridge=False, environment=None):
         self.messages = messages
+        self.environment = environment or {}
         self.methods = {}
         server = types.ModuleType("tui_gateway.server")
         server._sessions = {}
@@ -62,10 +63,25 @@ class FakeHermes:
             "hermes_cli.backend_retirement": types.SimpleNamespace(retirement=retirement),
             "agent": types.ModuleType("agent"), "agent.skill_utils": types.SimpleNamespace(ESSENTIAL_SKILLS=set()),
         }
+        # Bot Chat delivery: Hermes 6ebd92d's dashboard consumer, or eb75627's authority-only producers.
+        self.mailbox = types.ModuleType("tools.bot_live_delivery")
+        native = lambda *args, **kwargs: None
+        for name in ("_root", "_locked", "_read", "_write", "_scan_read", "_next_sequence", "_delivery_id", "complete_delivery",
+                     "find_canonical_live_owner", "deliver_to_live_owner"):
+            setattr(self.mailbox, name, native)
+        self.mailbox.has_mailbox = lambda home: False
+        for name in ("_ensure_active_session_slot", "_session_turn_admission", "_run_prompt_submit", "_notif_release_turn"):
+            setattr(server, name, native)
+        if bridge:
+            self.mailbox.authority_delivery = native
+        else:
+            server._poll_bot_live_delivery_once = native
+        self.modules.update({"tools": types.ModuleType("tools"), "tools.bot_live_delivery": self.mailbox,
+                             "tools.bot_failure_reasons": types.SimpleNamespace(classify_agent_error=lambda error: "unknown")})
 
     def __enter__(self):
         self.patches = [patch.dict(sys.modules, self.modules), patch.object(extension, "source_state", lambda: (extension.REVISION, None)),
-                        patch.dict("os.environ", {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": ""})]
+                        patch.dict("os.environ", {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": "", **self.environment})]
         for item in self.patches:
             item.start()
         self.directory = tempfile.TemporaryDirectory()
@@ -229,6 +245,39 @@ class CanonicalOpenTests(unittest.TestCase):
             after = hermes.open()["messages"]
         self.assertNotEqual(before, after)
         self.assertIn(during, (before, after))
+
+
+class BotDeliveryInstallTests(unittest.TestCase):
+    def test_native_consumer_hermes_keeps_native_delivery_and_owes_only_addon_receipts(self):
+        with FakeHermes([]) as hermes:
+            self.assertFalse(getattr(hermes.mailbox, "_agent_interface_bridge", False))
+            self.assertFalse(hermes.journal.bot_delivery.native_records)
+
+    def test_authority_hermes_also_runs_receipts_its_retired_consumer_left(self):
+        with FakeHermes([], bridge=True) as hermes:
+            self.assertTrue(hermes.journal.bot_delivery.native_records)
+
+    def test_authority_only_hermes_delivers_only_beside_a_settled_chat_outside_maintenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lease = Path(directory) / "maintenance.json"
+            with FakeHermes([], bridge=True, environment={"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(lease)}) as hermes:
+                self.assertTrue(hermes.mailbox._agent_interface_bridge)
+                consumer = hermes.journal.bot_delivery
+                sid = consumer.open_canonical("default")
+                self.assertEqual(sid, "sid")
+                def allowed():
+                    with consumer.admission(sid) as value:
+                        return value
+                self.assertTrue(allowed())
+                db = hermes.journal.db
+                with db:
+                    db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES('open','d','default','sid','stored','nicolas','e','open','Ask','[]',0,'accepted',0,1)")
+                self.assertFalse(allowed())
+                with db:
+                    db.execute("UPDATE receipts SET terminal=1 WHERE request_id='open'")
+                self.assertTrue(allowed())
+                lease.write_text('{"operationId": "installer"}'); lease.chmod(0o600)
+                self.assertFalse(allowed())
 
 
 if __name__ == "__main__":

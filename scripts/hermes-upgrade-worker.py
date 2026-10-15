@@ -324,6 +324,9 @@ class NativeUpdateClaim:
             sys.path.remove(str(source)); sys.dont_write_bytecode = self.original_bytecode; raise
         self.source_path = str(source)
         self.lock = module.UpdateLock(path=self.path)
+        # Marker v2 (Hermes Oct 2026) adds a "ct:" creation-time line: a claim lives while its
+        # pid and creation time match, never by age, and delegates append lines after it.
+        self.identity = getattr(module, "_identity_line", None)
         self.failure = None
         self.guardian_pid = None
         self.guardian_fd = None
@@ -336,11 +339,23 @@ class NativeUpdateClaim:
         if self.failure is not None: raise RuntimeError("The native updater claim was lost") from self.failure
         marker = private_file(self.path)
         lines = marker.read_text().splitlines()
-        if len(lines) != 2 or int(lines[0]) != self.owner_pid or not 0 <= time.time() - float(lines[1]) < 1200:
+        if len(lines) < 2 or int(lines[0]) != self.owner_pid: raise RuntimeError("The native updater claim changed")
+        if len(lines) > 2 and lines[2].startswith("ct:"):
+            if self.identity is None or lines[2] != self.identity(self.owner_pid): raise RuntimeError("The native updater claim changed")
+        elif len(lines) != 2 or not 0 <= time.time() - float(lines[1]) < 1200:
             raise RuntimeError("The native updater claim changed")
+
+    def claim_body(self, lines):
+        """This owner's marker: v2 keeps started_at and later lines as native rewrites do; v1 is aged by its timestamp."""
+        identity = self.identity(self.owner_pid) if self.identity else ""
+        if identity and len(lines) > 2 and lines[2].startswith("ct:"):
+            return "".join(line + "\n" for line in [str(self.owner_pid), lines[1], identity, *lines[3:]])
+        return f"{self.owner_pid}\n{int(time.time())}\n"
 
     def refresh(self):
         self.validate()
+        # A v2 claim never ages, and delegates keep its first lines byte-identical: leave it.
+        if len(self.path.read_text().splitlines()) > 2: return
         # Refresh only the existing owned inode. Never replace another updater's claim.
         fd = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
         with os.fdopen(fd, "r+") as output:
@@ -366,9 +381,10 @@ class NativeUpdateClaim:
                 try:
                     marker_fd = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
                     with os.fdopen(marker_fd, "r+") as output:
-                        if int(output.readline().strip()) != worker_pid: raise RuntimeError("Native claim changed during handoff")
+                        lines = output.read().splitlines()
+                        if not lines or int(lines[0]) != worker_pid: raise RuntimeError("Native claim changed during handoff")
                         self.owner_pid = os.getpid()
-                        output.seek(0); output.write(f"{self.owner_pid}\n{int(time.time())}\n"); output.truncate(); output.flush(); os.fsync(output.fileno())
+                        output.seek(0); output.write(self.claim_body(lines)); output.truncate(); output.flush(); os.fsync(output.fileno())
                     os.write(ready_write, b"1"); os.close(ready_write)
                     while True:
                         readable, _, _ = select.select([read_fd], [], [], 30)

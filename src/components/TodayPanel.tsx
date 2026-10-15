@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, write } from "../client-api";
+import { api, pollWhileVisible, write } from "../client-api";
 import { Avatar, stateLabels } from "./Avatar";
 import { When } from "./When";
 import { eventHeadline } from "../shared/event-copy";
@@ -19,8 +19,8 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
       catch (e) { if (current) setError((e as Error).message); }
       finally { if (current) setLoading(false); }
     }
-    void refresh(); const timer = setInterval(() => void refresh(), 30_000);
-    return () => { current = false; clearInterval(timer); };
+    void refresh(); const stop = pollWhileVisible(() => void refresh(), 30_000);
+    return () => { current = false; stop(); };
   }, [bootstrap.user.id, reload]);
   const items = overview?.items || [];
   const attention = items.filter(item => !item.error && (item.approvals.some(approval => approval.status === "pending") || item.attention.length || ["blocked", "interrupted", "failed"].includes(item.activity.state)));

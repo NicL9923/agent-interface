@@ -102,5 +102,33 @@ class GatewayGuardTests(unittest.TestCase):
             self.assertEqual(self.status._get_code_identity_fields()["agent_interface_gateway_guard"]["pendingIngress"], 0)
         asyncio.run(scenario())
 
+    def test_held_lease_refuses_unified_runtime_admission_like_a_native_drain(self):
+        class Refusal(Exception):
+            def __init__(self, reason): self.reason = reason
+        class SessionAuthority:
+            def _require_admission_open(self):
+                if self.draining: raise Refusal("native_draining")
+        authority = types.SimpleNamespace(SessionAuthority=SessionAuthority)
+        drain = types.SimpleNamespace(drain_requested=lambda **_: False)
+        guard.install(drain, self.gateway, self.status, self.path, self.inbound, authority, Refusal)
+        owner = SessionAuthority(); owner.draining = False
+        owner._require_admission_open()
+        self.path.write_text("held")
+        with self.assertRaises(Refusal) as refused: owner._require_admission_open()
+        self.assertEqual(refused.exception.reason, "runtime_draining")
+        self.path.unlink(); owner.draining = True
+        with self.assertRaises(Refusal) as native: owner._require_admission_open()
+        self.assertEqual(native.exception.reason, "native_draining")
+        with self.assertRaises(RuntimeError):
+            guard.install(types.SimpleNamespace(drain_requested=lambda: False), self.gateway, self.status, self.path, self.inbound,
+                          types.SimpleNamespace(SessionAuthority=object), Refusal)
+
+    def test_qualification_command_loads_the_guard_under_test(self):
+        path = ROOT / "src/hermes/gateway_guard.py"
+        code = guard.native_command(self.path.parent, "/native/store/python", [], guard=path)[3]
+        self.assertIn(f"spec_from_file_location('agent_interface_gateway', {str(path.resolve())!r})", code)
+        self.assertNotIn("import agent_interface_gateway;", code)
+        self.assertIn("agent_interface_gateway.bootstrap(); runpy.run_path(", code)
+
 
 if __name__ == "__main__": unittest.main()

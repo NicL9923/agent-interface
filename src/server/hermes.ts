@@ -1,4 +1,4 @@
-import { reasoningLevels, serviceTiers } from "../shared/types.js";
+import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
@@ -54,6 +54,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
+  const watchers = new Map<string, Set<() => void>>();
   let capabilityCache: Capabilities | undefined;
   let capabilityRequest: Promise<Capabilities> | undefined;
   let rosterRequest: Promise<Bot[]> | undefined;
@@ -62,6 +63,15 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const serviceAuth = options.authMode === 'service';
   const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
   const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
+  // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
+  function changed(botId?: string): void {
+    for (const [watched, listeners] of watchers) {
+      if (botId !== undefined && watched !== botId) continue;
+      for (const listener of listeners) {
+        try { listener(); } catch { /* A watcher never stops frame processing. */ }
+      }
+    }
+  }
 
   let origin: URL | undefined;
   let configurationError: TransportError | undefined;
@@ -115,6 +125,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // A disconnected stream cannot identify which turn is now active. Fresh
     // native snapshots restore current activity, reasoning and tools.
     transient.clear();
+    // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
+    // but failed attempts during an outage, which never carried frames, stay quiet.
+    if (current.verified) changed();
     if (current.ws.readyState < WebSocket.CLOSING) {
       try { current.ws.close(); } catch { /* Already disconnected. */ }
     }
@@ -231,11 +244,13 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         }
         if (connection !== current || current.ws.readyState !== WebSocket.OPEN) throw unavailable();
         verifyContract(capabilities);
-        if (!current.verified) lastConnectedAt = new Date().toISOString();
+        const fresh = !current.verified;
+        if (fresh) lastConnectedAt = new Date().toISOString();
         current.verified = true;
         failures = 0;
         retryAt = 0;
         diagnostic = {connected: true, code: 'ready', version: capabilities.revision, detail: 'The Hermes gateway and durable add-on contract are verified.'};
+        if (fresh) changed();
       } catch (error) {
         const failure = error instanceof TransportError ? error : unavailable();
         if (current && connection === current) disconnect(current, failure);
@@ -305,6 +320,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           catch { disconnect(current, unavailable()); }
         }
       }
+      // Opening a conversation attaches this socket to its session, so its frames arrive here.
+      const botId = owners.get(sid);
+      if (botId !== undefined) changed(botId);
     }
   }
   /**
@@ -661,7 +679,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       rosterRequest = request;
       try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }
     },
-    async saveBot(input:BotInput,id?:string){await connect();const name=id??input.name.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-|-$/g,'');if(!name)throw new Error('Bot name needs letters or numbers.');
+    async saveBot(input:BotInput,id?:string){await connect();const name=id??botIdFor(input.name);if(!name)throw new Error('Bot name needs letters or numbers.');
       let created=false;try{if(!id){await rpc('profiles.create',{name,description:input.description,soul:input.instructions,mirror_credentials:true,no_alias:true});created=true;}
       const rosterBefore=await rpc('profiles.list',{include_sessions:false});const previous=rosterBefore.profiles.find((x:Wire)=>x.name===name);
       const config:Wire={name,soul:input.instructions,description:input.description??'',ui_meta:{'hermes-bots':{...previous?.ui_meta?.['hermes-bots'],title:input.name},agent_interface:{...previous?.ui_meta?.agent_interface,name:input.name,shared:input.shared}},ui_meta_expected_revisions:{'hermes-bots':previous?.ui_meta_revisions?.['hermes-bots']??0,agent_interface:previous?.ui_meta_revisions?.agent_interface??0}};
@@ -748,6 +766,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}});if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
     async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}});if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
+    fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){
       const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);
       const tooLarge=()=>Object.assign(new Error(`${file.name} is larger than ${formatBytes(maxBytes)}, the most this app opens. Ask the assistant for a smaller file.`),{statusCode:502,code:'file_too_large',expose:true});
@@ -841,7 +860,16 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     saveRoutine: routineMutation,
     async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});},
-    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');return await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;},
+    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const result=await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;
+      // Routine deliveries settle outside the open session's frames; the journal names their bot.
+      for(const event of result.events??[])if(typeof event.botId==='string')changed(event.botId);
+      return result;},
+    watch(botId, listener) {
+      const listeners = watchers.get(botId) ?? new Set();
+      watchers.set(botId, listeners);
+      listeners.add(listener);
+      return () => { listeners.delete(listener); if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId); };
+    },
     async close() {
       closed = true;
       retryAt = 0;

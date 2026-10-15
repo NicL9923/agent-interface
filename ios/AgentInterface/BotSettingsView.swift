@@ -18,6 +18,8 @@ struct BotSettingsView: View {
   @State private var error: String?
   @State private var notice: String?
   @State private var confirmModel = false
+  @State private var confirmPersonal = false
+  @State private var personalConfirmed = false
   @State private var deleteConfirm = false
   @State private var portraitImport = false
   @State private var portraitPrompt = ""
@@ -98,12 +100,21 @@ struct BotSettingsView: View {
           titleVisibility: .visible
         ) { Button("Change shared model") { saveBot(confirmed: true) } }
         .confirmationDialog(
+          "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
+          titleVisibility: .visible
+        ) {
+          Button("Make it personal", role: .destructive) { saveBot(personal: true) }
+        } message: {
+          Text("It will disappear for the rest of the household, along with its conversation, routines and group chats.")
+        }
+        .confirmationDialog(
           "Delete \(bot?.name ?? "this assistant")?", isPresented: $deleteConfirm,
           titleVisibility: .visible
         ) {
           Button("Delete assistant", role: .destructive) {
             action {
               guard let id = bot?.id, let api = store.api else { return }
+              store.deletedBotId = id
               try await api.delete("/bots/\(APIClient.component(id))")
               await store.refreshBootstrap()
               dismiss()
@@ -136,9 +147,11 @@ struct BotSettingsView: View {
       TextField("Name", text: $form.name)
       TextField("Description", text: $form.description, axis: .vertical).lineLimit(2...4)
       Toggle("Shared with the household", isOn: $form.shared)
-      Text("Personal assistants are personalized, not private from other household members.").font(
-        .caption
-      ).foregroundStyle(.secondary)
+      Text(
+        form.shared
+          ? "Everyone in your household can use a shared assistant."
+          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins."
+      ).font(.caption).foregroundStyle(.secondary)
     }
     Section("Instructions") {
       TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel(
@@ -472,14 +485,25 @@ struct BotSettingsView: View {
       do { try await operation() } catch {
         self.error = error.localizedDescription
         if let e = error as? APIError, e.confirmRequired { confirmModel = true }
+        if let e = error as? APIError, e.code == "private_confirmation_required" {
+          self.error = nil
+          confirmPersonal = true
+        }
       }
     }
   }
-  private func saveBot(confirmed: Bool = false) {
+  private func saveBot(confirmed: Bool = false, personal: Bool? = nil) {
+    let personal = personal ?? personalConfirmed
+    if form.hidesFromHousehold(bot) && !personal {
+      confirmPersonal = true
+      return
+    }
+    personalConfirmed = personal
     action {
       guard let api = store.api else { return }
       var value = form
       value.confirmModel = confirmed
+      if bot != nil && personal { value.confirmPrivate = true }
       let _: Bot = try await api.write(
         bot.map { "/bots/\(APIClient.component($0.id))" } ?? "/bots", value,
         method: bot == nil ? "POST" : "PATCH")
@@ -579,7 +603,7 @@ struct RoutineEditor: View {
         }
         RoutinePreviewControls(routine: $routine, previewValid: $schedulePreviewValid)
         Section {
-          ForEach(store.bootstrap?.household ?? []) { user in
+          ForEach(recipients) { user in
             Toggle(
               user.name,
               isOn: Binding(
@@ -630,16 +654,22 @@ struct RoutineEditor: View {
         }
     }
   }
+  private var recipients: [Member] {
+    let household = store.bootstrap?.household ?? []
+    return store.bootstrap?.bots.first { $0.id == routine.botId }?.routineRecipients(household) ?? household
+  }
   private func save() {
     busy = true
     error = nil
+    var value = routine
+    value.recipientIds = value.recipientIds?.filter { id in recipients.contains { $0.id == id } }
     Task {
       defer { busy = false }
       do {
         guard let api = store.api else { return }
         let _: Routine = try await api.write(
           routine.id.isEmpty ? "/routines" : "/routines/\(APIClient.component(routine.id))",
-          routine, method: routine.id.isEmpty ? "POST" : "PUT")
+          value, method: routine.id.isEmpty ? "POST" : "PUT")
         onSaved()
         dismiss()
       } catch { self.error = error.localizedDescription }

@@ -10,7 +10,7 @@ const apps:Awaited<ReturnType<typeof createApp>>['app'][]=[];
 afterEach(async()=>{await Promise.all(apps.splice(0).map(app=>app.close()));});
 async function installation(overrides:Partial<Runtime>={}){
   const runtime={
-    listBots:vi.fn(async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}]),
+    listBots:vi.fn(async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'},{id:'other',name:'Other',shared:true,model:'test',activity:'idle'}]),
     capabilities:vi.fn(async()=>capabilities),
     status:vi.fn(async()=>({connected:true,code:'connected'})),
     reconnect:vi.fn(async()=>({connected:true,code:'connected'})),

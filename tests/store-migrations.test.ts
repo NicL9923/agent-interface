@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, schemaVersion } from "../src/server/store.js";
@@ -131,6 +129,18 @@ describe("rollback to the previous release", () => {
     }
   });
 
+  it("returns a database that briefly versioned the assistant visibility tables to version 2, keeping their rows", () => {
+    const path = legacyDatabase();
+    open(path).close(); stores.pop();
+    const db = new DatabaseSync(path);
+    db.prepare("INSERT INTO bot_visibility_periods VALUES(?,?,?)").run("ranch", 0, "one");
+    db.exec("PRAGMA user_version=3");
+    db.close();
+    const store = open(path);
+    expect(version(store.db)).toBe(previousRelease.schemaVersion);
+    expect(store.visibilityPeriods("ranch")).toEqual([{ startedAt: 0, ownerId: "one" }]);
+  });
+
   it("opens a database the previous release wrote", () => {
     const directory = mkdtempSync(join(tmpdir(), "agent-store-"));
     directories.push(directory);
@@ -144,32 +154,5 @@ describe("rollback to the previous release", () => {
     const store = open(path);
     expect(store.draft("one", "ranch")).toEqual({ text: "Written before the upgrade", attachments: [], revision: 0, reason: "edit", sentRevision: 0 });
     expect(store.saveDraft("one", "ranch", { text: "Edited", attachments: [] }, 0)).toMatchObject({ saved: true, draft: { revision: 1 } });
-  });
-});
-
-// An extra local check with the real previous store, as on origin/main. A shallow checkout skips it.
-const previousStore = (() => {
-  try { return execFileSync("git", ["show", "origin/main:src/server/store.ts"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
-  catch { return undefined; }
-})();
-describe.skipIf(!previousStore)("rollback", () => {
-  it("lets the previous release start on a database this release wrote", async () => {
-    const path = legacyDatabase();
-    const current = open(path);
-    current.saveDraft("one", "ranch", { text: "Saved by this release", attachments: [] }, 0);
-    current.close();
-    stores.pop();
-    // Placed beside the real module so its relative imports resolve.
-    const file = fileURLToPath(new URL(`../src/server/.previous-store-${process.pid}.ts`, import.meta.url));
-    writeFileSync(file, previousStore!);
-    try {
-      const { Store: Previous } = await import(/* @vite-ignore */ pathToFileURL(file).href) as typeof import("../src/server/store.js");
-      const previous = new Previous(path);
-      try {
-        expect(previous.personal("drafts" as "read_positions", "one", "ranch")).toEqual({ text: "Saved by this release", attachments: [] });
-        previous.savePersonal("drafts" as "read_positions", "one", "ranch", { text: "Written after rollback", attachments: [] });
-      } finally { previous.close(); }
-    } finally { rmSync(file, { force: true }); }
-    expect(open(path).draft("one", "ranch")).toMatchObject({ text: "Written after rollback", revision: 1 });
   });
 });

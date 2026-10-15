@@ -11,7 +11,7 @@ const integrationFiles = [
   "src/shared/experience.ts", "src/shared/reply-cards.ts", "src/shared/routine-presets.ts", "src/shared/voice.ts",
   "scripts/spike/experience_probe.py",
   "src/hermes/extension.py", "src/hermes/service_auth.py", "src/hermes/dashboard.py",
-  "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/integrations.py", "src/server/hermes.ts", "src/server/hermes-qualification.ts", "src/server/integrations.ts",
+  "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/bot_delivery.py", "src/hermes/integrations.py", "src/server/hermes.ts", "src/server/hermes-qualification.ts", "src/server/integrations.ts",
   "src/hermes/computer.py", "src/hermes/computer_host.py", "src/server/computer.ts", "src/server/terminal.ts", "src/server/terminal-host.py", "src/shared/computer.ts",
   "src/server/app.ts", "src/server/config.ts", "src/server/upgrades.ts", "src/shared/types.ts", "src/shared/upgrades.ts", "src/shared/integrations.ts",
   "scripts/spike/run.py", "scripts/spike/probe.py", "scripts/spike/extension_probe.py",

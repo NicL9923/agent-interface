@@ -44,7 +44,7 @@ export function ChatHeader({ boot, view, selected, avatarState, conversation, co
           />
           <div className="chat-title">
             <h1>{selected.name}</h1>
-            <p>{`${selected.shared ? "Shared with your household" : "Your personal assistant"} · ${selected.provider ? selected.provider + " / " : ""}${selected.model}`}</p>
+            <p>{`${selected.shared ? "Shared with your household" : selected.ownerId ? "Your personal assistant" : "Personal, visible to the household"} · ${selected.provider ? selected.provider + " / " : ""}${selected.model}`}</p>
           </div>
           <ArtifactsButton key={`${boot.user.id}:${selected.id}`} bot={selected} conversation={conversation} unavailable={connectionLost} />
           <button

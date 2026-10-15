@@ -64,6 +64,13 @@ struct RootView: View {
     .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea() }
     .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.environmentObject(store) }
     .onReceive(store.$todayRequest) { request in if request != nil { todayOpen=true;groupsOpen=false;discoveryOpen=false;compactColumn = .detail } }
+    .onReceive(store.$leftBotId) { id in
+      guard let id else { return }
+      if settingsBot?.id == id { settingsBot = nil }
+      if store.routineResult?.botId == id { store.routineResult = nil }
+      // Only a person looking at its conversation is taken home; Today and the other views stay.
+      if !discoveryOpen && !todayOpen && !groupsOpen { compactColumn = .sidebar }
+    }
     .onReceive(store.$selectedBotId) { id in
       if id != nil { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail }
     }
@@ -217,6 +224,15 @@ struct BotListView: View {
   var openDiscovery: () -> Void
   var body: some View {
     List {
+      if let notice = store.notice {
+        Section {
+          HStack(alignment: .top) {
+            Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+            Button { store.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
+              .accessibilityLabel("Dismiss")
+          }.accessibilityIdentifier("homeNotice")
+        }
+      }
       Section {
         Button(action: openToday) { Label("Today", systemImage: "sun.max") }.accessibilityIdentifier("openToday")
         Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.accessibilityIdentifier("openGroups")

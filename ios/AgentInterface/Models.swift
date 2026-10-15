@@ -136,6 +136,8 @@ struct BotInput: Encodable {
   var provider: String?
   var enabledMcpServers: [String] = []
   var shared = true
+  /// Sent only after the person agrees that the assistant disappears for everyone else.
+  var confirmPrivate: Bool?
   init(bot: Bot? = nil, fallback: Bot? = nil) {
     name = bot?.name ?? ""
     description = bot?.description ?? ""
@@ -144,6 +146,11 @@ struct BotInput: Encodable {
     provider = bot?.provider ?? fallback?.provider
     enabledMcpServers = bot?.enabledMcpServers ?? []
     shared = bot?.shared ?? true
+  }
+  /// Whether saving makes an assistant everyone could see this person's personal one.
+  func hidesFromHousehold(_ bot: Bot?) -> Bool {
+    guard let bot else { return false }
+    return !shared && (bot.shared || bot.ownerId == nil)
   }
 }
 struct FileRef: Codable, Identifiable, Equatable {
@@ -327,11 +334,23 @@ struct DraftConflict: Decodable {
   static let code = "draft_conflict"
   var draft: SavedDraft
 }
+/// The files of the history before a window, from `GET /bots/:id/files?before=`.
+struct EarlierFiles: Decodable {
+  struct Entry: Decodable {
+    var id: String
+    var files: [FileRef]?
+  }
+  var messages: [Entry]
+}
 struct Conversation: Codable {
   var attention: [Attention]?
   var botId: String
   var sessionId: String?
   var messages: [Message]
+  /// Turns before the first loaded message, present when the server windowed the history.
+  var earlier: Int?
+  /// Files only the unloaded earlier turns carry, present when the server windowed the history.
+  var earlierFiles: Int?
   var activity: Activity
   var approvals: [Approval]
   var files: [FileRef]
@@ -429,6 +448,12 @@ struct CapabilityItem: Codable, Identifiable {
   var description: String
   var enabled: Bool
   var required: Bool?
+}
+extension Bot {
+  /// Only its owner can receive a private assistant's routine results.
+  func routineRecipients(_ household: [Member]) -> [Member] {
+    !shared && ownerId != nil ? household.filter { $0.id == ownerId } : household
+  }
 }
 struct Routine: Codable, Identifiable {
   var id: String

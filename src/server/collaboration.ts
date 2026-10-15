@@ -5,17 +5,17 @@ import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { GroupCatalog, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
+import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
 const uuid = z.string().uuid();
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 
-export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store) {
-  async function bots(userId: string) {
-    return (await runtime.listBots()).map(bot => ({ ...bot, ...store.presentation(bot.id) }))
-      .filter(bot => bot.shared || !bot.ownerId || bot.ownerId === userId);
-  }
+export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
+  // A group with someone else's private assistant does not exist for this person: its
+  // other assistants' replies would quote and answer the private one.
+  const bots = (userId: string) => visibleBots(runtime, store, userId);
   async function profile(userId: string, botId: string) {
-    if (!(await bots(userId)).some(bot => bot.id === botId)) throw fail(404, 'Assistant not found');
+    if (!(await bots(userId)).some(bot => bot.id === botId)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
   }
   app.get('/api/bots/:botId/routines/:routineId/results', async req => {
     const p = z.object({ botId: id, routineId: id }).parse(req.params);
@@ -27,7 +27,9 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const p = z.object({ botId: id, routineId: id, resultId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
     if (!runtime.routineOutput) throw fail(409, 'Routine output is unavailable on this Hermes integration.');
-    return runtime.routineOutput(p.botId, p.routineId, p.resultId);
+    const output = await runtime.routineOutput(p.botId, p.routineId, p.resultId);
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    return { ...output, messages: output.messages.map(redact.message) };
   });
   async function request(input: GroupRequest) {
     if (!runtime.groupRequest) throw fail(409, 'Hosted group chats are unavailable on this Hermes integration.');

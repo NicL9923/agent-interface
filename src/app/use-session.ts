@@ -5,6 +5,8 @@ type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
   onError(message: string): void;
+  /** The open assistant left this person's roster, as when another member made it personal. */
+  onBotGone(botId: string): void;
 };
 export function useSession(events: SessionEvents) {
   const handlers = useRef(events);
@@ -29,6 +31,8 @@ export function useSession(events: SessionEvents) {
   };
   const bootRef = useRef(boot);
   bootRef.current = boot;
+  const botIdRef = useRef(botId);
+  botIdRef.current = botId;
   const authRef = useRef(auth);
   authRef.current = auth;
   const refresh = useCallback((): Promise<Bootstrap | null> => {
@@ -57,6 +61,8 @@ export function useSession(events: SessionEvents) {
         setAuth(false);
         setAppUnavailable(false);
         setDisconnected(!next.connection.connected);
+        const open = botIdRef.current;
+        if (next.connection.connected && open && !next.bots.some(bot => bot.id === open)) handlers.current.onBotGone(open);
         setBotId((previous) => {
           if (!next.connection.connected) return previous;
           if (next.bots.some(bot => bot.id === previous)) return previous;

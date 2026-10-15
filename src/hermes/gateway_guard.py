@@ -22,7 +22,12 @@ def maintenance_active(path):
     return True
 
 
-def install(drain, startup, status, path, inbound):
+def install(drain, startup, status, path, inbound, authority=None, refusal=None):
+    """Bind the persistent lease to the native gateway seams.
+
+    ``authority`` is the unified runtime's session authority module, when Hermes has
+    one, with ``refusal`` its store error. It admits durable work before running it.
+    """
     path = Path(path)
     if not path.is_absolute():
         raise RuntimeError("Persistent gateway maintenance file must be absolute")
@@ -33,6 +38,8 @@ def install(drain, startup, status, path, inbound):
                          (status, "_get_code_identity_fields"), (ingress, "_handle_message"), (inbound, "t")):
         if not callable(getattr(target, name, None)):
             raise RuntimeError("Native gateway maintenance seams require qualification")
+    if authority is not None and (refusal is None or not callable(getattr(getattr(authority, "SessionAuthority", None), "_require_admission_open", None))):
+        raise RuntimeError("Native session authority admission seam requires qualification")
     previous = getattr(drain, "_agent_interface_persistent_gate", None)
     if previous is not None:
         if previous != str(path): raise RuntimeError("Gateway maintenance was already bound to another file")
@@ -84,6 +91,16 @@ def install(drain, startup, status, path, inbound):
     runner._run_startup_resume_event = guarded_resume
     ingress._handle_message = guarded_message
     status._get_code_identity_fields = guarded_identity
+    if authority is not None:
+        owner = authority.SessionAuthority
+        admission_open = owner._require_admission_open
+
+        def guarded_admission(self, *args, **kwargs):
+            # The inbound fence below closes an admitted turn without running it. Refuse
+            # admission the way a native drain does, so held maintenance admits nothing.
+            if maintenance_active(path): raise refusal("runtime_draining")
+            return admission_open(self, *args, **kwargs)
+        owner._require_admission_open = guarded_admission
     drain._agent_interface_persistent_gate = str(path)
 
 
@@ -104,23 +121,41 @@ def bootstrap():
     integrations.register_file_tool()
     integrations.register_google_tasks_tool()
     integrations.register_tool_catalog()
+    # The gateway delivers routine output. Keep household Bot Chat deliveries with the dashboard add-on.
+    delivery_spec = importlib.util.spec_from_file_location("agent_interface_bot_delivery", Path(__file__).resolve().with_name("bot_delivery.py"))
+    delivery = importlib.util.module_from_spec(delivery_spec); delivery_spec.loader.exec_module(delivery)
+    import tools.bot_live_delivery as mailbox
+    delivery.install_producer(mailbox)
     import gateway.drain_control as drain
     import gateway.run_startup as startup
     import gateway.status as status
     import gateway.run_inbound as inbound
-    install(drain, startup, status, Path(configured), inbound)
+    authority = refusal = None
+    if importlib.util.find_spec("gateway.session_authority") is not None:
+        import gateway.session_authority as authority
+        from hermes_state_runtime import RuntimeStoreError as refusal
+    install(drain, startup, status, Path(configured), inbound, authority, refusal)
 
 
-def native_command(source, python, args):
-    """Truthful native run_path entry, recognized by Hermes' process identity."""
+def native_command(source, python, args, guard=None):
+    """Truthful native run_path entry, recognized by Hermes' process identity.
+
+    ``guard`` loads this wrapper from an explicit file instead of the link beside
+    hermes_cli, so qualification runs the add-on under test.
+    """
     source = Path(source).resolve()
+    load = "import agent_interface_gateway; " if guard is None else (
+        "import importlib.util; "
+        f"spec = importlib.util.spec_from_file_location('agent_interface_gateway', {str(Path(guard).resolve())!r}); "
+        "agent_interface_gateway = importlib.util.module_from_spec(spec); "
+        "sys.modules['agent_interface_gateway'] = agent_interface_gateway; spec.loader.exec_module(agent_interface_gateway); ")
     code = (
         f"import sys, runpy; sys.path.insert(0, {str(source)!r}); import os; "
         "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
         "os.environ.pop('VIRTUAL_ENV', None); "
         "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
         "str(__import__('hermes_constants').get_default_hermes_root()); "
-        "import hermes_bootstrap; import agent_interface_gateway; "
+        "import hermes_bootstrap; " + load +
         "agent_interface_gateway.bootstrap(); "
         f"runpy.run_path({str(source / 'gateway/run.py')!r}, run_name='__main__')"
     )

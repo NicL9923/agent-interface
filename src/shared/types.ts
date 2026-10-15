@@ -140,6 +140,8 @@ export interface Bot {
   /** Latest canonical message preview from Hermes's roster, for the home list. */
   lastMessage?: { text: string; at?: string };
 }
+/** The Hermes profile ID a new assistant gets from its name. */
+export const botIdFor = (name: string) => name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
 export interface BotInput {
   confirmModel?: boolean;
   name: string;
@@ -326,6 +328,8 @@ export interface Runtime {
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   conversation(botId: string): Promise<Conversation>;
+  /** Calls `changed` whenever the bot's conversation may have changed, until the returned function is called. */
+  watch?(botId: string, changed: () => void): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;
@@ -346,6 +350,8 @@ export interface Runtime {
   ): Promise<FileRef>;
   /** The body never yields more than maxBytes; a larger file is refused with file_too_large. */
   download(id: string, maxBytes: number): Promise<DownloadedFile>;
+  /** The assistant a file ID belongs to, only when its signature is genuine. */
+  fileBotId?(id: string): string | undefined;
   tools(botId: string): Promise<Tool[]>;
   setTools(botId: string, ids: string[]): Promise<void>;
   skills(botId: string): Promise<Skill[]>;

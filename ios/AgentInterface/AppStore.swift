@@ -16,6 +16,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var pending: PendingSubmission?
   @Published var receipt: Receipt?
   @Published var error: String?
+  /// A short message for home, such as an assistant that is no longer available.
+  @Published var notice: String?
+  /// The assistant this person just lost access to, so views showing it close.
+  @Published var leftBotId: String?
+  /// Set before deleting, so the deleted assistant leaves without a message.
+  var deletedBotId: String?
+  /// After leaving an assistant, home stays open instead of choosing another one.
+  private var stayHome = false
   @Published var signingIn = false
   @Published var loading = false
   @Published var sending = false
@@ -45,6 +53,30 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var selectionGeneration = UUID()
   private var fileTask: Task<Void, Never>?
   private var failures = 0
+  /// Turns of history one request covers, the same page the web client uses.
+  static let historyPageTurns = 20
+  /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
+  /// it, a foreground return and pull to refresh all refresh it sooner.
+  static let bootstrapInterval: Duration = .seconds(60)
+  /// Tests substitute a clock they advance by hand.
+  var now: () -> ContinuousClock.Instant = { .now }
+  private var bootstrapRefreshedAt: ContinuousClock.Instant?
+  /// Oldest loaded message per assistant. Polls ask for everything from there on, so the window
+  /// grows with new turns instead of sliding past the turn being read, as on the web.
+  private var historyStarts: [String: String] = [:]
+  /// Bumped when earlier history is added, so a poll that asked for the narrower window earlier
+  /// cannot replace it when its response arrives late.
+  private var windowGeneration = 0
+  /// Files from before the loaded window, fetched when the file list is opened. They are good
+  /// while the message they were fetched before is still loaded, as on the web.
+  @Published private var earlierFileCache: [String: EarlierFilePage] = [:]
+  private struct EarlierFilePage {
+    var sessionId: String?
+    var before: String?
+    var files: [FileRef]
+  }
+  @Published var loadingEarlierFiles = false
+  @Published var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
     bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
@@ -212,33 +244,48 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pollTask?.cancel()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
-        guard let self else { return }
-        if let api = self.api,
-          let expiry = UserDefaults.standard.string(
-            forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
-          let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
-        {
-          self.sessionExpired = true
-          self.error =
-            "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
-          return
-        }
-        await self.refreshBootstrap()
-        await self.refreshConversation()
-        await self.reconcilePending()
+        guard let self, await self.pollOnce() else { return }
         let seconds = self.failures == 0 ? 1.5 : min(30, pow(2, Double(min(self.failures, 5))))
         try? await Task.sleep(for: .seconds(seconds))
       }
     }
   }
+  /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
+  func pollOnce() async -> Bool {
+    if let api,
+      let expiry = UserDefaults.standard.string(
+        forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
+      let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
+    {
+      sessionExpired = true
+      error =
+        "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
+      return false
+    }
+    await refreshBootstrap(ifDue: true)
+    await refreshConversation()
+    await reconcilePending()
+    return true
+  }
   func suspend() {
     pollTask?.cancel()
     pollTask = nil
+    // The next poll loop starts with a fresh bootstrap.
+    bootstrapRefreshedAt = nil
     persistDraft()
     flushDraft(inBackground: true)
   }
-  func refreshBootstrap() async {
-    guard let api, api.token != nil else { return }
+  /// Bootstrap costs the server several Hermes calls, so the poll loop asks for it only when it
+  /// is due. A failure, an outage or a missing roster is always due, because recovery needs it.
+  private var bootstrapDue: Bool {
+    guard let last = bootstrapRefreshedAt, bootstrap != nil, failures == 0, !appUnavailable,
+      bootstrap?.connection.connected == true
+    else { return true }
+    return now() - last >= Self.bootstrapInterval
+  }
+  func refreshBootstrap(ifDue: Bool = false) async {
+    guard let api, api.token != nil, !ifDue || bootstrapDue else { return }
+    bootstrapRefreshedAt = now()
     let currentGeneration = generation
     do {
       var value: Bootstrap = try await api.get("/bootstrap")
@@ -253,8 +300,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         selectionGeneration = UUID()
         generation = UUID()
         selectedBotId = nil
+        stayHome = false
         conversation = nil
         conversationCache.removeAll()
+        historyStarts.removeAll()
+        earlierFileCache.removeAll()
         draft = Draft()
         draftReady = false
         pending = nil
@@ -269,7 +319,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       appUnavailable = false
       failures = 0
       if pending == nil { pending = read(key("pending")) }
-      if selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
+      if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
+        await leave(open)
+      } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
         let last: String? = read(key("selected"))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {
@@ -284,7 +336,19 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       report(error)
     }
   }
+  /// Another member made the open assistant personal, or it was deleted: return home and stop asking for it.
+  func leave(_ id: String) async {
+    conversationCache[id] = nil
+    if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
+    error = nil
+    stayHome = true
+    if pending?.botId != id { receipt = nil }
+    await select(nil)
+    leftBotId = id
+  }
+  private static func missing(_ error: Error) -> Bool { (error as? APIError)?.code == "assistant_not_found" }
   func select(_ id: String?) async {
+    if id != nil { stayHome = false; notice = nil }
     persistDraft()
     flushDraft()
     selectionGeneration = UUID()
@@ -309,34 +373,123 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
+      if Self.missing(error) { await leave(id); return }
       draftReady = cached != nil
       report(error)
     }
   }
+  private func conversationPath(_ id: String, query: String) -> String {
+    "/bots/\(APIClient.component(id))/conversation?\(query)"
+  }
   func refreshConversation() async {
     guard let id = selectedBotId, let api, bootstrap != nil else { return }
     let selectedGeneration = selectionGeneration
+    let requestedWindow = windowGeneration
+    let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
+      ?? "turns=\(Self.historyPageTurns)"
     do {
-      let value: Conversation = try await api.get("/bots/\(APIClient.component(id))/conversation")
-      guard selectedGeneration == selectionGeneration else { return }
-      if conversation?.activity.runId != value.activity.runId
-        || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
+      var value: Conversation = try await api.get(conversationPath(id, query: query))
+      // A saved reading position older than the latest page is opened by loading the page that
+      // ends at it, so it can be restored instead of falling back to the latest message. A
+      // failure here throws, so nothing is applied or pinned and the next poll tries again.
+      if historyStarts[id] == nil, (value.earlier ?? 0) > 0,
+        let saved = savedAnchor(value, botId: id),
+        !value.messages.contains(where: { $0.id == saved })
       {
-        interruptionReviewed = false
+        value = try await api.get(
+          conversationPath(id, query: "start=\(APIClient.component(saved))&turns=\(Self.historyPageTurns)"))
       }
-      conversation = value
-      conversationCache[id] = value
-      // Polling also brings in a draft changed on another device, or a send made there, and
-      // settles a copy kept unsaved while saves were in flight.
-      if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) || draft.dirty == true && settled(id) {
-        loadDraft(value.draft, botId: id)
+      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration else {
+        return
       }
+      historyStarts[id] = value.messages.first?.id
+      apply(value, botId: id)
     } catch is CancellationError {} catch {
-      if selectedGeneration == selectionGeneration {
+      if selectedGeneration == selectionGeneration && Self.missing(error) {
+        await leave(id)
+      } else if selectedGeneration == selectionGeneration {
         appUnavailable = true
         failures += 1
         report(error)
       }
+    }
+  }
+  /// Adds one more page of history above what is loaded. A failure is reported but does not
+  /// mark the server unavailable, because the loaded conversation is still current.
+  func loadEarlier() async {
+    guard let id = selectedBotId, let api, !loadingEarlier,
+      let first = conversation?.messages.first?.id, (conversation?.earlier ?? 0) > 0
+    else { return }
+    let selectedGeneration = selectionGeneration
+    loadingEarlier = true
+    defer { loadingEarlier = false }
+    do {
+      let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
+      let value: Conversation = try await api.get(conversationPath(id, query: query))
+      guard selectedGeneration == selectionGeneration else { return }
+      windowGeneration += 1
+      historyStarts[id] = value.messages.first?.id
+      apply(value, botId: id)
+    } catch is CancellationError {} catch {
+      if selectedGeneration == selectionGeneration { report(error) }
+    }
+  }
+  private func savedAnchor(_ value: Conversation, botId id: String) -> String? {
+    let local: ReadPosition? = read(key("read", id))
+    return value.readPosition?.messageId ?? local?.messageId
+  }
+  /// Every file reference the open conversation knows, oldest first.
+  var conversationFiles: [FileRef] {
+    var seen = Set<String>()
+    var files: [FileRef] = []
+    for file in loadedEarlierFiles + (conversation?.files ?? []) where seen.insert(file.id).inserted {
+      files.append(file)
+    }
+    return files
+  }
+  /// Whether the file list has anything to show or fetch.
+  var hasConversationFiles: Bool {
+    !conversationFiles.isEmpty || (conversation?.earlierFiles ?? 0) > 0
+  }
+  private var currentEarlierFiles: EarlierFilePage? {
+    guard let id = selectedBotId, let page = earlierFileCache[id],
+      page.sessionId == conversation?.sessionId,
+      page.before == nil || conversation?.messages.contains(where: { $0.id == page.before }) == true
+    else { return nil }
+    return page
+  }
+  private var loadedEarlierFiles: [FileRef] { currentEarlierFiles?.files ?? [] }
+  /// Fetches the files of the history before the loaded window. Called when the file list opens.
+  func loadEarlierFiles() async {
+    guard let id = selectedBotId, let api, let current = conversation,
+      (current.earlierFiles ?? 0) > 0, !loadingEarlierFiles, currentEarlierFiles == nil
+    else { return }
+    let selectedGeneration = selectionGeneration
+    let before = current.messages.first?.id
+    loadingEarlierFiles = true
+    defer { loadingEarlierFiles = false }
+    do {
+      let suffix = before.map { "?before=\(APIClient.component($0))" } ?? ""
+      let page: EarlierFiles = try await api.get("/bots/\(APIClient.component(id))/files\(suffix)")
+      guard selectedGeneration == selectionGeneration else { return }
+      earlierFileCache[id] = EarlierFilePage(
+        sessionId: current.sessionId, before: before, files: page.messages.flatMap { $0.files ?? [] })
+    } catch is CancellationError {} catch {
+      if selectedGeneration == selectionGeneration { report(error) }
+    }
+  }
+  private func apply(_ value: Conversation, botId id: String) {
+    if conversation?.activity.runId != value.activity.runId
+      || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
+    {
+      interruptionReviewed = false
+    }
+    conversation = value
+    conversationCache[id] = value
+    // Polling also brings in a draft changed on another device, or a send made there, and
+    // settles a copy kept unsaved while saves were in flight.
+    if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) || draft.dirty == true && settled(id) {
+      loadDraft(value.draft, botId: id)
     }
   }
   func updateDraft(_ value: Draft) {
@@ -792,7 +945,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrap = nil
     conversation = nil
     conversationCache.removeAll()
+    historyStarts.removeAll()
+    earlierFileCache.removeAll()
+    bootstrapRefreshedAt = nil
     selectedBotId = nil
+    stayHome = false
+    notice = nil
     draft = Draft()
     draftReady = false
     pending = nil

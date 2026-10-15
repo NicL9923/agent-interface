@@ -661,6 +661,29 @@ class PlatformTests(unittest.TestCase):
         (generation.parent / "workspace/uv.lock").unlink()
         with self.assertRaisesRegex(RuntimeError, "qualified dependency lock is missing"): linux.Platform.sync(self.platform)
 
+    def test_dependency_mismatch_keeps_the_failing_inspections_rows_in_the_stage(self):
+        descriptor = self.stage / "qualified-runtime.json"
+        descriptor.write_text("{}"); descriptor.chmod(0o600)
+        self.platform.env["HERMES_UPGRADE_RUNTIME_DESCRIPTOR"] = str(descriptor)
+        self.platform.store_python = lambda: "/usr/bin/python3"
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv); Path(argv[-1]).write_text("rows"); Path(argv[-1] + ".editable.json").write_text("[]")
+            return json.dumps({"interpreterSha256": "same", "dependenciesSha256": "live"})
+        self.platform.run = run
+        with self.assertRaisesRegex(RuntimeError, r"^Managed dependencies differ from the qualified runtime\. Its package rows are in the stage as runtime-rows-[0-9a-f]{8}\.json$"):
+            linux.Platform.runtime(self.platform, {"interpreterSha256": "same", "dependenciesSha256": "qualified"})
+        # One inspection, and its own rows are the evidence.
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(Path(calls[0][-1]).parent, self.stage); self.assertTrue(Path(calls[0][-1]).exists())
+        self.assertTrue(Path(calls[0][-1] + ".editable.json").exists())
+        with self.assertRaisesRegex(RuntimeError, "^The managed interpreter differs"):
+            linux.Platform.runtime(self.platform, {"interpreterSha256": "other", "dependenciesSha256": "live"})
+        # A match leaves nothing behind.
+        self.assertEqual(linux.Platform.runtime(self.platform, {"interpreterSha256": "same", "dependenciesSha256": "live"})["dependenciesSha256"], "live")
+        self.assertFalse(Path(calls[-1][-1]).exists()); self.assertFalse(Path(calls[-1][-1] + ".editable.json").exists())
+
+
     def test_private_config_and_fixed_stage_paths_are_required(self):
         self.config.chmod(0o644)
         with self.assertRaises(RuntimeError): linux.Platform(self.config, self.environment)

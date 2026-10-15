@@ -61,6 +61,7 @@ class WireSocket extends EventTarget {
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
     if(request.method==='profiles.set_asset')result={ok:true};
+    if(request.method==='agent-interface.discover')result={cursor:'2',events:[{id:'2',botId:'routine-bot',kind:'completed',title:'Routine result',occurredAt:'2026-10-14T12:00:00Z'}]};
     queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,result}));
   }
   close(){this.readyState=3;this.dispatchEvent(new Event('close'));}
@@ -436,6 +437,35 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await runtime.reconnect!();
     expect((await runtime.conversation('shared')).activity.state).toBe('idle');
     expect(sockets).toHaveLength(2);
+  });
+
+  it('tells watchers when an opened conversation changes, and every watcher when the connection does',async()=>{
+    const changes:string[]=[];
+    const stopShared=runtime.watch!('shared',()=>changes.push('shared'));
+    runtime.watch!('routine-bot',()=>changes.push('routine-bot'));
+    await runtime.conversation('shared');
+    // The new verified connection may have missed frames; everyone reloads.
+    expect(changes).toEqual(['shared','routine-bot']);
+    changes.length=0;
+    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{text:'Streaming'}}});
+    sockets[0].receive({jsonrpc:'2.0',id:'srq-one',method:'approval',params:{session_id:'live-one',description:'Native request'}});
+    // A session this app never opened belongs to no watched conversation.
+    sockets[0].receive({method:'event',params:{session_id:'another-client',type:'message.delta',payload:{text:'Elsewhere'}}});
+    expect(changes).toEqual(['shared','shared']);
+    changes.length=0;
+    // Routine deliveries settle outside the session's frames.
+    await runtime.discoverEvents('1');
+    expect(changes).toEqual(['routine-bot']);
+    changes.length=0;
+    stopShared();
+    sockets[0].close();
+    expect(changes).toEqual(['routine-bot']);
+    changes.length=0;
+    // Failed attempts during an outage carried no frames, so nobody reloads for them.
+    connectionFails=true;
+    await expect(runtime.reconnect!()).resolves.toMatchObject({connected:false});
+    expect(sockets.length).toBeGreaterThan(1);
+    expect(changes).toEqual([]);
   });
 
   it('does not resume or create canonical work when the durable add-on contract is absent',async()=>{
