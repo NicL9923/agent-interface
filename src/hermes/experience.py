@@ -143,6 +143,7 @@ def routine_results(data):
     The dashboard's cross-profile owner fallback is inappropriate here. Keep the
     requested owner even after a one-time job has disappeared from jobs.json.
     """
+    from inspect import signature
     from hermes_cli.web_routers.cron import (
         _owner_home_scope, _open_session_db_for_profile, _call_cron_for_profile,
         _list_cron_output_runs, _reconcile_cron_runs, _cron_output_runs_dir)
@@ -160,7 +161,9 @@ def routine_results(data):
             job = _call_cron_for_profile(profile, "get_job", job_id)
             directory = _cron_output_runs_dir(profile, job_id)
             expected = get_hermes_home().resolve() / "cron" / "output" / job_id
-            docs = _list_cron_output_runs(job, job_id, profile, 100) if directory.resolve() == expected else []
+            native_runs = _list_cron_output_runs(job, job_id, profile, 100) if directory.resolve() == expected else []
+            # New Hermes returns the execution ledger beside the documents.
+            docs, attempts = native_runs if isinstance(native_runs, tuple) else (native_runs, [])
             # Native history previews follow symlinks. Keep those documents out
             # of both the picker and the output reader, including their previews.
             def safe_document(row):
@@ -170,7 +173,14 @@ def routine_results(data):
                     return True
                 return bool(re.fullmatch(r"[A-Za-z0-9_-]{1,200}", stem) and path.is_file() and not path.is_symlink() and path.resolve().parent == expected)
             docs = [row for row in docs if safe_document(row)]
-            rows = _reconcile_cron_runs(sessions, docs, 100)
+            arguments = (sessions, docs, attempts, job_id, 100)
+            try:
+                signature(_reconcile_cron_runs).bind(*arguments)
+            except TypeError:
+                arguments = (sessions, docs, 100)
+            rows = _reconcile_cron_runs(*arguments)
+            # Ledger reconciliation can add metadata-only cron_output rows.
+            rows = [row for row in rows if row.get("source") != "cron_output" or safe_document(row)]
             if data["operation"] == "routine_results":
                 return [dict(id=row["id"], title=row.get("title") or "Routine run",
                     startedAt=datetime.datetime.fromtimestamp(row["started_at"], datetime.timezone.utc).isoformat() if row.get("started_at") else None,

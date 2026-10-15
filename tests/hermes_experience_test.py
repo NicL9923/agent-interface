@@ -181,6 +181,13 @@ class RoutineOutputTests(unittest.TestCase):
         text = experience.routine_results(self.data)['messages'][0]['text']
         self.assertTrue(text.startswith('x' * 500000)); self.assertIn('Output truncated', text)
 
+    def test_two_documents_keep_both_runs(self):
+        (self.directory / '2026-10-02_07-00-00.md').write_text('First output')
+        (self.directory / '2026-10-03_07-00-00.md').write_text('Second output')
+        self.rows.append({**self.rows[0], 'id': 'cron_output:routine:2026-10-03_07-00-00'})
+        results = experience.routine_results({**self.data, 'operation': 'routine_results'})
+        self.assertEqual([row['id'] for row in results], [row['id'] for row in self.rows])
+
     def test_unwritten_profile_store_still_lists_output_documents(self):
         # The unified runtime refuses to open a store no session has written yet,
         # while a script-only run can still save its output document.
@@ -194,6 +201,45 @@ class RoutineOutputTests(unittest.TestCase):
         with self.assertRaises(experience.ExperienceError) as missing:
             experience.routine_results({**self.data, 'resultId': 'cron_routine_session'})
         self.assertEqual(missing.exception.status, 404)
+
+
+class RoutineLedgerOutputTests(RoutineOutputTests):
+    """Exercise the same output and profile fences with the new native contract."""
+    def setUp(self):
+        super().setUp()
+        self.attempts = []
+        cron = self.modules['hermes_cli.web_routers.cron']
+        cron._list_cron_output_runs = lambda *a: (self.rows, self.attempts)
+        def reconcile(sessions, docs, attempts, job_id, limit):
+            if self.directory == self.home / 'cron/output/routine':
+                self.assertIs(attempts, self.attempts)
+            else:
+                self.assertEqual(attempts, [])
+            self.assertEqual(job_id, 'routine')
+            self.assertEqual(limit, 100)
+            return sessions + docs + [dict(id=f'cron_output:{job_id}:exec:{i}', source='cron_output', title='Failed run', preview=attempt['error']) for i, attempt in enumerate(attempts)]
+        cron._reconcile_cron_runs = reconcile
+
+    def test_pruned_execution_remains_readable_without_a_document(self):
+        self.rows.clear()
+        self.attempts.append(dict(error='Native execution failed'))
+        results = experience.routine_results({**self.data, 'operation': 'routine_results'})
+        self.assertEqual([row['id'] for row in results], ['cron_output:routine:exec:0'])
+        result = experience.routine_results({**self.data, 'resultId': results[0]['id']})
+        self.assertTrue(result['previewOnly'])
+        self.assertEqual(result['messages'][0]['text'], 'Native execution failed')
+
+    def test_reconciled_metadata_cannot_disguise_a_symlink_document(self):
+        self.rows.clear()
+        self.attempts.append(dict(error='Native execution failed'))
+        outside = self.home / 'other-profile.md'; outside.write_text('Private unrelated output')
+        (self.directory / 'exec:0.md').symlink_to(outside)
+        self.assertEqual(experience.routine_results({**self.data, 'operation': 'routine_results'}), [])
+
+    def test_unsafe_directory_never_lists_native_output(self):
+        self.directory = self.home / 'other-profile'
+        self.modules['hermes_cli.web_routers.cron']._list_cron_output_runs = lambda *a: self.fail('listed another profile directory')
+        self.assertEqual(experience.routine_results({**self.data, 'operation': 'routine_results'}), [])
 
 
 

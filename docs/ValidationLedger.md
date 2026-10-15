@@ -1,5 +1,24 @@
 # Validation ledger
 
+## October 15 Hermes routine history compatibility
+
+The guarded update check for Hermes `acc3cada0da86c81efc8aa6c5a291989549ca900`
+failed twice in disposable homes because native routine history now returns
+documents and execution attempts, and reconciliation takes both with the job ID.
+Production remained on `6ebd92d93852b7f33ca3bdb2c6c3d0fc997ce46f`.
+The adapter now supports both contracts, preserves execution-only results, and
+checks synthetic metadata rows against the existing document safety rules.
+
+Implementation: GPT-6.1 Sol. Source fingerprint:
+`sha256:6c2cd7f9acc5761021d3af863de082410a1df27cd36277b38200b300d6e43388`.
+The focused regression file passed under Python 3.14.7. The full Python run
+passed 19 files and skipped the system-terminal file because local tmux is
+unavailable; two individual platform-dependent tests also skipped. All 694
+application tests, the production build, and Ruff 0.17.0 passed.
+Claude Opus 5.5 independently reviewed the complete code diff and found no
+actionable issues. No browser interaction or production activation was performed
+for this entry; native qualification and cutover are recorded separately.
+
 ## October 15 app release cae0d2d
 
 PR #126 merged at `cae0d2da811019f8252c85f600be7716b7cf67de`. The release is live at `https://agentui.wildflowersranch.com`,
