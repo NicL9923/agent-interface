@@ -15,6 +15,33 @@ final class NativeFlowTests: XCTestCase {
     app.launch()
     return app
   }
+  func testCoordinationActivityKeepsScheduledAnswerVisible() {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launchEnvironment["AGENT_INTERFACE_UI_COORDINATION"] = "1"
+    app.launch()
+    XCTAssertTrue(app.staticTexts["Scheduled"].waitForExistence(timeout: 10))
+    let handoff = app.staticTexts["Scheduled job handoff: hay, water, and bunny check"]
+    XCTAssertFalse(handoff.exists)
+    XCTAssertFalse(app.staticTexts["Internal delivery retry details."].exists)
+    let collapsed = XCTAttachment(screenshot: app.screenshot())
+    collapsed.name = "Scheduled answer with coordination collapsed"
+    collapsed.lifetime = .keepAlways
+    add(collapsed)
+    for group in ["Bot messages", "Scheduled jobs", "Subagents", "Background processes", "Diagnostics"] {
+      XCTAssertTrue(app.buttons[group].exists, "Missing activity group: " + group)
+    }
+    let scheduled = app.buttons["Scheduled jobs"]
+    for _ in 0..<4 { if scheduled.isHittable { break }; app.swipeUp() }
+    scheduled.tap()
+    XCTAssertTrue(handoff.waitForExistence(timeout: 5))
+    let expanded = XCTAttachment(screenshot: app.screenshot())
+    expanded.name = "Scheduled job details expanded"
+    expanded.lifetime = .keepAlways
+    add(expanded)
+  }
   func testOnboardingValidatesAddressWithoutDroppingEnteredText() {
     let app = app(fixture: false)
     let address = app.textFields["serverAddress"]

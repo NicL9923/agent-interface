@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, cachedResponse, changeStream, pollWhileVisible, write } from "../client-api";
+import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import type { Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
@@ -10,7 +11,7 @@ const LATEST_DISTANCE = 100;
 const firstPage = (botId: string) =>
   `/bots/${encodeURIComponent(botId)}/conversation?turns=${HISTORY_PAGE_TURNS}`;
 const countsAsNew = (message: Message) =>
-  message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length);
+  !isActivityMessage(message) && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
 export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void) {
   const missing = useRef(onMissing);

@@ -98,7 +98,7 @@ enum ReplyCards {
 struct ReplyContentView: View {
   var message: Message
   var body: some View {
-    if message.role == "assistant" {
+    if message.role == "assistant" && !message.isInternalActivity {
       ForEach(ReplyCards.parse(message.text)) { part in
         if let markdown = part.markdown { MarkdownView(text: markdown) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }

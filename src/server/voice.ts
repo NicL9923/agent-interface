@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { Runtime } from "../shared/types.js";
+import { isConversationReply } from "../shared/message-origin.js";
+import type { Message, Runtime } from "../shared/types.js";
 import type { VoiceAudio, VoiceTranscript } from "../shared/voice.js";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, VOICE_MIMES } from "../shared/voice.js";
 import { signedIn } from "./auth.js";
@@ -16,9 +17,9 @@ const AUDIO_TTL = 5 * 60_000;
 const MAX_CACHED_AUDIO = 32 * 1024 * 1024;
 
 /** Install after authentication and multipart plugins. Audio never becomes a shared artifact. */
-export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRuntime, options: { now?: () => number; visible?: (botId: string, userId: string) => boolean } = {}) {
+export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRuntime, options: { now?: () => number; visible?: (botId: string, userId: string) => boolean; redact?: (message: Message, userId: string) => Promise<Message> } = {}) {
   const now = options.now ?? Date.now;
-  const audio = new Map<string, { userId: string; botId: string; expires: number; data: Buffer; mime: string }>();
+  const audio = new Map<string, { userId: string; botId: string; expires: number; data: Buffer; mime: string; messageId: string }>();
   const busy = new Set<string>();
   const prune = () => { for (const [key, entry] of audio) if (entry.expires <= now()) audio.delete(key); };
   const cleanup = setInterval(prune, 30_000); cleanup.unref();
@@ -27,6 +28,12 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
     // Cached speech outlives the request that made it, so it is checked again when fetched.
     if (options.visible && !options.visible(botId, signedIn(req).id)) throw failure(404, "This assistant is no longer available.");
     if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw failure(404, "This assistant is no longer available.");
+  };
+  const readableReply = async (req: FastifyRequest, botId: string, messageId: string) => {
+    const raw = (await runtime.conversation(botId)).messages.find(item => item.id === messageId && isConversationReply(item));
+    const message = raw && (options.redact ? await options.redact(raw, signedIn(req).id) : raw);
+    if (!message || !isConversationReply(message) || !message.text.trim()) throw failure(404, "Choose a completed assistant reply to listen to.");
+    return message;
   };
   const operation = async <T>(req: FastifyRequest, fn: () => Promise<T>) => {
     const key = signedIn(req).id;
@@ -63,8 +70,7 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
     await checkBot(req, botId);
     if (!runtime.synthesizeVoice) throw failure(409, "Spoken replies are unavailable on this Hermes connection.");
     return operation(req, async () => {
-      const message = (await runtime.conversation(botId)).messages.find(item => item.id === messageId && item.role === "assistant");
-      if (!message?.text.trim()) throw failure(404, "Choose a completed assistant reply to listen to.");
+      const message = await readableReply(req, botId, messageId);
       if (message.id.endsWith("-inflight")) throw failure(409, "Wait for this assistant reply to finish before listening.");
       if (message.text.length > MAX_SPOKEN_TEXT) throw failure(400, "This reply is too long to read aloud. Ask for a shorter summary.");
       const result = await runtime.synthesizeVoice!(botId, message.text);
@@ -77,7 +83,7 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
       let total = [...audio.values()].reduce((sum, entry) => sum + entry.data.length, 0);
       for (const [key, entry] of audio) { if (total + result.data.length <= MAX_CACHED_AUDIO) break; total -= entry.data.length; audio.delete(key); }
       const key = randomUUID(), expires = now() + AUDIO_TTL;
-      audio.set(key, { userId, botId, data: result.data, mime, expires });
+      audio.set(key, { userId, botId, messageId, data: result.data, mime, expires });
       return reply.header("Cache-Control", "private, no-store").send({ url: `/api/voice/audio/${key}`, mime, expiresAt: new Date(expires).toISOString() });
     });
   });
@@ -89,6 +95,7 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
     if (!entry || entry.userId !== userId) throw failure(404, "This audio reply expired. Request speech again.");
     audio.delete(audioId);
     await checkBot(req, entry.botId);
+    await readableReply(req, entry.botId, entry.messageId);
     return reply.header("Cache-Control", "private, no-store").header("Content-Disposition", 'inline; filename="reply.audio"').type(entry.mime).send(entry.data);
   });
 }

@@ -1,5 +1,5 @@
 import type { Message } from "../shared/types";
-import { isAgentExchange } from "../components/AgentExchange";
+import { isConversationReply } from "../shared/message-origin";
 import type { SavedConversation } from "./storage";
 /** The assistant can still add to its reply in these states. */
 const replying = new Set(["thinking", "working"]);
@@ -15,7 +15,7 @@ export interface ReplyWatch {
 // Hermes shows the unsaved tail of a reply as a message that is replaced by saved rows with new IDs.
 const saved = (message: Message) => !message.id.endsWith("-inflight");
 const speakable = (message: Message) =>
-  message.role === "assistant" && !!message.text.trim() && !isAgentExchange(message);
+  isConversationReply(message) && !!message.text.trim();
 /** Markdown read aloud as written would spell out its symbols, so keep only the words. */
 export function replySnippet(text: string) {
   const plain = text

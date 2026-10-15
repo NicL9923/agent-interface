@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 
 INTEGRATION_FILES = (
-    "src/shared/collaboration.ts", "src/server/collaboration.ts",
+    "src/shared/message-origin.ts", "src/shared/collaboration.ts", "src/server/collaboration.ts",
   "src/shared/discovery.ts", "src/server/discovery.ts",
     "src/hermes/vault.py", "src/server/vault.ts", "src/shared/vault.ts", "scripts/spike/vault_probe.py",
     "src/hermes/experience.py", "src/hermes/extension.py", "src/hermes/service_auth.py",

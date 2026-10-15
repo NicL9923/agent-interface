@@ -139,11 +139,17 @@ struct ConversationView: View {
           if store.conversation?.messages.isEmpty == true {
             StarterActionsView(starters: starters, add: addStarter)
           }
-          ForEach(store.conversation?.visibleMessages ?? []) { message in
-            MessageView(
-              message: message, advanced: store.bootstrap?.preferences.presentation == "advanced"
-            )
-            .id(message.id)
+          ForEach(store.conversation?.presentationTurns ?? []) { turn in
+            ForEach(turn.messages.filter { $0.isConversationVisible }) { message in
+              MessageView(message: message, advanced: store.bootstrap?.preferences.presentation == "advanced").id(message.id)
+            }
+            ForEach(turn.coordinationGroups) { group in
+              DisclosureGroup(group.id) {
+                ForEach(group.messages) { message in
+                  MessageView(message: message, advanced: store.bootstrap?.preferences.presentation == "advanced")
+                }
+              }
+            }
           }
           if ![.idle, .done].contains(store.activity) { liveActivity }
           ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
@@ -154,11 +160,11 @@ struct ConversationView: View {
           }
           if let conversation = store.conversation,
             store.bootstrap?.preferences.presentation == "advanced"
-              || !conversation.activityMessages.isEmpty
+              || conversation.activityMessages.contains(where: { !$0.isInternalActivity })
           {
             DisclosureGroup("Activity details") {
               Text(conversation.activity.detail ?? store.activity.label).font(.footnote)
-              ForEach(conversation.activityMessages.suffix(8)) { message in
+              ForEach(conversation.activityMessages.filter { !$0.isInternalActivity }.suffix(8)) { message in
                 ToolActivityView(message: message)
               }
               if store.bootstrap?.preferences.presentation == "advanced" {
@@ -513,8 +519,8 @@ struct MessageView: View {
     VStack(alignment: .leading, spacing: 10) {
       HStack {
         Text(
-          message.sender?.name
-            ?? (message.role == "assistant"
+          message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
+            ?? (message.isInternalActivity ? message.presentationOrigin?.title ?? message.activityGroup : message.role == "assistant"
               ? "Assistant"
               : message.role == "tool" ? message.toolName ?? "Tool" : message.role.capitalized)
         ).font(.caption.bold())
@@ -534,7 +540,7 @@ struct MessageView: View {
         if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
       } else {
         ReplyContentView(message: message)
-        if message.role == "assistant" && !message.text.isEmpty { SpokenReplyButton(text: ReplyCards.spokenText(message.text)) }
+        if message.role == "assistant" && !message.isInternalActivity && !message.text.isEmpty { SpokenReplyButton(text: ReplyCards.spokenText(message.text)) }
         if advanced && message.toolCall != nil { ToolActivityView(message: message) }
         if !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
       }

@@ -27,6 +27,16 @@
         let capture=SharedCapture(id:UUID().uuidString,scope:scope,botId:"ranch",text:"https://example.invalid/shared-page",files:[],createdAt:Date())
         try? JSONEncoder().encode(capture).write(to:root.appendingPathComponent(capture.id + ".json"),options:.atomic)
       }
+      if environment["AGENT_INTERFACE_UI_COORDINATION"] == "1" {
+        FixtureProtocol.messages = [
+          ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
+          ["id": "answer", "role": "assistant", "text": "Start with the bunnies, then choose one small task.\n\n- Top up hay.\n- Refresh water.", "origin": ["kind": "scheduled", "visibility": "conversation"]],
+          ["id": "dm", "role": "user", "text": "Message from 🤖 Planner (@planner): Peppers are covered.", "origin": ["kind": "agent", "visibility": "activity", "name": "Planner"]],
+          ["id": "child", "role": "user", "text": "Hay and pellets are stocked.", "origin": ["kind": "subagent", "visibility": "activity", "title": "Supply check completed"]],
+          ["id": "process", "role": "user", "text": "Inventory process exited successfully.", "origin": ["kind": "process", "visibility": "activity"]],
+          ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
+        ]
+      }
       await store.refreshBootstrap()
       store.startPolling()
       return true

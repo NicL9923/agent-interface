@@ -153,6 +153,18 @@ class BotDeliveryTests(unittest.TestCase):
         self.assertEqual(self.box.find_canonical_live_owner(self.home)["lease_id"], "authority")
         self.assertEqual([call[0] for call in self.box.native], ["find", "find"])
 
+    def test_scheduled_delivery_carries_display_provenance_without_changing_the_prompt(self):
+        self.box = mailbox()
+        store = Store(chat=None)
+        delivery.install_producer(self.box, store)
+        owner = self.box.find_canonical_live_owner(self.home)
+        message = '[Cronjob "Bunny care" output — scheduled job, not the user. Review it, act on anything that needs action, and summarize for the chat.]\n\nHay and water.'
+        self.box.deliver_to_live_owner(self.home, owner, message, delivery_id=KEY)
+        server = Server({"session_key": "stored", "agent": object()})
+        self.assertTrue(self.consumer(server, store).deliver_once("penny", self.home))
+        self.assertEqual(server.turns[0][2], message)
+        self.assertEqual(server.turns[0][3]["display_metadata"]["origin"], {"kind": "scheduled", "visibility": "activity", "title": "Bunny care"})
+
     def test_consumer_runs_queued_delivery_once_and_records_reply(self):
         self.box = mailbox()
         store = Store(chat=None)

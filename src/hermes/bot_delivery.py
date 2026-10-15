@@ -23,6 +23,7 @@ which native claims can never match, so the add-on still delivers each once.
 """
 import contextlib
 import logging
+import re
 import threading
 import time
 import uuid
@@ -274,7 +275,15 @@ class Consumer:
                                            reply=str(terminal.get("text") or "") if status == "settled" else "",
                                            error=error, reason=reason)
 
-        extra = {"display_metadata": {"notification_category": "diagnostic"}} if claimed.get("notification_category") == "diagnostic" else {}
+        # Native roles serve the model. Carry separate provenance to client history.
+        metadata = {}
+        if claimed.get("notification_category") == "diagnostic":
+            metadata = {"notification_category": "diagnostic"}
+        else:
+            scheduled = re.match(r'^\[Cronjob "([^\n]+)" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]', claimed["message"])
+            if scheduled:
+                metadata = {"origin": {"kind": "scheduled", "visibility": "activity", "title": scheduled[1][:160]}}
+        extra = {"display_metadata": metadata} if metadata else {}
         try:
             started = self.server._run_prompt_submit(f"__bot_dm__{delivery_id}", sid, session, claimed["message"],
                                                      image_paths=[], terminal_callback=terminal_receipt,

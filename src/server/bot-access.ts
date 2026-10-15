@@ -110,9 +110,10 @@ export async function redactAgents(store: Store, roster: Roster, userId: string)
   return {
     message: <T extends Message>(message: T): T => {
       const envelope = agentEnvelope(message);
-      if (envelope && (named(envelope.handle) || named(envelope.name))) return { ...message, text: hiddenText };
+      const originHidden = message.origin && (named(message.origin.handle) || named(message.origin.name) || mentions(message.origin.title));
+      if (originHidden || envelope && (named(envelope.handle) || named(envelope.name))) return { ...message, text: hiddenText, origin: { kind: "agent", visibility: "activity" }, files: undefined, reasoning: undefined, toolCall: undefined };
       if (message.toolCall ? hides(message.toolCall) || message.role === "tool" && mentions(message.text) : handoff(message.toolName) || message.role === "tool" && mentions(message.text))
-        return { ...message, text: "", ...(message.toolCall ? { toolCall: call(message.toolCall) } : {}) };
+        return { ...message, text: "", origin: message.origin ? { kind: message.origin.kind, visibility: message.origin.visibility } : undefined, files: undefined, reasoning: undefined, ...(message.toolCall ? { toolCall: call(message.toolCall) } : {}) };
       return message;
     },
     // Calls still running are listed beside the messages.

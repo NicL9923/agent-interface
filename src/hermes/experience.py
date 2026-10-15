@@ -455,6 +455,7 @@ def discovery(data, journal, projector):
     current_run = None
     # Recover only the nearest preceding *native* user in display order. A
     # later desktop turn breaks app attribution, even if it reuses a tool id.
+    prior_prompt = None
     before = offset
     while before > 0:
         chunk_start = max(0, before - 100)
@@ -466,9 +467,11 @@ def discovery(data, journal, projector):
         visible = projector([dict(row, _row_id=row["id"]) for row in previous], profile_home=sessions._history_profile_home(profile), image_urls=False)
         prior_user = next((row for row in reversed(visible) if row.get("role") == "user"), None)
         if prior_user is not None:
+            prior_prompt = dict(prior_user)
             prior = history_receipt(journal, profile, lineage, next((row for row in previous if row["id"] == prior_user.get("row_id")), None))
             if prior:
                 current_run = prior[2]
+                prior_prompt["app_sender_id"] = prior[1]
             break
         before = chunk_start
     for message in native_rows:
@@ -497,7 +500,7 @@ def discovery(data, journal, projector):
             text = json.dumps(text)
         # Keep the native projector's attachment fields for the server's signed registrar.
         rows.append({**row, "id": str(native_ids.get(row.get("row_id")) or row.get("row_id") or row.get("id") or f"{sid}-{offset + index}"), "role": row.get("role", "system"), "text": text, "toolName": row.get("name"), **({"createdAt": __import__("datetime").datetime.fromtimestamp(row["timestamp"], __import__("datetime").timezone.utc).isoformat()} if isinstance(row.get("timestamp"), (float, int)) else {})})
-    return {"botId": profile, "sessionId": value["session_id"], "messages": rows, "offset": offset, "hasMore": len(raw) == 100}
+    return {"botId": profile, "sessionId": value["session_id"], "messages": rows, "offset": offset, "hasMore": len(raw) == 100, **({"app_prior_prompt": prior_prompt} if prior_prompt else {})}
 
 
 def install(web, journal, projector):

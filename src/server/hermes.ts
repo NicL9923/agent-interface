@@ -5,6 +5,7 @@ import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.
 import ClientWebSocket from 'ws';
 import type { SecureRequest } from '../shared/vault.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
+import { withMessageOrigins, wireOrigin, messageOrigin } from "../shared/message-origin.js";
 import { formatBytes } from '../shared/uploads.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
@@ -503,7 +504,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   }
   function preview(session?:Wire):Bot['lastMessage']{
     const text=typeof session?.preview==='string'?session.preview.replace(/\s+/g,' ').trim().slice(0,160):'';
-    if(!text)return undefined;
+    if(!text || messageOrigin({id:"preview",role:"user",text})?.visibility === "activity")return undefined;
     const at=typeof session?.last_active==='number'&&Number.isFinite(session.last_active)?new Date(session.last_active*1000).toISOString():undefined;
     return at?{text,at}:{text};
   }
@@ -719,7 +720,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
             toolCall.completedAt=createdAt;
           }
         }
-        return {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),runId:typeof row.app_run_id==='string'?row.app_run_id:undefined,role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:bridged(row.name,row.args).name,toolCall,files:artifacts(botId,row)};
+        const message: Message = {id:String(row.app_request_id??row.row_id??`${sid}-${index}`),runId:typeof row.app_run_id==='string'?row.app_run_id:undefined,role:['user','assistant','tool'].includes(row.role)?row.role:'system',text,createdAt,reasoning,toolName:typeof bridged(row.name,row.args).name === 'string' ? String(bridged(row.name,row.args).name) : undefined,toolCall,files:artifacts(botId,row)};
+        const origin = wireOrigin(message, row);
+        return origin ? { ...message, origin } : message;
       });
       const state=transient.get(sid);const inflight=value.inflight??{};
       const active=!!value.info?.running||!!value.app_run_id;
@@ -739,7 +742,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
       const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
-      if(text||reasoning)rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning});
+      if(text||reasoning) {
+        const origin = !savedPrompt ? wireOrigin({id:'inflight-prompt',role:'user',text:prompt},inflight) ?? {kind:'human' as const,visibility:'conversation' as const} : undefined;
+        rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})});
+      }
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];
       const approvals=requests.filter((x:Wire)=>x.method==='approval').map((x:Wire)=>({id:String(x.id),title:'Action approval',detail:x.params?.description??x.params?.command??'Hermes requests approval.',status:'pending' as const}));
       const attention=requests.filter((x:Wire)=>x.method!=='approval').map((x:Wire)=>{
@@ -760,7 +766,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
-      return {botId,sessionId:value.canonical_stored_session_id??value.stored_session_id??value.info?.stored_session_id??sid,messages:rows,activity:{state:value.app_interruption?'interrupted':attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined},toolCalls:active?toolCalls:[],approvals,attention,files:rows.flatMap(x=>x.files??[])};},
+      return {botId,sessionId:value.canonical_stored_session_id??value.stored_session_id??value.info?.stored_session_id??sid,messages:withMessageOrigins(rows),activity:{state:value.app_interruption?'interrupted':attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined},toolCalls:active?toolCalls:[],approvals,attention,files:rows.flatMap(x=>x.files??[])};},
     submit(input){return submit(input);},steer(input){return submit(input,true);},
     async lookupSubmission(requestId){await connect();if(!extension)return null;const result=await rpc('agent-interface.receipt',{request_id:requestId});return result.receipt?receipt(result.receipt):null;},
     async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}});if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
@@ -800,7 +806,22 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     async experienceRequest(input) {
       const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
-      if (input.operation === 'history') value.messages = value.messages.map((row: Wire) => ({ ...row, text:exposedText(row.app_tool_result) ?? row.text, files: artifacts(input.profile, row), ...(row.role==='tool'?{toolCall:toolDetails({name:row.name,args:row.args,result:row.app_tool_result ?? row.text},String(row.tool_call_id ?? row.id),'completed')}:{}) }));
+      if (input.operation === 'history') {
+        const seed = value.app_prior_prompt;
+        const seedOrigin = seed ? wireOrigin({ id: 'prior', role: 'user', text: seed.text ?? '' }, seed) : undefined;
+        value.messages = withMessageOrigins(value.messages.map((row: Wire) => {
+          // Expose the app contract only. Raw native metadata can duplicate private message content.
+          const message: Message & { app_sender_id?: string } = {
+            id:String(row.id), role:row.role, text:exposedText(row.app_tool_result) ?? row.app_display_text ?? row.text ?? '',
+            createdAt:row.createdAt, reasoning:row.reasoning, toolName:row.toolName, files:artifacts(input.profile,row),
+            ...(typeof row.app_sender_id === 'string' ? {app_sender_id:row.app_sender_id} : {}),
+            ...(row.role==='tool'?{toolCall:toolDetails({name:row.name,args:row.args,result:row.app_tool_result ?? row.text},String(row.tool_call_id ?? row.id),'completed')}:{})
+          };
+          const origin = wireOrigin(message, row);
+          return origin ? { ...message, origin } : message;
+        }), seedOrigin?.kind === 'human' ? undefined : seedOrigin);
+        delete value.app_prior_prompt;
+      }
       return value;
     },
     async vaultRequest(input) {
