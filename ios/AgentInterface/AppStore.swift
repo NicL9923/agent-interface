@@ -498,7 +498,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     draft.text = value.text
     draft.attachments = value.attachments
     draft.dirty = true
-    draft.seq = (draft.seq ?? 0) + 1
+    draft.seq = nextDraftSeq(selectedBotId)
     persistDraft()
     draftTask?.cancel()
     scheduledDraftSave = nil
@@ -555,6 +555,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var draftSavesInFlight: [String: [Int]] = [:]
   /// Consecutive failed saves per cached draft, for the retry backoff: 1 s, 2 s, 4 s, up to 30 s.
   private var draftSaveFailures: [String: Int] = [:]
+  /// When a failed draft may retry. Until then only a new edit saves it, not a poll.
+  private var draftRetryAt: [String: ContinuousClock.Instant] = [:]
+  /// The last edit sequence per cached draft, for the life of the store. A copy adopted from the
+  /// server forgets its own, so a new edit never reuses one an older save in flight carries.
+  private var draftSeqs: [String: Int] = [:]
+  private func nextDraftSeq(_ botId: String?) -> Int {
+    let localKey = botId.flatMap { key("draft", $0) } ?? ""
+    let next = max(draftSeqs[localKey] ?? 0, draft.seq ?? 0) + 1
+    draftSeqs[localKey] = next
+    return next
+  }
   private func settled(_ botId: String) -> Bool { key("draft", botId).map { draftSavesInFlight[$0] == nil } ?? true }
   /// Saves a draft on its base revision, then merges the response into the open copy and the
   /// cached copy as they are now. Kept edits after a conflict save again on the new base.
@@ -588,14 +599,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       guard currentGeneration == generation else { throw error }
       let count = (draftSaveFailures[localKey] ?? 0) + 1
       draftSaveFailures[localKey] = count
+      let delay = Duration.seconds(min(30, pow(2, Double(count - 1))))
+      draftRetryAt[localKey] = .now + delay
       Task {
-        try? await Task.sleep(for: .seconds(min(30, pow(2, Double(count - 1)))))
+        try? await Task.sleep(for: delay)
         guard currentGeneration == self.generation else { return }
         self.ensureDraftSaved(botId)
       }
       throw error
     }
     draftSaveFailures[localKey] = nil
+    draftRetryAt[localKey] = nil
     guard currentGeneration == generation else { return }
     let settled = draftSavesInFlight[localKey] == nil
     // A 409 answering the latest edit is the server's word, even if older than the copy.
@@ -620,6 +634,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// waiting, saves again.
   private func ensureDraftSaved(_ botId: String, retries: Int = 3) {
     guard settled(botId), let localKey = key("draft", botId) else { return }
+    // A failing save retries on its backoff, however often the conversation polls.
+    if let retryAt = draftRetryAt[localKey], ContinuousClock.now < retryAt { return }
     if selectedBotId == botId && draftReady {
       if draft.dirty == true, scheduledDraftSave == nil { startDraftSave(botId: botId) }
     } else if let cached: Draft = read(localKey), cached.dirty == true, retries > 0 {

@@ -82,6 +82,9 @@ private final class NativeMockServer: @unchecked Sendable {
     func setUpgradeResponseStatus(_ status: Int) { lock.withLock { upgradeResponseStatus = status } }
     func hold(_ path: String) { _ = lock.withLock { heldPaths.insert(path) } }
     /// Answers the held request with a server error, without acting on it.
+    /// Answers every draft save with a server error, without acting on it.
+    func failDraftSaves(_ fail: Bool = true) { lock.withLock { draftSavesFail = fail } }
+    private var draftSavesFail = false
     func failHeld(_ path: String) {
         lock.withLock { () -> NativeMockProtocol? in heldPaths.remove(path); return held.removeValue(forKey: path) }?
             .respond(status: 500, data: Self.json(["error": "Synthetic save failure"]))
@@ -289,6 +292,9 @@ private final class NativeMockServer: @unchecked Sendable {
             }
             if anchored { status = 503 }
             data = status == 200 ? conversationData(request.url!.pathComponents.dropLast().last ?? "bot", query: request.url?.query) : Self.json(["error": "Synthetic conversation outage"])
+        }
+        else if path.hasSuffix("/draft") && request.httpMethod == "PUT" && lock.withLock({ draftSavesFail }) {
+            status = 500; data = Self.json(["error": "Synthetic save failure"])
         }
         else if path.hasSuffix("/draft") {
             let bot = request.url!.pathComponents.dropLast().last ?? ""
@@ -968,6 +974,36 @@ private final class NativeMockServer: @unchecked Sendable {
         server.failHeld(path)
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
+    }
+
+    func testPollingWaitsForTheBackoffOfAFailingSave() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.failDraftSaves()
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(server.draftSaves().count, 1)
+        for _ in 0..<3 { await value.refreshConversation(); try await Task.sleep(for: .milliseconds(80)) }
+        XCTAssertEqual(server.draftSaves().count, 1, "Polls do not retry before the backoff")
+        try await Task.sleep(for: .milliseconds(1000))
+        XCTAssertEqual(server.draftSaves().count, 2, "The backoff retries once")
+    }
+
+    func testANewEditAfterAdoptingTheServerDraftNeverReusesAnInFlightSequence() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("other")
+        value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
+        let path = "/api/bots/bot/draft"; server.holdNext(path)
+        value.updateDraft(Draft(text: "A", attachments: []))
+        try await server.waitForHeld(path)
+        await value.send()
+        await value.refreshConversation()
+        XCTAssertEqual(value.draft.baseRevision, 1, "Adopted the send's clear")
+        value.updateDraft(Draft(text: "B", attachments: []))
+        await value.select("other")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.draftSaves().last?.text, "B", "Leaving sends the new edit")
+        server.failHeld(path)
     }
 
     func testAnEditTypedDuringAFailedSaveSavesAfterABackoff() async throws {
