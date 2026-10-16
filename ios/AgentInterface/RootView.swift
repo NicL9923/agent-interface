@@ -19,28 +19,32 @@ struct RootView: View {
       if store.bootstrap == nil {
         ConnectionView()
       } else {
-        NavigationSplitView(
-          columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn
-        ) {
-          BotListView(
-            openPreferences: { preferencesOpen = true }, create: { creatingBot = true },
-            openBot: { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail },
-            openToday: { discoveryOpen = false; todayOpen = true; groupsOpen = false; compactColumn = .detail },
-            openGroups: { discoveryOpen = false; groupsOpen = true; todayOpen = false; compactColumn = .detail },
-            openDiscovery: { discoveryOpen = true; groupsOpen = false; todayOpen = false; compactColumn = .detail })
-        } detail: {
-          if discoveryOpen {
-            DiscoveryView()
-          } else if groupsOpen {
-            GroupChatsView()
-          } else if todayOpen {
-            TodayView(openBot: { todayOpen = false; compactColumn = .detail })
-          } else if let bot = store.bot {
-            ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
-          } else {
-            ContentUnavailableView(
-              "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
-              description: Text("Your assistants keep their conversations here."))
+        // Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
+        VStack(spacing: 0) {
+          if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
+          NavigationSplitView(
+            columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn
+          ) {
+            BotListView(
+              openPreferences: { preferencesOpen = true }, create: { creatingBot = true },
+              openBot: { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail },
+              openToday: { discoveryOpen = false; todayOpen = true; groupsOpen = false; compactColumn = .detail },
+              openGroups: { discoveryOpen = false; groupsOpen = true; todayOpen = false; compactColumn = .detail },
+              openDiscovery: { discoveryOpen = true; groupsOpen = false; todayOpen = false; compactColumn = .detail })
+          } detail: {
+            if discoveryOpen {
+              DiscoveryView()
+            } else if groupsOpen {
+              GroupChatsView()
+            } else if todayOpen {
+              TodayView(openBot: { todayOpen = false; compactColumn = .detail })
+            } else if let bot = store.bot {
+              ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
+            } else {
+              ContentUnavailableView(
+                "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
+                description: Text("Your assistants keep their conversations here."))
+            }
           }
         }
       }

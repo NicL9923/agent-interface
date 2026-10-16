@@ -1,5 +1,7 @@
 # Repository tools
 
+- `node .agents/tools/publish-ios.mjs setup|prepare|status|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD` registers Apple identifiers, checks App Store profiles, archives and verifies the exact signed IPA, uploads it once, and confirms internal TestFlight availability before producing update settings. Uses private Mac credentials in `~/.config/wildbots/apple/config.json`; see `ios/README.md`. `apple-api.mjs` supplies authenticated requests, bounded pagination, and distribution checks.
+
 - `python3 .agents/tools/stage-recovery-tools.py MERGED_COMMIT --host SSH_ALIAS --app-base PATH` copies the exact Git recovery helper and its `deploy_common.py` into a fresh private host audit directory, verifies their hashes and records provenance without changing live services or app source.
 - `python3 .agents/tools/setup-shared-computer.py` stages private desktop/browser and terminal settings on the Hermes Linux service account without restarting live services; `--start` enables the shared computer after guarded release activation.
 - `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/accept-shared-computer.mjs PRIVATE_RECEIPT_PATH` checks authenticated native RFB, takeover/handback and a real terminal reconnect/end through the deployed app on its Linux host; uses a terminal administrator with a pre-confirmed temporary app session, so administrators get one "System terminal opened" alert; refuses to touch an existing member shell and removes its temporary app session.

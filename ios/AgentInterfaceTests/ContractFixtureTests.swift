@@ -44,6 +44,8 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.capabilities["imageGeneration"]?.supported, false); XCTAssertNotNil($0.capabilities["imageGeneration"]?.reason)
       XCTAssertEqual($0.connection.code, "ready"); XCTAssertNotNil($0.connection.lastConnectedAt)
       XCTAssertEqual($0.preferences.assistantGroups($0.bots).map(\.title), ["Home", "More assistants"])
+      XCTAssertEqual($0.nativeApp, NativeAppInfo(latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT"))
+      XCTAssertEqual(AppUpdate.evaluate($0.nativeApp, installedBuild: 11), .available(URL(string: "https://testflight.apple.com/join/CONTRACT")!))
     },
     "bot-avatar": check(AvatarConfig.self) { XCTAssertEqual($0.shape, "pebble"); XCTAssertEqual($0.accessory, "glasses") },
     "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
@@ -72,6 +74,16 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual(reply.reasoning, "Balanced the week around the pantry list."); XCTAssertEqual(reply.files?.first?.size, 18432)
       XCTAssertEqual(ReplyCards.parse(reply.text).compactMap(\.cards).flatMap { $0 }.map(\.id), ["groceries"])
     },
+    "live-activity": check(LiveActivityStatus.self) {
+      XCTAssertTrue($0.available)
+      let state: AssistantsActivityAttributes.ContentState = $0.state
+      XCTAssertEqual(state.hero?.botId, "garden"); XCTAssertEqual(state.hero?.phase, .waiting)
+      XCTAssertEqual(state.rows.map(\.phase), [.waiting, .working]); XCTAssertEqual(state.rows[1].detail, "Comparing recipes")
+      XCTAssertEqual(state.updatedDate, Date(timeIntervalSince1970: 1790856000)); XCTAssertEqual(state.rows[0].color, "#FF9800")
+      XCTAssertEqual(state.header(stale: false).text, "2 active"); XCTAssertEqual(state.header(stale: false).attention, " · 1 needs you")
+      XCTAssertEqual(state.compactLabel(stale: false), "Approval")
+    },
+    "live-activity-register": check(EmptyResponse.self) { XCTAssertEqual($0.ok, true) },
     "group-approve": check(GroupApproved.self) { XCTAssertTrue($0.approved) },
     "group-create": check(GroupCreated.self) { XCTAssertEqual($0.room.members.map(\.display_name), ["Household", "Garden"]) },
     "group-log": check(GroupPage.self) {

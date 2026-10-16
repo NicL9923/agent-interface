@@ -9,6 +9,9 @@ struct PreferencesView: View {
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
   @State private var notificationBusy = false
+  @State private var liveActivities = true
+  /// Read once on appear; the system setting does not change while this sheet is open.
+  @State private var liveActivitiesAllowed = true
   var body: some View {
     NavigationStack {
       Form {
@@ -83,6 +86,20 @@ struct PreferencesView: View {
           )
         }
         .disabled(notificationBusy || store.sessionExpired)
+        Section {
+          Toggle("Live Activities", isOn: $liveActivities).accessibilityIdentifier("liveActivitiesToggle")
+            .onChange(of: liveActivities) { _, value in
+              guard value != LiveActivityController.shared.enabled else { return }
+              Task { await LiveActivityController.shared.setEnabled(value) }
+            }
+          if !liveActivitiesAllowed {
+            Text("Live Activities are off for WildBots in iOS Settings.").font(.footnote).foregroundStyle(.secondary)
+          }
+        } header: {
+          Text("Lock Screen")
+        } footer: {
+          Text("Shows assistants that are working or waiting for you on the Lock Screen and in the Dynamic Island on this device.")
+        }
         if let url = try? store.api?.url("/?computer=1") {
           Section {
             Link(destination: url) {
@@ -110,6 +127,7 @@ struct PreferencesView: View {
           NavigationLink("Hermes updates") { HermesUpgradeView() }
           Button("Change server") { changeServerConfirm = true }
         }
+        Section("About") { AppVersionRows(update: store.appUpdate) }
         Section("Account") {
           Text(store.bootstrap?.user.name ?? "")
           Text(store.bootstrap?.user.email ?? "").font(.footnote).foregroundStyle(.secondary)
@@ -132,7 +150,11 @@ struct PreferencesView: View {
             }.disabled(saving || store.sessionExpired)
           }
         }
-        .onAppear { preferences = store.bootstrap?.preferences ?? Preferences() }
+        .onAppear {
+          preferences = store.bootstrap?.preferences ?? Preferences()
+          liveActivities = LiveActivityController.shared.enabled
+          liveActivitiesAllowed = LiveActivityController.shared.systemAllowed
+        }
         .confirmationDialog(
           "Sign out on this device? Your personal drafts stay saved for your next sign-in.",
           isPresented: $signOutConfirm, titleVisibility: .visible

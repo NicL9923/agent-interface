@@ -260,6 +260,101 @@ the matching signed app entitlement, a real APNs signing key, notification
 permission, and a current device registration. The repository does not provision
 those external credentials or publish a signed app.
 
+## Live Activity
+
+The app shows one aggregate Live Activity per device: the person's assistants that are
+working, waiting for them, or just finished. The server owns the content so the lock
+screen, Dynamic Island and the in-app view agree. Rows include an assistant visible to the
+signed-in person when that person sent to its current run (run participant) or follows it,
+the same rule as notifications. A private assistant appears only for its owner.
+
+| Method and route | Body or response |
+| --- | --- |
+| `GET /api/native/live-activity?deviceId=UUID` | `{ "available": true, "state": ACTIVITY_STATE }`; `available` is false when APNs is not configured. The optional installation UUID restores this native session's starting grace and observed rows. |
+| `PUT /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN", "botIds": ["kitchen"] }`; returns `{ "ok": true }`, and the next push within about five seconds replays the current state |
+| `DELETE /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN" }`; removes only that activity token, so late cleanup cannot remove a replacement |
+
+`ACTIVITY_STATE` is both the response body field and the APNs `content-state`:
+
+```json
+{
+  "title": "Kitchen needs you",
+  "activeCount": 2,
+  "attentionCount": 1,
+  "updatedAt": 1760000000,
+  "rows": [
+    { "botId": "kitchen", "name": "Kitchen", "phase": "waiting", "status": "Needs approval",
+      "detail": "Order groceries", "since": 1759999900, "color": "#1084FE" }
+  ]
+}
+```
+
+- `phase` is `starting`, `thinking`, `working`, `waiting`, `blocked`, `done`, `failed` or
+  `interrupted`. Clients render an unknown phase as "Status unknown".
+- `status` is a short label of at most 24 characters. `detail` is optional, at most 80
+  characters, and comes from the current activity detail. `color` is the avatar color when
+  the assistant has a geometric or character avatar.
+- `updatedAt` and `since` are Unix epoch seconds. They are numbers, not ISO strings, because
+  ActivityKit decodes `Date` from the 2001 reference epoch.
+- At most four rows, ordered: attention (`waiting`, `blocked`), then `failed` and
+  `interrupted`, then `starting`, `thinking` and `working`, then `done`. The first row
+  drives the tint, the minimal Dynamic Island symbol and the tap target.
+- `activeCount` counts non-terminal rows, including any beyond the first four.
+
+Registration requires native bearer authentication and binds the activity token to the
+person, installation UUID and native session, like device registration. The app keeps a
+different installation UUID for each server/account so an offline sign-out cannot block
+the next person's activity. Re-registering the same session preserves its observed rows
+and starting grace; token rotation replays them. A token is 16 to
+256 bytes encoded as hex. `botIds` (at most 10) lists assistants the app just sent to: for
+two minutes, each appears as `starting` until Hermes reports it active or finished, and
+the server does not end the activity while one is still starting. Registering a new token for the same
+device replaces the previous one and replays the current state on the next push.
+Without APNs configuration, registration returns 409 and the app does not start an
+activity.
+
+The background worker pushes with `apns-push-type: liveactivity` and topic
+`APNS_TOPIC.push-type.liveactivity`:
+
+- `update` when the content changes, at most once every 15 seconds unless the attention
+  count rises, a row finishes, or the active count changes. While anything is active it
+  repeats the current state every five minutes so `stale-date` (15 minutes ahead) keeps
+  moving. Updates use priority 5; a rise in attention uses priority 10.
+- `end` at priority 10 when no row is active and the grace period has passed. The final
+  state keeps finished rows and sets `dismissal-date` five minutes ahead. The server then
+  forgets the registration.
+- Updates never carry an `alert`; ordinary notifications already announce finished work
+  and decisions.
+- Content stays below 3500 JSON bytes, leaving space for the APNs envelope. Long names
+  are shortened and excess previews or rows are omitted without changing aggregate counts.
+- A 410 or `BadDeviceToken`, `DeviceTokenNotForTopic` or `Unregistered` response removes
+  the registration. Sign-out removes it with the native session.
+
+The app starts the activity in the foreground after sending a message, or on foreground
+when the state has active rows. It shows a `starting` seed row for the assistant it sent
+to, registers the push token as soon as iOS provides it, and re-registers on every
+foreground. It ends extra activities, ends its activity on sign-out or account change,
+and respects a per-device Live Activities switch in Preferences.
+
+## Widgets
+
+The widget extension never receives a sign-in token. The app writes a snapshot of the
+signed-in person's visible assistants into the shared App Group whenever the household
+refreshes, removes it on sign-out or account change, and reloads widget timelines when it
+changes. Widgets show the snapshot time and say "Open WildBots to refresh" once it is
+older than 30 minutes. Message previews are privacy-sensitive, so a locked device that
+hides widget data redacts them. A tap opens `agentinterface://open?bot=ID`, which the app
+handles exactly like a notification link to `/?bot=ID`.
+
+## App updates
+
+The bootstrap includes `"nativeApp": { "latestBuild": 12, "updateUrl": "https://testflight.apple.com/join/CODE" }`
+when the host sets both `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`. The app compares
+`latestBuild` with its own `CFBundleVersion` and, when it is behind, shows an update
+banner and a Preferences row whose button opens `updateUrl`. The URL must use HTTPS.
+Setting only one of the two variables is a configuration error. Raise
+`IOS_APP_LATEST_BUILD` after each distributed build.
+
 Protocol references: [Apple APNs requests](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns),
 [Apple APNs connections](https://developer.apple.com/documentation/usernotifications/establishing-a-connection-to-apns),
 and [Google ID token verification](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).

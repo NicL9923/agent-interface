@@ -5,6 +5,7 @@ import type { Runtime } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
 import { createApnsSender, type ApnsSender } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
+import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
@@ -26,6 +27,7 @@ export class BackgroundWorker {
   readonly loop: FailureTracker;
   readonly discovery: FailureTracker;
   readonly push: FailureTracker;
+  readonly live: LiveActivities;
   constructor(
     private store: Store,
     private runtime: Runtime,
@@ -33,6 +35,7 @@ export class BackgroundWorker {
     private send?: PushSender,
     private sendApns?: ApnsSender,
     private log: Log = quietLog,
+    sendLiveActivity?: LiveActivitySender,
   ) {
     this.loop = new FailureTracker(log, "Background worker");
     this.discovery = new FailureTracker(log, "Hermes event discovery");
@@ -40,8 +43,10 @@ export class BackgroundWorker {
     if (!sendApns && config.apns) {
       const sender = createApnsSender(config.apns)!;
       this.sendApns = sender;
+      sendLiveActivity ??= sender.liveActivity;
       this.closeApns = () => sender.close();
     }
+    this.live = new LiveActivities(store, runtime, config, sendLiveActivity, log);
     if (!send && config.vapidPublicKey) {
       webpush.setVapidDetails(
         config.vapidSubject,
@@ -82,6 +87,8 @@ export class BackgroundWorker {
         if (removed.sessions || removed.notifications) this.log.info(removed, "Removed expired sessions and old notifications");
       }
       await this.deliver();
+      // Live Activity pushes never hold up notifications; their failures are tracked separately.
+      try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
       this.loop.success();
     } catch (error) {
       this.loop.failure(error);

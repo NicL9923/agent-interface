@@ -1,5 +1,70 @@
 # Validation ledger
 
+## October 16 widgets, Live Activity, updates and TestFlight setup
+
+The branch adds a native Home/Lock Screen widget, an aggregate ActivityKit card
+and Dynamic Island views, server-owned APNs activity updates, and persistent web
+and native update notices. Web checks run on foreground, reconnect and every
+30 minutes. The native release command checks signed app/extension identities,
+matching versions, production push and App Group entitlements before upload.
+It confirms the exact processed build and both household testers before emitting
+the host's update settings. It never announces an uncertain upload.
+
+The web build and all 720 tests passed on Node 26 and the production Node 24
+runtime. The latest focused lifecycle, native API, publishing and APNs transport
+checks passed, including stream timeout isolation, device/session-bound startup
+grace, repeat registration, oversized Unicode/escaped payloads and two-person
+distribution checks. TypeScript and diff checks passed. Validation source before
+the signing search-list follow-up was
+`sha256:da74344cc784b308da96820e3b4c9496611ea578a97db91051d190c7e187988e`.
+The search-list change passed the command's syntax check and a real temporary
+keychain experiment established why it is needed. Apple's group-specific tester
+endpoint returned HTTP 500; its documented filtered tester list returned the
+exact two household members. The publisher now uses that list, and its six
+focused checks passed. A second review found late activity cleanup could delete
+a replacement token, and a first-visit tab could miss another tab's later update.
+Cleanup now requires the ended token, native cleanup captures its old activity
+before awaiting, and the browser remembers when first control has happened.
+All 39 focused lifecycle, API, browser-update and publishing checks and TypeScript
+passed after these fixes. Current source is
+`sha256:6a60b7695d13215d6f039e59336a7e4a9ec4819f07f2f1454f625f576b058d47`.
+
+Both the iOS Release archive and simulator test targets compiled with Xcode
+27.1, build 27A9275. Before the Xcode update, 131 native unit checks completed
+with one evidence-only skip, and both new update-banner UI checks passed.
+The broader UI run hit an existing upgrade-flow timeout. Xcode updated during
+the next run, and its required CoreSimulator 1174.9.2 setup did not complete;
+the machine still has 1171.7. Simulator execution remains pending administrator
+first-launch setup. No full simulator-suite success is claimed for this source.
+The new account-switch regression tests compile but have not run on that runtime.
+Rendered widget, Dynamic Island and update-banner fixture collages were inspected
+in both themes. They do not establish physical-device push delivery or privacy.
+
+Existing Apple team credentials were recovered privately. All three app IDs and
+their shared App Group are registered and associated. Actual App Store profiles
+for all three passed their decoded entitlement checks. The **WildBots Household**
+App Store Connect record is `6823644380`, using `dev.agentinterface.ios` and SKU
+`wildbots-ios`. The existing APNs key is production and team scoped. Its private
+copy is staged on the VPS; the live service configuration has not changed.
+The internal **Household** group uses explicit build distribution. Kim accepted
+her Marketing invitation, limited to this app. Both household accounts are now
+internal members of the group; Apple shows two testers and no available builds.
+Apple intermittently
+returned HTTP 500 errors during setup; no rejected mutation was blindly retried.
+
+Grok 4.7's first independent review found lifecycle, privacy, payload-size and
+release-tool issues. Fixes preserve startup grace and observed state, separate
+installation IDs by account, clear old widget data during a disconnected account
+switch, mark activity detail private, bound the serialized payload, isolate APNs
+stream timeouts, check the exact tester set, and keep reusable signing passwords
+out of process arguments and errors. The second review confirmed those fixes;
+its two additional findings were addressed as described above. Final integration
+review is pending. The app-specific
+HTTPS TestFlight link was checked against Apple's own landing page and association
+file; its physical-phone tap, notification delivery and first signed installation
+remain acceptance work. No IPA upload, public store submission or server deployment
+has completed at this point.
+
 ## October 16 production Hermes update
 
 The guarded update completed at 01:34 UTC. Hermes now runs upstream main

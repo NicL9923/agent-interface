@@ -25,20 +25,28 @@ def settings(values):
     return "{" + " ".join(f'{key} = "{value}";' for key, value in values.items()) + "}"
 
 
+# One version for the app and every extension: App Store validation rejects extensions whose
+# versions differ from the app's.
+MARKETING_VERSION = "1.0"
+CURRENT_PROJECT_VERSION = "1"
+EXTENSIONS = ["AgentInterfaceShare", "AgentInterfaceWidgets"]
 targets = []
 products = []
 groups = []
-for name, kind in [("AgentInterfaceShare", "extension"), ("AgentInterface", "app"), ("AgentInterfaceTests", "unit"), ("AgentInterfaceUITests", "ui")]:
+for name, kind in [(extension, "extension") for extension in EXTENSIONS] + [("AgentInterface", "app"), ("AgentInterfaceTests", "unit"), ("AgentInterfaceUITests", "ui")]:
     files = sorted((ROOT / name).glob("*.swift"))
     if kind in ("app", "extension"):
         files += sorted((ROOT / "Shared").glob("*.swift"))
+    # Widget and Live Activity models and views: the app writes and previews what the widgets show.
+    if name in ("AgentInterface", "AgentInterfaceWidgets"):
+        files += sorted((ROOT / "Shared" / "Widgets").glob("*.swift"))
     # The independently owned contract suite is included before its first write.
     if name == "AgentInterfaceTests" and not any(p.name == "NativeContractTests.swift" for p in files):
         files.append(ROOT / name / "NativeContractTests.swift")
     references = []
     builds = []
     for path in files:
-        reference = add(f"ref:{name}/{path.name}", f'{{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{str(path.relative_to(ROOT / name)) if path.parent == ROOT / name else "../Shared/" + path.name}"; sourceTree = "<group>";}}')
+        reference = add(f"ref:{name}/{path.name}", f'{{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{str(path.relative_to(ROOT / name)) if path.parent == ROOT / name else "../" + str(path.relative_to(ROOT))}"; sourceTree = "<group>";}}')
         references.append(reference)
         builds.append(add(f"build:{name}/{path.name}", f"{{isa = PBXBuildFile; fileRef = {reference};}}"))
     resource_builds = []
@@ -64,7 +72,7 @@ for name, kind in [("AgentInterfaceShare", "extension"), ("AgentInterface", "app
             "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "dev.agentinterface.ios" + ("" if kind == "app" else "." + name),
             "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
             "TARGETED_DEVICE_FAMILY": "1,2", "SWIFT_VERSION": "5.0", "CODE_SIGN_STYLE": "Automatic", "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
-            "SWIFT_EMIT_LOC_STRINGS": "YES", "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @loader_path/Frameworks", "GENERATE_INFOPLIST_FILE": "NO" if kind in ("app", "extension") else "YES",
+            "SWIFT_EMIT_LOC_STRINGS": "YES", "MARKETING_VERSION": MARKETING_VERSION, "CURRENT_PROJECT_VERSION": CURRENT_PROJECT_VERSION, "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @loader_path/Frameworks", "GENERATE_INFOPLIST_FILE": "NO" if kind in ("app", "extension") else "YES",
         }
         if kind == "app":
             values.update({"INFOPLIST_FILE": "AgentInterface/Info.plist", "CODE_SIGN_ENTITLEMENTS": "AgentInterface/AgentInterface.entitlements", "APNS_ENVIRONMENT": "development" if configuration == "Debug" else "production", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon", "ENABLE_PREVIEWS": "YES"})
@@ -74,6 +82,8 @@ for name, kind in [("AgentInterfaceShare", "extension"), ("AgentInterface", "app
             values.update({"TEST_HOST": "$(BUILT_PRODUCTS_DIR)/AgentInterface.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AgentInterface", "BUNDLE_LOADER": "$(TEST_HOST)"})
         else:
             values.update({"TEST_TARGET_NAME": "AgentInterface"})
+        if configuration == "Release" and kind in ("app", "extension"):
+            values["PROVISIONING_PROFILE_SPECIFIER"] = "$(WILDBOTS_PROFILE_" + name + ")"
         if configuration == "Debug":
             values.update({"SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG $(inherited)", "SWIFT_OPTIMIZATION_LEVEL": "-Onone", "ENABLE_TESTABILITY": "YES", "ONLY_ACTIVE_ARCH": "YES"})
         configs.append(add(f"config:{name}:{configuration}", f'{{isa = XCBuildConfiguration; buildSettings = {settings(values)}; name = {configuration};}}'))
@@ -84,11 +94,14 @@ for name, kind in [("AgentInterfaceShare", "extension"), ("AgentInterface", "app
         dependencies.append(add(f"dependency:{name}", f'{{isa = PBXTargetDependency; target = {ident("target:AgentInterface")}; targetProxy = {proxy};}}'))
     phases = [source, frameworks, resources]
     if kind == "app":
-        extension_product = ident("product:AgentInterfaceShare")
-        embedded = add("embed:Share", f'{{isa = PBXBuildFile; fileRef = {extension_product}; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy);}};}}')
-        phases.append(add("phase:Share", f'{{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = ({embedded}); name = "Embed app extensions"; runOnlyForDeploymentPostprocessing = 0;}}'))
-        proxy = add("proxy:Share", f'{{isa = PBXContainerItemProxy; containerPortal = {ident("project")}; proxyType = 1; remoteGlobalIDString = {ident("target:AgentInterfaceShare")}; remoteInfo = AgentInterfaceShare;}}')
-        dependencies.append(add("dependency:Share", f'{{isa = PBXTargetDependency; target = {ident("target:AgentInterfaceShare")}; targetProxy = {proxy};}}'))
+        embedded = []
+        for extension in EXTENSIONS:
+            # The share extension keeps its original identifiers so the project diff stays small.
+            key = "Share" if extension == "AgentInterfaceShare" else extension
+            embedded.append(add(f"embed:{key}", f'{{isa = PBXBuildFile; fileRef = {ident("product:" + extension)}; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy);}};}}'))
+            proxy = add(f"proxy:{key}", f'{{isa = PBXContainerItemProxy; containerPortal = {ident("project")}; proxyType = 1; remoteGlobalIDString = {ident("target:" + extension)}; remoteInfo = {extension};}}')
+            dependencies.append(add(f"dependency:{key}", f'{{isa = PBXTargetDependency; target = {ident("target:" + extension)}; targetProxy = {proxy};}}'))
+        phases.append(add("phase:Share", f'{{isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = {array(embedded)}; name = "Embed app extensions"; runOnlyForDeploymentPostprocessing = 0;}}'))
     product_type = {"extension": "app-extension", "app": "application", "unit": "bundle.unit-test", "ui": "bundle.ui-testing"}[kind]
     targets.append(add(f"target:{name}", f'{{isa = PBXNativeTarget; buildConfigurationList = {config_list}; buildPhases = {array(phases)}; buildRules = (); dependencies = {array(dependencies)}; name = {name}; productName = {name}; productReference = {product}; productType = "com.apple.product-type.{product_type}";}}'))
 

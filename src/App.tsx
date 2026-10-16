@@ -12,6 +12,7 @@ import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useSubmission } from "./app/use-submission";
 import { useAppInstall, useMobile } from "./app/use-browser";
+import { UpdateNotice } from "./app/UpdateNotice";
 import { Sidebar } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
@@ -62,7 +63,7 @@ export function App() {
     const theme = boot?.preferences.theme || "system";
     document.documentElement.dataset.theme = theme;
   }, [boot?.preferences.theme]);
-  const { workerUpdate, installEvent, notice, setNotice } = useAppInstall();
+  const { update, installEvent, notice, setNotice } = useAppInstall();
   // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
   const computerLoaded = useOnceActive(panel?.kind === "computer");
   const upgradeLoaded = useOnceActive(panel?.kind === "upgrade");
@@ -129,7 +130,7 @@ export function App() {
   return (
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} view={view} state={state} connectionLost={connectionLost} offline={offline}
-        mobile={mobile} open={railOpen} onSelectBot={selectBot}
+        mobile={mobile} open={railOpen} update={update} onSelectBot={selectBot}
         onView={next => { setView(next); setRailOpen(false); }}
         onNewBot={() => open({ kind: "settings", bot: "new" })}
         onSettings={() => open({ kind: "preferences" })}
@@ -140,11 +141,13 @@ export function App() {
           connectionLost={connectionLost} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
           onSettings={bot => setPanel({ kind: "settings", bot })} onPin={togglePin} />
+        {/* On a computer the rail is always beside this, so its notice is enough. */}
+        {mobile && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading key="groups"><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
-            reconnect={session.reconnect} error={error} setError={setError} workerUpdate={workerUpdate}
+            reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} content={content} history={history} reply={reply} onScroll={persistPosition}
             onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />

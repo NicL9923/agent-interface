@@ -176,6 +176,10 @@
               "stop", "portraitGeneration", "avatarMetadata",
             ].map { ($0, ["supported": true]) }),
         ]
+        // A distributed build newer than any local build, so the update banner shows.
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
+          object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
+        }
       } else if path.hasSuffix("/conversation") {
         object = [
           "botId": path.components(separatedBy: "/")[3], "messages": Self.messages,
@@ -392,6 +396,17 @@
           Self.routines.removeAll { $0["id"] as? String == routine["id"] as? String }
           Self.routines.append(routine)
           object = routine
+        }
+      } else if path == "/api/native/live-activity" {
+        // Unavailable unless asked for, so other tests never start a real Live Activity.
+        if method == "GET" {
+          let now = Date().timeIntervalSince1970
+          object = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ACTIVITY_SERVER"] == "1"
+            ? ["available": true, "state": ["title": "Ranch hand needs you", "activeCount": 2, "attentionCount": 1, "updatedAt": now, "rows": [
+              ["botId": "ranch", "name": "Ranch hand", "phase": "waiting", "status": "Needs approval", "detail": "Order hay delivery", "since": now - 95, "color": "#1084FE"],
+              ["botId": "kitchen", "name": "Kitchen companion", "phase": "working", "status": "Working", "detail": "Planning this week's dinners", "since": now - 312, "color": "#FF9800"],
+            ]] as [String: Any]]
+            : ["available": false, "state": ["title": "", "activeCount": 0, "attentionCount": 0, "updatedAt": now, "rows": []] as [String: Any]]
         }
       } else if path == "/api/native/push/config" {
         object = ["available": false, "environment": "sandbox"]
