@@ -1,5 +1,20 @@
 # Validation ledger
 
+## October 16 app release eace535
+
+PR #130 merged at `eace535f5d740fb454af365e800e108da6df700b`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `c229c9a8afdba23d`, from the archive with SHA256
+`ef895e401f6440b8584fdc3773e6e6f73cbd06a20cc5371b604a5806257db25d`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-eace535f-20261016T002959Z.json) records the result. Hermes remains
+at `6ebd92d93852`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
 ## October 15 asynchronous browser recovery
 
 Real-browser acceptance exposed an existing race: Chrome can acknowledge a
