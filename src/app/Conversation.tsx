@@ -268,7 +268,7 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
             {message.createdAt && <When value={message.createdAt} />}
           </div>}
           {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
-            <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} />
+            <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
           ) : message.role !== "tool" && (
             <div className="message-text">{message.text}</div>
           )}

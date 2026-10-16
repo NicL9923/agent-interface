@@ -198,6 +198,13 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-cards", "role": "assistant", "text": "Fixture grocery suggestion.\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Grocery checklist\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"}]}]}\n```"]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_INLINE_UI"] == "1" {
+          let html = "<h3>Hay supply planner</h3><p>Explicit simulator fixture.</p><button id='compare' onclick=\"document.getElementById('days').textContent='40 days';document.getElementById('extra').hidden=false\">Compare supply</button><p id='days'>24 days</p><p id='extra' hidden>At half a bale per day, twenty bales lasts forty days.</p>"
+          let payload: [String: Any] = ["version": 1, "title": "Hay supply planner", "html": html]
+          let data = try! JSONSerialization.data(withJSONObject: payload)
+          let text = "Twelve bales lasts about 24 days. Compare a larger supply below.\n\n```wildbots-html\n" + String(decoding: data, as: UTF8.self) + "\n```"
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "inline-fixture", "role": "assistant", "text": text]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT"] == "1" {
           let requests: [[String: Any]] = [
             ["method": "vault.save_login", "origin": "https://school.example.test", "site": "Fixture school portal"],

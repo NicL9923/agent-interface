@@ -37,6 +37,7 @@ import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
+import { installInlineUi } from "./inline-ui.js";
 import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
 import { isApiRequest, routePattern } from "./route-path.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
@@ -140,6 +141,7 @@ export async function createApp(
     for (const method of [route.method].flat()) routes.push({ method, url: route.url });
   });
   installSecurityHeaders(app, config.origin);
+  installInlineUi(app);
   installEtags(app);
   await app.register(cookie);
   await app.register(websocket, {options: {maxPayload: 256 * 1024}});

@@ -8,6 +8,7 @@ import stat
 from pathlib import Path
 
 INTEGRATION_FILES = (
+    "src/shared/inline-ui-instructions.json", "src/shared/inline-ui.ts", "src/server/inline-ui.ts",
     "src/shared/message-origin.ts", "src/shared/collaboration.ts", "src/server/collaboration.ts",
   "src/shared/discovery.ts", "src/server/discovery.ts",
     "src/hermes/vault.py", "src/server/vault.ts", "src/shared/vault.ts", "scripts/spike/vault_probe.py",

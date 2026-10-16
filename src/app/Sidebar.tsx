@@ -105,6 +105,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
         {pinned.length > 0 && <ul className="home-pinned" aria-label="Pinned assistants">
           {pinned.map(bot => {
             const botState = activity(bot);
+            const showActivity = botState !== "idle" && botState !== "done";
             return <li key={bot.id}>
               <button type="button" className={`bot-item pinned-bot${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
                 onClick={() => onSelectBot(bot.id)} {...menuProps(bot)}>
@@ -112,7 +113,12 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
                   <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} reducedMotion />
                   <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                 </span>
-                <span className="pinned-name">{bot.name}</span>
+                <span className="pinned-copy">
+                  <span className="pinned-name">{bot.name}</span>
+                  <small className={`pinned-activity${showActivity ? ` bot-activity state-${botState}` : ""}`}>
+                    {showActivity ? stateLabels[botState] : null}
+                  </small>
+                </span>
               </button>
             </li>;
           })}

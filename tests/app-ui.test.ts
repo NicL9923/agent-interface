@@ -436,7 +436,7 @@ describe("conversation state", () => {
     vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T);
     try {
       await render();
-      const pinned = () => [...container.querySelectorAll(".home-pinned .pinned-bot")].map(item => item.textContent);
+      const pinned = () => [...container.querySelectorAll(".home-pinned .pinned-name")].map(item => item.textContent);
       expect(pinned()).toEqual(["Shared"]);
       const row = container.querySelector<HTMLButtonElement>(".home-list .bot-row")!;
       expect(row.textContent).toContain("Pot roast tonight.");

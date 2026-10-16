@@ -15,6 +15,19 @@ private final class ExperienceProtocol: URLProtocol, @unchecked Sendable {
   override func stopLoading() {}
 }
 final class ExperienceTests: XCTestCase {
+  func testInlineViewsRequireValidCompleteExplicitFences() {
+    let json = #"{"version":1,"title":"Supply planner","html":"<button>Compare</button>"}"#
+    let fence = "```wildbots-html\n" + json + "\n```"
+    let parts = ReplyCards.parse("Before\n" + fence + "\nAfter")
+    XCTAssertEqual(parts.count, 3)
+    XCTAssertEqual(parts[1].inline?.title, "Supply planner")
+    XCTAssertEqual(parts.last?.markdown, "After")
+    XCTAssertFalse(ReplyCards.spokenText(fence).contains("<button>"))
+    for source in ["```wildbots-html\n" + json, "````text\n" + fence + "\n````", "````text\n" + fence, "```html\n" + json + "\n```", "```wildbots-html\n{}\n```"] {
+      XCTAssertTrue(ReplyCards.parse(source).allSatisfy { $0.inline == nil })
+    }
+    XCTAssertNil(InlineDocument.parse(#"{"version":1,"title":"Test","html":"ok","url":"https://example.test"}"#))
+  }
   private func fence(_ payload: String) -> String { "Before\n```agent-ui\n" + payload + "\n```\nAfter" }
   func testReplyCardsRetainProseAndSeparateInteractiveChecklist() {
     let parts = ReplyCards.parse(fence(#"{"version":1,"cards":[{"id":"shopping","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}"#))
@@ -22,6 +35,11 @@ final class ExperienceTests: XCTestCase {
     XCTAssertEqual(parts.first?.markdown, "Before\n")
     XCTAssertEqual(parts[1].cards?.first?.items?.first?.text, "Milk")
     XCTAssertEqual(parts.last?.markdown, "After")
+    let payload = #"{"version":1,"cards":[{"id":"shopping","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}"#
+    for language in ["json", "", "text"] {
+      let source = "```" + language + "\n" + payload + "\n```"
+      XCTAssertTrue(ReplyCards.parse(source).allSatisfy { $0.cards == nil })
+    }
   }
   func testInvalidOrAmbiguousCardDataStaysReadableCode() {
     let payloads = [

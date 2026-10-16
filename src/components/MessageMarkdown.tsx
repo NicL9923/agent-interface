@@ -5,16 +5,24 @@ import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { parseReplyDocument, replyCardsFromText } from "../shared/reply-cards";
 import { ReplyCards } from "./ReplyCards";
+import { parseInlineDocument } from "../shared/inline-ui";
+import { InlineUi } from "./InlineUi";
 import "./message-markdown.css";
 
-interface ReplyContextValue { actionableIds: Set<string>; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }
+interface ReplyContextValue { text: string; inlineUi?: boolean; actionableIds: Set<string>; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }
 const ReplyContext = createContext<ReplyContextValue | null>(null);
-function MessagePre({ children }: { children?: ReactNode }) {
+function MessagePre({ children, node }: { children?: ReactNode; node?: { position?: { start: { offset?: number }; end: { offset?: number } } } }) {
   const context = useContext(ReplyContext);
   const child = Children.toArray(children)[0];
   if (!isValidElement<{ children?: ReactNode; className?: string }>(child)) return <pre>{children}</pre>;
   const code = String(child.props.children ?? "");
   const language = child.props.className?.match(/(?:^|\s)language-(\S+)/)?.[1];
+  // A streaming fence can contain valid JSON before its closing fence arrives.
+  const raw = context?.text.slice(node?.position?.start.offset, node?.position?.end.offset) || "";
+  const fences = /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*\n {0,3}(`{3,}|~{3,})[ \t]*$/.exec(raw);
+  const closed = fences && fences[1][0] === fences[2][0] && fences[2].length >= fences[1].length;
+  const inline = language === "wildbots-html" && context?.inlineUi && closed ? parseInlineDocument(code) : null;
+  if (inline) return <InlineUi key={code} document={inline} />;
   const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
   return document && context && document.cards.every(card => context.actionableIds.has(card.id))
     ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
@@ -103,10 +111,10 @@ const components: Components = {
 
 // Memoized because the composer re-renders the app on every keystroke, and
 // re-parsing every reply in a long transcript made typing lag.
-export const MessageMarkdown = memo(function MessageMarkdown({ text, botId, messageId, userId, unavailable }: {
-  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean;
+export const MessageMarkdown = memo(function MessageMarkdown({ text, botId, messageId, userId, unavailable, inlineUi = false }: {
+  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;
 }) {
-  const context = useMemo(() => ({ actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, botId, messageId, userId, unavailable]);
+  const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
   return (
     <ReplyContext.Provider value={context}>
     <div className="message-markdown">

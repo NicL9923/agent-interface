@@ -10,6 +10,7 @@ const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts',
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
 const { filesBefore, historyWindow, windowFiles } = await tsImport('../../src/shared/history.ts', import.meta.url);
+const { inlineUiShell, inlineUiShellPolicy } = await tsImport('../../src/server/inline-ui.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve('dist/client');
@@ -73,6 +74,13 @@ const conversations = {
   ledger: { messages: [{ id: 'l1', role: 'assistant', text: 'September is reconciled except for one charge I cannot match.', createdAt: at(10) }], activity: { state: 'blocked', detail: 'Waiting for you to identify a $48.20 charge from “TX FEED CO”.' }, attention: [{ id: 'ask', kind: 'clarify', title: 'Which category is the TX FEED CO charge?', detail: 'It does not match a receipt in the shared folder.', questions: [{ id: 'category', prompt: 'Category', options: ['Livestock feed', 'Garden supplies', 'Something else'] }] }] },
   guide: { messages: [{ id: 'g1', role: 'assistant', text: 'I could not reach the trail conditions service. Your request is saved.', createdAt: at(12) }], activity: { state: 'failed', detail: 'The trail conditions service did not respond.' } },
 };
+if (process.env.PREVIEW_INLINE_UI === '1') {
+  const html = `<!doctype html><html><head><style>h3{margin:0 0 16px}label{display:grid;gap:8px}input{width:100%;accent-color:var(--primary)}output{display:block;font-size:32px;font-weight:600;color:var(--primary);margin:16px 0}.bar{height:12px;background:var(--border);border-radius:6px;overflow:hidden}.bar span{display:block;height:100%;background:var(--primary)}</style></head><body><h3>Hay supply planner</h3><label for="bales">Bales in the barn<input id="bales" type="range" min="1" max="40" value="12"></label><output id="days" for="bales">24 days</output><div class="bar"><span id="fill" style="width:30%"></span></div><p>At half a bale per day.</p><button id="details" type="button" aria-expanded="false">Show assumptions</button><p id="assumptions" hidden>Fixture estimate: one half bale each day. Actual feed needs vary.</p><script>bales.oninput=()=>{days.value=bales.value*2+' days';fill.style.width=bales.value/40*100+'%'};details.onclick=()=>{assumptions.hidden=!assumptions.hidden;details.setAttribute('aria-expanded',String(!assumptions.hidden))}</script></body></html>`;
+  conversations.ranch = { activity: { state: 'idle' }, approvals: [], messages: [
+    { id: 'inline-prompt', role: 'user', text: 'How long will our hay last? Let me adjust the number of bales.' },
+    { id: 'inline-reply', role: 'assistant', text: 'Twelve bales lasts about 24 days at half a bale per day. Adjust the supply to compare.\n\n```wildbots-html\n' + JSON.stringify({ version: 1, title: 'Hay supply planner', html }) + '\n```' },
+  ] };
+}
 // Synthetic coordination fixture for source-aware presentation and disclosure checks.
 if (process.env.PREVIEW_COORDINATION === '1') {
   conversations.ranch = { activity: { state: 'idle' }, approvals: [], messages: [
@@ -420,6 +428,7 @@ const server = createServer(async (request, response) => {
     if (path === '/preferences') { Object.assign(preferences, body); return json(response, preferences); }
     return json(response, {});
   }
+  if (url.pathname === '/inline-ui') { response.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': inlineUiShellPolicy, 'X-Frame-Options': 'SAMEORIGIN' }); return response.end(inlineUiShell); }
   try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));

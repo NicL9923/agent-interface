@@ -149,6 +149,14 @@ a new Hermes session starts. In **Details**, enable interactive replies to add
 checklists, itineraries and reviewed calendar proposals to assistant answers.
 Your checks and itinerary notes are saved for your account.
 
+Assistant replies can also contain interactive charts, calculators, diagrams and
+small tools inline on web and iOS. These generated views follow your theme and
+resize to their content. **Reset view** starts over, and **View source** shows the
+HTML. Their controls affect only the view; changes reset when you reopen the
+conversation. Hermes receives the format instructions automatically in WildBots
+conversations. See [inline views](docs/HouseholdExperience.md#inline-views) for
+the reply format and supported behavior.
+
 **Routines** includes morning brief, meal plan and VPS health recipes, schedule
 previews in the actual Hermes timezone, and **Try once** with durable run
 receipts. See the [household experience guide](docs/HouseholdExperience.md) for

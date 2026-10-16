@@ -65,6 +65,50 @@ file; its physical-phone tap, notification delivery and first signed installatio
 remain acceptance work. No IPA upload, public store submission or server deployment
 has completed at this point.
 
+## October 16 inline UI implementation
+
+Base commit `9896a9bee7194d9482bfc276f542117147effa43`. Implementation source state
+`sha256:d2e609dfb79bfd5d02bc0cbe793abfce7ab8e42cb3c8dda4d65f0316bf2ba32a`
+over 783 files, including uncommitted new files. The fingerprint excludes this
+ledger and ignored runtime/build output.
+
+- Web suite: 62 files, 697 tests passed after review fixes. Production build
+  and TypeScript checks passed.
+- Python suite: 19 files passed, one system terminal file skipped because this
+  Mac lacks tmux. The final Hermes invocation hook passed all nine journal and
+  guidance tests, and the dashboard contract suite passed eight tests. Ruff 0.17.0 passed through `uvx`; no global install was needed.
+  The guidance tests use a gateway double, including the current invocation
+  hook, older runner hook, changed model, repeated turns and provider failure.
+- Native: Xcode 27.0 build 27A266a, iOS 27.0, dedicated iPhone simulator
+  `49F79E0F-A794-4047-A169-5E70F0781A09`. The signed simulator run passed all 122
+  unit tests plus the inline UI interaction/reset test. After the final native
+  parsing, identity, link-preview and theme updates, nine focused experience
+  unit tests and that UI test passed.
+  An earlier unsigned run failed the existing App Group test; signing with the
+  repository's ad hoc simulator configuration resolved it.
+- Chromium: inspected 1280x800 and 390x844 layouts, light/dark appearance,
+  keyboard adjustment, expansion with automatic resizing, reset and source.
+  The deterministic browser check confirmed that generated code cannot read
+  the parent DOM, cookies or local storage, or fetch the app API. Browser
+  diagnostics confirmed `frame-src about:` blocked an attempted external
+  self-navigation, with no outbound request. Expected CSP errors came only
+  from those deliberate probes. The exported native interaction screenshot
+  was also inspected.
+
+Anthropic independent review found and prompted fixes for the native fence
+parser, native document identity/link previews, background-turn prompt scope,
+qualification packaging and prose-first guidance. Theme propagation had already
+been fixed during that review. The documented residual browser network channels
+such as WebRTC remain outside the claimed isolation boundary; this is not a
+complete network sandbox.
+The focused second Anthropic review found no remaining actionable findings or
+regressions. It did not run Hermes; fresh native qualification remains pending.
+
+Local logs and native screenshot attachments are in ignored `.private` storage
+and `/Volumes/DevSSD/scratch/wildbots-inline-*`. This work has not changed
+production. Fresh disposable Hermes qualification and a physical-device check
+remain release validation; no live-provider or physical-phone result is claimed.
+
 ## October 16 production Hermes update
 
 The guarded update completed at 01:34 UTC. Hermes now runs upstream main
