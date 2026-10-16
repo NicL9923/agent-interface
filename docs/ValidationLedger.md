@@ -1,5 +1,109 @@
 # Validation ledger
 
+## October 16 production Hermes update
+
+The guarded update completed at 01:34 UTC. Hermes now runs upstream main
+`acc3cada0da86c81efc8aa6c5a291989549ca900`, verified as the latest remote tip
+at 01:35 UTC. WildBots runs PR #131's merged source `d49dab010607` in
+`release-d49dab01-20261016T011914Z`, web build `c229c9a8afdba23d`.
+
+All 12 updater checks passed. The installer took a cold backup, selected a new
+native generation and required the installed interpreter and dependency
+fingerprints to match fresh qualification exactly. The shared-OAuth repair was
+preserved over nearby upstream edits, with installed diff SHA256
+`30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+Protected profile settings, disabled skills and service definitions matched the
+baseline. Original Google HTTP and fresh WebSockets, both Discord connections,
+native maintenance ownership and release all passed. Backup archives and the
+private operation receipt remain on the VPS for recovery.
+
+The [production update receipt](evidence/hermes-production-update-20261016.json)
+records the qualification and runtime hashes. The full isolated integration
+suite and all 18 private OAuth/Google regressions passed before installation.
+The existing real-browser acceptance applies to this exact candidate and the
+unchanged adapter bytes. No new browser interaction was needed for the helper
+change.
+
+After cutover, both configured profiles completed serial model turns with an
+actual terminal call, exact synthetic output and successful tool/process/final
+exit codes. The gateway CLI stream omits the model ID; the receipt does not infer
+one. Public readiness and the expected service-worker build passed. Anonymous
+WildBots bootstrap and native config/profile requests returned 401. All five
+user services, Caddy and WireGuard were active, and maintenance and drain markers
+were absent. Full model output and operational recovery paths remain private.
+
+## October 16 app release d49dab0
+
+PR #131 merged at `d49dab010607fba42d3d96cfd2214ea2823bdb5e`. The release went live at `https://agentui.wildflowersranch.com`,
+web build `c229c9a8afdba23d`, from the archive with SHA256
+`a5871fca1ccaad9363f00678d6f983b179a0d12645b67e5beecf859b78ce4f07`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-d49dab01-20261016T011914Z.json) records the result. At this app cutover, Hermes remained
+at `6ebd92d93852`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+## October 16 qualified native runtime rebuild
+
+The first guarded installation of Hermes `acc3cada0da8` rejected the installed
+runtime fingerprint and rolled back to `6ebd92d93852`. Native PM had reused its
+old editable core snapshot because its dependency stamp omits core source and
+the dependency inputs had not changed. The other 112 installed distributions
+matched qualification. Production services recovered and maintenance cleared.
+
+PR #131, implementation `d6a7272`, forces a new native generation for qualified
+installs, keeps the qualified lock seed and rejects reuse before launcher
+publication. Failed generation selection restores the prior facts. The exact
+runtime fingerprint check remains unchanged. Implementation: GPT-6.1 Sol.
+Source fingerprint:
+`sha256:7c72580b4975bca4059c81e0309af6b10eaab6388c36bab08099b6c95fabc6cb`.
+The focused Linux installer suite, Ruff 0.17.0 and all four CI jobs passed.
+Claude Opus 5.5 independently reviewed the complete diff and candidate native
+PM implementation with no actionable findings.
+
+The [native rehearsal receipt](evidence/hermes-native-generation-rehearsal-20261016.json)
+records an actual disposable old installation and a source-only update with
+unchanged extras and plugin identity. Native PM reported current while selecting
+the old generation. An independent fresh candidate qualification produced a
+different fingerprint. The reviewed helper then selected a new generation whose
+interpreter and dependency fingerprints exactly matched that qualification.
+Disposable source and runtimes were removed; private receipts and logs remain.
+No browser interaction was performed for this helper change.
+
+## October 16 app release eace535
+
+PR #130 merged at `eace535f5d740fb454af365e800e108da6df700b`. The release went live at `https://agentui.wildflowersranch.com`,
+web build `c229c9a8afdba23d`, from the archive with SHA256
+`ef895e401f6440b8584fdc3773e6e6f73cbd06a20cc5371b604a5806257db25d`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-eace535f-20261016T002959Z.json) records the result. At this app cutover, Hermes remained
+at `6ebd92d93852`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+## October 16 private Google regression compatibility
+
+Only the authoritative private upgrade fixture changed. Upstream commit
+`5bb155d568` maps a forged JWT signature to an invalid-session rejection rather
+than a provider error. The fixture now requires a rejected session and the
+matching native HTTP status under either contract. It accepts neither an
+identity nor an authenticated request for a forged signature.
+
+The fixture SHA256 is
+`964f0bd42d595f7cc1c455d5c02e3971defd001ae8242a966e3e6a02398479fd`.
+Claude Opus 5.5 independently reviewed the correction. All 18 private shared-OAuth
+and Google cases passed against both the installed runtime and the fresh
+candidate. The live Google plugin and historical operation snapshots were
+unchanged. Operational backups and the installation receipt remain private.
+
 ## October 15 asynchronous browser recovery
 
 Real-browser acceptance exposed an existing race: Chrome can acknowledge a

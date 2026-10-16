@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "candidateRevision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "baselineRevision": "6ebd92d93852b7f33ca3bdb2c6c3d0fc997ce46f",
+  "helperSha256": "bffe763582416018813787528a9da13b08787c04c0a5c2f38f35147fb8087341",
+  "nativeReportedCurrentAfterSourceUpdate": true,
+  "staleFingerprint": {
+    "dependenciesSha256": "185eb135eae3920035d1c64732b338767d5d406ab0b21d6e725fd5ade45e74d6",
+    "interpreterSha256": "8dfa9757a52b9c3edf1dedaaa2a7a8c40ea4beb058f20e90bdd47b48f3b1b176"
+  },
+  "qualifiedFingerprint": {
+    "dependenciesSha256": "1e2996795ee29b81a8be4202a6e1ec215692d7a5338ca8e008e4a58d03667c48",
+    "interpreterSha256": "8dfa9757a52b9c3edf1dedaaa2a7a8c40ea4beb058f20e90bdd47b48f3b1b176"
+  },
+  "installedFingerprint": {
+    "dependenciesSha256": "1e2996795ee29b81a8be4202a6e1ec215692d7a5338ca8e008e4a58d03667c48",
+    "interpreterSha256": "8dfa9757a52b9c3edf1dedaaa2a7a8c40ea4beb058f20e90bdd47b48f3b1b176"
+  },
+  "strictEquality": true,
+  "sync": {
+    "ok": true,
+    "state": "synced"
+  },
+  "disposableRuntimePruned": true,
+  "newNativeGenerationSelected": true,
+  "implementationCommit": "d6a7272522d9ca5d56d03c9f0d9c90b0c42bad1e",
+  "mergedCommit": "d49dab010607fba42d3d96cfd2214ea2823bdb5e",
+  "sourceFingerprint": "sha256:7c72580b4975bca4059c81e0309af6b10eaab6388c36bab08099b6c95fabc6cb",
+  "independentReview": {
+    "implementer": "OpenAI GPT-6.1 Sol",
+    "reviewer": "Anthropic Claude Opus 5.5",
+    "findings": []
+  },
+  "scope": "Disposable native installation, same plugin identity and extras throughout; production facts and services untouched"
+}
