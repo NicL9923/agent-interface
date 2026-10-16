@@ -618,9 +618,23 @@ class PlatformTests(unittest.TestCase):
         calls = self.home / "pm-calls.json"
         record = "import json\nfrom pathlib import Path\np=Path(" + repr(str(calls)) + ")\ndef note(v):\n old=json.loads(p.read_text()) if p.exists() else []\n p.write_text(json.dumps(old+[v]))\n"
         state = self.home / "installs/key"
-        (pm / "__init__.py").write_text(record + "import json\nfrom pathlib import Path\ndef sync_venv(extras=None, **kwargs):\n f=Path(" + repr(str(state / "facts.json")) + ")\n lock=json.loads(f.read_text())['packages']['venv'].get('resolved_lock') if f.exists() else None\n note({'extras':extras,'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root']),'seed':Path(lock).read_text() if lock else None})\n if f.with_name('rebuild').exists():\n  data=json.loads(f.read_text()); data['packages']['venv']['resolved_lock']='new generation lock'; f.write_text(json.dumps(data))\n")
+        (pm / "__init__.py").write_text(record + '''
+import shutil,uuid
+def sync_venv(extras=None, **kwargs):
+ f=Path(__FACTS_PATH__)
+ prior=json.loads(f.read_text())['packages']['venv'] if f.exists() else {}
+ lock=prior.get('resolved_lock')
+ note({'extras':extras,'evict':kwargs['evict_incompatible_plugins'],'explicit':kwargs['explicit'],'root':str(kwargs['project_root']),'seed':Path(lock).read_text() if lock else None})
+ # Native PM's stamp depends on dependency inputs, not app.py's contents.
+ if prior.get('stamp')=='s' or f.with_name('skip-rebuild').exists(): return
+ generation=f.parent/uuid.uuid4().hex
+ workspace=generation/'workspace'; workspace.mkdir(parents=True)
+ shutil.copy2(kwargs['project_root']/'app.py',workspace/'app.py')
+ (workspace/'uv.lock').write_text('new generation lock')
+ f.write_text(json.dumps({'packages':{'venv':{'stamp':'s','extras':extras,'environment':str(generation/'venv'),'resolved_lock':str(workspace/'uv.lock')}}}))
+'''.replace('__FACTS_PATH__', repr(str(state / "facts.json"))))
         (pm / "environments.py").write_text("from pathlib import Path\ndef install_state_dir(root): return Path(" + repr(str(state)) + ")\ndef runtime_facts_path(root): return install_state_dir(root) / 'facts.json'\n")
-        (pm / "lock.py").write_text("import json\nclass Facts:\n def __init__(self, path, strict=False): self.path=path\n def get(self, name): return json.loads(self.path.read_text())['packages'].get(name) if self.path.exists() else None\n def record_state(self, name, stamp, extras, *, environment=None, resolved_lock=None):\n  data=json.loads(self.path.read_text()); data['packages'][name]={'stamp':stamp,'extras':extras,'environment':str(environment),'resolved_lock':str(resolved_lock.resolve())}; self.path.write_text(json.dumps(data))\n")
+        (pm / "lock.py").write_text("import json\nclass Facts:\n def __init__(self, path, strict=False): self.path=path\n def get(self, name): return json.loads(self.path.read_text())['packages'].get(name) if self.path.exists() else None\n def record_state(self, name, stamp, extras, *, environment=None, resolved_lock=None):\n  data=json.loads(self.path.read_text()); fact={'stamp':stamp,'extras':extras}\n  if environment is not None: fact['environment']=str(environment.resolve())\n  if resolved_lock is not None: fact['resolved_lock']=str(resolved_lock.resolve())\n  data['packages'][name]=fact; self.path.write_text(json.dumps(data))\n")
         (pm / "client.py").write_text("from pm import note\ndef ensure_tools_for_sync(): note('tools')\n")
         (cli / "__init__.py").write_text("")
         (cli / "venv_sync.py").write_text("from pm import note\ndef publish_launchers(root): note('publish')\n")
@@ -641,23 +655,40 @@ class PlatformTests(unittest.TestCase):
         generation = self.stage / "pm-home/installs/g/environments/e/venv"; (generation.parent / "workspace").mkdir(parents=True)
         (generation.parent / "workspace/uv.lock").write_text("qualified lock")
         descriptor.write_text(json.dumps({"extras": ["all"], "generation": str(generation)}))
+        (state / "facts.json").unlink()
         linux.Platform.sync(self.platform)
         self.assertIsNone(json.loads(calls.read_text())[2]["seed"])
         calls.unlink()
-        state.mkdir(parents=True); (state / "old.lock").write_text("baseline lock")
+        (state / "old.lock").write_text("baseline lock")
         prior = {"stamp": "s", "extras": ["all"], "environment": "/env", "resolved_lock": str((state / "old.lock").resolve())}
         (state / "facts.json").write_text(json.dumps({"packages": {"venv": prior}}))
+        (self.source / "app.py").write_text("new runtime\n")
         linux.Platform.sync(self.platform)
         self.assertEqual(json.loads(calls.read_text())[2]["seed"], "qualified lock")
         self.assertFalse((state / "agent-interface-qualified-uv.lock").exists())
-        # Nothing rebuilt: the original facts come back, naming a lock that still exists.
+        # A source-only update must rebuild even though its dependency stamp was current.
         venv = json.loads((state / "facts.json").read_text())["packages"]["venv"]
-        self.assertEqual(venv, prior); self.assertTrue(Path(venv["resolved_lock"]).is_file())
-        # Rebuilt: PM's new facts stand.
-        (state / "rebuild").touch()
+        self.assertNotEqual(venv["environment"], prior["environment"])
+        self.assertEqual((Path(venv["environment"]).parent / "workspace/app.py").read_text(), "new runtime\n")
+        self.assertTrue(Path(venv["resolved_lock"]).is_file())
+        # The stamp also needs invalidation when older facts have no resolved lock.
+        calls.unlink()
+        without_lock = {key: value for key, value in prior.items() if key != "resolved_lock"}
+        (state / "facts.json").write_text(json.dumps({"packages": {"venv": without_lock}}))
         linux.Platform.sync(self.platform)
-        self.assertEqual(json.loads((state / "facts.json").read_text())["packages"]["venv"]["resolved_lock"], "new generation lock")
-        (state / "rebuild").unlink(); (state / "facts.json").write_text(json.dumps({"packages": {"venv": prior}}))
+        self.assertIsNone(json.loads(calls.read_text())[2]["seed"])
+        self.assertNotEqual(json.loads((state / "facts.json").read_text())["packages"]["venv"]["environment"], prior["environment"])
+        # If PM still reuses the old generation, refuse publication and restore its facts.
+        calls.unlink()
+        (state / "facts.json").write_text(json.dumps({"packages": {"venv": prior}}))
+        (state / "skip-rebuild").touch()
+        with self.assertRaises(subprocess.CalledProcessError) as failure:
+            linux.Platform.sync(self.platform)
+        self.assertIn("Native PM reused the prior dependency generation", failure.exception.stderr)
+        self.assertNotIn("publish", json.loads(calls.read_text()))
+        self.assertEqual(json.loads((state / "facts.json").read_text())["packages"]["venv"], prior)
+        self.assertFalse((state / "agent-interface-qualified-uv.lock").exists())
+        (state / "skip-rebuild").unlink()
         (generation.parent / "workspace/uv.lock").unlink()
         with self.assertRaisesRegex(RuntimeError, "qualified dependency lock is missing"): linux.Platform.sync(self.platform)
 
