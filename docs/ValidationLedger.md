@@ -1,5 +1,44 @@
 # Validation ledger
 
+## October 16 shared web UI controls
+
+WildBots now uses shared native controls and dialog lifecycle handling, with
+Base UI context menus and model popovers. Tailwind utilities use a `tw:` prefix
+and omit Preflight. Standard shadcn color pairs and dark variants resolve to the
+existing app theme, preserving the current typography, colors and layout.
+
+Implementation: GPT-6.1 Sol, commits `ea632ec`, `781023c` and `441c8b1`.
+Source fingerprint:
+`sha256:793365a08be33f535155048949993fdd284fe0c6b46afc4e62137ca3afe0f5eb`.
+All 65 application test files, 721 tests, passed on Node 26.10.0. The production
+build and whitespace checks passed, producing web build `cc1f6003882ddbfc`.
+The shadcn 4.22.0 CLI resolved the configuration and aliases. A stock card
+addition in a scratch copy preserved the custom CSS; a registry theme payload
+confirmed why generated palettes require adaptation, as documented in README.
+
+Agent browser acceptance covered 1440, 768 and 390 CSS-pixel widths, light/dark
+settings, keyboard menus and focus return, model search and popup bounds,
+unsaved assistant edits, artifact empty/filter states, update failure details,
+and terminal close/reopen state. Chromium emulated touch also verified held
+presses, scrolling cancellation and suppressed selection on release. Actual
+blocked and delayed model-picker chunk requests at desktop and phone widths
+left both textarea and voice controls uncovered, and the draft editable.
+The repeatable screenshot and chunk-failure checks are indexed in `.agents/tools`.
+
+Six screenshot pairs compare a saved main build at `a65b9bb` with this build,
+using matching synthetic household preferences. No live household data was
+captured. Total initial script plus modulepreload JavaScript, compressed per
+file with Node's `gzipSync`, grew from 176,833 to 217,855 bytes. Lazy loading the
+advanced picker and avoiding unnecessary class merging reduced the first
+implementation's overhead by about 15 KB. Terminal and VNC clients remain lazy.
+
+Claude Opus 5.5 independently reviewed the full diff and two follow-up rounds.
+Review fixes corrected future theme-token semantics, removed unused APIs and
+duplicate styling, tightened meaningful assertions, and replaced the model
+control's screen-level loading/error notice with inline placeholders. The final
+round found no actionable issues. No Windows or physical mobile-device testing
+was performed, and this work did not deploy the app.
+
 ## October 16 inline UI implementation
 
 Base commit `9896a9bee7194d9482bfc276f542117147effa43`. Implementation source state
