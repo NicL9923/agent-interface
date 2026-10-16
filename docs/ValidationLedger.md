@@ -37,8 +37,20 @@ the unsigned iOS Release archive and simulator build-for-testing. Its source is
 `sha256:89b3ced09fcaf1351adfd5bc00e07ace63f395992829a220cdb16fad60ba10d4`.
 The Python run passed 18 files and skipped the tmux-only file. The worker test
 file hit the real free-space guard on the internal temporary volume; its rerun
-uses the mounted development SSD. This is an environment failure, with its
-result still pending.
+on the mounted development SSD passed all 58 checks with one skip. Combined,
+all 19 applicable Python files passed, with the tmux-only file skipped.
+
+The signing command then encountered OpenSSL's separate certificate/key input
+requirement and macOS's rejection of an empty-password PKCS12. Its disposable
+import now uses a fixed placeholder inside the private directory, while the
+reusable certificate password still goes only over stdin. Actual import and
+partition setup passed. Signed version 1.0 build 1 from `ecf382b` archived and
+exported successfully, with all three bundle signatures, versions, profiles,
+App Group and production-push checks verified again in the IPA. Its SHA256 is
+`b4332b87ac818430a20a7775e21d3cb725b4cd52b9a6d2a41fbb0d1e8a89ebfd`.
+The temporary keychain, import and certificate files were removed. Current
+source is `sha256:2c706fc4abbab4fda716a493d8c90700e7c5281bfdd5a0ab316bc1fa5734e9eb`.
+Upload was initiated once; Apple acceptance and distribution are not yet confirmed.
 
 Both the iOS Release archive and simulator test targets compiled with Xcode
 27.1, build 27A9275. Before the Xcode update, 131 native unit checks completed
