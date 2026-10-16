@@ -92,6 +92,10 @@ async function archive(api, config, version, build) {
   // The short-lived keychain is protected by the enclosing 0700 directory and is deleted
   // below. No reusable certificate or account password goes into a process argument.
   const password = '';
+  // macOS rejects OpenSSL's empty-password PKCS12. This disposable transport file
+  // uses a fixed placeholder, not the reusable certificate password; the 0700
+  // directory and 0600 file provide access control until import deletes it.
+  const importPassword = 'temporary-import';
   const importFile = join(destination, 'distribution-import.p12');
   const certificateFile = join(destination, 'signing-certificate.pem');
   try {
@@ -100,7 +104,7 @@ async function archive(api, config, version, build) {
       // Export reads certificate and private key separately. Reusing stdin for both
       // consumes it once and loses the certificate on OpenSSL 3.
       writeFileSync(certificateFile, execFileSync('openssl', ['x509', '-outform', 'PEM'], { input: clear }), { mode: 0o600 });
-      const temporaryP12 = execFileSync('openssl', ['pkcs12', '-export', '-inkey', '/dev/stdin', '-in', certificateFile, '-passout', 'pass:'], { input: clear });
+      const temporaryP12 = execFileSync('openssl', ['pkcs12', '-export', '-legacy', '-inkey', '/dev/stdin', '-in', certificateFile, '-passout', `pass:${importPassword}`], { input: clear });
       try { writeFileSync(importFile, temporaryP12, { mode: 0o600 }); }
       finally { temporaryP12.fill(0); }
     } finally { clear.fill(0); }
@@ -109,7 +113,7 @@ async function archive(api, config, version, build) {
     run('security', ['set-keychain-settings', '-lut', '21600', keychain]);
     // create-keychain does not add it to the search list. Archive and export both need it.
     run('security', ['list-keychains', '-d', 'user', '-s', ...keychains(), keychain]);
-    run('security', ['import', importFile, '-k', keychain, '-P', '', '-T', '/usr/bin/codesign']);
+    run('security', ['import', importFile, '-k', keychain, '-P', importPassword, '-T', '/usr/bin/codesign']);
     unlinkSync(importFile);
     run('security', ['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', password, keychain]);
     const archivePath = join(destination, 'WildBots.xcarchive');
