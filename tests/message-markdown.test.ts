@@ -24,8 +24,8 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(text: string) {
-  await act(async () => root.render(createElement(MessageMarkdown, { text })));
+async function render(text: string, inlineUi = false) {
+  await act(async () => root.render(createElement(MessageMarkdown, { text, inlineUi })));
 }
 
 async function copy() {
@@ -35,6 +35,39 @@ async function copy() {
 }
 
 describe("assistant Markdown", () => {
+  it("renders only closed explicit UI fences when the caller enables assistant UI", async () => {
+    vi.stubGlobal("matchMedia", () => ({ addEventListener() {}, removeEventListener() {} }));
+    const payload = JSON.stringify({ version: 1, title: "Supply planner", html: "<button>Compare</button>" });
+    const fence = "```wildbots-html\n" + payload + "\n```";
+    await render(fence);
+    expect(container.querySelector("iframe")).toBeNull();
+    await render("```wildbots-html\n" + payload, true);
+    expect(container.querySelector("iframe")).toBeNull();
+    await render("````text\n" + fence + "\n````", true);
+    expect(container.querySelector("iframe")).toBeNull();
+    await render(fence, true);
+    const frame = container.querySelector("iframe")!;
+    expect(frame.getAttribute("title")).toBe("Supply planner");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.src).toContain("/inline-ui");
+    const message = (data: unknown, source: MessageEventSource | null) => act(async () => window.dispatchEvent(new MessageEvent("message", { data, source })));
+    await message({ type: "wildbots-size", height: 900 }, window);
+    expect(frame.style.height).toBe("240px");
+    await message({ type: "wildbots-size", height: 99999 }, frame.contentWindow);
+    expect(frame.style.height).toBe("1600px");
+    await message({ type: "wildbots-size", height: NaN }, frame.contentWindow);
+    expect(frame.style.height).toBe("1600px");
+    await message({ type: "wildbots-size", height: 1 }, frame.contentWindow);
+    expect(frame.style.height).toBe("80px");
+    await message({ type: "wildbots-loaded" }, frame.contentWindow);
+    expect(container.textContent).not.toContain("Loading interactive view");
+    await render(fence + "\n\nMore explanation.", true);
+    expect(container.querySelector("iframe")).toBe(frame);
+    await act(async () => container.querySelector("button")!.click());
+    expect(container.querySelector("iframe")).not.toBe(frame);
+    await render("```wildbots-html\n{}\n```", true);
+    expect(container.querySelector("iframe")).toBeNull();
+  });
   it("renders semantic headings, emphasis, lists, links, and GFM tables", async () => {
     await render(
       "## Plan\n\nUse **care** and *patience*.\n\n1. Read the `config`.\n2. Follow [the docs](https://example.test/docs).\n\n| Step | State |\n| --- | --- |\n| Review | Done |",

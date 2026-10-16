@@ -108,6 +108,62 @@ and item IDs against that message before saving state. Calendar proposals requir
 review. Web opens an editable Google Calendar draft or downloads an ICS file;
 iOS opens the system event editor, where you choose whether to save.
 
+## Inline views
+
+Web and iOS conversations render an assistant's `wildbots-html` fence as an
+interactive view. Ordinary `html` fences, user messages, tool output, invalid
+documents and unfinished fences stay readable code. The JSON has exactly three
+fields and a 100,000 UTF-16 code unit limit, including JSON syntax:
+
+````text
+```wildbots-html
+{"version":1,"title":"Supply calculator","html":"<!doctype html><html><body><label>Bales <input id='bales' type='number' min='0' value='12'></label><p id='days'>24 days</p><script>bales.oninput=()=>days.textContent=(Number(bales.value)*2)+' days'</script></body></html>"}
+```
+````
+
+Use self-contained HTML, inline CSS, vanilla JavaScript, SVG and data images.
+External libraries, fonts and images cannot load. A view has no app API access,
+cookies, local storage or action bridge to Hermes. Controls can calculate,
+filter, expand or draw within the view. They cannot send messages, approve work,
+or save changes. Use the existing checklist, itinerary and calendar cards when
+those saved actions are needed. Keep a short text explanation outside the view
+for notifications and other clients.
+
+The host supplies `--background`, `--foreground`, `--muted-foreground`, `--card`,
+`--border`, `--primary`, `--primary-foreground` and `--radius`. Use fluid widths,
+accessible labels and content-driven height. The frame grows from 80 to 1,600
+pixels and scrolls for longer content. Avoid `100vh` in generated content.
+Reset view reruns the document. View source exposes the original HTML.
+
+The web uses an opaque sandbox inside a static relay at `/inline-ui`. The relay
+allows only `about:` child frames, which also blocks the generated frame from
+navigating to an external page. The app keeps its existing script policy. iOS
+uses a nonpersistent WebKit view with the same nested sandbox and a navigation
+delegate that cancels external loads. The only host messages report view size,
+loading and theme. Generated views never receive application credentials.
+
+This isolates the application account; it is not a complete browser network
+sandbox. Browser channels such as WebRTC are outside `connect-src`, and support
+for CSP's separate WebRTC restriction varies. DNS hints can also sit outside
+ordinary resource loading. The shell turns off DNS prefetch and the agent
+instructions prohibit those APIs, but those measures are not a network security
+guarantee. See the [CSP WebRTC directive](https://www.w3.org/TR/CSP/#directive-webrtc)
+and its [browser implementation issue](https://bugzilla.mozilla.org/show_bug.cgi?id=1783489).
+Do not put credentials in a generated view.
+
+The Hermes add-on supplies the format instructions through
+`ephemeral_system_prompt` while an unresolved app-submitted turn invokes the model. It keeps
+existing ephemeral instructions and restores them afterward, including on
+failure. User text, durable receipts, profile instructions and skill selections
+stay as saved. No separate skill installation or assistant setting is required.
+The add-on matches the active durable app receipt and skips background or
+attributed bot messages. Standalone scheduled jobs
+need the format in their routine prompt if they should produce a view.
+
+Deploy the app and updated Hermes add-on together through the usual qualification
+workflow. The shared format instructions and shell are included in the
+integration digest, so an old qualification receipt cannot qualify this release.
+
 ## Routine recipes and trials
 
 Morning brief, weekly meal plan and VPS health digest presets fill the existing

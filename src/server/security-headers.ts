@@ -13,7 +13,7 @@ export function contentSecurityPolicy(origin: string) {
     "media-src 'self' blob:",
     // Older Safari does not match WebSockets with 'self'.
     `connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host} https://accounts.google.com/gsi/`,
-    "frame-src https://accounts.google.com/gsi/",
+    "frame-src 'self' https://accounts.google.com/gsi/",
     "worker-src 'self'",
     "manifest-src 'self'",
     "object-src 'none'",

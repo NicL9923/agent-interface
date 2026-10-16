@@ -26,24 +26,32 @@ struct ReplyContentPart: Identifiable {
   var id: Int
   var markdown: String?
   var cards: [ReplyCard]?
+  var inline: InlineDocument?
 }
 enum ReplyCards {
   static func spokenText(_ text: String) -> String {
     parse(text).map { part in
       if let prose = part.markdown { return prose }
+      if let inline = part.inline { return inline.title }
       return (part.cards ?? []).map { card in
         ([card.title] + (card.items ?? []).map { $0.text ?? $0.title ?? "" }).joined(separator: ". ")
       }.joined(separator: "\n")
     }.joined(separator: "\n")
   }
   static func parse(_ text: String) -> [ReplyContentPart] {
-    guard text.utf8.count <= 200_000,
-      let pattern = try? NSRegularExpression(pattern: "(?m)^```agent-ui[ \\t]*\\r?\\n([\\s\\S]*?)^```[ \\t]*(?:\\r?\\n|$)") else { return [.init(id: 0, markdown: text)] }
-    let range = NSRange(text.startIndex..., in: text)
+    guard text.utf16.count <= 200_000 else { return [.init(id: 0, markdown: text)] }
     var parts: [ReplyContentPart] = []
     var cursor = text.startIndex
-    for match in pattern.matches(in: text, range: range) {
-      guard let whole = Range(match.range, in: text), let payload = Range(match.range(at: 1), in: text),
+    for block in fencedBlocks(text) {
+      let whole = block.whole, payload = block.payload
+      if block.language == "wildbots-html" {
+        guard let doc = InlineDocument.parse(String(text[payload])) else { continue }
+        if cursor < whole.lowerBound { parts.append(.init(id: parts.count, markdown: String(text[cursor..<whole.lowerBound]))) }
+        parts.append(.init(id: parts.count, inline: doc)); cursor = whole.upperBound
+        continue
+      }
+      guard block.language == "agent-ui" else { continue }
+      guard
         let data = String(text[payload]).data(using: .utf8), strictJSON(data),
         let doc = try? JSONDecoder().decode(ReplyCardDocument.self, from: data), valid(doc) else { continue }
       if cursor < whole.lowerBound { parts.append(.init(id: parts.count, markdown: String(text[cursor..<whole.lowerBound]))) }
@@ -53,6 +61,32 @@ enum ReplyCards {
     let cards = parts.flatMap { $0.cards ?? [] }
     guard cards.count <= 8, Set(cards.map(\.id)).count == cards.count else { return [.init(id: 0, markdown: text)] }
     return parts
+  }
+  struct Fence { var whole: Range<String.Index>; var payload: Range<String.Index>; var language: String }
+  // Scan all code fences so an example nested inside a longer fence stays code.
+  static func fencedBlocks(_ text: String) -> [Fence] {
+    let opening = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)$")
+    var result: [Fence] = []
+    var active: (start: String.Index, payload: String.Index, language: String, closing: NSRegularExpression)?
+    var cursor = text.startIndex
+    while cursor < text.endIndex {
+      let end = text[cursor...].firstIndex(of: "\n") ?? text.endIndex
+      let next = end < text.endIndex ? text.index(after: end) : end
+      let line = String(text[cursor..<end]).trimmingCharacters(in: .newlines)
+      let range = NSRange(line.startIndex..., in: line)
+      if let current = active {
+        if current.closing.firstMatch(in: line, range: range) != nil {
+          result.append(Fence(whole: current.start..<next, payload: current.payload..<cursor, language: current.language))
+          active = nil
+        }
+      } else if let match = opening.firstMatch(in: line, range: range), let delimiterRange = Range(match.range(at: 1), in: line), let languageRange = Range(match.range(at: 2), in: line) {
+        let delimiter = String(line[delimiterRange])
+        let pattern = "^ {0,3}" + String(delimiter.first!) + "{" + String(delimiter.count) + ",}[ \t]*$"
+        active = (cursor, next, String(line[languageRange]).trimmingCharacters(in: .whitespaces), try! NSRegularExpression(pattern: pattern))
+      }
+      cursor = next
+    }
+    return result
   }
   static func strictJSON(_ data: Data) -> Bool {
     guard data.count <= 100_000, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], Set(object.keys) == ["version", "cards"], let cards = object["cards"] as? [[String: Any]] else { return false }
@@ -101,6 +135,7 @@ struct ReplyContentView: View {
     if message.role == "assistant" && !message.isInternalActivity {
       ForEach(ReplyCards.parse(message.text)) { part in
         if let markdown = part.markdown { MarkdownView(text: markdown) }
+        if let inline = part.inline { InlineUiView(document: inline) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
       }
     } else { MarkdownView(text: message.text) }
