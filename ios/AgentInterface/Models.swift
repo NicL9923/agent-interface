@@ -126,6 +126,12 @@ struct Bot: Codable, Identifiable {
   var enabledSkills: [String]?
   var sessionId: String?
   var activity: ActivityState
+  var lastMessage: LastMessage?
+}
+/// The newest message in an assistant's canonical conversation, for list and widget previews.
+struct LastMessage: Codable, Equatable {
+  var text: String
+  var at: String?
 }
 struct BotInput: Encodable {
   var confirmModel = false
@@ -515,6 +521,12 @@ struct Bootstrap: Codable {
   var capabilities: [String: Capability]
   var connection: RuntimeStatus
   var csrfToken: String?
+  /// Present when the host publishes the latest distributed iOS build.
+  var nativeApp: NativeAppInfo?
+}
+struct NativeAppInfo: Codable, Equatable {
+  var latestBuild: Int
+  var updateUrl: String
 }
 struct CapabilityItem: Codable, Identifiable {
   var id: String

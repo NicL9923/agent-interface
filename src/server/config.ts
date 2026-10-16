@@ -26,6 +26,8 @@ export interface Config {
     python: string;
     adminEmails: string[];
   };
+  /** The newest distributed iOS build and where to get it, for the app's update banner. */
+  nativeApp?: { latestBuild: number; updateUrl: string };
   apns?: {
     teamId: string;
     keyId: string;
@@ -145,6 +147,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     config.apns = { teamId: env.APNS_TEAM_ID!, keyId: env.APNS_KEY_ID!, topic: env.APNS_TOPIC!,
       privateKeyFile: env.APNS_PRIVATE_KEY_FILE!, environment: env.APNS_ENVIRONMENT as "sandbox" | "production" };
   } else if (env.APNS_ENVIRONMENT) throw new Error("APNs signing settings are required with APNS_ENVIRONMENT");
+  if (env.IOS_APP_LATEST_BUILD || env.IOS_APP_UPDATE_URL) {
+    if (!env.IOS_APP_LATEST_BUILD || !env.IOS_APP_UPDATE_URL)
+      throw new Error("IOS_APP_LATEST_BUILD and IOS_APP_UPDATE_URL must be supplied together");
+    if (!/^[1-9][0-9]{0,8}$/.test(env.IOS_APP_LATEST_BUILD))
+      throw new Error("IOS_APP_LATEST_BUILD must be the whole-number CFBundleVersion of the latest distributed build");
+    let url: URL | undefined;
+    try { url = new URL(env.IOS_APP_UPDATE_URL); } catch { /* Reported below. */ }
+    if (url?.protocol !== "https:") throw new Error("IOS_APP_UPDATE_URL must be an HTTPS link, such as a TestFlight invitation");
+    config.nativeApp = { latestBuild: Number(env.IOS_APP_LATEST_BUILD), updateUrl: url.href };
+  }
   return config;
 }
 

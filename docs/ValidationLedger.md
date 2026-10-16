@@ -1,5 +1,102 @@
 # Validation ledger
 
+## October 16 app release 6e6ea92
+
+PR #136 merged at `6e6ea924c8d3049198ebf2f60f9a16bd3cf10716`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `cf33a3930eb8526d`, from the archive with SHA256
+`20290fe80b3a51c26c84cdff2f1e603d085196c7dafc81c6b2717236c39ebb7c`. The host build reproduced the local web build.
+
+After the Patch turn finished, a reversible native drain lasting at most five
+seconds let Hermes recount active work from a stale 1 to 0. The gateway kept its
+process ID and normal admission was restored; no work was cancelled and no
+status counters were edited. Production Apple push and build 1 update settings were applied
+atomically with a private backup of the prior environment file.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-6e6ea924-20261016T161115Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+Authenticated native API reads then verified both allowed household accounts
+using temporary test sessions. These reads ran from the activated release
+immediately after the deployment tool verified it was current. Each received the
+distributed build 1 TestFlight link, production push configuration and available
+Live Activity state. Both test
+sessions were removed. The [API acceptance receipt](evidence/2026-10-16-system-surfaces-acceptance.json)
+records these checks. This does not establish interactive phone sign-in or real
+push delivery. The Home/Lock Screen widget and Live Activity phone checks remain
+as listed below.
+
+## October 16 widgets, Live Activity, updates and TestFlight
+
+PR #136 merged as `6e6ea924c8d3049198ebf2f60f9a16bd3cf10716`. It adds Home
+and Lock Screen widgets, one aggregate Live Activity with Dynamic Island views,
+server APNs updates, and persistent web and native update notices. Widgets and
+activities keep account data separate and label stale content. Web update checks
+run on foreground, reconnect and every 30 minutes. Native updates link to the
+exact distributed household beta.
+
+The final implementation source fingerprint, excluding this ledger, was
+`sha256:2c706fc4abbab4fda716a493d8c90700e7c5281bfdd5a0ab316bc1fa5734e9eb`.
+Local checks ran on integrated candidate
+`sha256:89b3ced09fcaf1351adfd5bc00e07ace63f395992829a220cdb16fad60ba10d4`
+before the signing-tool follow-up. All 730 web/server tests passed on Node 24 and
+26, with TypeScript and production build checks. The web build is
+`cf33a3930eb8526d`. All 19 applicable Python test files passed; the tmux-only file
+was skipped. CI repeated Node 24/26, build and Python checks on final head
+`3620b0a`, whose implementation fingerprint matches the final source above. The worker file initially hit the
+internal volume's real free-space guard; all 58 checks passed with one skip when
+rerun using the mounted development SSD for temporary data.
+
+The full ad-hoc signed simulator run on final head `3620b0a` used Xcode 27.1
+(27A9275), iOS 27.0 and dedicated simulator `6198D64C-5D50-498B-A09F-8F3F13613247`. It executed 162 tests: 159
+passed, three intentional skips, zero failures. This includes both account-switch
+regressions, both update-banner UI flows and uncertain-install recovery. The result
+bundle is `.private/ios-test-20261016T151638Z-86054.xcresult`. After all suites
+finished, Xcode waited on an optional `simctl diagnose` child. Stopping only that
+collector let the command finalize the bundle and exit 0 with TEST SUCCEEDED.
+No test runner was interrupted. The unsigned Release archive and simulator test
+build also completed. All four PR checks were green before merge.
+
+Grok 4.7 independently reviewed the complete implementation. Earlier findings
+prompted fixes for device/session-bound startup grace, account isolation, private
+activity detail, bounded APNs payloads, isolated stream timeouts, late token
+cleanup, first-visit browser update control, exact household distribution and
+signing-secret handling. The final integration review returned no findings.
+Rendered widgets, Dynamic Island and update-banner collages were inspected in
+both themes. They establish fixture appearance, not physical-device behavior.
+
+Signed version 1.0 build 1 was archived from `ecf382b8f87debddd01f44b1cf6dc28b88874895`;
+its app and extension source matches the merged release. All three bundle
+signatures, versions, profiles, App Group and production-push entitlements were
+checked again in the exported IPA. Its SHA256 is
+`b4332b87ac818430a20a7775e21d3cb725b4cd52b9a6d2a41fbb0d1e8a89ebfd`.
+Reusable certificate credentials went only through stdin; disposable signing
+files and the temporary keychain were removed. Apple accepted one upload at
+15:05 UTC, build UUID `61956b99-84a3-4295-8cb0-447505c2abf2`, and processed it
+as VALID with no non-exempt encryption. At 15:51 UTC Apple confirmed it was
+IN_BETA_TESTING in the explicit-build internal Household group with exactly the
+two configured testers. No public App Store submission was made. The app record
+is **WildBots Household**, ID `6823644380`, bundle `dev.agentinterface.ios`.
+Its [TestFlight link](https://testflight.apple.com/v1/app/6823644380) was checked
+against Apple's landing page and association file. The beta expires January 14,
+2027. [Distribution receipt](evidence/2026-10-16-household-testflight.json).
+
+Fresh disposable Hermes qualification for merge `6e6ea924c8d3` passed against
+production revision
+`acc3cada0da86c81efc8aa6c5a291989549ca900` and the existing approved repair.
+Integration digest: `aa8eb71d4fbc68d230f70fe3fee20dc14544faa736b9273bc8eba164a3ffed7d`.
+The isolated probe ran the private Google-session authentication regressions
+against fixtures, then removed its disposable files. [Sanitized receipts](evidence/2026-10-16-widgets-qualification/manifest.json).
+The server cutover subsequently completed as recorded above. Production Apple
+push configuration and the distributed build 1 update settings are active.
+Physical-phone installation, widget placement and taps, locked-device preview
+privacy, and real APNs Live Activity delivery remain acceptance work.
+
 ## October 16 shared web UI controls
 
 WildBots now uses shared native controls and dialog lifecycle handling, with

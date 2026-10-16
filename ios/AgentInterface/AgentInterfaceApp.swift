@@ -15,6 +15,7 @@ import UserNotifications
         )
         .task {
           NotificationController.shared.store = store
+          LiveActivityController.shared.store = store
           #if DEBUG
             if await DebugFixtures.configure(store) { return }
           #endif
@@ -22,13 +23,32 @@ import UserNotifications
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
-            Task { await store.resume() }
+            Task {
+              await store.resume()
+              await LiveActivityController.shared.foreground()
+            }
           } else {
             store.suspend()
+            LiveActivityController.shared.background()
           }
         }
         .onChange(of: store.bootstrap?.user.id) { _, id in
           if id != nil { Task { await NotificationController.shared.synchronize() } }
+        }
+        // Sign-out, another account or another server: the old account's activity ends, and
+        // the new one starts from its own state.
+        .onChange(of: store.scope) { old, new in
+          Task {
+            if old != nil { await LiveActivityController.shared.endAll(unregister: false) }
+            if new != nil { await LiveActivityController.shared.foreground() }
+          }
+        }
+        // Widget and Live Activity taps. The sign-in callback never arrives here: the
+        // authentication session receives it directly, and `DeepLink` ignores it anyway.
+        .onOpenURL { url in
+          guard let path = DeepLink.relativePath(for: url) else { return }
+          NotificationController.shared.pendingURL = path
+          Task { await NotificationController.shared.openPendingConversation() }
         }
     }
   }

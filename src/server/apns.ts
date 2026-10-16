@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createPrivateKey, sign } from "node:crypto";
 import { connect, type ClientHttp2Session } from "node:http2";
 import type { Config } from "./config.js";
+import type { LiveActivitySender } from "./live-activity.js";
 
 export interface NativeDevice { deviceId: string; token: string; environment: "sandbox" | "production" }
 export type ApnsSender = (device: NativeDevice, payload: string) => Promise<unknown>;
@@ -26,7 +27,7 @@ export function apnsPayload(payload: string) {
   return JSON.stringify({ aps: { alert: { title: fit(value.title, 160), body: fit(value.body, 1000) }, sound: "default" }, url, tag: fit(value.tag, 160) });
 }
 
-export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void }) | undefined {
+export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender }) | undefined {
   if (!config) return undefined;
   const key = createPrivateKey(readFileSync(config.privateKeyFile));
   if (key.asymmetricKeyType !== "ec" || key.asymmetricKeyDetails?.namedCurve !== "prime256v1")
@@ -52,7 +53,7 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
     return new Promise((resolve, reject) => {
       const request = current.request(headers);
       let statusCode = 0, responseBody = "";
-      const timeout = setTimeout(() => { request.close(); current.destroy(); reject(new Error("APNs delivery timed out")); }, 15000);
+      const timeout = setTimeout(() => { request.close(); reject(new Error("APNs delivery timed out")); }, 15000);
       request.on("response", response => { statusCode = Number(response[":status"]); });
       request.setEncoding("utf8");
       request.on("data", chunk => { if (responseBody.length < 8192) responseBody += chunk; });
@@ -72,5 +73,15 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
       "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsPayload(payload));
     if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected notification (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
   };
-  return Object.assign(send, { close() { session?.destroy(); } });
+  // Live Activities take their own topic suffix and push type; the payload is built by LiveActivities.
+  const liveActivity: LiveActivitySender = async (target, payload, priority) => {
+    if (target.environment !== config.environment) throw new Error("APNs device environment does not match this host");
+    const body = JSON.stringify(payload);
+    if (Buffer.byteLength(body) > 4096) throw Object.assign(new Error("Live Activity payload exceeds APNs' 4096-byte limit"), { statusCode: 413 });
+    const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${target.token}`, authorization: `bearer ${providerToken()}`,
+      "apns-topic": `${config.topic}.push-type.liveactivity`, "apns-push-type": "liveactivity", "apns-priority": String(priority),
+      "apns-expiration": String(Math.floor(Date.now() / 1000) + 900), "content-type": "application/json" }, body);
+    if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected Live Activity update (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
+  };
+  return Object.assign(send, { close() { session?.destroy(); }, liveActivity });
 }

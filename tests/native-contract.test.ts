@@ -234,6 +234,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
   vi.useFakeTimers({ toFake: ["Date"], now: new Date(now) });
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
   config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "dev.agentinterface.ios", privateKeyFile: "unused-by-contract-test", environment: "sandbox" };
+  config.nativeApp = { latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT" };
   const { app, store } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades });
   const fixtures = new Map<string, { request: string; response: unknown }>();
   try {
@@ -335,6 +336,11 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
 
     await record("upgrade", "GET", "/api/hermes/upgrade");
     await record("push-config", "GET", "/api/native/push/config");
+    // The aggregate shows a run this person sent to and an assistant they follow, waiting first.
+    store.participate("run-dinner", "local-one");
+    store.savePreferences("local-one", { ...preferences, followBots: ["garden"] });
+    await record("live-activity-register", "PUT", "/api/native/live-activity", { deviceId: "8F0C2F6E-1D7A-4D35-9B53-3C1E6E2F9A10", token: "ab".repeat(32), botIds: ["household"] });
+    await record("live-activity", "GET", "/api/native/live-activity");
   } finally {
     await app.close();
   }

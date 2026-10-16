@@ -271,6 +271,8 @@ export interface Bootstrap {
   connection: RuntimeStatus;
   csrfToken: string | null;
   vapidPublicKey?: string;
+  /** The newest distributed iOS build, when the host advertises one. */
+  nativeApp?: { latestBuild: number; updateUrl: string };
 }
 export interface Submission {
   reviewedInterruption?: boolean;

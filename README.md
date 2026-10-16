@@ -146,6 +146,13 @@ Google's external configuration remains a separate step. Production requires HTT
 requires the three `VAPID_*` settings in `.env.example`. Accounts, credentials,
 runtime databases and private operating notes stay outside this repository.
 
+After a new release, the web app shows **Update available** at the top of home, and
+above the conversation on phones, until you choose **Refresh**. An open tab or installed
+app checks for a new release every 30 minutes and whenever it returns to the foreground.
+Drafts are saved before it reloads. The iOS app shows the same notice with an **Update**
+link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
+[native API contract](docs/native-api.md#app-updates).
+
 During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
 online or into view. Manual reconnect checks immediately. The transport bounds

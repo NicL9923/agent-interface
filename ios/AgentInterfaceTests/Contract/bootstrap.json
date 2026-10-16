@@ -176,6 +176,10 @@
       "retryAt": "2026-10-01T12:05:00.000Z",
       "lastConnectedAt": "2026-10-01T11:58:00.000Z"
     },
-    "csrfToken": null
+    "csrfToken": null,
+    "nativeApp": {
+      "latestBuild": 12,
+      "updateUrl": "https://testflight.apple.com/join/CONTRACT"
+    }
   }
 }

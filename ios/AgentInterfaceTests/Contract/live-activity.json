@@ -1,0 +1,31 @@
+{
+  "request": "GET /api/native/live-activity",
+  "response": {
+    "available": true,
+    "state": {
+      "title": "Garden needs you",
+      "activeCount": 2,
+      "attentionCount": 1,
+      "updatedAt": 1790856000,
+      "rows": [
+        {
+          "botId": "garden",
+          "name": "Garden",
+          "phase": "waiting",
+          "status": "Needs approval",
+          "since": 1790856000,
+          "color": "#FF9800"
+        },
+        {
+          "botId": "household",
+          "name": "Household",
+          "phase": "working",
+          "status": "Working",
+          "detail": "Comparing recipes",
+          "since": 1790856000,
+          "color": "#00BCA6"
+        }
+      ]
+    }
+  }
+}

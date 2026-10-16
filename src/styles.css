@@ -744,6 +744,26 @@ a {
   padding: 5px 9px;
   flex-shrink: 0;
 }
+/* A newer build is waiting. It stays until applied, so nobody keeps running stale code unknowingly. */
+.app-update {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin: 0 0 14px;
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.app-update > svg { flex-shrink: 0; color: var(--accent); }
+.app-update span { flex: 1; min-width: 0; }
+.app-update strong { display: block; }
+.app-update button { flex-shrink: 0; padding: 7px 14px; font-size: 13px; }
+.conversation-panel > .app-update { margin: 10px 12px; }
 .notice.error {
   color: var(--danger);
   background: var(--raised);
