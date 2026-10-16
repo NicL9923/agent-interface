@@ -58,7 +58,9 @@ describe("screens that fail to load", () => {
       ? { ...bootstrap, preferences: { ...bootstrap.preferences, presentation: "advanced" } } : null) as T);
     await act(async () => root.render(createElement(App)));
     await loaded();
-    expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
+    const unavailable = container.querySelector<HTMLButtonElement>('[aria-label="Model controls unavailable. Reload to try again."]');
+    expect(unavailable?.disabled).toBe(true);
+    expect(unavailable?.closest(".composer-tools")).not.toBeNull();
     const input = container.querySelector<HTMLTextAreaElement>(".composer textarea");
     expect(input).not.toBeNull();
     expect(input?.disabled).toBe(false);

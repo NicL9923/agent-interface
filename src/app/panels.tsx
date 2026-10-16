@@ -20,12 +20,12 @@ export function useOnceActive(active: boolean) {
 }
 
 // A screen that cannot load, offline or because a release replaced its file, must not take the whole app down.
-class LoadFailure extends Component<{ children: ReactNode }, { failed: boolean }> {
+class LoadFailure extends Component<{ children: ReactNode; fallback?: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   render() {
     return this.state.failed
-      ? <div className="notice error panel-failure" role="alert">
+      ? this.props.fallback ?? <div className="notice error panel-failure" role="alert">
         <span>This screen could not load. Check your connection, then reload to try again.</span>
         <button type="button" onClick={() => location.reload()}>Reload</button>
       </div>
@@ -34,8 +34,10 @@ class LoadFailure extends Component<{ children: ReactNode }, { failed: boolean }
 }
 
 /** Shows a quiet status while a lazy screen loads, and a reload notice if it cannot. */
-export function Loading({ children }: { children: ReactNode }) {
-  return <LoadFailure>
-    <Suspense fallback={<p className="panel-loading" role="status">Opening…</p>}>{children}</Suspense>
+export function Loading({ children, loadingFallback = <p className="panel-loading" role="status">Opening…</p>, errorFallback }: {
+  children: ReactNode; loadingFallback?: ReactNode; errorFallback?: ReactNode;
+}) {
+  return <LoadFailure fallback={errorFallback}>
+    <Suspense fallback={loadingFallback}>{children}</Suspense>
   </LoadFailure>;
 }

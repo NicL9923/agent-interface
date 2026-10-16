@@ -1,5 +1,8 @@
 # Repository tools
 
+- `capture-ui-comparison.js` is a Playwright CLI run-code function that captures six desktop/phone states from the synthetic loopback preview. A wrapper can pass `{ outputDir, prefix }` as its second argument; defaults write to ignored `.private/ui-comparison`.
+- `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that text and voice controls remain uncovered at desktop and phone widths.
+
 - `check-inline-ui-browser.js` is an expression to evaluate in a loopback WildBots preview. It checks the real sandbox's DOM, cookie, storage and fetch isolation, then attempts a navigation. Browser diagnostics must show `frame-src about:` blocking that navigation with no outbound request.
 - `PREVIEW_INLINE_UI=1 node .agents/tools/preview-app.mjs` shows a local hay supply calculator for inline rendering, resizing, theme, keyboard and reset checks. It uses synthetic data.
 
