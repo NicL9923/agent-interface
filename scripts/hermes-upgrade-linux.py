@@ -269,24 +269,34 @@ with contextlib.redirect_stdout(sys.stderr):
     try:
         ensure_tools_for_sync()
         seed=None
-        if sys.argv[3]:
+        qualified=sys.argv[4]=='1'
+        prior={}
+        if qualified or sys.argv[3]:
             from pm.environments import install_state_dir, runtime_facts_path
             from pm.lock import Facts
             facts=Facts(runtime_facts_path(root),strict=True); prior=facts.get('venv') or {}
             # Only where PM itself would seed from the prior lock; otherwise it uses the
             # checkout's lock, as qualification did. The cold backup holds the original facts.
-            if prior.get('resolved_lock'):
+            if sys.argv[3] and prior.get('resolved_lock'):
                 seed=install_state_dir(root)/'agent-interface-qualified-uv.lock'
                 seed.write_bytes(Path(sys.argv[3]).read_bytes()); seed.chmod(0o600)
-                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=seed)
-        pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
-        if seed is not None:
-            # A sync with nothing to rebuild leaves the facts naming the temporary seed.
-            facts=Facts(runtime_facts_path(root),strict=True)
-            recorded=(facts.get('venv') or {}).get('resolved_lock')
-            if recorded and Path(recorded).resolve()==seed.resolve():
-                facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=Path(prior['resolved_lock']))
-            seed.unlink()
+            if prior:
+                # Native PM's dependency stamp omits core source. Invalidate it so
+                # source-only updates build a fresh editable snapshot as qualification did.
+                facts.record_state('venv','agent-interface-qualified-rebuild' if qualified else prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=seed or (Path(prior['resolved_lock']) if prior.get('resolved_lock') else None))
+        try:
+            pm.sync_venv(json.loads(sys.argv[2]),explicit=True,project_root=root,evict_incompatible_plugins=False)
+            if qualified:
+                selected=(Facts(runtime_facts_path(root),strict=True).get('venv') or {}).get('environment')
+                if not selected or prior.get('environment') and Path(selected).resolve()==Path(prior['environment']).resolve():
+                    raise RuntimeError('Native PM reused the prior dependency generation instead of rebuilding qualified source')
+        finally:
+            if qualified or seed is not None:
+                facts=Facts(runtime_facts_path(root),strict=True)
+                current=facts.get('venv') or {}
+                if prior and current.get('environment')==prior.get('environment'):
+                    facts.record_state('venv',prior['stamp'],prior['extras'],environment=Path(prior['environment']) if prior.get('environment') else None,resolved_lock=Path(prior['resolved_lock']) if prior.get('resolved_lock') else None)
+                if seed is not None: seed.unlink(missing_ok=True)
         publish_launchers(root)
     finally: lock.release()
 print(json.dumps({'ok':True,'state':'synced'}))
@@ -301,7 +311,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # lock instead, uv keeps every version it holds.
         seed = Path(qualified["generation"]).parent / "workspace/uv.lock" if qualified.get("generation") else None
         if seed is not None and not seed.is_file(): raise RuntimeError("The qualified dependency lock is missing")
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or "")], capture=True))
+        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or ""), "1" if descriptor else "0"], capture=True))
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
