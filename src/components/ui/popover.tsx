@@ -4,7 +4,6 @@ import { useOverlayContainer } from "../../lib/overlay-container";
 
 export const Popover = Primitive.Root;
 export const PopoverTrigger = Primitive.Trigger;
-export const PopoverClose = Primitive.Close;
 
 type ContentProps = ComponentProps<typeof Primitive.Popup> & Pick<Primitive.Positioner.Props, "align" | "side" | "sideOffset"> & {
   container?: ComponentProps<typeof Primitive.Portal>["container"];

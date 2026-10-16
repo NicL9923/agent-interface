@@ -4,5 +4,3 @@ import type { ComponentProps } from "react";
 export function NativeSelect(props: ComponentProps<"select">) {
   return <select data-slot="native-select" {...props} />;
 }
-
-export { NativeSelect as Select };

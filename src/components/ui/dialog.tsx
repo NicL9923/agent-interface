@@ -7,9 +7,7 @@ export type DialogProps = Omit<ComponentProps<"dialog">, "open"> & {
   /** Defaults to open for conditionally mounted sheets. False keeps contents mounted. */
   open?: boolean;
   initialFocus?: DialogFocusTarget;
-  returnFocus?: DialogFocusTarget;
   fallbackFocus?: DialogFocusTarget;
-  onOpenChange?(open: boolean): void;
 };
 
 function target(value: DialogFocusTarget | undefined, scope: ParentNode): HTMLElement | null {
@@ -33,23 +31,23 @@ function focus(element: HTMLElement | null) {
 
 /** Native top-layer dialog, with one lifecycle for mounted and persistent sheets. */
 export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog({
-  open = true, initialFocus, returnFocus, fallbackFocus, onOpenChange, onClose, children, ...props
+  open = true, initialFocus, fallbackFocus, onClose, children, ...props
 }, ref) {
   const [element, setElement] = useState<HTMLDialogElement | null>(null);
   const previous = useRef<HTMLElement | null>(null);
-  const options = useRef({ initialFocus, returnFocus, fallbackFocus });
-  options.current = { initialFocus, returnFocus, fallbackFocus };
+  const options = useRef({ initialFocus, fallbackFocus });
+  options.current = { initialFocus, fallbackFocus };
   useImperativeHandle(ref, () => element!, [element]);
 
   function restoreFocus(dialog: HTMLDialogElement) {
     const document = dialog.ownerDocument;
     const remaining = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]")).filter(item => item !== dialog).at(-1);
-    const requested = target(options.current.returnFocus, document) ?? previous.current;
+    const requested = previous.current;
     const allowed = usable(requested) && (!remaining || remaining.contains(requested));
     const fallback = target(options.current.fallbackFocus, remaining ?? document);
     if (allowed) focus(requested);
     else if (usable(fallback) && (!remaining || remaining.contains(fallback))) focus(fallback);
-    else focus(remaining ?? document.querySelector<HTMLElement>("[data-dialog-focus-fallback], main, [role='main']"));
+    else focus(remaining ?? document.querySelector<HTMLElement>("main, [role='main']"));
     previous.current = null;
   }
 
@@ -78,7 +76,6 @@ export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog
       // A guarded editor may reopen after a noncancelable native dismissal.
       if (event.currentTarget.open) return;
       if (previous.current) restoreFocus(event.currentTarget);
-      onOpenChange?.(false);
     }}>{children}</dialog>
   </OverlayContainerContext>;
 });

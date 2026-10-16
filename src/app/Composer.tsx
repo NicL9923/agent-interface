@@ -6,7 +6,7 @@ import type { VoiceState } from "../shared/voice";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
-import { ComposerModelPicker } from "../components/ComposerModelPicker";
+import { ComposerModelPicker, Loading } from "./panels";
 import { write } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
@@ -281,8 +281,8 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               event.target.value = "";
             }}
           />
-          {advanced && <ComposerModelPicker bot={selected} bootstrap={boot}
-            disabled={connectionLost || sending} onSaved={refresh} />}
+          {advanced && <Loading><ComposerModelPicker bot={selected} bootstrap={boot}
+            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
           <div className="composer-voice">
             {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
             <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}

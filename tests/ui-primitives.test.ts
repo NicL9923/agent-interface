@@ -69,12 +69,13 @@ it.each(["removed", "inert", "body"])("uses the supplied safe fallback when the 
   expect(document.activeElement).toBe(fallback);
 });
 
-it("lets an unsaved-changes guard reopen without notifying a controlled close", async () => {
-  const changed = vi.fn();
-  await act(async () => root.render(h(Dialog, { onOpenChange: changed, onClose: event => event.currentTarget.showModal() }, "Unsaved")));
+it("keeps focus inside when an unsaved-changes guard reopens", async () => {
+  const opener = document.createElement("button");
+  document.body.append(opener); opener.focus();
+  await act(async () => root.render(h(Dialog, { initialFocus: "#editing", onClose: event => event.currentTarget.showModal() }, h(Input, { id: "editing" }))));
   await act(async () => container.querySelector("dialog")!.close());
   expect(container.querySelector("dialog")!.open).toBe(true);
-  expect(changed).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(container.querySelector("input"));
 });
 
 it("does not report a stale native close event after StrictMode reopens", async () => {

@@ -22,5 +22,3 @@ export function ContextMenuContent({ container, positionerProps, ...props }: Con
 export function ContextMenuItem(props: ComponentProps<typeof Menu.Item>) {
   return <Menu.Item data-slot="menu-item" render={<button type="button" />} nativeButton {...props} />;
 }
-
-export const ContextMenuSeparator = Menu.Separator;
