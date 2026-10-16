@@ -6,11 +6,21 @@ import type { VoiceState } from "../shared/voice";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
-import { ComposerModelPicker } from "../components/ComposerModelPicker";
+import { ComposerModelPicker, Loading } from "./panels";
+import { Button } from "../components/ui/button";
 import { write } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
 import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
+
+function ModelPickerPlaceholder({ model, failed = false }: { model: string; failed?: boolean }) {
+  const description = failed ? "Model controls unavailable. Reload to try again." : "Loading model controls";
+  return <div className="composer-model" role={failed ? "status" : undefined}>
+    <Button className="composer-tool" disabled aria-label={description} title={description}>
+      <Icon name="robot" size={18} /><span className="tool-label composer-model-name">{model}</span>
+    </Button>
+  </div>;
+}
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
 function useComposerInput(text: string, botId: string) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -281,8 +291,9 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               event.target.value = "";
             }}
           />
-          {advanced && <ComposerModelPicker bot={selected} bootstrap={boot}
-            disabled={connectionLost || sending} onSaved={refresh} />}
+          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
+            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
+            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
           <div className="composer-voice">
             {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
             <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}

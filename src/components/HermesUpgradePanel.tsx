@@ -1,3 +1,5 @@
+import { Dialog } from "./ui/dialog";
+import { Button } from "./ui/button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, write } from "../client-api";
 import type { Bot } from "../shared/types";
@@ -57,7 +59,6 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
   const [uncertain, setUncertain] = useState(false);
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState<UpgradeControlAction | null>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
   // Polls and actions are separate: a click during a poll must not be dropped, and a
   // poll that started before a click must not overwrite the click's fresher status.
   const pollBusy = useRef(false);
@@ -71,20 +72,6 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const element = dialog.current;
-    element?.showModal();
-    // Start at the title, so the close button is not pre-selected.
-    element?.querySelector<HTMLElement>("#hermes-upgrade-title")?.focus();
-    return () => {
-      element?.close();
-      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
-      else (document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
-        ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
-    };
-  }, [open]);
 
   const refresh = useCallback(async () => {
     if (pollBusy.current) return;
@@ -192,11 +179,13 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
   const failed = status && ["failed", "rolled_back", "blocked"].includes(status.phase);
   // A check's own retry is just "Check again"; recovery actions belong to installs.
   const recovery = !!status && (operation === "install" && (status.canRetry || status.canCancel) || status.canRestartService);
-  return <dialog ref={dialog} className="hermes-upgrade-panel" aria-labelledby="hermes-upgrade-title"
+  return <Dialog open={open} initialFocus="#hermes-upgrade-title"
+    fallbackFocus={() => document.querySelector<HTMLElement>(".bot-rail:not([inert]) [aria-label='Settings']")
+      ?? document.querySelector<HTMLElement>("[aria-label='Back to assistants']")} className="hermes-upgrade-panel" aria-labelledby="hermes-upgrade-title"
     onCancel={onClose} onClose={onClose}>
     <header className="upgrade-header">
       <p className="eyebrow">Hermes updates</p>
-      <button className="icon-button" aria-label="Close Hermes updates" onClick={onClose}><Icon name="close" /></button>
+      <Button className="icon-button" aria-label="Close Hermes updates" onClick={onClose}><Icon name="close" /></Button>
     </header>
     <div className={`upgrade-mark ${active || submitting || uncertain ? "is-working" : ""} ${failed ? "needs-attention" : ""}`} aria-hidden="true">
       <Icon size={28} name={status?.phase === "succeeded" ? "check" : status?.phase === "rolled_back" ? "undo" : "upgrade"} />
@@ -218,15 +207,15 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
     {busyNames.length > 0 && <p className="upgrade-work-block">Finish active work before upgrading: <strong>{busyNames.join(", ")}</strong>.</p>}
     {error && <p className="upgrade-error" role="alert">{error}</p>}
     <div className="upgrade-action">
-      <button className="primary" disabled={disabled} onClick={() => void act(install)}>
+      <Button className="primary" disabled={disabled} onClick={() => void act(install)}>
         {(active || submitting) && <Icon name="spinner" className="spin" size={16} />}{label}
-      </button>
+      </Button>
       <p>{active || uncertain ? "You can close this. Progress continues on the server."
         : install ? "Installing briefly reconnects Hermes. Conversations and drafts stay saved."
         : "A check finds the newest Hermes and tests it in a separate copy. Nothing is installed until you choose Install."}</p>
-      {active && operation === "check" && status?.canCancel && <button type="button" className="upgrade-stop" disabled={settling}
-        onClick={() => void control("cancel")}>Stop checking</button>}
-      {!status && error && <button disabled={loading} onClick={() => void refresh()}>Try again</button>}
+      {active && operation === "check" && status?.canCancel && <Button type="button" className="upgrade-stop" disabled={settling}
+        onClick={() => void control("cancel")}>Stop checking</Button>}
+      {!status && error && <Button disabled={loading} onClick={() => void refresh()}>Try again</Button>}
     </div>
     {status && recovery && <section className="upgrade-recovery" aria-label="Update recovery">
       <h3>{active ? "Need to stop this update?" : "Get back on track"}</h3>
@@ -236,15 +225,15 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
         <p>{confirmation === "cancel" ? "Cancel this update and restore a working version?"
           : "Restart the Hermes service and check the connection? This may briefly disconnect everyone."}</p>
         <div className="actions">
-          <button disabled={settling} onClick={() => void control(confirmation)}>
+          <Button disabled={settling} onClick={() => void control(confirmation)}>
             {confirmation === "cancel" ? "Yes, cancel update" : "Yes, restart Hermes"}
-          </button>
-          <button onClick={() => setConfirmation(null)}>Keep current state</button>
+          </Button>
+          <Button onClick={() => setConfirmation(null)}>Keep current state</Button>
         </div>
       </div> : <div className="actions">
-        {status.canRetry && operation === "install" && <button disabled={settling} onClick={() => void control("retry")}>Check and try again</button>}
-        {status.canRestartService && <button disabled={settling} onClick={() => setConfirmation("restart_service")}>Restart Hermes</button>}
-        {status.canCancel && operation === "install" && <button disabled={settling} onClick={() => setConfirmation("cancel")}>Cancel update</button>}
+        {status.canRetry && operation === "install" && <Button disabled={settling} onClick={() => void control("retry")}>Check and try again</Button>}
+        {status.canRestartService && <Button disabled={settling} onClick={() => setConfirmation("restart_service")}>Restart Hermes</Button>}
+        {status.canCancel && operation === "install" && <Button disabled={settling} onClick={() => setConfirmation("cancel")}>Cancel update</Button>}
       </div>}
     </section>}
     {!!status?.checks.length && <details className="upgrade-checks" open={stopped || undefined}>
@@ -256,5 +245,5 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
       {status.error && <p className="upgrade-checked-at">Update reference: <code>{status.error}</code></p>}
     </details>}
     {status?.checkedAt && <p className="upgrade-checked-at">Last checked <When value={status.checkedAt} inline /></p>}
-  </dialog>;
+  </Dialog>;
 }

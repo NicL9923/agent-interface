@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { Dialog } from "../components/ui/dialog";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { NativeSelect } from "../components/ui/native-select";
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Bootstrap, Bot, Preferences } from "../shared/types";
 import { Avatar } from "../components/Avatar";
@@ -24,18 +28,6 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
   onIntegrations(): void;
   onUpgrade(): void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    const previous = document.activeElement as HTMLElement | null;
-    element?.showModal();
-    // Start at the title, so the close button is not pre-selected.
-    element?.querySelector<HTMLElement>("#settings-title")?.focus();
-    return () => {
-      element?.close();
-      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
-    };
-  }, []);
   const prefs = boot.preferences;
   const bots = boot.bots;
   const save = (update: Partial<Preferences>) => void savePreferences({ ...prefs, ...update });
@@ -44,9 +36,9 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
     save({ notifications: { timezone, batchMinutes: 0, ...prefs.notifications, ...update } });
   const version = boot.connection.version;
   return (
-    <dialog ref={dialog} className="settings-sheet" aria-labelledby="settings-title" onCancel={onClose} onClose={onClose}>
+    <Dialog initialFocus="#settings-title" className="settings-sheet" aria-labelledby="settings-title" onCancel={onClose} onClose={onClose}>
       <header className="sheet-header">
-        <button type="button" className="sheet-close" aria-label="Close settings" onClick={onClose}><Icon name="close" /></button>
+        <Button type="button" className="sheet-close" aria-label="Close settings" onClick={onClose}><Icon name="close" /></Button>
         <h2 id="settings-title" tabIndex={-1}>Settings</h2>
       </header>
       <div className="sheet-body">
@@ -69,39 +61,39 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
         <h3 className="settings-heading">Display</h3>
         <div className="settings-group">
           <label className="settings-row"><span className="row-label">Appearance</span>
-            <select value={prefs.theme} onChange={event => save({ theme: event.target.value as Preferences["theme"] })}>
+            <NativeSelect value={prefs.theme} onChange={event => save({ theme: event.target.value as Preferences["theme"] })}>
               <option value="system">Follow device</option><option value="light">Light</option><option value="dark">Dark</option>
-            </select></label>
+            </NativeSelect></label>
           <Switch label="Advanced details" detail="Reasoning, tool inputs and the model menu" checked={prefs.presentation === "advanced"}
             onChange={checked => save({ presentation: checked ? "advanced" : "simple" })} />
           <label className="settings-row"><span className="row-label">Start page</span>
-            <select value={prefs.startPage || (prefs.defaultBotId ? "assistant" : "today")}
+            <NativeSelect value={prefs.startPage || (prefs.defaultBotId ? "assistant" : "today")}
               onChange={event => save({ startPage: event.target.value as "today" | "assistant" })}>
               <option value="today">Today</option><option value="assistant">Assistant</option>
-            </select></label>
+            </NativeSelect></label>
           <label className="settings-row"><span className="row-label">Open by default</span>
-            <select value={prefs.defaultBotId || ""} onChange={event => save({ defaultBotId: event.target.value || undefined })}>
+            <NativeSelect value={prefs.defaultBotId || ""} onChange={event => save({ defaultBotId: event.target.value || undefined })}>
               <option value="">First assistant</option>
               {bots.map(bot => <option value={bot.id} key={bot.id}>{bot.name}</option>)}
-            </select></label>
+            </NativeSelect></label>
         </div>
 
         <h3 className="settings-heading">Notifications</h3>
         <div className="settings-group">
           <div className="settings-row settings-notifications"><NotificationSettings notifications={notifications} title="This device" /></div>
           <label className="settings-row"><span className="row-label">Batching</span>
-            <select value={prefs.notifications?.batchMinutes || 0} onChange={event => notify({ batchMinutes: Number(event.target.value) })}>
+            <NativeSelect value={prefs.notifications?.batchMinutes || 0} onChange={event => notify({ batchMinutes: Number(event.target.value) })}>
               <option value={0}>As updates arrive</option><option value={5}>Every 5 minutes</option>
               <option value={15}>Every 15 minutes</option><option value={60}>Hourly</option>
-            </select></label>
+            </NativeSelect></label>
           <Switch label="Quiet hours" checked={!!prefs.notifications?.quietStart}
             onChange={checked => save({ notifications: { timezone, batchMinutes: prefs.notifications?.batchMinutes || 0,
               ...(checked ? { quietStart: "22:00", quietEnd: "07:00" } : {}) } })} />
           {prefs.notifications?.quietStart && <>
             <label className="settings-row"><span className="row-label">From</span>
-              <input type="time" value={prefs.notifications.quietStart} onChange={event => notify({ quietStart: event.target.value })} /></label>
+              <Input type="time" value={prefs.notifications.quietStart} onChange={event => notify({ quietStart: event.target.value })} /></label>
             <label className="settings-row"><span className="row-label">Until</span>
-              <input type="time" value={prefs.notifications.quietEnd} onChange={event => notify({ quietEnd: event.target.value })} /></label>
+              <Input type="time" value={prefs.notifications.quietEnd} onChange={event => notify({ quietEnd: event.target.value })} /></label>
           </>}
         </div>
         {prefs.notifications?.quietStart && <p className="settings-footnote">
@@ -122,10 +114,10 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
         <SectionEditor preferences={prefs} bots={bots} save={savePreferences} />
 
         <div className="settings-group">
-          {installEvent && <button type="button" className="settings-row" onClick={() => void installEvent.prompt()}>
-            <Icon name="download" size={18} /><span className="row-label">Install app</span></button>}
-          <button type="button" className="settings-row danger" disabled={notifications.busy} onClick={() => void onSignOut()}>
-            <span className="row-label">Sign out</span></button>
+          {installEvent && <Button type="button" className="settings-row" onClick={() => void installEvent.prompt()}>
+            <Icon name="download" size={18} /><span className="row-label">Install app</span></Button>}
+          <Button type="button" className="settings-row danger" disabled={notifications.busy} onClick={() => void onSignOut()}>
+            <span className="row-label">Sign out</span></Button>
         </div>
         <p className="settings-footnote">On iPhone, choose Share, then Add to Home Screen. Install before enabling notifications.</p>
         {notice && <p className="settings-footnote" role="status">{notice}</p>}
@@ -135,23 +127,23 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
           {version && <small>Hermes {version}</small>}
         </footer>
       </div>
-    </dialog>
+    </Dialog>
   );
 }
 
 function NavRow({ icon, label, detail, badge, onClick }: { icon: IconName; label: string; detail?: string; badge?: ReactNode; onClick(): void }) {
-  return <button type="button" className="settings-row" onClick={onClick}>
+  return <Button type="button" className="settings-row" onClick={onClick}>
     <span className="row-icon"><Icon name={icon} size={18} />{badge}</span>
     <span className="row-text"><span className="row-label">{label}</span>{detail && <small>{detail}</small>}</span>
     <Icon name="chevron" size={16} className="row-chevron" />
-  </button>;
+  </Button>;
 }
 
 function Switch({ label, detail, checked, icon, onChange }: { label: string; detail?: string; checked: boolean; icon?: ReactNode; onChange(checked: boolean): void }) {
   return <label className="settings-row">
     {icon}
     <span className="row-text"><span className="row-label">{label}</span>{detail && <small>{detail}</small>}</span>
-    <input type="checkbox" role="switch" className="switch" checked={checked} onChange={event => onChange(event.target.checked)} />
+    <Input type="checkbox" role="switch" className="switch" checked={checked} onChange={event => onChange(event.target.checked)} />
   </label>;
 }
 
@@ -162,8 +154,8 @@ function SectionEditor({ preferences, bots, save }: { preferences: Preferences; 
     {preferences.sections.map(section => <div className="settings-group" key={section.id}>
       <div className="settings-row section-title">
         <span className="row-label">{section.name}</span>
-        <button type="button" className="icon-button" aria-label={`Remove section ${section.name}`}
-          onClick={() => update(preferences.sections.filter(item => item.id !== section.id))}><Icon name="close" size={16} /></button>
+        <Button type="button" className="icon-button" aria-label={`Remove section ${section.name}`}
+          onClick={() => update(preferences.sections.filter(item => item.id !== section.id))}><Icon name="close" size={16} /></Button>
       </div>
       {bots.map(bot => <Switch key={bot.id} label={bot.name} checked={section.botIds.includes(bot.id)}
         icon={<Avatar avatar={bot.avatar} size={28} name={bot.name} reducedMotion />}
@@ -176,8 +168,8 @@ function SectionEditor({ preferences, bots, save }: { preferences: Preferences; 
       update([...preferences.sections, { id: crypto.randomUUID(), name: name.trim(), botIds: [] }]);
       setName("");
     }}>
-      <input aria-label="New section name" value={name} onChange={event => setName(event.target.value)} placeholder="New section, like Around the house" />
-      <button type="submit" disabled={!name.trim()}>Add</button>
+      <Input aria-label="New section name" value={name} onChange={event => setName(event.target.value)} placeholder="New section, like Around the house" />
+      <Button type="submit" disabled={!name.trim()}>Add</Button>
     </form>
   </>;
 }

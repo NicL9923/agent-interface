@@ -1,3 +1,6 @@
+import { Dialog } from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
@@ -47,22 +50,9 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
   const [terminalStep, setTerminalStep] = useState<"confirm" | "shell" | null>(null);
   const [status, setStatus] = useState<ComputerStatus | null>(null);
   const [statusError, setStatusError] = useState("");
-  const dialog = useRef<HTMLDialogElement>(null);
   // This is an attachment identity, never an authorization token. It lasts only for this signed-in user.
   const viewerId = useRef<string | undefined>(undefined);
 
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const element = dialog.current;
-    element?.showModal();
-    return () => {
-      element?.close();
-      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
-      else (document.querySelector<HTMLButtonElement>(".bot-rail:not([inert]) [aria-label='Settings']")
-        ?? document.querySelector<HTMLButtonElement>("[aria-label='Back to assistants']"))?.focus();
-    };
-  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -107,7 +97,9 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
     if (next === "terminal") setTerminalOpened(true);
   };
 
-  return <dialog ref={dialog} className="computer-panel" aria-labelledby="computer-title"
+  return <Dialog open={open}
+    fallbackFocus={() => document.querySelector<HTMLElement>(".bot-rail:not([inert]) [aria-label='Settings']")
+      ?? document.querySelector<HTMLElement>("[aria-label='Back to assistants']")} className="computer-panel" aria-labelledby="computer-title"
     onCancel={event => { event.preventDefault(); onClose(); }}>
     <header>
       <div>
@@ -115,10 +107,10 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
         <h2 id="computer-title">Computer</h2>
         <p className="computer-subtitle">One desktop for your assistants. Your own persistent shell.</p>
       </div>
-      <button className="icon-button" aria-label="Close computer" onClick={onClose}><Icon name="close" /></button>
+      <Button className="icon-button" aria-label="Close computer" onClick={onClose}><Icon name="close" /></Button>
     </header>
     <div className="computer-tabs" role="tablist" aria-label="Computer views">
-      {(["desktop", "terminal"] as const).map(value => <button key={value} id={`computer-tab-${value}`}
+      {(["desktop", "terminal"] as const).map(value => <Button key={value} id={`computer-tab-${value}`}
         role="tab" aria-selected={tab === value} aria-controls={`computer-${value}`} tabIndex={tab === value ? 0 : -1}
         onClick={() => changeTab(value)} onKeyDown={event => {
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -126,7 +118,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
           const next = event.key === "Home" ? "desktop" : event.key === "End" ? "terminal" : tab === "desktop" ? "terminal" : "desktop";
           changeTab(next);
           document.getElementById(`computer-tab-${next}`)?.focus();
-        }}><Icon name={value === "desktop" ? "computer" : "terminal"} size={18} />{value === "desktop" ? "Desktop" : "Terminal"}</button>)}
+        }}><Icon name={value === "desktop" ? "computer" : "terminal"} size={18} />{value === "desktop" ? "Desktop" : "Terminal"}</Button>)}
       <span className="computer-host">{status?.label || "Hermes host"}</span>
     </div>
     {statusError && <p role="status" className="computer-notice">{statusError}</p>}
@@ -144,7 +136,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
             detail={terminal?.reason || (terminal?.available ? "Checking your access to the system terminal."
               : "The system terminal is not available on this Hermes host yet.")} />}
     </section>
-  </dialog>;
+  </Dialog>;
 }
 
 function Unavailable({ icon, title, detail }: { icon: "computer" | "terminal"; title: string; detail: string }) {
@@ -220,10 +212,10 @@ function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
     {!config && !error && <p role="status">Checking sign-in…</p>}
     {googleLoading && <p role="status">Loading Google sign-in…</p>}
     {busy && <p role="status">Confirming…</p>}
-    {member && <button className="primary" disabled={busy} onClick={() => void confirm({ member })}>Confirm local member {member}</button>}
+    {member && <Button className="primary" disabled={busy} onClick={() => void confirm({ member })}>Confirm local member {member}</Button>}
     {error && <div className="computer-confirm-error">
       <p role="alert">{error}</p>
-      <button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</button>
+      <Button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</Button>
     </div>}
   </div>;
 }
@@ -344,9 +336,9 @@ function DesktopView({ status, onStatus, viewerId }: {
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connection === "connected" ? "ready" : ""}`} />
         <strong>{ownerLabel(status, controlling)}</strong><span>{controlling ? "Assistants are paused while you use the desktop." : "Take over to use the mouse and keyboard."}</span></div>
       <div className="computer-control-actions">
-        {!controlling && status.control.kind === "human" && status.control.mine && <button disabled={connection !== "connected" || submitting} onClick={() => void control("release")}>Hand back</button>}
-        <button className={controlling ? "" : "primary"} disabled={connection !== "connected" || submitting || status.control.kind === "human" && !status.control.mine}
-          onClick={() => void control()}>{submitting ? "Updating control…" : controlling ? "Hand back" : "Take over"}</button>
+        {!controlling && status.control.kind === "human" && status.control.mine && <Button disabled={connection !== "connected" || submitting} onClick={() => void control("release")}>Hand back</Button>}
+        <Button className={controlling ? "" : "primary"} disabled={connection !== "connected" || submitting || status.control.kind === "human" && !status.control.mine}
+          onClick={() => void control()}>{submitting ? "Updating control…" : controlling ? "Hand back" : "Take over"}</Button>
       </div>
     </div>
     {(error || status.reason) && <p className="computer-notice" role="status">{error || status.reason}</p>}
@@ -354,14 +346,14 @@ function DesktopView({ status, onStatus, viewerId }: {
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="computer" size={30} /><strong>{connection === "failed" ? "Desktop connection unavailable" : connection === "reconnecting" ? "Reconnecting desktop" : "Opening desktop"}</strong>
-        {connection === "failed" && <button onClick={() => setAttempt(value => value + 1)}>Reconnect</button>}
+        {connection === "failed" && <Button onClick={() => setAttempt(value => value + 1)}>Reconnect</Button>}
       </div>}
     </div>
     <div className="terminal-tools">
-      <button disabled={!controlling} aria-expanded={textOpen} aria-controls="desktop-text" onClick={() => setTextOpen(value => !value)}>Type text</button>
-      <button disabled={!controlling} onClick={() => key(0xff0d)}>Enter</button>
-      <button disabled={!controlling} onClick={() => key(0xff09)}>Tab</button>
-      <button disabled={!controlling} onClick={() => key(0xff08)}>Backspace</button>
+      <Button disabled={!controlling} aria-expanded={textOpen} aria-controls="desktop-text" onClick={() => setTextOpen(value => !value)}>Type text</Button>
+      <Button disabled={!controlling} onClick={() => key(0xff0d)}>Enter</Button>
+      <Button disabled={!controlling} onClick={() => key(0xff09)}>Tab</Button>
+      <Button disabled={!controlling} onClick={() => key(0xff08)}>Backspace</Button>
     </div>
     {textOpen && <form id="desktop-text" className="terminal-paste" onSubmit={event => {
       event.preventDefault();
@@ -372,8 +364,8 @@ function DesktopView({ status, onStatus, viewerId }: {
       }
       setTypedText(""); setTextOpen(false); rfb.current?.focus();
     }}><label htmlFor="desktop-text-input">Type into the selected desktop field</label>
-      <textarea id="desktop-text-input" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={8192} rows={2} value={typedText} onChange={event => setTypedText(event.target.value)} />
-      <div className="actions"><small>Click a field on the desktop first. Text is cleared after sending.</small><button type="submit" disabled={!controlling || !typedText}>Send text</button></div>
+      <Textarea id="desktop-text-input" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={8192} rows={2} value={typedText} onChange={event => setTypedText(event.target.value)} />
+      <div className="actions"><small>Click a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
     </form>}
     <p className="computer-footnote">The desktop and browser logins stay on the server when you close this panel.</p>
   </div>;
@@ -516,25 +508,25 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connected ? "ready" : ""}`} />
         <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span></div>
-      <button disabled={!sessionId.current || connection === "ended" || ending} onClick={() => setConfirmEnd(true)}>End shell</button>
+      <Button disabled={!sessionId.current || connection === "ended" || ending} onClick={() => setConfirmEnd(true)}>End shell</Button>
     </div>
     {confirmEnd && <div className="computer-end-confirmation" role="alert">
       <span>End this shell? Running commands will stop.</span>
-      <button disabled={ending} onClick={() => setConfirmEnd(false)}>Keep shell</button>
-      <button disabled={ending} className="danger" onClick={() => void end()}>{ending ? "Ending…" : "End this shell"}</button>
+      <Button disabled={ending} onClick={() => setConfirmEnd(false)}>Keep shell</Button>
+      <Button disabled={ending} className="danger" onClick={() => void end()}>{ending ? "Ending…" : "End this shell"}</Button>
     </div>}
     {error && <p className="computer-notice" role="status">{error}</p>}
     <div className="computer-screen-wrap terminal-wrap">
       <div ref={surface} className="computer-terminal" aria-label="System terminal" />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="terminal" size={30} /><strong>{connection === "ended" ? "Your shell has ended" : connection === "failed" ? "Terminal connection unavailable" : connection === "reconnecting" ? "Reconnecting terminal" : "Opening your shell"}</strong>
-        {(connection === "ended" || connection === "failed") && <button onClick={() => { setConfirmEnd(false); setAttempt(value => value + 1); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</button>}
+        {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); setAttempt(value => value + 1); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
       </div>}
     </div>
     <div className="terminal-tools">
-      <button disabled={!connected} onClick={() => terminal.current?.focus()}>Keyboard</button>
-      <button disabled={!connected} aria-label="Send Ctrl+C" onClick={() => send({ type: "input", data: "\u0003" })}>Ctrl+C</button>
-      <button disabled={!connected} aria-expanded={pasteOpen} aria-controls="terminal-paste" onClick={() => setPasteOpen(value => !value)}>Paste text</button>
+      <Button disabled={!connected} onClick={() => terminal.current?.focus()}>Keyboard</Button>
+      <Button disabled={!connected} aria-label="Send Ctrl+C" onClick={() => send({ type: "input", data: "\u0003" })}>Ctrl+C</Button>
+      <Button disabled={!connected} aria-expanded={pasteOpen} aria-controls="terminal-paste" onClick={() => setPasteOpen(value => !value)}>Paste text</Button>
       <span>Closing this panel keeps your shell running.</span>
     </div>
     {pasteOpen && <form id="terminal-paste" className="terminal-paste" onSubmit={event => {
@@ -543,8 +535,8 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
       terminal.current?.paste(pasteText);
       setPasteText(""); setPasteOpen(false); terminal.current?.focus();
     }}><label htmlFor="terminal-paste-text">Paste into your terminal</label>
-      <textarea id="terminal-paste-text" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} rows={2} value={pasteText} onChange={event => setPasteText(event.target.value)} />
-      <div className="actions"><small>Text is sent as typed. It is not saved in this browser.</small><button type="submit" disabled={!connected || !pasteText}>Send text</button></div>
+      <Textarea id="terminal-paste-text" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} rows={2} value={pasteText} onChange={event => setPasteText(event.target.value)} />
+      <div className="actions"><small>Text is sent as typed. It is not saved in this browser.</small><Button type="submit" disabled={!connected || !pasteText}>Send text</Button></div>
     </form>}
   </div>;
 }

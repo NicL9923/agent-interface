@@ -75,6 +75,41 @@ For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and
 requests to the app server. The built application serves its API and static files
 from one Fastify process.
 
+## Web UI components
+
+Shared controls live in `src/components/ui`, with shadcn configuration in
+`components.json` and Base UI handling context menus and popovers. Keep the
+existing WildBots colors, typography and spacing when adding controls.
+
+Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
+prefix so they cannot collide with existing semantic class names. Preflight is
+omitted to preserve native control styling. Keep custom layout, avatar and
+markdown CSS where it is clearer than utilities.
+
+Standard shadcn color utilities map to the live WildBots palette: `primary` is
+the brand green, `accent` is its soft hover background, and `muted` is a quiet
+surface. Use `tw:text-muted-foreground` for subdued text or `tw:text-brand` for
+the brand color. Dark variants follow the app's light, dark and system setting.
+
+Preview additions with `npx shadcn@4.22.0 add <component> --dry-run --diff`, then adapt
+the generated component to the existing controls, icons and styling. Registry
+items can also change `src/ui.css`. The stock card leaves it alone, while custom
+items that supply theme variables can append `:root` and `.dark` palettes.
+Keep the existing token mappings and dark variant. Map any needed new colors
+to app tokens instead of accepting those generated palettes. Do not run preset
+or theme initialization over this file.
+
+The `cn` helper and `@/` alias support generated shadcn components. Native
+wrappers forward existing classes directly, so they do not load the class
+merging helper at startup.
+
+Use the shared `Button`, `Input`, `Textarea` and `NativeSelect` controls in the
+migrated settings and panels. `Button` defaults to `type="button"`; form submit
+actions must explicitly use `type="submit"`. The shared `Dialog` preserves the
+native top layer and owns opening, closing and focus restoration. Pass `open`
+for panels that stay mounted while hidden. Nested overlay wrappers inherit the
+dialog as their portal container.
+
 ## Connect Hermes
 
 Hermes runs separately from this application. Guided setup saves `HERMES_URL` and

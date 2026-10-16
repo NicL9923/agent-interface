@@ -77,3 +77,65 @@ it("replaces stale working indicators during connection loss and restores them o
   await render();
   expect(statuses()).toEqual(["Working", "Thinking"]);
 });
+
+const menuItems = () => [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+const key = async (target: Element, value: string, shiftKey = false) => act(async () => {
+  target.dispatchEvent(new KeyboardEvent("keydown", { key: value, shiftKey, bubbles: true, cancelable: true }));
+});
+const settleFocus = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+
+it("opens the assistant menu by keyboard, navigates its actions, and restores row focus on Escape", async () => {
+  await render();
+  const row = container.querySelector<HTMLButtonElement>(".pinned-bot")!;
+  row.focus();
+  await key(row, "F10", true);
+  await settleFocus();
+  expect(document.body.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Ranch hand");
+  const [unpin, settings] = menuItems();
+  await key(document.activeElement!, "ArrowDown");
+  expect(document.activeElement).toBe(unpin);
+  await key(unpin, "End");
+  expect(document.activeElement).toBe(settings);
+  await key(settings, "Home");
+  expect(document.activeElement).toBe(unpin);
+  await key(unpin, "a");
+  expect(document.activeElement).toBe(settings);
+  await key(settings, "Escape");
+  await settleFocus();
+  expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(row);
+  expect(props.onSelectBot).not.toHaveBeenCalled();
+});
+
+it("opens a right-click menu for its own assistant and invokes its settings", async () => {
+  await render();
+  const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
+  await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
+  await settleFocus();
+  await act(async () => menuItems()[1].click());
+  expect(props.onBotSettings).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
+  expect(props.onSelectBot).not.toHaveBeenCalled();
+  expect(document.body.querySelector('[role="menu"]')).toBeNull();
+});
+
+it("opens on a held touch, cancels a scrolling touch, and suppresses selection after a long press", async () => {
+  await render();
+  const row = container.querySelector<HTMLButtonElement>(".pinned-bot")!;
+  const touch = async (type: string, x: number, y: number) => act(async () => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] });
+    row.dispatchEvent(event);
+  });
+  await touch("touchstart", 30, 40);
+  await touch("touchmove", 30, 60);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 520)); });
+  expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  await touch("touchend", 30, 60);
+  await touch("touchstart", 30, 40);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 520)); });
+  await settleFocus();
+  expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+  await touch("touchend", 30, 40);
+  await act(async () => row.click());
+  expect(props.onSelectBot).not.toHaveBeenCalled();
+});

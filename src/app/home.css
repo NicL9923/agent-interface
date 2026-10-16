@@ -203,7 +203,6 @@
   text-align: center;
 }
 .bot-menu {
-  position: fixed;
   z-index: 20;
   min-width: 200px;
   padding: 6px;
@@ -225,6 +224,7 @@
   text-align: left;
   font-size: 14px;
 }
+.bot-menu [data-highlighted] { background: var(--accent-soft); color: var(--accent); }
 @keyframes bot-menu-in { from { opacity: 0; transform: scale(0.96); } }
 
 /* Settings: grouped rows in a sheet. */

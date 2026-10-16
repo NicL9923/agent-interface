@@ -16,6 +16,9 @@ Verified September 29, 2026. Direct dependencies use exact versions in
 | React Markdown | 10.1.0 | [Official documentation](https://github.com/remarkjs/react-markdown), [registry](https://registry.npmjs.org/react-markdown/10.1.0) |
 | remark-gfm | 4.0.1 | [Official documentation](https://github.com/remarkjs/remark-gfm), [registry](https://registry.npmjs.org/remark-gfm/4.0.1) |
 | jsdom, development DOM tests | 30.1.1 | [Official documentation](https://github.com/jsdom/jsdom), [registry](https://registry.npmjs.org/jsdom/30.1.1) |
+| Base UI, web context menus and popovers | 1.9.0 | [Official documentation](https://base-ui.com/react/overview/about), [registry](https://registry.npmjs.org/@base-ui/react/1.9.0) |
+| Tailwind CSS and Vite plugin | 4.3.3 | [Theme variables](https://tailwindcss.com/docs/theme), [registry](https://registry.npmjs.org/tailwindcss/4.3.3) |
+| clsx and tailwind-merge, shared control classes | 2.1.1 / 3.7.0 | [clsx](https://github.com/lukeed/clsx), [tailwind-merge](https://github.com/dcastil/tailwind-merge) |
 | SQLite | 3.53.4 in both tested Node binaries | [Node SQLite API](https://nodejs.org/api/sqlite.html) and `SELECT sqlite_version()` |
 
 `.node-version` selects Node 24.21.0. The engine range also permits Node 26.10
@@ -23,6 +26,10 @@ and later releases within major 26. Both tested versions satisfy the published
 requirements of Vite, Fastify, Google auth, and Vitest. Odd Node majors are excluded.
 No third-party SQLite driver or native build is required. Node ships the database
 binding and engine. The SQLite engine version therefore follows the Node binary.
+
+The UI additions above were verified October 16, 2026. `components.json` configures
+shadcn's Base UI registry conventions; the customized components live in this
+repository. The shadcn CLI is development tooling rather than a runtime dependency.
 
 The app contract tests passed under Node 24.21.0 and Node 26.10.0. Integration and
 browser evidence records its actual runtime in `ValidationLedger.md`. This does

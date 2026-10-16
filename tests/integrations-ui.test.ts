@@ -74,10 +74,10 @@ describe("integration connections", () => {
     const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
     await enter(input, "private-token");
     vi.mocked(write).mockRejectedValueOnce(new Error("Connection not accepted."));
-    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    await click("Connect");
     expect(input.value).toBe("private-token");
     expect(container.textContent).toContain("Connection not accepted.");
-    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    await click("Connect");
     expect(write).toHaveBeenLastCalledWith("/integrations/workspace/connect", { profile: "bot", fields: { token: "private-token" } });
     expect(container.querySelector('input[type="password"]')).toBeNull();
     expect(sessionStorage.length).toBe(0);

@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent } from "react";
+import { useRef, useState } from "react";
+import type { ReactElement } from "react";
+import { Button } from "../components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/ui/context-menu";
 import type { ActivityState, Bootstrap, Bot } from "../shared/types";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { Icon } from "../components/Icon";
@@ -30,7 +32,6 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
   onPin(bot: Bot): void;
   onBotSettings(bot: Bot): void;
 }) {
-  const [menu, setMenu] = useState<{ bot: Bot; x: number; y: number } | null>(null);
   const prefs = boot.preferences;
   const pinned = prefs.favorites.map(id => boot.bots.find(bot => bot.id === id)).filter((bot): bot is Bot => !!bot);
   const unpinned = boot.bots.filter(bot => !prefs.favorites.includes(bot.id));
@@ -39,65 +40,40 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
   const rest = unpinned.filter(bot => !prefs.sections.some(section => section.botIds.includes(bot.id)));
   const activity = (bot: Bot): ActivityState => connectionLost ? "disconnected" : bot.id === botId ? state : bot.activity;
   const current = (bot: Bot) => bot.id === botId && view === "conversation";
-  // Long-press on touch and the context menu elsewhere offer Pin and Settings.
-  const press = useRef<{ timer: ReturnType<typeof setTimeout>; fired: boolean; x: number; y: number } | null>(null);
-  useEffect(() => () => { if (press.current) clearTimeout(press.current.timer); }, []);
-  const cancelPress = () => { if (press.current && !press.current.fired) { clearTimeout(press.current.timer); press.current = null; } };
-  const menuProps = (bot: Bot) => ({
-    onContextMenu: (event: MouseEvent<HTMLElement>) => {
-      event.preventDefault();
-      // The keyboard's menu key reports no pointer position; open beside the row instead.
-      const rect = event.currentTarget.getBoundingClientRect();
-      const keyboard = !event.clientX && !event.clientY;
-      setMenu({ bot, x: keyboard ? rect.left + 24 : event.clientX, y: keyboard ? rect.bottom - 8 : event.clientY });
-    },
-    onPointerDown: (event: PointerEvent) => {
-      if (event.pointerType !== "touch") return;
-      const { clientX: x, clientY: y } = event;
-      cancelPress();
-      const state = { x, y, fired: false, timer: setTimeout(() => { state.fired = true; setMenu({ bot, x, y }); }, 500) };
-      press.current = state;
-    },
-    onPointerUp: cancelPress,
-    onPointerCancel: cancelPress,
-    // Scrolling the list is not a long-press, however slowly the finger drifts.
-    onPointerMove: (event: PointerEvent) => {
-      if (press.current && Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 10) cancelPress();
-    },
-    onClickCapture: (event: MouseEvent) => { if (press.current?.fired) { event.preventDefault(); event.stopPropagation(); press.current = null; } },
-  });
   const row = (bot: Bot) => {
     const botState = activity(bot);
     const working = !connectionLost && botState !== "idle" && botState !== "done";
     return <li key={bot.id}>
-      <button type="button" className={`bot-item bot-row${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
-        onClick={() => onSelectBot(bot.id)} {...menuProps(bot)}>
-        <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion />
-        <span className="bot-row-text">
-          <span className="bot-row-top"><strong>{bot.name}</strong>
-            {bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}</span>
-          <small className={working ? `bot-activity state-${botState}` : undefined}>
-            {working ? stateLabels[botState] : bot.lastMessage?.text || (bot.shared ? "Shared assistant" : "Personal assistant")}
-          </small>
-        </span>
-      </button>
+      <BotMenu bot={bot} pinned={prefs.favorites.includes(bot.id)} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}>
+        <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
+          onClick={() => onSelectBot(bot.id)}>
+          <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion />
+          <span className="bot-row-text">
+            <span className="bot-row-top"><strong>{bot.name}</strong>
+              {bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}</span>
+            <small className={working ? `bot-activity state-${botState}` : undefined}>
+              {working ? stateLabels[botState] : bot.lastMessage?.text || (bot.shared ? "Shared assistant" : "Personal assistant")}
+            </small>
+          </span>
+        </Button>
+      </BotMenu>
     </li>;
   };
   const status = connectionLost ? offline ? "offline" : "reconnecting" : "connected";
   return (
     <aside id="assistant-navigation" className={`bot-rail home${open ? " open" : ""}`} aria-label="Assistants" inert={mobile && !open}>
       <header className="home-bar">
-        <button type="button" className="home-account" aria-label="Settings" title="Settings" onClick={onSettings}>
+        <Button className="home-account" aria-label="Settings" title="Settings" onClick={onSettings}>
           {boot.user.picture ? <img src={boot.user.picture} alt="" referrerPolicy="no-referrer" /> : initials(boot.user.name)}
           <span className={`home-status home-status-${status}`} aria-hidden="true" />
-        </button>
+        </Button>
         {connectionLost && <span className="home-sync" role="status">
           <Icon name="spinner" size={16} className={offline ? undefined : "spin"} />{offline ? "Offline" : "Reconnecting"}</span>}
         <span className="home-bar-actions">
-          <button type="button" className="home-round" aria-label="Search & saved" aria-pressed={view === "find"} onClick={() => onView("find")}>
+          <Button className="home-round" aria-label="Search & saved" aria-pressed={view === "find"} onClick={() => onView("find")}>
             <Icon name="search" />
-          </button>
-          <button type="button" className="home-round" aria-label="New assistant" onClick={onNewBot}><Icon name="plus" /></button>
+          </Button>
+          <Button className="home-round" aria-label="New assistant" onClick={onNewBot}><Icon name="plus" /></Button>
         </span>
       </header>
       <UpdateNotice update={update} />
@@ -107,27 +83,29 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
             const botState = activity(bot);
             const showActivity = botState !== "idle" && botState !== "done";
             return <li key={bot.id}>
-              <button type="button" className={`bot-item pinned-bot${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
-                onClick={() => onSelectBot(bot.id)} {...menuProps(bot)}>
-                <span className="pinned-avatar">
-                  <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} reducedMotion />
-                  <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
-                </span>
-                <span className="pinned-copy">
-                  <span className="pinned-name">{bot.name}</span>
-                  <small className={`pinned-activity${showActivity ? ` bot-activity state-${botState}` : ""}`}>
-                    {showActivity ? stateLabels[botState] : null}
-                  </small>
-                </span>
-              </button>
+              <BotMenu bot={bot} pinned onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}>
+                <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
+                  onClick={() => onSelectBot(bot.id)}>
+                  <span className="pinned-avatar">
+                    <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} reducedMotion />
+                    <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
+                  </span>
+                  <span className="pinned-copy">
+                    <span className="pinned-name">{bot.name}</span>
+                    <small className={`pinned-activity${showActivity ? ` bot-activity state-${botState}` : ""}`}>
+                      {showActivity ? stateLabels[botState] : null}
+                    </small>
+                  </span>
+                </Button>
+              </BotMenu>
             </li>;
           })}
         </ul>}
         <nav className="home-links" aria-label="Household">
           {([["today", "Today"], ["groups", "Group chats"]] as const).map(([item, label]) => (
-            <button key={item} type="button" aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>
+            <Button key={item} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>
               <Icon name={item} size={16} /> {label}
-            </button>
+            </Button>
           ))}
         </nav>
         {sections.map(section => <section className="bot-section" key={section.id} aria-label={section.name}>
@@ -140,11 +118,9 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
         </section>}
         {!boot.bots.length && <div className="home-empty">
           <p className="muted">No assistants are available from Hermes yet.</p>
-          <button type="button" className="primary" onClick={onNewBot}>Create an assistant</button>
+          <Button className="primary" onClick={onNewBot}>Create an assistant</Button>
         </div>}
       </div>
-      {menu && <BotMenu bot={menu.bot} x={menu.x} y={menu.y} pinned={prefs.favorites.includes(menu.bot.id)}
-        onPin={() => onPin(menu.bot)} onSettings={() => onBotSettings(menu.bot)} onClose={() => setMenu(null)} />}
     </aside>
   );
 }
@@ -155,27 +131,32 @@ function ListDate({ value }: { value: string }) {
   return <time dateTime={value}>{formatListDate(value)}</time>;
 }
 
-function BotMenu({ bot, x, y, pinned, onPin, onSettings, onClose }: {
-  bot: Bot; x: number; y: number; pinned: boolean; onPin(): void; onSettings(): void; onClose(): void;
+function BotMenu({ bot, pinned, onPin, onSettings, children }: {
+  bot: Bot; pinned: boolean; onPin(): void; onSettings(): void; children: ReactElement;
 }) {
-  const menu = useRef<HTMLDivElement>(null);
-  const dismiss = useRef(onClose);
-  dismiss.current = onClose;
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    menu.current?.querySelector("button")?.focus();
-    const close = (event: Event) => {
-      if (event instanceof KeyboardEvent ? event.key === "Escape" : !menu.current?.contains(event.target as Node)) dismiss.current();
-    };
-    document.addEventListener("keydown", close);
-    document.addEventListener("pointerdown", close);
-    return () => { document.removeEventListener("keydown", close); document.removeEventListener("pointerdown", close); previous?.focus(); };
-  }, []);
-  const left = Math.min(Math.max(x, 12), window.innerWidth - 212);
-  const top = Math.min(Math.max(y, 12), window.innerHeight - 124);
-  const choose = (action: () => void) => () => { onClose(); action(); };
-  return <div ref={menu} className="bot-menu" role="menu" aria-label={bot.name} style={{ left, top }}>
-    <button type="button" role="menuitem" onClick={choose(onPin)}><Icon name="pin" size={16} />{pinned ? "Unpin" : "Pin to top"}</button>
-    <button type="button" role="menuitem" onClick={choose(onSettings)}><Icon name="gear" size={16} />Assistant settings</button>
-  </div>;
+  const trigger = useRef<HTMLDivElement>(null);
+  const [keyboardAnchor, setKeyboardAnchor] = useState(false);
+  const suppressTouchClick = useRef(false);
+  return <ContextMenu onOpenChange={(open, details) => {
+    if (open && details.event.type.startsWith("touch")) suppressTouchClick.current = true;
+  }}>
+    <ContextMenuTrigger ref={trigger} render={children}
+      onContextMenu={event => setKeyboardAnchor(!event.clientX && !event.clientY)}
+      // Browsers may report the menu key without coordinates; anchor that menu to its row.
+      onKeyDown={event => {
+        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+        event.preventDefault();
+        event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      }}
+      onTouchStart={() => { suppressTouchClick.current = false; setKeyboardAnchor(false); }}
+      onClickCapture={event => {
+        if (!suppressTouchClick.current) return;
+        event.preventDefault(); event.stopPropagation(); suppressTouchClick.current = false;
+      }} />
+    <ContextMenuContent className="bot-menu" aria-label={bot.name} finalFocus={trigger}
+      positionerProps={{ collisionPadding: 12, ...(keyboardAnchor ? { anchor: trigger } : {}) }}>
+      <ContextMenuItem onClick={onPin}><Icon name="pin" size={16} />{pinned ? "Unpin" : "Pin to top"}</ContextMenuItem>
+      <ContextMenuItem onClick={onSettings}><Icon name="gear" size={16} />Assistant settings</ContextMenuItem>
+    </ContextMenuContent>
+  </ContextMenu>;
 }
