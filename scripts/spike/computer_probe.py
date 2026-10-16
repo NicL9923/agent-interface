@@ -63,6 +63,22 @@ assert get_hermes_home() == home
 assert starts == [str(resource), str(resource)]
 checks["native_dispatch_preserves_two_bot_home_identities_and_one_screen"] = True
 
+# Both native routing contracts must keep the fixed household browser, even
+# when callers request a sidecar or opt out of their personal browser profile.
+routing = []
+for options in ({}, {"real_profile": True}, {"real_profile": False}):
+    for local in (False, True):
+        for sidecar in (False, True):
+            env = {"BU_CDP_URL": "http://127.0.0.1:9999"}
+            assert browser_use_cli._route_backend(env, "routing-probe", "routing-probe", local,
+                force_local_sidecar=sidecar, **options) is None
+            assert env["BU_CDP_URL"] == computer.endpoint
+            assert env["BU_AUTOSPAWN"] == "0"
+            assert env[browser_use_cli._BOT_DESKTOP_BROWSER_SENTINEL] == "1"
+            routing.append(env)
+assert len({env["BH_RUNTIME_DIR"] for env in routing}) == 1
+checks["native_browser_routing_flags_preserve_the_fixed_shared_browser"] = True
+
 # Exercise the default native browser_exec handler, including its native env
 # builder and own-tab preamble. Only the CLI's process result is synthetic.
 executions = []
