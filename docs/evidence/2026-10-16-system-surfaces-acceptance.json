@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-16T16:13:15.665Z",
+  "commit": "6e6ea924c8d3049198ebf2f60f9a16bd3cf10716",
+  "accountCount": 2,
+  "authenticatedNativeBootstrap": true,
+  "latestDistributedBuild": 1,
+  "updateUrl": "https://testflight.apple.com/v1/app/6823644380",
+  "productionPushConfigured": true,
+  "liveActivityStateAvailable": true,
+  "physicalPushDeliveryVerified": false,
+  "temporarySessionsRemoved": true
+}

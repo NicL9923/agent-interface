@@ -1,5 +1,36 @@
 # Validation ledger
 
+## October 16 app release 6e6ea92
+
+PR #136 merged at `6e6ea924c8d3049198ebf2f60f9a16bd3cf10716`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `cf33a3930eb8526d`, from the archive with SHA256
+`20290fe80b3a51c26c84cdff2f1e603d085196c7dafc81c6b2717236c39ebb7c`. The host build reproduced the local web build.
+
+After the Patch turn finished, a reversible native drain lasting at most five
+seconds let Hermes recount active work from a stale 1 to 0. The gateway kept its
+process ID and normal admission was restored; no work was cancelled and no
+status counters were edited. Production Apple push and build 1 update settings were applied
+atomically with a private backup of the prior environment file.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-6e6ea924-20261016T161115Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+Authenticated native API reads then verified both allowed household accounts
+using temporary test sessions. These reads ran from the activated release
+immediately after the deployment tool verified it was current. Each received the
+distributed build 1 TestFlight link, production push configuration and available
+Live Activity state. Both test
+sessions were removed. The [API acceptance receipt](evidence/2026-10-16-system-surfaces-acceptance.json)
+records these checks. This does not establish interactive phone sign-in or real
+push delivery. The Home/Lock Screen widget and Live Activity phone checks remain
+as listed below.
+
 ## October 16 widgets, Live Activity, updates and TestFlight
 
 PR #136 merged as `6e6ea924c8d3049198ebf2f60f9a16bd3cf10716`. It adds Home
@@ -61,10 +92,10 @@ production revision
 Integration digest: `aa8eb71d4fbc68d230f70fe3fee20dc14544faa736b9273bc8eba164a3ffed7d`.
 The isolated probe ran the private Google-session authentication regressions
 against fixtures, then removed its disposable files. [Sanitized receipts](evidence/2026-10-16-widgets-qualification/manifest.json).
-The server cutover is pending an idle gateway. Apple push credentials and native
-update settings are staged privately; live configuration and services have not
-changed. Physical-phone installation, widget placement and taps, locked-device
-preview privacy, and real APNs Live Activity delivery remain acceptance work.
+The server cutover subsequently completed as recorded above. Production Apple
+push configuration and the distributed build 1 update settings are active.
+Physical-phone installation, widget placement and taps, locked-device preview
+privacy, and real APNs Live Activity delivery remain acceptance work.
 
 ## October 16 inline UI implementation
 
