@@ -1,5 +1,30 @@
 # Validation ledger
 
+## October 16 shared UI main refresh
+
+Normal merge `804cffe` incorporates main at `66215ac` into PR #135 without
+rewriting the published branch. Only the tools index and this ledger needed
+additive conflict resolution. The new update notice remains in the sidebar.
+Implementation source fingerprint, excluding this ledger:
+`sha256:7cde816a92f4abb4e92903c1c8606c9ae61805b7fef3f37b75ec665b43c6bbce`.
+
+All 69 web test files, 751 tests, passed. The production build passed with web
+build `1c59648934b30c68`. Browser checks repeated actual delayed and failed
+model-picker chunk requests at 1440 and 390 CSS pixels; the composer stayed
+editable and the textarea and voice controls stayed uncovered.
+
+Xcode 27.1, build 27A9275, built and ran the ad hoc signed native unit suite on
+iOS 27.0, dedicated simulator `ADAF233A-DB00-4AEA-B8E7-EBEDCE28C630`.
+Of 133 tests, 132 passed and the optional evidence-rendering test skipped, with
+zero failures. Result bundle:
+`/Volumes/DevSSD/scratch/wildbots-shadcn-a65b9bb/ios-merge-units-original.xcresult`.
+
+Claude Opus 5.5 independently reviewed integration against latest main and found
+no actionable issues. It also traced the earlier iOS CI failure to fixed-sleep
+draft-sync assertions that fail on main with the same Swift source. Those
+pre-existing timing failures are tracked in [#139](https://github.com/NicL9923/agent-interface/issues/139).
+This refresh changes no native implementation or tests and does not deploy.
+
 ## October 16 app release 6e6ea92
 
 PR #136 merged at `6e6ea924c8d3049198ebf2f60f9a16bd3cf10716`. The release is live at `https://agentui.wildflowersranch.com`,
