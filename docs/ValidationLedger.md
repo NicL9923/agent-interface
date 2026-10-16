@@ -1,92 +1,70 @@
 # Validation ledger
 
-## October 16 widgets, Live Activity, updates and TestFlight setup
+## October 16 widgets, Live Activity, updates and TestFlight
 
-The branch adds a native Home/Lock Screen widget, an aggregate ActivityKit card
-and Dynamic Island views, server-owned APNs activity updates, and persistent web
-and native update notices. Web checks run on foreground, reconnect and every
-30 minutes. The native release command checks signed app/extension identities,
-matching versions, production push and App Group entitlements before upload.
-It confirms the exact processed build and both household testers before emitting
-the host's update settings. It never announces an uncertain upload.
+PR #136 merged as `6e6ea924c8d3049198ebf2f60f9a16bd3cf10716`. It adds Home
+and Lock Screen widgets, one aggregate Live Activity with Dynamic Island views,
+server APNs updates, and persistent web and native update notices. Widgets and
+activities keep account data separate and label stale content. Web update checks
+run on foreground, reconnect and every 30 minutes. Native updates link to the
+exact distributed household beta.
 
-The web build and all 720 tests passed on Node 26 and the production Node 24
-runtime. The latest focused lifecycle, native API, publishing and APNs transport
-checks passed, including stream timeout isolation, device/session-bound startup
-grace, repeat registration, oversized Unicode/escaped payloads and two-person
-distribution checks. TypeScript and diff checks passed. Validation source before
-the signing search-list follow-up was
-`sha256:da74344cc784b308da96820e3b4c9496611ea578a97db91051d190c7e187988e`.
-The search-list change passed the command's syntax check and a real temporary
-keychain experiment established why it is needed. Apple's group-specific tester
-endpoint returned HTTP 500; its documented filtered tester list returned the
-exact two household members. The publisher now uses that list, and its six
-focused checks passed. A second review found late activity cleanup could delete
-a replacement token, and a first-visit tab could miss another tab's later update.
-Cleanup now requires the ended token, native cleanup captures its old activity
-before awaiting, and the browser remembers when first control has happened.
-All 39 focused lifecycle, API, browser-update and publishing checks and TypeScript
-passed after these fixes. Source before merging current main was
-`sha256:6a60b7695d13215d6f039e59336a7e4a9ec4819f07f2f1454f625f576b058d47`.
+The final implementation source fingerprint, excluding this ledger, was
+`sha256:2c706fc4abbab4fda716a493d8c90700e7c5281bfdd5a0ab316bc1fa5734e9eb`.
+Local checks ran on integrated candidate
+`sha256:89b3ced09fcaf1351adfd5bc00e07ace63f395992829a220cdb16fad60ba10d4`
+before the signing-tool follow-up. All 730 web/server tests passed on Node 24 and
+26, with TypeScript and production build checks. The web build is
+`cf33a3930eb8526d`. All 19 applicable Python test files passed; the tmux-only file
+was skipped. CI repeated Node 24/26, build and Python checks on final head
+`3620b0a`, whose implementation fingerprint matches the final source above. The worker file initially hit the
+internal volume's real free-space guard; all 58 checks passed with one skip when
+rerun using the mounted development SSD for temporary data.
 
-Current main's inline UI and pinned activity changes were merged at `41bca04`.
-The generated Xcode project was regenerated with both additions, and its new
-Sidebar fixture now supplies the update prop. The integrated candidate passed
-all 730 tests on Node 24 and 26, the production build (`cf33a3930eb8526d`),
-the unsigned iOS Release archive and simulator build-for-testing. Its source is
-`sha256:89b3ced09fcaf1351adfd5bc00e07ace63f395992829a220cdb16fad60ba10d4`.
-The Python run passed 18 files and skipped the tmux-only file. The worker test
-file hit the real free-space guard on the internal temporary volume; its rerun
-on the mounted development SSD passed all 58 checks with one skip. Combined,
-all 19 applicable Python files passed, with the tmux-only file skipped.
+The full ad-hoc signed simulator run on final head `3620b0a` used Xcode 27.1
+(27A9275), iOS 27.0 and dedicated simulator `6198D64C-5D50-498B-A09F-8F3F13613247`. It executed 162 tests: 159
+passed, three intentional skips, zero failures. This includes both account-switch
+regressions, both update-banner UI flows and uncertain-install recovery. The result
+bundle is `.private/ios-test-20261016T151638Z-86054.xcresult`. After all suites
+finished, Xcode waited on an optional `simctl diagnose` child. Stopping only that
+collector let the command finalize the bundle and exit 0 with TEST SUCCEEDED.
+No test runner was interrupted. The unsigned Release archive and simulator test
+build also completed. All four PR checks were green before merge.
 
-The signing command then encountered OpenSSL's separate certificate/key input
-requirement and macOS's rejection of an empty-password PKCS12. Its disposable
-import now uses a fixed placeholder inside the private directory, while the
-reusable certificate password still goes only over stdin. Actual import and
-partition setup passed. Signed version 1.0 build 1 from `ecf382b` archived and
-exported successfully, with all three bundle signatures, versions, profiles,
-App Group and production-push checks verified again in the IPA. Its SHA256 is
+Grok 4.7 independently reviewed the complete implementation. Earlier findings
+prompted fixes for device/session-bound startup grace, account isolation, private
+activity detail, bounded APNs payloads, isolated stream timeouts, late token
+cleanup, first-visit browser update control, exact household distribution and
+signing-secret handling. The final integration review returned no findings.
+Rendered widgets, Dynamic Island and update-banner collages were inspected in
+both themes. They establish fixture appearance, not physical-device behavior.
+
+Signed version 1.0 build 1 was archived from `ecf382b8f87debddd01f44b1cf6dc28b88874895`;
+its app and extension source matches the merged release. All three bundle
+signatures, versions, profiles, App Group and production-push entitlements were
+checked again in the exported IPA. Its SHA256 is
 `b4332b87ac818430a20a7775e21d3cb725b4cd52b9a6d2a41fbb0d1e8a89ebfd`.
-The temporary keychain, import and certificate files were removed. Current
-source is `sha256:2c706fc4abbab4fda716a493d8c90700e7c5281bfdd5a0ab316bc1fa5734e9eb`.
-Upload was initiated once; Apple acceptance and distribution are not yet confirmed.
+Reusable certificate credentials went only through stdin; disposable signing
+files and the temporary keychain were removed. Apple accepted one upload at
+15:05 UTC, build UUID `61956b99-84a3-4295-8cb0-447505c2abf2`, and processed it
+as VALID with no non-exempt encryption. At 15:51 UTC Apple confirmed it was
+IN_BETA_TESTING in the explicit-build internal Household group with exactly the
+two configured testers. No public App Store submission was made. The app record
+is **WildBots Household**, ID `6823644380`, bundle `dev.agentinterface.ios`.
+Its [TestFlight link](https://testflight.apple.com/v1/app/6823644380) was checked
+against Apple's landing page and association file. The beta expires January 14,
+2027. [Distribution receipt](evidence/2026-10-16-household-testflight.json).
 
-Both the iOS Release archive and simulator test targets compiled with Xcode
-27.1, build 27A9275. Before the Xcode update, 131 native unit checks completed
-with one evidence-only skip, and both new update-banner UI checks passed.
-The broader UI run hit an existing upgrade-flow timeout. Xcode updated during
-the next run, and its required CoreSimulator 1174.9.2 setup did not complete;
-the machine still has 1171.7. Simulator execution remains pending administrator
-first-launch setup. No full simulator-suite success is claimed for this source.
-The new account-switch regression tests compile but have not run on that runtime.
-Rendered widget, Dynamic Island and update-banner fixture collages were inspected
-in both themes. They do not establish physical-device push delivery or privacy.
-
-Existing Apple team credentials were recovered privately. All three app IDs and
-their shared App Group are registered and associated. Actual App Store profiles
-for all three passed their decoded entitlement checks. The **WildBots Household**
-App Store Connect record is `6823644380`, using `dev.agentinterface.ios` and SKU
-`wildbots-ios`. The existing APNs key is production and team scoped. Its private
-copy is staged on the VPS; the live service configuration has not changed.
-The internal **Household** group uses explicit build distribution. Kim accepted
-her Marketing invitation, limited to this app. Both household accounts are now
-internal members of the group; Apple shows two testers and no available builds.
-Apple intermittently
-returned HTTP 500 errors during setup; no rejected mutation was blindly retried.
-
-Grok 4.7's first independent review found lifecycle, privacy, payload-size and
-release-tool issues. Fixes preserve startup grace and observed state, separate
-installation IDs by account, clear old widget data during a disconnected account
-switch, mark activity detail private, bound the serialized payload, isolate APNs
-stream timeouts, check the exact tester set, and keep reusable signing passwords
-out of process arguments and errors. The second review confirmed those fixes;
-its two additional findings were addressed as described above. Final integration
-review is pending. The app-specific
-HTTPS TestFlight link was checked against Apple's own landing page and association
-file; its physical-phone tap, notification delivery and first signed installation
-remain acceptance work. No IPA upload, public store submission or server deployment
-has completed at this point.
+Fresh disposable Hermes qualification for merge `6e6ea924c8d3` passed against
+production revision
+`acc3cada0da86c81efc8aa6c5a291989549ca900` and the existing approved repair.
+Integration digest: `aa8eb71d4fbc68d230f70fe3fee20dc14544faa736b9273bc8eba164a3ffed7d`.
+The isolated probe ran the private Google-session authentication regressions
+against fixtures, then removed its disposable files. [Sanitized receipts](evidence/2026-10-16-widgets-qualification/manifest.json).
+The server cutover is pending an idle gateway. Apple push credentials and native
+update settings are staged privately; live configuration and services have not
+changed. Physical-phone installation, widget placement and taps, locked-device
+preview privacy, and real APNs Live Activity delivery remain acceptance work.
 
 ## October 16 inline UI implementation
 
