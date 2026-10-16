@@ -1,5 +1,33 @@
 # Validation ledger
 
+## October 15 Hermes shared-browser compatibility
+
+Hermes `acc3cada0da86c81efc8aa6c5a291989549ca900` adds a `real_profile`
+keyword to native browser routing. The adapter accepts it while keeping every
+routing mode on the explicitly configured household browser. The disposable
+probe covers omitted, true and false values with both local/sidecar flags,
+plus actual native `browser_exec` dispatch, profile identity and lease recovery.
+
+Implementation: GPT-6.1 Sol. Source fingerprint:
+`sha256:fca657f0bb5cf2670ed4f57bb94d7eeb2d8e8f40e7678397a603dbb9fd8522c4`.
+Claude Opus 5.5 independently reviewed the full branch diff and found no
+actionable issues. Ruff 0.17.0 and the full Python runner passed 19 files;
+the terminal file skipped because local tmux is unavailable, and two individual
+platform-dependent tests skipped. Node and web inputs are unchanged from #128.
+
+Before another deployment, the complete isolated candidate suite passed,
+including native messaging, routines, service/credential guards, shared computer,
+maintenance recovery and end-to-end application probes. The five private OAuth
+regressions passed. The Google fixture expected a provider error for a forged
+signature; upstream commit `5bb155d568` now returns an invalid-session rejection.
+A proposed fixture that requires rejection under either contract passed all
+13 Google cases in a separate private bundle. Its operational rollout is
+recorded separately. This run reused its
+retained disposable dependency environment; it issued no production receipt
+and changed no live service. App qualification against the installed runtime
+and the guarded update's fresh qualification remain required before cutover.
+No manual household browser interaction was performed.
+
 ## October 15 app release 0bac88e
 
 PR #128 merged at `0bac88e0e1f493f9a883665023a8c016c6c5d895`. The release is live at `https://agentui.wildflowersranch.com`,
