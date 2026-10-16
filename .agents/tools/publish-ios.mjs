@@ -93,12 +93,17 @@ async function archive(api, config, version, build) {
   // below. No reusable certificate or account password goes into a process argument.
   const password = '';
   const importFile = join(destination, 'distribution-import.p12');
+  const certificateFile = join(destination, 'signing-certificate.pem');
   try {
     const clear = execFileSync('openssl', ['pkcs12', '-in', config.signingP12, '-passin', 'stdin', '-nodes'], { input: config.signingPassword });
-    const temporaryP12 = execFileSync('openssl', ['pkcs12', '-export', '-passout', 'pass:'], { input: clear });
-    writeFileSync(importFile, temporaryP12, { mode: 0o600 });
-    clear.fill(0);
-    temporaryP12.fill(0);
+    try {
+      // Export reads certificate and private key separately. Reusing stdin for both
+      // consumes it once and loses the certificate on OpenSSL 3.
+      writeFileSync(certificateFile, execFileSync('openssl', ['x509', '-outform', 'PEM'], { input: clear }), { mode: 0o600 });
+      const temporaryP12 = execFileSync('openssl', ['pkcs12', '-export', '-inkey', '/dev/stdin', '-in', certificateFile, '-passout', 'pass:'], { input: clear });
+      try { writeFileSync(importFile, temporaryP12, { mode: 0o600 }); }
+      finally { temporaryP12.fill(0); }
+    } finally { clear.fill(0); }
     run('security', ['create-keychain', '-p', password, keychain]);
     run('security', ['unlock-keychain', '-p', password, keychain]);
     run('security', ['set-keychain-settings', '-lut', '21600', keychain]);
@@ -123,6 +128,7 @@ async function archive(api, config, version, build) {
     privateJson(join(destination, 'release.json'), { appId: selectedApp.id, version, build, commit, ipa, sha256: digest(ipa) });
     console.log(`Verified archive and IPA: ${destination}/release.json`);
   } finally {
+    if (existsSync(certificateFile)) unlinkSync(certificateFile);
     if (existsSync(importFile)) unlinkSync(importFile);
     if (existsSync(keychain)) {
       // Read the current list so another release's additions survive our cleanup.
