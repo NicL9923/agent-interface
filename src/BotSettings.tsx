@@ -1,3 +1,7 @@
+import { Dialog } from "./components/ui/dialog";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Textarea } from "./components/ui/textarea";
 import { useEffect, useId, useRef, useState } from "react";
 import type {
   Avatar as AvatarConfig,
@@ -125,23 +129,6 @@ export function BotSettings({
   const errorBanner = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (error) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [error]);
   const dialog = useRef<HTMLDialogElement>(null);
-  const mounted = useRef(false);
-  useEffect(() => {
-    const element = dialog.current;
-    const previous = document.activeElement as HTMLElement | null;
-    mounted.current = true;
-    element?.showModal();
-    return () => {
-      mounted.current = false;
-      element?.close();
-      // WebKit does not focus a clicked button, so the opener can be the page itself.
-      if (previous && previous !== document.body && previous.isConnected && !previous.closest("[inert]")) previous.focus();
-      // A phone keeps only one screen live, so a candidate on the hidden one cannot take focus.
-      else ["[aria-label='Edit assistant']", ".bot-rail [aria-label='Settings']", "[aria-label='Back to assistants']"]
-        .map(selector => document.querySelector<HTMLElement>(selector))
-        .find(control => control && !control.closest("[inert]"))?.focus();
-    };
-  }, []);
   useEffect(() => {
     if (!existing) return;
     let current = true;
@@ -263,8 +250,11 @@ export function BotSettings({
     if (fromOverflow) overflowTrigger.current?.focus();
   };
   return (
-    <dialog
+    <Dialog
       ref={dialog}
+      fallbackFocus={() => ["[aria-label='Edit assistant']", ".bot-rail [aria-label='Settings']", "[aria-label='Back to assistants']"]
+        .map(selector => document.querySelector<HTMLElement>(selector))
+        .find(control => control && !control.closest("[inert]")) ?? null}
       className="settings-dialog"
       aria-labelledby="assistant-settings-title"
       onCancel={(event) => {
@@ -274,7 +264,7 @@ export function BotSettings({
       }}
       onClose={() => {
         // Closing and reopening in one pass, as Strict Mode does, queues an event for a dialog that is open.
-        if (!mounted.current || dialog.current?.open) return;
+        if (dialog.current?.open) return;
         // A second Escape can close the dialog without a cancelable event, so put it back.
         if (!unsaved) return onClose();
         dialog.current?.showModal();
@@ -286,24 +276,24 @@ export function BotSettings({
           <p className="eyebrow">Assistant settings</p>
           <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || "New assistant"}</h2>
         </div>
-        <button
+        <Button
           className="icon-button"
           aria-label="Close assistant settings"
           onClick={requestClose}
         >
           <Icon name="close" />
-        </button>
+        </Button>
       </header>
       <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
         {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
-          <button
+          <Button
             type="button"
             aria-current={tab === t ? "page" : undefined}
             key={t}
             onClick={() => selectTab(t)}
           >
             {t}
-          </button>
+          </Button>
         ))}
         {compactSettings && <details className="settings-tabs-overflow" ref={overflowMenu}
           onKeyDown={(event) => {
@@ -319,8 +309,8 @@ export function BotSettings({
             <span>{settingsSections.slice(2).includes(tab) ? tab : "More"}</span><Icon name="chevron" size={16} />
           </summary>
           <div className="settings-more-menu" id={overflowMenuId}>
-            {settingsSections.slice(2).map((section) => <button type="button" key={section}
-              aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</button>)}
+            {settingsSections.slice(2).map((section) => <Button type="button" key={section}
+              aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</Button>)}
           </div>
         </details>}
       </nav>
@@ -339,8 +329,8 @@ export function BotSettings({
           <div className="capability-note" role="alert">
             <p>Discard your unsaved changes?</p>
             <div className="actions">
-              <button type="button" className="danger" onClick={onClose}>Discard changes</button>
-              <button type="button" ref={keepEditing} onClick={resumeEditing}>Keep editing</button>
+              <Button type="button" className="danger" onClick={onClose}>Discard changes</Button>
+              <Button type="button" ref={keepEditing} onClick={resumeEditing}>Keep editing</Button>
             </div>
           </div>
         )}
@@ -351,12 +341,12 @@ export function BotSettings({
               rest of the household, along with its conversation, routines and group chats.
             </p>
             <div className="actions">
-              <button type="button" className="danger" disabled={busy} onClick={() => void saveBot(false, true)}>
+              <Button type="button" className="danger" disabled={busy} onClick={() => void saveBot(false, true)}>
                 Make it personal
-              </button>
-              <button type="button" onClick={() => setConfirmPersonal(false)}>
+              </Button>
+              <Button type="button" onClick={() => setConfirmPersonal(false)}>
                 Keep editing
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -367,12 +357,12 @@ export function BotSettings({
               the reported warning above before continuing.
             </p>
             <div className="actions">
-              <button disabled={busy} onClick={() => void saveBot(true)}>
+              <Button disabled={busy} onClick={() => void saveBot(true)}>
                 Confirm this model
-              </button>
-              <button onClick={() => setConfirmModel(false)}>
+              </Button>
+              <Button onClick={() => setConfirmModel(false)}>
                 Keep editing
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -386,7 +376,7 @@ export function BotSettings({
             {unavailable("botConfiguration")}
             <label>
               Name
-              <input
+              <Input
                 required
                 maxLength={100}
                 value={form.name}
@@ -395,7 +385,7 @@ export function BotSettings({
             </label>
             <label>
               Description
-              <input
+              <Input
                 value={form.description}
                 onChange={(e) =>
                   setForm({ ...form, description: e.target.value })
@@ -404,7 +394,7 @@ export function BotSettings({
             </label>
             <label>
               Instructions
-              <textarea
+              <Textarea
                 rows={7}
                 value={form.instructions}
                 onChange={(e) =>
@@ -413,9 +403,9 @@ export function BotSettings({
                 placeholder="How should this assistant help?"
               />
             </label>
-            <div className="interactive-replies-setting"><button type="button" disabled={busy || form.instructions.includes(interactiveReplyInstructions)}
+            <div className="interactive-replies-setting"><Button type="button" disabled={busy || form.instructions.includes(interactiveReplyInstructions)}
               onClick={() => setForm({ ...form, instructions: `${form.instructions.trim()}\n\n${interactiveReplyInstructions}`.trim() })}>
-              {form.instructions.includes(interactiveReplyInstructions) ? "Interactive replies enabled" : "Enable interactive replies"}</button>
+              {form.instructions.includes(interactiveReplyInstructions) ? "Interactive replies enabled" : "Enable interactive replies"}</Button>
               <p className="muted">Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.</p></div>
             <ModelSelector
               value={{ provider: form.provider || "", model: form.model }}
@@ -430,7 +420,7 @@ export function BotSettings({
               onFavoritesSaved={onSaved}
             />
             <label className="checkbox-label">
-              <input
+              <Input
                 type="checkbox"
                 checked={form.shared}
                 onChange={(e) => setForm({ ...form, shared: e.target.checked })}
@@ -444,7 +434,7 @@ export function BotSettings({
             </p>
             <label>
               Enabled existing MCP servers
-              <input
+              <Input
                 value={form.enabledMcpServers?.join(", ") || ""}
                 onChange={(e) =>
                   setForm({
@@ -462,14 +452,15 @@ export function BotSettings({
               Only existing Hermes connections can be configured here.
             </p>
             <div className="actions">
-              <button
+              <Button
+                type="submit"
                 className="primary with-progress"
                 disabled={
                   busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
                 <SaveProgress state={progress("details")} label={existing ? "Save changes" : "Create assistant"} />
-              </button>
+              </Button>
               {existing && (
                 <DeleteBot
                   bot={existing}
@@ -503,7 +494,7 @@ export function BotSettings({
                   </p>
                   <label>
                     Upload portrait
-                    <input
+                    <Input
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
                       disabled={
@@ -518,14 +509,14 @@ export function BotSettings({
                   {unavailable("uploads")}
                   <label>
                     Generate a portrait
-                    <textarea
+                    <Textarea
                       rows={3}
                       value={prompt}
                       onChange={(e) => setPrompt(e.target.value)}
                       placeholder="Describe the portrait you want…"
                     />
                   </label>
-                  <button
+                  <Button
                     disabled={
                       !existing ||
                       busy ||
@@ -549,7 +540,7 @@ export function BotSettings({
                     }
                   >
                     Generate portrait
-                  </button>
+                  </Button>
                   {unavailable("portraitGeneration")}
                 </>
               )}
@@ -560,7 +551,7 @@ export function BotSettings({
               </p>
             )}
             <div className="actions sticky-actions">
-              <button
+              <Button
                 className="primary with-progress"
                 disabled={
                   !existing ||
@@ -584,7 +575,7 @@ export function BotSettings({
                 }
               >
                 <SaveProgress state={progress("avatar")} label="Save avatar" />
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -597,14 +588,14 @@ export function BotSettings({
               <>
                 {bootstrap.capabilities[tab].supported && !catalogReady && (
                   catalog?.tab === tab && catalog.status === "error" ? (
-                    <button onClick={() => { setError(""); setCatalogRetry((value) => value + 1); }}>
+                    <Button onClick={() => { setError(""); setCatalogRetry((value) => value + 1); }}>
                       Retry loading {tab}
-                    </button>
+                    </Button>
                   ) : <p role="status">Loading {tab}…</p>
                 )}
                 {(tab === "tools" ? tools : skills).map((item) => (
                   <label className="capability-item" key={item.id}>
-                    <input
+                    <Input
                       type="checkbox"
                       checked={
                         item.enabled || ("required" in item && !!item.required)
@@ -642,7 +633,7 @@ export function BotSettings({
                   !(tab === "tools" ? tools : skills).length && (
                     <p className="muted">No {tab} were reported by Hermes.</p>
                   )}
-                <button
+                <Button
                   className="primary with-progress"
                   disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported}
                   onClick={() =>
@@ -663,7 +654,7 @@ export function BotSettings({
                   }
                 >
                   <SaveProgress state={progress(tab)} label={`Save ${tab}`} />
-                </button>
+                </Button>
               </>
             )}
           </>
@@ -689,7 +680,7 @@ export function BotSettings({
           </>
         )}
       </div>
-    </dialog>
+    </Dialog>
   );
 }
 function DeleteBot({
@@ -707,20 +698,20 @@ function DeleteBot({
   return confirm ? (
     <>
       <span>Delete {bot.name}?</span>
-      <button type="button" className="danger" disabled={busy} onClick={remove}>
+      <Button type="button" className="danger" disabled={busy} onClick={remove}>
         Yes, delete
-      </button>
-      <button type="button" onClick={() => setConfirm(false)}>Keep assistant</button>
+      </Button>
+      <Button type="button" onClick={() => setConfirm(false)}>Keep assistant</Button>
     </>
   ) : (
-    <button
+    <Button
       type="button"
       className="danger"
       disabled={busy || !supported}
       onClick={() => setConfirm(true)}
     >
       Delete assistant
-    </button>
+    </Button>
   );
 }
 function RoutineManager({
@@ -778,9 +769,9 @@ function RoutineManager({
         Routines keep working when you are away. Choose notification recipients
         explicitly.
       </p>
-      <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
+      <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <Button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
         onClick={() => { setEditing(null); setPreviewedSchedule(""); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id] }); }}>
-        <strong>{preset.name}</strong><small>{preset.description}</small></button>)}</div>
+        <strong>{preset.name}</strong><small>{preset.description}</small></Button>)}</div>
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
           <h3>{routine.name}</h3>
@@ -789,7 +780,7 @@ function RoutineManager({
           <p>{routine.prompt}</p>
           <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
           <div className="actions">
-            <button
+            <Button
               disabled={busy}
               onClick={() =>
                 void action(() =>
@@ -806,18 +797,18 @@ function RoutineManager({
               }
             >
               {routine.enabled ? "Pause" : "Resume"}
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => {
                 setEditing(routine.id);
                 setForm(routine);
               }}
             >
               Edit
-            </button>
+            </Button>
             {deleteId === routine.id ? (
               <>
-                <button
+                <Button
                   className="danger"
                   onClick={() =>
                     void action(() =>
@@ -828,16 +819,16 @@ function RoutineManager({
                   }
                 >
                   Confirm delete
-                </button>
-                <button onClick={() => setDeleteId("")}>Cancel</button>
+                </Button>
+                <Button onClick={() => setDeleteId("")}>Cancel</Button>
               </>
             ) : (
-              <button
+              <Button
                 className="danger"
                 onClick={() => setDeleteId(routine.id)}
               >
                 Delete
-              </button>
+              </Button>
             )}
           </div>
         </article>
@@ -869,7 +860,7 @@ function RoutineManager({
         <h3>{editing ? "Edit routine" : "New routine"}</h3>
         <label>
           Name
-          <input
+          <Input
             required
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -877,7 +868,7 @@ function RoutineManager({
         </label>
         <label>
           Instructions
-          <textarea
+          <Textarea
             required
             rows={4}
             value={form.prompt}
@@ -886,7 +877,7 @@ function RoutineManager({
         </label>
         <label>
           Schedule
-          <input
+          <Input
             required
             value={form.schedule}
             onChange={(e) => setForm({ ...form, schedule: e.target.value })}
@@ -895,7 +886,7 @@ function RoutineManager({
         </label>
         <RoutineSchedulePreview key={editing || "new"} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
         <label className="checkbox-label">
-          <input
+          <Input
             type="checkbox"
             checked={form.enabled}
             onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
@@ -906,7 +897,7 @@ function RoutineManager({
           <legend>Notify these household members</legend>
           {recipients.map((user) => (
             <label className="checkbox-label" key={user.id}>
-              <input
+              <Input
                 type="checkbox"
                 checked={form.recipientIds?.includes(user.id) || false}
                 onChange={(e) =>
@@ -929,11 +920,11 @@ function RoutineManager({
           results remain in the assistant conversation.
         </p>
         <div className="actions">
-          <button className="primary" disabled={busy || !supported || previewedSchedule !== form.schedule || !form.schedule.trim()}>
+          <Button type="submit" className="primary" disabled={busy || !supported || previewedSchedule !== form.schedule || !form.schedule.trim()}>
             {busy ? "Saving…" : editing ? "Save routine" : "Add routine"}
-          </button>
+          </Button>
           {editing && (
-            <button
+            <Button
               type="button"
               onClick={() => {
                 setEditing(null);
@@ -948,7 +939,7 @@ function RoutineManager({
               }}
             >
               Cancel edit
-            </button>
+            </Button>
           )}
         </div>
       </form>

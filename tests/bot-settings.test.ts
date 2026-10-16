@@ -230,7 +230,7 @@ describe("closing with unsaved edits", () => {
 
   it("treats saved details as the new baseline", async () => {
     await edit();
-    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    await click("Save changes");
     expect(write).toHaveBeenCalledWith("/bots/shared", expect.objectContaining({ instructions: "Rewritten from scratch" }), "PATCH");
     await escape();
     expect(container.textContent).not.toContain("Discard your unsaved changes?");
@@ -266,6 +266,26 @@ describe("closing with unsaved edits", () => {
     expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("Discard your unsaved changes?");
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("preserves the original opener after recovering from a noncancelable close", async () => {
+    await act(async () => root.unmount());
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    root = createRoot(container);
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
+    await edit();
+    instructions().focus();
+    dialog().open = false;
+    await act(async () => dialog().dispatchEvent(new Event("close")));
+    expect(dialog().open).toBe(true);
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await click("Keep editing");
+    expect(document.activeElement).toBe(instructions());
+    await act(async () => root.unmount());
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 
   it("returns focus to the control that was focused before the prompt", async () => {

@@ -1,0 +1,26 @@
+/* Keep the existing application's native defaults. Deliberately omit Preflight. */
+@layer theme, base, components, utilities;
+/* Prefix utilities so legacy semantic classes such as "inline" stay inert. */
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" layer(utilities) source(".") prefix(tw);
+
+/* Resolve against the app's live light/dark tokens, including system theme. */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-rail: var(--rail);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-attention: var(--attention);
+  --color-user: var(--user);
+  --font-sans: ui-rounded, "Avenir Next", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Base UI keyboard highlighting should match existing pointer highlighting. */
+[data-slot="menu-item"][data-highlighted]:not([data-disabled]) {
+  background: var(--accent-soft);
+}

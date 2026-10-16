@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { Dialog } from "../components/ui/dialog";
+import { Button } from "../components/ui/button";
+import { useEffect, useState } from "react";
 import type { FileRef } from "../shared/types";
 import { formatBytes, MAX_UPLOAD_BYTES } from "../shared/uploads";
 import { Icon } from "../components/Icon";
@@ -78,32 +80,25 @@ function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemo
     {state === "failed" && <span className="attachment-progress failed" aria-hidden="true"><Icon name="alert" size={22} /></span>}
   </>;
   return <li className={`attachment attachment-${state}${image ? " attachment-image" : ""}`} title={`${name}\n${meta}`}>
-    {onOpen ? <button type="button" className="attachment-thumb" aria-label={`Preview ${name}`} onClick={onOpen}>{thumb}</button>
+    {onOpen ? <Button type="button" className="attachment-thumb" aria-label={`Preview ${name}`} onClick={onOpen}>{thumb}</Button>
       : <span className="attachment-thumb">{thumb}</span>}
     {!image && <span className="attachment-label"><span>{name}</span><small>{meta}</small></span>}
     {image && upload && <span className="sr-only">{name}, {meta}</span>}
-    {onRetry && <button type="button" className="attachment-retry" aria-label={`Retry uploading ${name}`} onClick={onRetry}>
-      <Icon name="refresh" size={14} />Retry</button>}
-    <button type="button" className="attachment-remove" aria-label={removeLabel} onClick={onRemove}><Icon name="close" size={12} /></button>
+    {onRetry && <Button type="button" className="attachment-retry" aria-label={`Retry uploading ${name}`} onClick={onRetry}>
+      <Icon name="refresh" size={14} />Retry</Button>}
+    <Button type="button" className="attachment-remove" aria-label={removeLabel} onClick={onRemove}><Icon name="close" size={12} /></Button>
   </li>;
 }
 
 function AttachmentPreview({ preview, onClose }: { preview: Preview; onClose(): void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const element = dialog.current;
-    element?.showModal?.();
-    return () => { element?.close?.(); if (previous?.isConnected) previous.focus(); };
-  }, []);
-  return <dialog ref={dialog} className="attachment-preview" aria-label={`Preview of ${preview.name}`}
+  return <Dialog className="attachment-preview" aria-label={`Preview of ${preview.name}`}
     onCancel={onClose} onClose={onClose} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <img src={preview.url} alt={preview.name} />
     <footer>
       <span>{preview.name}{preview.size !== undefined && <small> · {formatBytes(preview.size)}</small>}</span>
-      <button type="button" className="icon-button" aria-label="Close preview" onClick={onClose}><Icon name="close" size={18} /></button>
+      <Button type="button" className="icon-button" aria-label="Close preview" onClick={onClose}><Icon name="close" size={18} /></Button>
     </footer>
-  </dialog>;
+  </Dialog>;
 }
 
 // Covers the conversation while files are dragged over it, so it is obvious where to drop them.

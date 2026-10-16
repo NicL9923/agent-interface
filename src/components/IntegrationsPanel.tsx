@@ -1,3 +1,7 @@
+import { Dialog } from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { NativeSelect } from "./ui/native-select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, write } from "../client-api";
 import type { Bot } from "../shared/types";
@@ -17,19 +21,13 @@ function authorizationUrl(value?: string) {
 }
 
 export function IntegrationsPanel({ bots, accountScope, onClose }: { bots: Bot[]; accountScope: string; onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [profile, setProfile] = useState(bots[0]?.id || "");
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    dialog.current?.showModal();
-    return () => { dialog.current?.close(); if (previous?.isConnected) previous.focus(); };
-  }, []);
-  return <dialog ref={dialog} className="integrations-panel" aria-labelledby="integrations-title" onCancel={onClose} onClose={onClose}>
-    <header><div><p className="eyebrow">Your household workspace</p><h2 id="integrations-title">Integrations</h2></div><button className="icon-button" aria-label="Close integrations" onClick={onClose}><Icon name="close" /></button></header>
+  return <Dialog className="integrations-panel" aria-labelledby="integrations-title" onCancel={onClose} onClose={onClose}>
+    <header><div><p className="eyebrow">Your household workspace</p><h2 id="integrations-title">Integrations</h2></div><Button className="icon-button" aria-label="Close integrations" onClick={onClose}><Icon name="close" /></Button></header>
     <p className="muted">Connect the accounts and services your assistants use. A saved connection is checked separately from its permissions.</p>
-    {bots.length > 1 && <label className="integration-profile">Connections for<select value={profile} onChange={e => setProfile(e.target.value)}>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label>}
+    {bots.length > 1 && <label className="integration-profile">Connections for<NativeSelect value={profile} onChange={e => setProfile(e.target.value)}>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>}
     {profile ? <IntegrationList key={profile} profile={profile} bots={bots} accountScope={accountScope} /> : <p>Create an assistant before connecting its services.</p>}
-  </dialog>;
+  </Dialog>;
 }
 
 export function IntegrationList({ profile, bots, accountScope = "" }: { profile: string; bots: Bot[]; accountScope?: string }) {
@@ -115,39 +113,39 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   };
   const categories = [...new Set(catalog?.connections.map(item => item.category))];
   return <div className="integration-list">
-    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><button disabled={loading || !!busy} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh status"}</button></div>
+    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button disabled={loading || !!busy} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
     {error && <p role="alert" className="form-error">{error}</p>}
-    {!catalog && !loading && error && <button onClick={() => void refresh()}>Try again</button>}
+    {!catalog && !loading && error && <Button onClick={() => void refresh()}>Try again</Button>}
     {flow && <section className="integration-flow" aria-label="Connection sign-in" role="status">
       <strong>{flow.status === "approved" || flow.kind === "connected" ? "Connection ready" : flow.status === "pending" ? "Finish connecting your account" : "Sign-in status"}</strong>
       <p>{flow.message}</p>
       {flow.userCode && <p>Enter this code: <code className="integration-code">{flow.userCode}</code></p>}
       {flow.status === "pending" && authorizationUrl(flow.url) && <a href={authorizationUrl(flow.url)} target="_blank" rel="noopener noreferrer">Open sign-in <Icon name="external" size={15} /></a>}
-      {flow.callbackInput && flow.status === "pending" && <form onSubmit={e => { e.preventDefault(); void finishFlow(); }}><label>Returned address<input type="url" required value={callback} onChange={e => setCallback(e.target.value)} placeholder="Paste the full browser address after sign-in" autoComplete="off" /></label><button disabled={!!busy}>Finish connection</button></form>}
-      {flow.status === "pending" ? <button disabled={!!busy} onClick={() => void finishFlow(true)}>Cancel sign-in</button> : <button onClick={() => setFlow(undefined)}>Dismiss</button>}
+      {flow.callbackInput && flow.status === "pending" && <form onSubmit={e => { e.preventDefault(); void finishFlow(); }}><label>Returned address<Input type="url" required value={callback} onChange={e => setCallback(e.target.value)} placeholder="Paste the full browser address after sign-in" autoComplete="off" /></label><Button type="submit" disabled={!!busy}>Finish connection</Button></form>}
+      {flow.status === "pending" ? <Button disabled={!!busy} onClick={() => void finishFlow(true)}>Cancel sign-in</Button> : <Button onClick={() => setFlow(undefined)}>Dismiss</Button>}
     </section>}
     {editing && <form className="integration-setup" onSubmit={e => { e.preventDefault(); void action(editing.id, "connect", { profile, fields }); }}>
       <h3>Connect {editing.name}</h3><p className="muted">Connection credentials stay with Hermes. Secret fields are cleared after saving.</p>
-      {editing.setup.map(field => <label key={field.key}>{field.label}{field.options ? <select required={field.required} value={fields[field.key] || ""} onChange={e => setFields({ ...fields, [field.key]: e.target.value })}>{!fields[field.key] && <option value="">Choose a sign-in method</option>}{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input required={field.required} type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"} autoComplete="off" value={fields[field.key] || ""} onChange={e => setFields({ ...fields, [field.key]: e.target.value })} />}</label>)}
-      <div className="actions"><button className="primary" disabled={!!busy}>{busy ? "Connecting…" : "Connect"}</button><button type="button" disabled={!!busy} onClick={() => { setEditing(undefined); setFields({}); }}>Cancel</button></div>
+      {editing.setup.map(field => <label key={field.key}>{field.label}{field.options ? <NativeSelect required={field.required} value={fields[field.key] || ""} onChange={e => setFields({ ...fields, [field.key]: e.target.value })}>{!fields[field.key] && <option value="">Choose a sign-in method</option>}{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : <Input required={field.required} type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"} autoComplete="off" value={fields[field.key] || ""} onChange={e => setFields({ ...fields, [field.key]: e.target.value })} />}</label>)}
+      <div className="actions"><Button type="submit" className="primary" disabled={!!busy}>{busy ? "Connecting…" : "Connect"}</Button><Button type="button" disabled={!!busy} onClick={() => { setEditing(undefined); setFields({}); }}>Cancel</Button></div>
     </form>}
     {categories.map(category => <section className="integration-group" key={category}><h3>{categoryLabels[category] || category}</h3><div className="integration-cards">{catalog!.connections.filter(item => item.category === category).map(item => <article className="integration-card" key={item.id} data-status={item.status}>
       <div className="integration-card-heading"><h4>{item.name}</h4><span className="integration-status">{statusLabels[item.status]}</span></div>
       {item.account && <p className="integration-account">{item.account}</p>}<p>{item.detail}</p>
       <dl><div><dt>Managed by</dt><dd>{item.owner}</dd></div><div><dt>Assistants</dt><dd>{item.botIds.length ? item.botIds.map(id => bots.find(bot => bot.id === id)?.name || id).join(", ") : "This assistant"}</dd></div><div><dt>Last checked</dt><dd>{item.checkedAt ? <When value={item.checkedAt} /> : "Not checked yet"}</dd></div></dl>
       {item.permissions.length > 0 && <details><summary>Access & permissions</summary><ul>{item.permissions.map(permission => <li key={permission.id}>{permission.name}<span>{permission.granted === true ? "Granted" : permission.granted === false ? "Missing" : "Not checked"}</span></li>)}</ul></details>}
-      {disconnect === item.id ? <div className="integration-confirmation"><p>Disconnect {item.name}? Assistants using it will lose access.</p><div className="actions"><button className="danger" disabled={!!busy} onClick={() => void action(item.id, "disconnect")}>Disconnect</button><button disabled={!!busy} onClick={() => setDisconnect("")}>Keep connected</button></div></div> : <div className="actions">
-        {item.actions.connect && <button className={item.status !== "connected" ? "primary" : ""} disabled={!!busy || !catalog!.canManage || flow?.status === "pending"} onClick={() => { if (item.setup.length) { setEditing(item); setFields(Object.fromEntries(item.setup.filter(field => field.defaultValue !== undefined).map(field => [field.key, field.defaultValue!]))); } else void action(item.id, "connect"); }}>{busy === item.id ? "Working…" : item.status === "not_connected" || item.status === "unsupported" ? "Connect" : "Reconnect"}</button>}
-        {item.actions.check && <button disabled={!!busy} onClick={() => void action(item.id, "check")}>Check connection</button>}
-        {item.actions.disconnect && <button disabled={!!busy || !catalog!.canManage} onClick={() => setDisconnect(item.id)}>Disconnect</button>}
+      {disconnect === item.id ? <div className="integration-confirmation"><p>Disconnect {item.name}? Assistants using it will lose access.</p><div className="actions"><Button className="danger" disabled={!!busy} onClick={() => void action(item.id, "disconnect")}>Disconnect</Button><Button disabled={!!busy} onClick={() => setDisconnect("")}>Keep connected</Button></div></div> : <div className="actions">
+        {item.actions.connect && <Button className={item.status !== "connected" ? "primary" : ""} disabled={!!busy || !catalog!.canManage || flow?.status === "pending"} onClick={() => { if (item.setup.length) { setEditing(item); setFields(Object.fromEntries(item.setup.filter(field => field.defaultValue !== undefined).map(field => [field.key, field.defaultValue!]))); } else void action(item.id, "connect"); }}>{busy === item.id ? "Working…" : item.status === "not_connected" || item.status === "unsupported" ? "Connect" : "Reconnect"}</Button>}
+        {item.actions.check && <Button disabled={!!busy} onClick={() => void action(item.id, "check")}>Check connection</Button>}
+        {item.actions.disconnect && <Button disabled={!!busy || !catalog!.canManage} onClick={() => setDisconnect(item.id)}>Disconnect</Button>}
       </div>}
     </article>)}</div></section>)}
     {catalog && catalog.connections.length === 0 && <p className="muted">Hermes has not reported any connections for this assistant.</p>}
-    {catalog?.canManage && <section className="integration-custom"><button aria-expanded={custom} onClick={() => setCustom(!custom)}><Icon name="plus" size={18} /> Add custom MCP connection</button>{custom && <form onSubmit={async e => {
+    {catalog?.canManage && <section className="integration-custom"><Button aria-expanded={custom} onClick={() => setCustom(!custom)}><Icon name="plus" size={18} /> Add custom MCP connection</Button>{custom && <form onSubmit={async e => {
       e.preventDefault(); if (locked.current) return; locked.current = true; setBusy("mcp"); setError("");
       try { const next = await write<IntegrationFlow | IntegrationConnection>("/integrations/mcp", { profile, ...mcp, token: mcp.auth === "bearer" ? mcp.token : undefined }); if (alive.current) { if ("kind" in next) acceptFlow(next); setMcp({ name: "", url: "", auth: "none", token: "" }); setCustom(false); await refresh(); } }
       catch (e) { if (alive.current) setError(actionError(e)); }
       finally { locked.current = false; if (alive.current) setBusy(""); }
-    }}><label>Connection name<input required pattern="[A-Za-z0-9_-]{1,80}" title="Use letters, numbers, underscores, or hyphens, up to 80 characters" value={mcp.name} onChange={e => setMcp({ ...mcp, name: e.target.value })} /></label><label>Server address<input required type="url" placeholder="https://" value={mcp.url} onChange={e => setMcp({ ...mcp, url: e.target.value })} /></label><label>Sign-in method<select value={mcp.auth} onChange={e => setMcp({ ...mcp, auth: e.target.value, token: "" })}><option value="none">No sign-in</option><option value="oauth">Sign in with browser</option><option value="bearer">Access token</option></select></label>{mcp.auth === "bearer" && <label>Access token<input required type="password" autoComplete="off" value={mcp.token} onChange={e => setMcp({ ...mcp, token: e.target.value })} /></label>}<button className="primary" disabled={!!busy}>Add connection</button></form>}</section>}
+    }}><label>Connection name<Input required pattern="[A-Za-z0-9_-]{1,80}" title="Use letters, numbers, underscores, or hyphens, up to 80 characters" value={mcp.name} onChange={e => setMcp({ ...mcp, name: e.target.value })} /></label><label>Server address<Input required type="url" placeholder="https://" value={mcp.url} onChange={e => setMcp({ ...mcp, url: e.target.value })} /></label><label>Sign-in method<NativeSelect value={mcp.auth} onChange={e => setMcp({ ...mcp, auth: e.target.value, token: "" })}><option value="none">No sign-in</option><option value="oauth">Sign in with browser</option><option value="bearer">Access token</option></NativeSelect></label>{mcp.auth === "bearer" && <label>Access token<Input required type="password" autoComplete="off" value={mcp.token} onChange={e => setMcp({ ...mcp, token: e.target.value })} /></label>}<Button type="submit" className="primary" disabled={!!busy}>Add connection</Button></form>}</section>}
   </div>;
 }

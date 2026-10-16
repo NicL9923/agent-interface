@@ -441,11 +441,11 @@ describe("conversation state", () => {
       const row = container.querySelector<HTMLButtonElement>(".home-list .bot-row")!;
       expect(row.textContent).toContain("Pot roast tonight.");
       expect(row.querySelector("time")?.getAttribute("dateTime")).toBe(other.lastMessage.at);
-      await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 20, clientY: 20 })));
-      await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.bot-menu [role="menuitem"]')].find(item => item.textContent === "Pin to top")!.click());
+      await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 20, clientY: 20 })));
+      await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>('.bot-menu [role="menuitem"]')].find(item => item.textContent === "Pin to top")!.click());
       expect(write).toHaveBeenCalledWith("/preferences", expect.objectContaining({ favorites: ["shared", "other"] }), "PATCH");
       expect(pinned()).toEqual(["Shared", "Other"]);
-      expect(container.querySelector(".bot-menu")).toBeNull();
+      expect(document.body.querySelector(".bot-menu")).toBeNull();
       const toggle = container.querySelector<HTMLButtonElement>('.chat-header [aria-label="Unpin assistant"]')!;
       await act(async () => toggle.click());
       expect(pinned()).toEqual(["Other"]);
@@ -456,18 +456,18 @@ describe("conversation state", () => {
     await render();
     const row = container.querySelector<HTMLButtonElement>(".bot-row")!;
     const touch = (type: string, x: number, y: number) => {
-      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y });
-      Object.defineProperty(event, "pointerType", { value: "touch" });
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] });
       return act(async () => row.dispatchEvent(event));
     };
-    await touch("pointerdown", 20, 20);
-    for (let y = 22; y <= 60; y += 2) await touch("pointermove", 20, y);
+    await touch("touchstart", 20, 20);
+    for (let y = 22; y <= 60; y += 2) await touch("touchmove", 20, y);
     await advance(600);
-    expect(container.querySelector(".bot-menu")).toBeNull();
-    await touch("pointerup", 20, 60);
-    await touch("pointerdown", 20, 20);
+    expect(document.body.querySelector(".bot-menu")).toBeNull();
+    await touch("touchend", 20, 60);
+    await touch("touchstart", 20, 20);
     await advance(600);
-    expect(container.querySelector(".bot-menu")).not.toBeNull();
+    expect(document.body.querySelector(".bot-menu")).not.toBeNull();
   });
 
   it("does not save the switch-time scroll clamp as the next assistant's reading position", async () => {

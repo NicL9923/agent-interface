@@ -13,7 +13,7 @@ const { filesBefore, historyWindow, windowFiles } = await tsImport('../../src/sh
 const { inlineUiShell, inlineUiShellPolicy } = await tsImport('../../src/server/inline-ui.ts', import.meta.url);
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
-const root = resolve('dist/client');
+const root = resolve(process.env.PREVIEW_CLIENT_DIR || 'dist/client');
 // LAN previews need request IDs even when HTTPS-only randomUUID is unavailable.
 // Microphone and push remain subject to the browser's real secure-context rules.
 // Served as a file, not inline, so the app's own Content-Security-Policy applies unchanged.

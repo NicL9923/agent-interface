@@ -75,6 +75,24 @@ For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and
 requests to the app server. The built application serves its API and static files
 from one Fastify process.
 
+## Web UI components
+
+Shared controls live in `src/components/ui`, with shadcn configuration in
+`components.json` and Base UI handling context menus and popovers. Keep the
+existing WildBots colors, typography and spacing when adding controls.
+
+Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
+prefix so they cannot collide with existing semantic class names. Preflight is
+omitted to preserve native control styling. Keep custom layout, avatar and
+markdown CSS where it is clearer than utilities.
+
+Use the shared `Button`, `Input`, `Textarea` and `NativeSelect` controls in the
+migrated settings and panels. `Button` defaults to `type="button"`; form submit
+actions must explicitly use `type="submit"`. The shared `Dialog` preserves the
+native top layer and owns opening, closing and focus restoration. Pass `open`
+for panels that stay mounted while hidden. Nested overlay wrappers inherit the
+dialog as their portal container.
+
 ## Connect Hermes
 
 Hermes runs separately from this application. Guided setup saves `HERMES_URL` and

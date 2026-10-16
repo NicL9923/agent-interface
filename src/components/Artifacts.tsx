@@ -1,3 +1,7 @@
+import { Dialog } from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { NativeSelect } from "./ui/native-select";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../client-api";
 import type { EarlierFiles } from "../shared/history";
@@ -95,12 +99,12 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
     setOpen(true);
   };
   return <>
-    <button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
+    <Button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
       title="Browse artifacts" aria-haspopup="dialog" onClick={show}>
       <Icon name="file" />
       <span className="artifacts-button-label">Artifacts</span>
       {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
-    </button>
+    </Button>
     {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
       earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
       unavailable={unavailable} onClose={() => setOpen(false)} />}
@@ -110,7 +114,6 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
 function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose }: {
   bot: Bot; artifacts: Artifact[]; loading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const searchId = useId();
   const [query, setQuery] = useState("");
@@ -120,24 +123,18 @@ function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose 
     && (kind === "all" || fileKind(file) === kind));
   // Polling can add/remove files. Keep a selection only while it is in the current results.
   const selected = filtered.find(({ file }) => file.id === selectedId) || filtered[0];
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const element = dialog.current;
-    element?.showModal();
-    return () => { element?.close(); if (previous?.isConnected) previous.focus(); };
-  }, []);
-  return <dialog ref={dialog} className="artifacts-dialog" aria-labelledby={titleId}
+  return <Dialog className="artifacts-dialog" aria-labelledby={titleId}
     onCancel={onClose} onClose={onClose}>
     <header className="artifacts-header">
       <div><p className="eyebrow">{bot.name}</p><h2 id={titleId}>Artifacts <span>{artifacts.length}</span></h2></div>
-      <button className="icon-button" aria-label="Close artifacts" onClick={onClose}><Icon name="close" /></button>
+      <Button className="icon-button" aria-label="Close artifacts" onClick={onClose}><Icon name="close" /></Button>
     </header>
     <div className="artifacts-toolbar">
-      <label htmlFor={searchId}>Search files<input id={searchId} type="search" value={query}
+      <label htmlFor={searchId}>Search files<Input id={searchId} type="search" value={query}
         placeholder="Find a filename" onChange={event => setQuery(event.target.value)} /></label>
-      <label>File type<select value={kind} onChange={event => setKind(event.target.value as FileKind | "all")}>
+      <label>File type<NativeSelect value={kind} onChange={event => setKind(event.target.value as FileKind | "all")}>
         {kinds.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select></label>
+      </NativeSelect></label>
     </div>
     {unavailable && <p className="artifacts-notice" role="status">{artifacts.length
       ? "The connection is unavailable. These are the last reported files; opening one may need a reconnect."
@@ -149,20 +146,20 @@ function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose 
       : !artifacts.length ? <div className="artifacts-empty"><Icon name="file" size={36} />
         <h3>No artifacts yet</h3><p>Generated outputs and files shared in this conversation will appear here.</p></div>
       : !filtered.length ? <div className="artifacts-empty" role="status"><h3>No matching files</h3>
-        <p>Try another filename or file type.</p><button onClick={() => { setQuery(""); setKind("all"); }}>Clear filters</button></div>
+        <p>Try another filename or file type.</p><Button onClick={() => { setQuery(""); setKind("all"); }}>Clear filters</Button></div>
       : <div className="artifacts-browser">
         <nav className="artifacts-list" aria-label="Conversation files">
-          {filtered.map(artifact => <button key={artifact.file.id}
+          {filtered.map(artifact => <Button key={artifact.file.id}
             className={`artifact-item ${selected?.file.id === artifact.file.id ? "selected" : ""}`}
             aria-current={selected?.file.id === artifact.file.id ? "true" : undefined}
             onClick={() => setSelectedId(artifact.file.id)}>
             <Icon name="file" size={19} /><span><strong>{artifact.file.name}</strong>
               <small>{artifact.source}{fileSize(artifact.file.size) && ` · ${fileSize(artifact.file.size)}`}</small></span>
-          </button>)}
+          </Button>)}
         </nav>
         {selected && <ArtifactDetail key={`${selected.file.id}:${selected.file.url}:${selected.file.mime}`} artifact={selected} />}
       </div>}
-  </dialog>;
+  </Dialog>;
 }
 
 function ArtifactDetail({ artifact }: { artifact: Artifact }) {
@@ -200,7 +197,7 @@ function FilePreview({ file, url }: { file: FileRef; url: string }) {
   return <>
     {loading && <p className="artifact-preview-status" role="status">Loading preview…</p>}
     {failed ? <div className="artifact-preview-error" role="alert"><p>We couldn’t load this preview. The file may be unavailable or your connection may have changed.</p>
-      <button onClick={retry}>Retry preview</button></div> : kind === "image"
+      <Button onClick={retry}>Retry preview</Button></div> : kind === "image"
       ? <img key={attempt} src={url} alt={file.name} decoding="async" onLoad={loaded} onError={error} />
       : kind === "audio" ? <audio key={attempt} src={url} controls preload="metadata" onLoadedMetadata={loaded} onError={error} aria-label={file.name} />
         : <video key={attempt} src={url} controls preload="metadata" playsInline onLoadedMetadata={loaded} onError={error} aria-label={file.name} />}
@@ -251,7 +248,7 @@ function TextPreview({ file, url }: { file: FileRef; url: string }) {
     return () => { live = false; controller.abort(); clearTimeout(timer); };
   }, [url, attempt]);
   return preview.error ? <div className="artifact-preview-error" role="alert"><p>{preview.error}</p>
-    <button onClick={() => setAttempt(value => value + 1)}>Retry preview</button></div>
+    <Button onClick={() => setAttempt(value => value + 1)}>Retry preview</Button></div>
     : preview.text === undefined ? <p role="status">Loading preview…</p>
       : <div className="artifact-text-preview"><pre aria-label={`Contents of ${file.name}`}>{preview.text || "This file is empty."}</pre>
         {preview.truncated && <p className="artifact-preview-status">Showing the first 256 KB. Download the file to read the rest.</p>}</div>;
