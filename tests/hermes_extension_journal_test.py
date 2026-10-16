@@ -10,6 +10,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -26,7 +27,7 @@ def image_text(text, images):
 
 class FakeHermes:
     """Just enough of tui_gateway for install() and agent-interface.open."""
-    def __init__(self, messages, bridge=False, environment=None):
+    def __init__(self, messages, bridge=False, environment=None, invocation=False):
         self.messages = messages
         self.environment = environment or {}
         self.methods = {}
@@ -50,6 +51,13 @@ class FakeHermes:
         server._maybe_schedule_auto_continue = lambda *args: None
         server._attach_session_transport = lambda session, transport: None
         server._session_cwd = lambda session: "/"
+        self.invoked = []
+        if invocation:
+            def invoke(sid, session, turn, *args, **kwargs):
+                text = kwargs.get("text", args[-1] if args else None)
+                self.invoked.append((turn.agent.ephemeral_system_prompt, text))
+                raise RuntimeError("Synthetic provider failure")
+            server._invoke_agent = invoke
         server._build_persist_message_with_image_refs = image_text
         requests = types.SimpleNamespace(_lock=threading.Lock(), _open={})
         gateway = types.ModuleType("tui_gateway")
@@ -96,6 +104,71 @@ class FakeHermes:
 
     def open(self):
         return self.methods["agent-interface.open"]("poll", {"profile": "default"})["result"]
+
+
+class InlineGuidanceTests(unittest.TestCase):
+    def pending_app_turn(self, hermes):
+        receipt(hermes.journal.db, "app-root", 1, time.time(), text="Original user text")
+        hermes.journal.db.execute("UPDATE receipts SET terminal=0,session_id='sid' WHERE request_id='app-root'")
+
+    def test_current_native_invocation_uses_post_model_switch_agent_and_restores_on_error(self):
+        with FakeHermes([], invocation=True) as hermes:
+            server = hermes.modules["tui_gateway.server"]
+            hermes.open()
+            self.pending_app_turn(hermes)
+            session = server._sessions["sid"]
+            stale_agent = types.SimpleNamespace(ephemeral_system_prompt="Previous model")
+            session["agent"] = stale_agent
+            agent = types.SimpleNamespace(ephemeral_system_prompt="Current model")
+            turn = types.SimpleNamespace(agent=agent)
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, "Synthetic provider failure"):
+                    server._invoke_agent("sid", session, turn, None, None, None, [], None, None, None, "Original user text")
+            self.assertEqual(hermes.invoked[0][1], "Original user text")
+            self.assertTrue(hermes.invoked[0][0].startswith("Current model\n\n"))
+            self.assertEqual(hermes.invoked[0][0].count("fenced wildbots-html"), 1)
+            self.assertEqual(hermes.invoked[0], hermes.invoked[1])
+            self.assertEqual(agent.ephemeral_system_prompt, "Current model")
+            self.assertEqual(stale_agent.ephemeral_system_prompt, "Previous model")
+            with self.assertRaises(RuntimeError):
+                server._invoke_agent("sid", session, turn, None, None, None, [], "bot_dm", None, {"kind": "agent"}, "Original user text")
+            self.assertEqual(hermes.invoked[-1][0], "Current model")
+            with self.assertRaises(RuntimeError):
+                server._invoke_agent("sid", session, turn, None, None, None, [], None, None, None, "Other client text")
+            self.assertEqual(hermes.invoked[-1][0], "Current model")
+
+    def test_guidance_is_ephemeral_and_only_for_app_sessions(self):
+        with FakeHermes([]) as hermes:
+            server = hermes.modules["tui_gateway.server"]
+            hermes.open()
+            self.pending_app_turn(hermes)
+            session = server._sessions["sid"]
+            # The legacy native runner is a no-op. Observe the guidance while it executes.
+            wrapper = server._run_prompt_submit
+            # Observe the prompt assigned during native execution and its restoration.
+            class ObservedAgent:
+                def __init__(self):
+                    self.values = []
+                    self._prompt = "Existing private instructions"
+                @property
+                def ephemeral_system_prompt(self):
+                    return self._prompt
+                @ephemeral_system_prompt.setter
+                def ephemeral_system_prompt(self, value):
+                    self.values.append(value)
+                    self._prompt = value
+            observed = ObservedAgent()
+            session["agent"] = observed
+            for _ in range(2):
+                wrapper("request", "sid", session, "Original user text")
+            self.assertEqual(observed.ephemeral_system_prompt, "Existing private instructions")
+            self.assertEqual(observed.values[0].count("fenced wildbots-html"), 1)
+            self.assertTrue(observed.values[0].startswith("Existing private instructions\n\n"))
+            self.assertEqual(observed.values[0], observed.values[2])
+            wrapper("request", "sid", session, "Other client text")
+            wrapper("__bot_dm__", "sid", session, "Original user text")
+            self.assertEqual(len(observed.values), 4)
+            self.assertEqual(hermes.messages, [])
 
 
 def receipt(db, request_id, row_id, created, *, profile="default", run_id=None, text=None, attachments=(), steering=0, status="accepted", actor="nicolas"):

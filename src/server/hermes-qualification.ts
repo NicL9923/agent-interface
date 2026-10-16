@@ -4,6 +4,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const integrationFiles = [
+  "src/shared/inline-ui-instructions.json", "src/shared/inline-ui.ts", "src/server/inline-ui.ts",
   "src/shared/message-origin.ts",
   "src/shared/collaboration.ts", "src/server/collaboration.ts",
   "src/shared/discovery.ts", "src/server/discovery.ts",

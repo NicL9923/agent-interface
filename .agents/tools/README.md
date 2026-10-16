@@ -1,5 +1,8 @@
 # Repository tools
 
+- `check-inline-ui-browser.js` is an expression to evaluate in a loopback WildBots preview. It checks the real sandbox's DOM, cookie, storage and fetch isolation, then attempts a navigation. Browser diagnostics must show `frame-src about:` blocking that navigation with no outbound request.
+- `PREVIEW_INLINE_UI=1 node .agents/tools/preview-app.mjs` shows a local hay supply calculator for inline rendering, resizing, theme, keyboard and reset checks. It uses synthetic data.
+
 - `python3 .agents/tools/stage-recovery-tools.py MERGED_COMMIT --host SSH_ALIAS --app-base PATH` copies the exact Git recovery helper and its `deploy_common.py` into a fresh private host audit directory, verifies their hashes and records provenance without changing live services or app source.
 - `python3 .agents/tools/setup-shared-computer.py` stages private desktop/browser and terminal settings on the Hermes Linux service account without restarting live services; `--start` enables the shared computer after guarded release activation.
 - `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/accept-shared-computer.mjs PRIVATE_RECEIPT_PATH` checks authenticated native RFB, takeover/handback and a real terminal reconnect/end through the deployed app on its Linux host; uses a terminal administrator with a pre-confirmed temporary app session, so administrators get one "System terminal opened" alert; refuses to touch an existing member shell and removes its temporary app session.

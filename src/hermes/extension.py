@@ -332,6 +332,46 @@ def install(path=None):
                 continue
         return registered
 
+    # Add client rendering guidance at model-call time, without changing SOUL,
+    # persisted user text, receipt digests, image recovery, or steering matches.
+    inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
+    def app_prompt(sid, text, display_kind=None, author=None):
+        if not isinstance(text, str) or display_kind is not None or author is not None:
+            return False
+        # A canonical session also accepts DMs, background work and other clients.
+        # Only an unresolved app root with this exact input gets rendering guidance.
+        with journal.lock:
+            return journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 AND status IN ('uncertain','accepted') AND input_text=? LIMIT 1", (sid, text)).fetchone() is not None
+
+    def with_inline_guidance(original, eligible, agent, *args, **kwargs):
+        if not eligible or agent is None:
+            return original(*args, **kwargs)
+        prior = getattr(agent, "ephemeral_system_prompt", None)
+        if inline_instructions not in (prior or ""):
+            agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, inline_instructions) if part)
+        try:
+            return original(*args, **kwargs)
+        finally:
+            agent.ephemeral_system_prompt = prior
+
+    # Newer Hermes splits the invocation from turn setup and model changes.
+    # Older qualified revisions enter with an already-built session agent.
+    if hasattr(server, "_invoke_agent"):
+        original_invoke = server._invoke_agent
+        def invoke(sid, session, turn, *args, **kwargs):
+            text = kwargs.get("text", args[7] if len(args) > 7 else None)
+            display_kind = kwargs.get("display_kind", args[4] if len(args) > 4 else None)
+            author = kwargs.get("turn_author", args[6] if len(args) > 6 else None)
+            return with_inline_guidance(original_invoke, app_prompt(sid, text, display_kind, author), turn.agent, sid, session, turn, *args, **kwargs)
+        server._invoke_agent = invoke
+    else:
+        original_run = server._run_prompt_submit
+        def run(rid, sid, session, *args, **kwargs):
+            text = kwargs.get("text", args[0] if args else None)
+            eligible = not str(rid).startswith("__") and app_prompt(sid, text, kwargs.get("display_kind"), kwargs.get("turn_author"))
+            return with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args, **kwargs)
+        server._run_prompt_submit = run
+
     original_write = server.write_json
     def history_row_floor(session):
         # Native flushes stamp raw rows with their durable IDs. Snapshot those

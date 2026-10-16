@@ -1,6 +1,21 @@
 import XCTest
 
 final class ExperienceFlowTests: XCTestCase {
+  func testInlineHtmlRunsLocalControlsAndResets() {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_INLINE_UI"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launch()
+    let compare = app.webViews.buttons["Compare supply"]
+    XCTAssertTrue(compare.waitForExistence(timeout: 15), app.debugDescription)
+    compare.tap()
+    XCTAssertTrue(app.webViews.staticTexts["40 days"].waitForExistence(timeout: 5))
+    capture(app, name: "Native inline UI expanded")
+    app.buttons["Reset view"].tap()
+    XCTAssertTrue(app.webViews.staticTexts["24 days"].waitForExistence(timeout: 5))
+  }
   private func launch() -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
