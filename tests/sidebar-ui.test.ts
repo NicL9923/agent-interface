@@ -29,7 +29,7 @@ beforeEach(() => {
       ],
     } as Bootstrap,
     botId: "ranch", view: "conversation", state: "working",
-    connectionLost: false, offline: false, mobile: false, open: true,
+    connectionLost: false, offline: false, mobile: false, open: true, update: null,
     onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(),
     onSettings: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
   };

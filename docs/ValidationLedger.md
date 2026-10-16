@@ -26,8 +26,19 @@ a replacement token, and a first-visit tab could miss another tab's later update
 Cleanup now requires the ended token, native cleanup captures its old activity
 before awaiting, and the browser remembers when first control has happened.
 All 39 focused lifecycle, API, browser-update and publishing checks and TypeScript
-passed after these fixes. Current source is
+passed after these fixes. Source before merging current main was
 `sha256:6a60b7695d13215d6f039e59336a7e4a9ec4819f07f2f1454f625f576b058d47`.
+
+Current main's inline UI and pinned activity changes were merged at `41bca04`.
+The generated Xcode project was regenerated with both additions, and its new
+Sidebar fixture now supplies the update prop. The integrated candidate passed
+all 730 tests on Node 24 and 26, the production build (`cf33a3930eb8526d`),
+the unsigned iOS Release archive and simulator build-for-testing. Its source is
+`sha256:89b3ced09fcaf1351adfd5bc00e07ace63f395992829a220cdb16fad60ba10d4`.
+The Python run passed 18 files and skipped the tmux-only file. The worker test
+file hit the real free-space guard on the internal temporary volume; its rerun
+uses the mounted development SSD. This is an environment failure, with its
+result still pending.
 
 Both the iOS Release archive and simulator test targets compiled with Xcode
 27.1, build 27A9275. Before the Xcode update, 131 native unit checks completed
