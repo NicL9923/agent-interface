@@ -6,12 +6,14 @@ import { Icon } from "../components/Icon";
 import { useMinute } from "../components/When";
 import { formatListDate } from "../time";
 import type { View } from "./view";
+import type { AppUpdate } from "./use-browser";
+import { UpdateNotice } from "./UpdateNotice";
 import "./home.css";
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase() || "?";
 
 /** Home: pinned assistants up top, then everyone else with their latest message. */
-export function Sidebar({ boot, botId, view, state, connectionLost, offline, mobile, open, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings }: {
+export function Sidebar({ boot, botId, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings }: {
   boot: Bootstrap;
   botId: string;
   view: View;
@@ -20,6 +22,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
   offline: boolean;
   mobile: boolean;
   open: boolean;
+  update: AppUpdate | null;
   onSelectBot(id: string): void;
   onView(view: View): void;
   onNewBot(): void;
@@ -97,6 +100,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
           <button type="button" className="home-round" aria-label="New assistant" onClick={onNewBot}><Icon name="plus" /></button>
         </span>
       </header>
+      <UpdateNotice update={update} />
       <div className="home-scroll">
         {pinned.length > 0 && <ul className="home-pinned" aria-label="Pinned assistants">
           {pinned.map(bot => {

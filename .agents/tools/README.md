@@ -1,5 +1,7 @@
 # Repository tools
 
+- `node .agents/tools/publish-ios.mjs setup|prepare|status|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD` registers Apple identifiers, checks App Store profiles, archives and verifies the exact signed IPA, uploads it once, and confirms internal TestFlight availability before producing update settings. Uses private Mac credentials in `~/.config/wildbots/apple/config.json`; see `ios/README.md`. `apple-api.mjs` supplies authenticated requests, bounded pagination, and distribution checks.
+
 - `check-inline-ui-browser.js` is an expression to evaluate in a loopback WildBots preview. It checks the real sandbox's DOM, cookie, storage and fetch isolation, then attempts a navigation. Browser diagnostics must show `frame-src about:` blocking that navigation with no outbound request.
 - `PREVIEW_INLINE_UI=1 node .agents/tools/preview-app.mjs` shows a local hay supply calculator for inline rendering, resizing, theme, keyboard and reset checks. It uses synthetic data.
 

@@ -16,7 +16,7 @@ import { When } from "../components/When";
 import { activityLabels, isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
 import type { SavedConversation } from "./storage";
 import type { useConversation } from "./use-conversation";
-export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, workerUpdate, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
+export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -31,7 +31,6 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
   reconnect(): Promise<void>;
   error: string;
   setError(message: string): void;
-  workerUpdate: ServiceWorker | null;
   notifications: ReturnType<typeof useDeviceNotifications>;
   scroll: RefObject<HTMLDivElement | null>;
   content: RefCallback<HTMLDivElement>;
@@ -53,23 +52,6 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
   const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
   return (
     <>
-      {workerUpdate && (
-        <div className="notice">
-          An app update is ready.
-          <button
-            onClick={() => {
-              navigator.serviceWorker.addEventListener(
-                "controllerchange",
-                () => location.reload(),
-                { once: true },
-              );
-              workerUpdate.postMessage({ type: "SKIP_WAITING" });
-            }}
-          >
-            Reload when ready
-          </button>
-        </div>
-      )}
       {connectionLost && selected && (
         <ConnectionPanel compact connection={boot.connection} offline={offline}
           appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />

@@ -24,6 +24,7 @@ import { installAuth, signedIn, stillSignedIn } from "./auth.js";
 import { installBotAccess, notFound, redactAgents, visible, visibleTo } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
 import type { ApnsSender } from "./apns.js";
+import type { LiveActivitySender } from "./live-activity.js";
 import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
 import { installVaultRoutes } from "./vault.js";
@@ -121,6 +122,7 @@ export async function createApp(
     background?: boolean;
     verifyGoogle?: Parameters<typeof installAuth>[3];
     sendApns?: ApnsSender;
+    sendLiveActivity?: LiveActivitySender;
     upgrades?: HermesUpgrades;
     logStream?: { write(line: string): void };
     clientRoot?: string;
@@ -262,6 +264,7 @@ export async function createApp(
     ...await runtimeSnapshot().then(value => ({ ...value, bots: value.bots.filter(bot => visible(bot, signedIn(req).id)) })),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
+    nativeApp: config.nativeApp,
   }));
   app.post("/api/connection/retry", async () =>
     runtime.reconnect ? runtime.reconnect() : runtime.status(),
@@ -832,6 +835,30 @@ export async function createApp(
     store.removeNativeDevice(signedIn(req).id, body.deviceId);
     return { ok: true };
   });
+  // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
+  app.get("/api/native/live-activity", async req => {
+    if (!req.nativeSessionHash) throw failure(403, "Live Activities require native sign-in");
+    const { deviceId } = z.object({ deviceId: z.string().uuid().optional() }).strict().parse(req.query);
+    const userId = signedIn(req).id;
+    const context = deviceId ? store.liveActivityContext(userId, req.nativeSessionHash, deviceId) : undefined;
+    return { available: !!config.apns, state: await worker.live.state(userId, context, context?.lastState) };
+  });
+  app.put("/api/native/live-activity", async req => {
+    const apns = requireNativePush(req);
+    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/), botIds: z.array(id).max(10).default([]) })
+      .strict().parse(req.body);
+    const userId = signedIn(req).id, armedAt = Date.now();
+    const armed = [...new Set(body.botIds)].filter(botId => visibleTo(store, botId, userId));
+    // The next worker pass replays the current state; a Hermes outage must not fail a saved registration.
+    store.registerLiveActivity(userId, req.nativeSessionHash!, body.deviceId, body.token.toLowerCase(), apns.environment, armed, armedAt);
+    return { ok: true };
+  });
+  app.delete("/api/native/live-activity", async req => {
+    if (!req.nativeSessionHash) throw failure(403, "Live Activities require native sign-in");
+    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
+    store.removeLiveActivity(signedIn(req).id, body.deviceId, body.token.toLowerCase());
+    return { ok: true };
+  });
   app.post("/api/native/push/test", async req => {
     requireNativePush(req);
     const { botId } = z.object({ botId: id }).strict().parse(req.body);
@@ -859,7 +886,7 @@ export async function createApp(
         : reply.type("text/html").sendFile("index.html"),
     );
   }
-  const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log);
+  const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log, options.sendLiveActivity);
   const health = new HealthMonitor({ store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log });
   installHealthRoutes(app, health);
   if (options.background !== false) {

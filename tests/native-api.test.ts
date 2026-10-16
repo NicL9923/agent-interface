@@ -123,11 +123,56 @@ it("keeps device ownership explicit, controls APNs environment on the host, and 
   expect((await register(two.token)).statusCode).toBe(200);
 });
 
+it("registers one Live Activity token per device and owner, seeds just-sent assistants, and forgets it on logout", async () => {
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", IOS_APP_LATEST_BUILD: "7", IOS_APP_UPDATE_URL: "https://testflight.apple.com/join/TEST" });
+  config.apns = apnsConfig();
+  const { app, store, worker } = await setup(config);
+  const one = await connectNative(app), two = await connectNative(app, "two");
+  const deviceId = randomUUID(), token = "ab".repeat(32);
+  const headers = (bearer: string) => ({ authorization: `Bearer ${bearer}` });
+  const register = (bearer: string, extra = {}) => app.inject({ method: "PUT", url: "/api/native/live-activity", headers: headers(bearer), payload: { deviceId, token, ...extra } });
+  expect((await app.inject({ url: "/api/bootstrap", headers: headers(one.token) })).json().nativeApp).toEqual({ latestBuild: 7, updateUrl: "https://testflight.apple.com/join/TEST" });
+  expect((await register(one.token, { environment: "production" })).statusCode).toBe(400);
+  expect((await register(one.token, { botIds: Array.from({ length: 11 }, (_, index) => `bot${index}`) })).statusCode).toBe(400);
+  const registered = await register(one.token, { botIds: ["bot", "bot", "missing"] });
+  expect(registered.statusCode).toBe(200);
+  expect(registered.json()).toEqual({ ok: true });
+  expect(await worker.live.state("local-one", store.liveActivities("sandbox")[0]))
+    .toMatchObject({ title: "Bot is starting", activeCount: 1, rows: [{ botId: "bot", phase: "starting", status: "Starting" }] });
+  expect(store.liveActivities("sandbox")).toMatchObject([{ userId: "local-one", armed: ["bot", "missing"] }]);
+  expect((await register(two.token)).statusCode).toBe(409);
+  const read = await app.inject({ url: "/api/native/live-activity", headers: headers(one.token) });
+  expect(read.json()).toMatchObject({ available: true, state: { activeCount: 0, rows: [] } });
+  const deviceRead = `/api/native/live-activity?deviceId=${deviceId}`;
+  expect((await app.inject({ url: deviceRead, headers: headers(one.token) })).json())
+    .toMatchObject({ state: { activeCount: 1, rows: [{ botId: "bot", phase: "starting" }] } });
+  // A device ID does not let another account or another native session inherit its grace.
+  expect((await app.inject({ url: deviceRead, headers: headers(two.token) })).json().state.rows).toEqual([]);
+  const otherSession = await connectNative(app);
+  expect((await app.inject({ url: deviceRead, headers: headers(otherSession.token) })).json().state.rows).toEqual([]);
+  // A browser session has no device to show a Live Activity on.
+  expect((await app.inject({ url: "/api/native/live-activity", headers: { cookie: "session=none" } })).statusCode).toBe(401);
+  await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token } });
+  expect(store.liveActivities("sandbox")).toHaveLength(1);
+  await app.inject({ method: "POST", url: "/api/auth/logout", headers: headers(one.token) });
+  expect(store.liveActivities("sandbox")).toHaveLength(0);
+  expect((await register(two.token)).statusCode).toBe(200);
+  const replacement = "cd".repeat(32);
+  expect((await register(two.token, { token: replacement })).statusCode).toBe(200);
+  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId } })).statusCode).toBe(400);
+  await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token } });
+  expect(store.liveActivities("sandbox")).toMatchObject([{ token: replacement }]);
+  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token: replacement.toUpperCase() } })).statusCode).toBe(200);
+  expect(store.liveActivities("sandbox")).toHaveLength(0);
+});
+
 it("reports absent APNs settings explicitly and rejects incomplete signing configuration", async () => {
   const { app } = await setup(); const { token } = await connectNative(app);
   const headers = { authorization: `Bearer ${token}` };
   expect((await app.inject({ url: "/api/native/push/config", headers })).json()).toEqual({ available: false });
   expect((await app.inject({ method: "PUT", url: "/api/native/push/device", headers, payload: { deviceId: randomUUID(), token: "ab".repeat(32) } })).statusCode).toBe(409);
+  expect((await app.inject({ url: "/api/native/live-activity", headers })).json()).toMatchObject({ available: false, state: { rows: [] } });
+  expect((await app.inject({ method: "PUT", url: "/api/native/live-activity", headers, payload: { deviceId: randomUUID(), token: "ab".repeat(32) } })).statusCode).toBe(409);
   expect(() => loadConfig({ APNS_KEY_ID: "KEY1234567" })).toThrow("All APNs");
   expect(() => loadConfig({ APNS_ENVIRONMENT: "sandbox" })).toThrow("signing settings");
 });

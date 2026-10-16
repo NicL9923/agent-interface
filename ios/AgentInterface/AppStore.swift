@@ -6,7 +6,9 @@ import UniformTypeIdentifiers
 final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
   @Published var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
   @Published var api: APIClient?
-  @Published var bootstrap: Bootstrap?
+  @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot() } }
+  /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
+  var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
   @Published var conversation: Conversation?
   @Published var selectedBotId: String?
   @Published var routineResult: RoutineResultDestination?
@@ -671,6 +673,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
       await handleReceipt(value)
+      if value.status == "accepted" { Task { await LiveActivityController.shared.sent(to: id) } }
     } catch {
       guard currentGeneration == generation else { return }
       report(error)

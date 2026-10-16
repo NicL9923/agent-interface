@@ -208,6 +208,10 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "PUT /api/native/push/device": "none",
   "DELETE /api/native/push/device": "none",
   "POST /api/native/push/test": "body",
+  // The aggregate holds only assistants this person sees; registration drops unseen botIds.
+  "GET /api/native/live-activity": "list",
+  "PUT /api/native/live-activity": "list",
+  "DELETE /api/native/live-activity": "none",
   // Audio this person asked for moments ago, from an assistant they could see.
   "GET /api/voice/audio/:audioId": "none",
 };
