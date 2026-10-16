@@ -56,6 +56,7 @@ final class ScreenshotTourTests: XCTestCase {
     XCTAssertTrue(app.buttons["avatarTile.family.bear"].waitForExistence(timeout: 5))
     try capture("05b-avatar-editor-mascot")
     app.buttons["Close"].tap()
+    if app.buttons["Discard changes"].waitForExistence(timeout: 2) { app.buttons["Discard changes"].tap() }
 
     openPreferences(app)
     try capture("06-preferences")
@@ -100,7 +101,7 @@ final class ScreenshotTourTests: XCTestCase {
     // Swiping down at the top of the sheet dismisses it, so reopen Preferences at the top instead.
     app.buttons["Close"].tap()
     openPreferences(app)
-    let theme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Theme")).firstMatch
+    let theme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Appearance")).firstMatch
     XCTAssertTrue(theme.waitForExistence(timeout: 5) && theme.isHittable, app.debugDescription)
     theme.tap()
     let dark = app.descendants(matching: .any).matching(NSPredicate(
@@ -108,8 +109,7 @@ final class ScreenshotTourTests: XCTestCase {
       [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
     XCTAssertTrue(dark.waitForExistence(timeout: 5), app.debugDescription)
     dark.tap()
-    app.buttons["Save"].tap()
-    XCTAssertTrue(app.buttons["Save"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     app.buttons["Close"].tap()
     goToAssistantList(app)
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
@@ -147,16 +147,16 @@ final class ScreenshotTourTests: XCTestCase {
   }
 
   private func goToAssistantList(_ app: XCUIApplication) {
-    if app.buttons["Your preferences"].exists { return }
+    if app.buttons["Settings"].exists { return }
     let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
-    XCTAssertTrue(app.buttons["Your preferences"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
   }
 
   private func openPreferences(_ app: XCUIApplication) {
     goToAssistantList(app)
-    app.buttons["Your preferences"].tap()
-    XCTAssertTrue(app.buttons["Save"].waitForExistence(timeout: 5))
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
   }
 
   private func openPreferencesLink(_ app: XCUIApplication, _ title: String) {
@@ -168,7 +168,7 @@ final class ScreenshotTourTests: XCTestCase {
 
   private func back(_ app: XCUIApplication, from title: String) {
     app.navigationBars[title].buttons.firstMatch.tap()
-    XCTAssertTrue(app.navigationBars["Your preferences"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
   }
 
   private func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {

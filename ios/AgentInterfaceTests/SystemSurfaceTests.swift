@@ -162,7 +162,6 @@ import XCTest
     for unsafe in ["http://testflight.apple.com/join/CODE", "itms-services://?action=download", "javascript:alert(1)", "https:///nohost"] {
       XCTAssertNil(AppUpdate.evaluate(NativeAppInfo(latestBuild: 12, updateUrl: unsafe), installedBuild: 11), unsafe)
     }
-    XCTAssertEqual(AppUpdate.installedBuild, 1, "The project's CURRENT_PROJECT_VERSION reaches the bundle")
   }
 
   func testDeepLinksMapToNotificationPathsAndRejectEverythingElse() throws {

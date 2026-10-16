@@ -29,6 +29,8 @@ import XCTest
         "The system browser must load the real host sign-in page.")
       localMember.tap()
 
+      XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 25), "Sign-in opens home")
+      app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bot.")).firstMatch.tap()
       let composer = app.textFields["messageComposer"]
       XCTAssertTrue(
         composer.waitForExistence(timeout: 25),
@@ -38,7 +40,7 @@ import XCTest
       let checkID = String(UUID().uuidString.prefix(8))
       let botName = "Native check \(checkID)"
       app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch.tap()
-      app.buttons["Create assistant"].tap()
+      app.buttons["New assistant"].tap()
       let name = app.textFields["Name"]
       XCTAssertTrue(name.waitForExistence(timeout: 10))
       name.tap()
@@ -50,7 +52,7 @@ import XCTest
       XCTAssertTrue(newBot.waitForExistence(timeout: 20))
       newBot.tap()
       let welcome = app.staticTexts[
-        "Ask \(botName) a question. This conversation stays with your assistant."]
+        "Let's discuss your role."]
       XCTAssertTrue(welcome.waitForExistence(timeout: 15))
       XCTAssertTrue(
         welcome.isHittable, "The empty welcome must be visible without manually scrolling.")
@@ -106,7 +108,7 @@ import XCTest
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() }
       XCTAssertTrue(
-        app.buttons["Create assistant"].waitForExistence(timeout: 20),
+        app.buttons["New assistant"].waitForExistence(timeout: 20),
         "Remove the test-owned assistant after capture.")
       XCTAssertFalse(newBot.exists)
     }

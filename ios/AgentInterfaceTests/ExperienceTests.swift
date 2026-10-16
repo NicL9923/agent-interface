@@ -15,6 +15,15 @@ private final class ExperienceProtocol: URLProtocol, @unchecked Sendable {
   override func stopLoading() {}
 }
 final class ExperienceTests: XCTestCase {
+  func testTodayHeadlinesRemoveMarkdownAndKeepApprovalSecretsInChat() {
+    let approval = TodayEvent(id: "a", botId: "b", kind: "approval", title: "Approval requested", body: "Run secret-token=123", occurredAt: "2026-10-01")
+    XCTAssertEqual(EventCopy.headline(approval), "Needs your approval to continue.")
+    var custom = approval; custom.title = "A custom approval with secret-token=123"
+    XCTAssertEqual(EventCopy.headline(custom), "Needs your approval to continue.")
+    let result = TodayEvent(id: "r", botId: "b", kind: "completed", title: "Hermes completed", body: "# Done\n\n**Check** the [gate](https://example.test).\n```sh\nsecret command\n```", occurredAt: "2026-10-01")
+    XCTAssertEqual(EventCopy.headline(result), "Done Check the gate.")
+    XCTAssertEqual(EventCopy.excerpt(String(repeating: "word ", count: 100)).suffix(1), "…")
+  }
   func testInlineViewsRequireValidCompleteExplicitFences() {
     let json = #"{"version":1,"title":"Supply planner","html":"<button>Compare</button>"}"#
     let fence = "```wildbots-html\n" + json + "\n```"

@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PhotosUI
 
 struct ConversationView: View {
   var bot: Bot
@@ -7,22 +8,23 @@ struct ConversationView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
   @State private var importFiles = false
+  @State private var importPhotos = false
+  @State private var photos: [PhotosPickerItem] = []
   @State private var voiceOpen = false
-  @State private var stopConfirm = false
   @State private var retryConfirm = false
   @State private var discardConfirm = false
   @State private var actionBusy = false
   @State private var visibleMessage: String?
   @State private var restoredBot: String?
-  @State private var filesOpen = false
   @State private var readSaveTask: Task<Void, Never>?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
   @State private var nearBottom = true
+  @State private var earlierEdgeVisible = false
+  @State private var unseen = 0
   @State private var starters: [Starter] = []
-  @State private var models: [ModelProviderInfo] = []
-  @State private var modelConfirmation: ModelChoice?
-  @State private var modelBusy = false
+  @State private var modelOpen = false
+  @State private var fileSheetOpen = false
   @FocusState private var composerFocused: Bool
   var body: some View {
     VStack(spacing: 0) {
@@ -42,7 +44,22 @@ struct ConversationView: View {
     )
     .toolbar {
       // Activity reads in the transcript; the bar keeps only the actions.
+      ToolbarItem(placement: .principal) {
+        HStack(spacing: 8) {
+          AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 30, name: bot.name, forceReducedMotion: true)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(bot.name).font(.headline).lineLimit(1)
+            Text("\(bot.shared ? "Shared with your household" : bot.ownerId == nil ? "Personal, visible to the household" : "Your personal assistant") · \(bot.provider.map { $0 + " / " } ?? "")\(bot.model)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+          }
+        }.accessibilityElement(children: .combine)
+      }
       ToolbarItemGroup(placement: .topBarTrailing) {
+        Button { Task { await store.togglePin(bot.id) } } label: {
+          Image(systemName: store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "pin.fill" : "pin")
+        }.accessibilityLabel(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant")
+          .disabled(!store.connected || store.sessionExpired)
+        Button { fileSheetOpen = true } label: { Image(systemName: "doc.on.doc") }
+          .accessibilityLabel("Artifacts (\(store.conversationFiles.count))").accessibilityIdentifier("conversationFiles")
         if !store.connected {
           Button {
             Task { await store.reconnect() }
@@ -50,44 +67,38 @@ struct ConversationView: View {
             Image(systemName: "arrow.clockwise")
           }.accessibilityLabel("Reconnect").disabled(store.sessionExpired)
         }
-        if store.active && store.supports("stop") {
-          Button {
-            stopConfirm = true
-          } label: {
-            Image(systemName: "stop.circle")
-          }.accessibilityLabel("Stop task").disabled(actionBusy || !store.connected)
-        }
-        Button(action: edit) { Image(systemName: "ellipsis.circle") }.accessibilityLabel(
+        Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel(
           "Configure \(bot.name)")
       }
     }
     .task(id: bot.id + (store.scope ?? "")) { await loadStarters() }
-    .task(id: "\(bot.id):\(store.scope ?? ""):\(advanced)") { await loadModels() }
-    .confirmationDialog(
-      modelConfirmation.map { "Use \($0.model)? Hermes asks for confirmation before using this model." } ?? "",
-      isPresented: Binding(get: { modelConfirmation != nil }, set: { if !$0 { modelConfirmation = nil } }),
-      titleVisibility: .visible
-    ) {
-      Button("Use this model") { if let choice = modelConfirmation { chooseModel(choice, confirmed: true) } }
-    }
+    .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).environmentObject(store) }
+    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().environmentObject(store) }
     .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).environmentObject(store) }
+    .photosPicker(isPresented: $importPhotos, selection: $photos, maxSelectionCount: 10, matching: .images)
+    .onChange(of: photos) { _, selection in
+      guard !selection.isEmpty else { return }
+      let scope = store.scope; let botId = bot.id
+      Task {
+        for item in selection {
+          do {
+            guard let data = try await item.loadTransferable(type: Data.self), scope == store.scope, store.selectedBotId == botId else { continue }
+            let image = try ShareImage.prepare(data)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("Photo-\(UUID().uuidString).\(image.ext)")
+            try image.data.write(to: url, options: .atomic)
+            await store.attach(urls: [url]); try? FileManager.default.removeItem(at: url)
+          } catch { if scope == store.scope { store.report(error) } }
+        }
+        photos = []
+      }
+    }
     .fileImporter(
-      isPresented: $importFiles, allowedContentTypes: [.png, .jpeg, .webP, .gif, .pdf, .plainText],
+      isPresented: $importFiles, allowedContentTypes: [.png, .jpeg, .webP, .gif, .pdf, .plainText, .commaSeparatedText, UTType(filenameExtension: "md") ?? .plainText],
       allowsMultipleSelection: true
     ) { result in
       switch result {
       case .success(let urls): Task { await store.attach(urls: urls) }
       case .failure(let error): store.report(error)
-      }
-    }
-    .confirmationDialog(
-      "Stop the current task? Completed actions remain in the conversation.",
-      isPresented: $stopConfirm, titleVisibility: .visible
-    ) {
-      Button("Stop task", role: .destructive) {
-        run {
-          try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]())
-        }
       }
     }
     .confirmationDialog(
@@ -125,31 +136,35 @@ struct ConversationView: View {
               } else {
                 Text("Show earlier messages")
               }
-            }.buttonStyle(.bordered).disabled(store.loadingEarlier).frame(maxWidth: .infinity)
+            }.buttonStyle(.bordered).disabled(store.loadingEarlier || !store.connected).frame(maxWidth: .infinity)
+              .onGeometryChange(for: Bool.self) { geometry in geometry.frame(in: .named("transcript")).maxY >= -600 } action: { earlierEdgeVisible = $0 }
+              .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(nearBottom)") {
+                guard earlierEdgeVisible, !nearBottom, restoredBot == bot.id, store.connected, !store.loadingEarlier else { return }
+                let anchor = store.conversation?.messages.first?.id
+                await store.loadEarlier()
+                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+              }
+          }
+          if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.conversation?.messages.isEmpty == false {
+            Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
           }
           if store.conversation == nil {
             ProgressView("Loading conversation…").frame(maxWidth: .infinity).padding(40)
           } else if store.conversation?.messages.isEmpty == true {
-            VStack(alignment: .leading, spacing: 8) {
-              Text("Hello, \(store.bootstrap?.user.name ?? "there")").font(.title2.bold())
-              Text("Ask \(bot.name) a question. This conversation stays with your assistant.")
-                .foregroundStyle(.secondary)
-            }.padding(.vertical, 36).id("welcome")
-          }
-          if store.conversation?.messages.isEmpty == true {
-            StarterActionsView(starters: starters, add: addStarter)
+            VStack(spacing: 14) {
+              AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 100, name: bot.name, forceReducedMotion: true)
+              Text("Let's discuss your role.").font(.title2.bold())
+              Text(bot.description?.isEmpty == false ? bot.description! : "Give this assistant a role, then start with what you need.").foregroundStyle(.secondary)
+              Button("Discuss \(bot.name)'s role") {
+                var draft = store.draft
+                let role = bot.description?.isEmpty == false ? ": \(bot.description!)" : ". Ask me what I need help with and how I like to work"
+                draft.text = "Let's talk about your role as \(bot.name)\(role)."
+                store.updateDraft(draft); composerFocused = true
+              }.buttonStyle(.bordered).disabled(!store.draftReady)
+            }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
           ForEach(store.conversation?.presentationTurns ?? []) { turn in
-            ForEach(turn.messages.filter { $0.isConversationVisible }) { message in
-              MessageView(message: message, advanced: store.bootstrap?.preferences.presentation == "advanced").id(message.id)
-            }
-            ForEach(turn.coordinationGroups) { group in
-              DisclosureGroup(group.id) {
-                ForEach(group.messages) { message in
-                  MessageView(message: message, advanced: store.bootstrap?.preferences.presentation == "advanced")
-                }
-              }
-            }
+            ConversationTurnView(turn: turn, advanced: advanced)
           }
           if ![.idle, .done].contains(store.activity) { liveActivity }
           ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
@@ -158,42 +173,11 @@ struct ConversationView: View {
           ForEach(store.conversation?.attention ?? []) { request in
             AttentionView(request: request, botId: bot.id)
           }
-          if let conversation = store.conversation,
-            store.bootstrap?.preferences.presentation == "advanced"
-              || conversation.activityMessages.contains(where: { !$0.isInternalActivity })
-          {
-            DisclosureGroup("Activity details") {
-              Text(conversation.activity.detail ?? store.activity.label).font(.footnote)
-              ForEach(conversation.activityMessages.filter { !$0.isInternalActivity }.suffix(8)) { message in
-                ToolActivityView(message: message)
-              }
-              if store.bootstrap?.preferences.presentation == "advanced" {
-                LabeledContent("Model", value: bot.model).font(.caption)
-                if let provider = bot.provider {
-                  LabeledContent("Provider", value: provider).font(.caption)
-                }
-                if let detail = store.bootstrap?.connection.detail {
-                  Text(detail).font(.caption).foregroundStyle(.secondary)
-                }
-              }
-            }
-          }
-          if store.hasConversationFiles {
-            DisclosureGroup("Conversation files", isExpanded: $filesOpen) {
-              if store.loadingEarlierFiles {
-                ProgressView("Loading files from earlier in the conversation").font(.caption)
-              }
-              ForEach(store.conversationFiles) {
-                FileAttachmentView(file: $0).padding(.vertical, 6)
-              }
-            }.onChange(of: filesOpen) { _, open in
-              if open { Task { await store.loadEarlierFiles() } }
-            }
-          }
           Color.clear.frame(height: 1).id("latest").onGeometryChange(for: CGFloat.self) {
             $0.frame(in: .named("transcript")).maxY
           } action: { bottom in
             nearBottom = bottom <= viewportHeight + 120
+            if nearBottom { unseen = 0 }
           }
         }.scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(
           maxWidth: .infinity)
@@ -209,7 +193,6 @@ struct ConversationView: View {
       .onChange(of: store.conversation?.botId, initial: true) { _, id in
         guard let id, id != restoredBot else { return }
         restoredBot = id
-        filesOpen = false
         nearBottom = true
         visibleMessage = nil
         if let message = store.conversation?.restorableReadAnchor(store.readMessageId()) {
@@ -224,14 +207,14 @@ struct ConversationView: View {
           proxy.scrollTo("latest", anchor: .bottom)
         }
       }
-      .overlay(alignment: .bottomTrailing) {
+      .overlay(alignment: .bottom) {
         if !nearBottom {
           Button {
             proxy.scrollTo("latest", anchor: .bottom)
             store.markRead(store.conversation?.messages.last?.id)
           } label: {
-            Image(systemName: "arrow.down").padding(10).background(.regularMaterial, in: Circle())
-          }.accessibilityLabel("Jump to latest message").padding(12).transition(.opacity)
+            Label(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")", systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
+          }.accessibilityLabel(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages"), jump to latest").padding(12).transition(.opacity)
         }
       }
       .animation(.easeOut(duration: 0.15), value: nearBottom)
@@ -248,6 +231,12 @@ struct ConversationView: View {
           try? await Task.sleep(for: .milliseconds(350))
           guard !Task.isCancelled else { return }
           store.markRead(id)
+        }
+      }
+      .onChange(of: store.conversation?.visibleMessages.last?.id) { old, new in
+        if let old, old != new, !nearBottom {
+          let messages = store.conversation?.visibleMessages ?? []
+          unseen += messages.firstIndex { $0.id == old }.map { messages.count - $0 - 1 } ?? 1
         }
       }
       .onChange(of: latestTrigger) { _, _ in proxy.scrollTo("latest", anchor: .bottom) }
@@ -332,12 +321,28 @@ struct ConversationView: View {
           .footnote
         ).foregroundStyle(.orange)
       }
+      ForEach(store.attachmentUploads.filter { $0.botId == bot.id }) { upload in
+        HStack(spacing: 8) {
+          if upload.uploading { ProgressView() } else { Image(systemName: upload.error == nil ? "clock" : "exclamationmark.circle").foregroundStyle(upload.error == nil ? Palette.muted : Palette.danger) }
+          VStack(alignment: .leading, spacing: 3) {
+            Text(upload.name).lineLimit(1)
+            Text(upload.error ?? "Waiting to upload…").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+          }
+          Spacer(minLength: 0)
+          if !upload.uploading { Button("Retry") { Task { await store.retryUpload(upload.id) } }.accessibilityLabel("Retry \(upload.name)").disabled(!store.connected || store.uploading) }
+          Button { store.removeUpload(upload.id) } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("Remove \(upload.name)")
+        }.font(.subheadline).padding(8).background(Palette.user(scheme), in: RoundedRectangle(cornerRadius: 10))
+      }
       if !store.draft.attachments.isEmpty {
         ScrollView(.horizontal) {
           HStack {
             ForEach(store.draft.attachments) { file in
               HStack {
-                Image(systemName: file.mime.hasPrefix("image/") ? "photo" : "doc")
+                Button { store.open(file) } label: {
+                  if file.mime.hasPrefix("image/") {
+                    AuthenticatedImage(path: "/api/files/\(APIClient.component(file.id))").scaledToFill().frame(width: 40, height: 40).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
+                  } else { Image(systemName: "doc").frame(width: 32, height: 40) }
+                }.accessibilityLabel("Preview \(file.name)")
                 Text(file.name).lineLimit(1)
                 Button {
                   var next = store.draft
@@ -351,14 +356,26 @@ struct ConversationView: View {
           }
         }
       }
+      TextField(
+          store.active ? "Guide the current task…" : "Message \(bot.name)…",
+          text: Binding(
+            get: { store.draft.text },
+            set: {
+              var value = store.draft
+              value.text = $0
+              store.updateDraft(value)
+            }), axis: .vertical
+        ).lineLimit(2...6).focused($composerFocused).padding(12).background(
+          Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16)
+        ).disabled(!store.draftReady).accessibilityIdentifier("messageComposer")
       HStack(alignment: .bottom, spacing: 10) {
-        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 36, height: 44) }
-          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending)
         Menu {
+          Button("Choose photos", systemImage: "photo.on.rectangle") { importPhotos = true }
+            .disabled(!store.supports("uploads") || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10)
           Button("Attach image, PDF, or text file", systemImage: "paperclip") { importFiles = true }
             .disabled(
-              store.uploading || !store.connected || !store.supports("uploads")
-                || store.draft.attachments.count >= 10)
+              !store.supports("uploads")
+                || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10)
           if !starters.isEmpty {
             Section("Starters") {
               ForEach(starters) { item in Button(item.title) { addStarter(item) } }
@@ -368,35 +385,26 @@ struct ConversationView: View {
           Image(systemName: "plus").font(.title3).frame(width: 40, height: 44)
         }.accessibilityLabel("Add to message").accessibilityIdentifier("composerAdd")
           .disabled(!store.draftReady)
-        if advanced { modelMenu }
-        TextField(
-          store.active ? "Guide the current task…" : "Message \(bot.name)…",
-          text: Binding(
-            get: { store.draft.text },
-            set: {
-              var value = store.draft
-              value.text = $0
-              store.updateDraft(value)
-            }), axis: .vertical
-        ).lineLimit(1...6).focused($composerFocused).padding(12).background(
-          Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14)
-        ).disabled(!store.draftReady).accessibilityIdentifier("messageComposer")
+        if advanced { modelButton }
+        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 36, height: 44) }
+          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending)
+        Spacer(minLength: 0)
         Button {
-          Task {
-            await store.send()
-            composerFocused = false
-            latestTrigger += 1
+          if stopVisible {
+            run { try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]()) }
+          } else {
+            Task { await store.send(); composerFocused = false; latestTrigger += 1 }
           }
         } label: {
           Image(
-            systemName: store.sending
+            systemName: stopVisible ? "stop.fill" : store.sending
               ? "hourglass" : store.active ? "arrow.turn.up.right" : "arrow.up"
           ).font(.headline).frame(width: 44, height: 44)
-            .foregroundStyle(store.canSend ? Palette.surface(scheme) : Palette.muted)
-            .background(store.canSend ? Palette.accent : Palette.line, in: Circle())
+            .foregroundStyle(store.canSend || stopVisible ? Palette.raised(scheme) : Palette.muted)
+            .background(store.canSend || stopVisible ? Palette.accent : Palette.line, in: Circle())
             .contentShape(Circle())
-        }.buttonStyle(.plain).disabled(!store.canSend)
-          .accessibilityLabel(store.active ? "Send guidance" : "Send message")
+        }.buttonStyle(.plain).disabled(stopVisible ? actionBusy || !store.connected : !store.canSend)
+          .accessibilityLabel(stopVisible ? "Stop task" : store.active ? "Send guidance" : "Send message")
           .accessibilityIdentifier("sendMessage")
       }
       if store.uploading {
@@ -416,53 +424,21 @@ struct ConversationView: View {
       if !store.supports("chat") {
         Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
       }
-    }.padding(12).background(.regularMaterial)
+    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 20))
+      .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
+      .padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
+      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
   }
+  private var stopVisible: Bool { store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.draft.attachments.isEmpty && store.supports("stop") }
   private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
-  /// Advanced mode's quick model switch; saves through the same assistant update as settings.
-  private var modelMenu: some View {
-    Menu {
-      if bot.shared { Text("Shared assistant: the model changes for your household.") }
-      ForEach(models) { provider in
-        Section(provider.name) {
-          ForEach(provider.models) { model in
-            Button { chooseModel(ModelChoice(provider: provider.id, model: model.id)) } label: {
-              if model.id == bot.model && provider.matches(bot.provider) { Label(model.name, systemImage: "checkmark") } else { Text(model.name) }
-            }.disabled(!model.available)
-          }
-        }
-      }
-      if models.isEmpty { Button("Load models from Hermes") { Task { await loadModels() } } }
-    } label: {
-      Image(systemName: "cpu").frame(width: 36, height: 44)
+  private var modelButton: some View {
+    Button { modelOpen = true } label: {
+      HStack(spacing: 6) {
+        Image(systemName: "cpu")
+        Text(bot.model).font(.caption).lineLimit(1).truncationMode(.middle)
+      }.frame(maxWidth: 180, minHeight: 44, alignment: .leading)
     }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      // A model-only save resends the assistant's other fields, so it needs the real instructions.
-      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || modelBusy)
-  }
-  private func loadModels() async {
-    models = []
-    guard advanced, let api = store.api else { return }
-    let scope = store.scope
-    let catalog: ModelCatalog? = try? await api.get("/models?botId=\(APIClient.component(bot.id))")
-    if scope == store.scope && !Task.isCancelled { models = catalog?.providers ?? [] }
-  }
-  private func chooseModel(_ choice: ModelChoice, confirmed: Bool = false) {
-    guard let api = store.api, !modelBusy else { return }
-    var input = BotInput(bot: bot)
-    input.model = choice.model
-    input.provider = choice.provider
-    input.confirmModel = confirmed
-    modelBusy = true
-    Task {
-      defer { modelBusy = false }
-      do {
-        let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", input, method: "PATCH")
-        modelConfirmation = nil
-        await store.refreshBootstrap()
-      } catch let error as APIError where error.confirmRequired {
-        modelConfirmation = choice
-      } catch { store.report(error) }
-    }
+      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected)
   }
   private func addStarter(_ item: Starter) {
     var next = store.draft
@@ -477,26 +453,7 @@ struct ConversationView: View {
     if scope == store.scope && !Task.isCancelled { starters = rows }
   }
   private func approvalCard(_ approval: Approval) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Label(approval.title, systemImage: "hand.raised").font(.headline)
-      MarkdownView(text: approval.detail)
-      if let expiry = approval.expiresAt {
-        Text("Expires \(expiry)").font(.caption).foregroundStyle(.secondary)
-      }
-      HStack {
-        Button("Approve") { approve(approval, "approved") }.buttonStyle(.borderedProminent)
-        Button("Deny", role: .destructive) { approve(approval, "denied") }.buttonStyle(.bordered)
-      }.disabled(actionBusy || !store.connected || !store.supports("approvals"))
-      Text("Either household member can decide. Hermes enforces the decision.").font(.caption)
-        .foregroundStyle(.secondary)
-    }.padding(16).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
-  }
-  private func approve(_ approval: Approval, _ decision: String) {
-    run {
-      try await store.perform(
-        "/bots/\(APIClient.component(bot.id))/approvals/\(APIClient.component(approval.id))",
-        ["decision": decision])
-    }
+    ApprovalDecisionView(approval: approval, botId: bot.id)
   }
   private func run(_ action: @escaping () async throws -> Void) {
     guard !actionBusy else { return }
@@ -513,22 +470,25 @@ struct ConversationView: View {
 struct MessageView: View {
   var message: Message
   var advanced: Bool
+  var continued = false
+  var groupedReasoning = false
+  var groupedActivity = false
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      HStack {
+      if !continued { HStack {
         Text(
           message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
             ?? (message.isInternalActivity ? message.presentationOrigin?.title ?? message.activityGroup : message.role == "assistant"
-              ? "Assistant"
+              ? ""
               : message.role == "tool" ? message.toolName ?? "Tool" : message.role.capitalized)
         ).font(.caption.bold())
         Spacer()
         if let date = message.createdAt, let value = ServerDate.parse(date) {
           Text(value, style: .time).font(.caption2).foregroundStyle(.secondary)
         }
-      }
+      } }
       if let envelope = message.agentEnvelope {
         Label("\(envelope.name) → \(store.bot?.name ?? "Assistant")", systemImage: "arrow.left.arrow.right").font(.caption.bold()).foregroundStyle(Palette.accent)
         Text("Agent message").font(.caption).foregroundStyle(.secondary)
@@ -537,14 +497,16 @@ struct MessageView: View {
         Label("Agent handoff", systemImage: "arrow.left.arrow.right").font(.caption.bold()).foregroundStyle(Palette.accent)
         ToolActivityView(message: message)
       } else if message.isToolActivity {
-        if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
+        if !groupedActivity {
+          if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
+        }
       } else {
         ReplyContentView(message: message)
         if message.role == "assistant" && !message.isInternalActivity && !message.text.isEmpty { SpokenReplyButton(text: ReplyCards.spokenText(message.text)) }
-        if advanced && message.toolCall != nil { ToolActivityView(message: message) }
-        if !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
+        if !groupedActivity && advanced && message.toolCall != nil { ToolActivityView(message: message) }
+        if !groupedActivity && !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
       }
-      if advanced, let reasoning = message.reasoning, !reasoning.isEmpty {
+      if advanced && !groupedReasoning, let reasoning = message.reasoning, !reasoning.isEmpty {
         DisclosureGroup("Reasoning") {
           MarkdownView(text: reasoning).font(.footnote).foregroundStyle(.secondary)
         }
@@ -553,14 +515,21 @@ struct MessageView: View {
     }.padding(message.role == "user" || message.isAgentExchange ? 14 : 0).background(
       message.isAgentExchange ? Palette.raised(scheme) : message.role == "user" ? Palette.user(scheme) : Color.clear,
       in: RoundedRectangle(cornerRadius: 14)
-    ).accessibilityElement(children: .contain)
+    ).padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
+      .accessibilityElement(children: .contain)
   }
 }
 struct ToolActivityView: View {
   var message: Message
+  @EnvironmentObject private var store: AppStore
   var body: some View {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 8) {
+        if let call = message.toolCall {
+          LabeledContent("Call", value: call.id).font(.caption).textSelection(.enabled)
+          if let date = call.startedAt.flatMap(ServerDate.parse) { LabeledContent("Started", value: date.formatted()).font(.caption) }
+          if let date = call.completedAt.flatMap(ServerDate.parse) { LabeledContent("Finished", value: date.formatted()).font(.caption) }
+        }
         if let arguments = message.toolCall?.arguments, !arguments.isEmpty {
           Text("Arguments").font(.caption.bold())
           Text(arguments).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -576,7 +545,7 @@ struct ToolActivityView: View {
         Label(message.displayToolName, systemImage: "wrench.and.screwdriver").font(.caption.bold())
         Spacer()
         if let status = message.toolCall?.status {
-          Text(status.capitalized).font(.caption).foregroundStyle(.secondary)
+          Text(status == "running" && !store.connected ? "Last seen running" : status.capitalized).font(.caption).foregroundStyle(.secondary)
         }
       }
     }

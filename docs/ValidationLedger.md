@@ -1,5 +1,83 @@
 # Validation ledger
 
+## October 16 native mobile and web parity
+
+The mobile update is based on `c1010178a24b973fcaf156b2974ca9b741d2658d`,
+with implementation by GPT-6.1 Sol. It aligns home pins and previews, account
+Settings and autosave, conversation turns and artifacts, the composer, shared
+model selection and inference, and Today. Notification authorization is requested
+automatically through iOS after sign-in when the server supports Apple push.
+Registration reconciles on foreground, including denied-to-authorized recovery.
+Live Activities follow the OS authorization. Account delivery rules remain in
+Settings.
+
+Final implementation source fingerprint, excluding this ledger: `sha256:546a7363b459274e5dc1d01d83ef0f4edcec0f444d05fd107067f2e4b4a93d78`.
+Native application source: `sha256:7acd5d0e6f0e9fb1db999ccea318a742c9be3582a545866522b0fab59d295cf0`.
+Native tests: `sha256:1b6a928e67bed683c4a0f6d1d7c55afd3d4e0b7c54217386673e5949c960319b`.
+The fingerprints include uncommitted files. Nicolas subsequently authorized PR
+merge and TestFlight publication. Version 1.0 build 2 is set across all three
+bundles. The first-build-only test assertion was removed; the meaningful build
+comparison and URL safety cases remain. The focused update test ran on build 2
+in `.private/ios-test-20261016T233653Z-74568.xcresult` with no failures. Native
+application Swift source is unchanged from the parity validation above. No
+release or TestFlight upload had occurred when this validation was recorded.
+
+Validation used Xcode 27.1 (27A9275), iOS 27.0 and dedicated simulators:
+iPhone 18 Pro `39F5329D-FA70-4259-9B8A-6AECECDE2227`, narrow iPhone 17e
+`F666B5D2-E8B2-4CED-A7D5-4519EE8B926D`, and iPad
+`0EC750D2-1DB5-4FD6-945F-3869E8D4ADB0`. Native runs use ad hoc simulator
+signing. `validate-ios.sh` now forwards focused Xcode filters; shell syntax and
+project regeneration passed. Web runtime source is unchanged: all 751 tests in
+69 files and the production build passed, producing web build `1c59648934b30c68`.
+
+The full native unit run executed 143 tests: 142 passed, one optional evidence
+rendering test skipped and none failed. Its bundle is
+`.private/ios-test-20261016T232714Z-45226.xcresult`. Latest attachment and Settings
+queue changes then passed both affected unit tests plus the assistant-with-file
+UI regression in `.private/ios-parity-ipad-complete.xcresult`.
+
+Across the focused runs, 15 distinct phone UI flows passed: account updates,
+search, shared captures, Today acknowledgment/navigation, conversation send and
+configuration, activity disclosure, home pinning, autosave, model/favorite/inference
+selection, unsaved edits, artifacts and save-failure retry. Main phone bundles:
+`.private/ios-parity-phone-final.xcresult`,
+`.private/ios-parity-phone-verified.xcresult`, and
+`.private/ios-test-20261016T232352Z-17497.xcresult`.
+Four tablet parity flows passed in `.private/ios-parity-ipad.xcresult`; latest home
+and layout passes are in `.private/ios-parity-ipad-verified.xcresult`. The final
+Settings retry flow passed in `.private/ios-parity-ipad-final.xcresult`.
+The final narrow-phone tool/file regression passed in
+`.private/ios-test-20261016T232858Z-47577.xcresult`.
+
+These are cumulative passes, with unaffected checks reused. Intermediate bundles
+also contain the resolved failures described below. The newly expanded tool/file
+fixture initially used a tool-role row, which both clients intentionally omit
+from the transcript. Correcting it to an assistant reply with no text and a file
+exercises the visible-row case that needed the grouped tool-card fix.
+
+Phone and tablet screenshots were inspected in light and dark, portrait and
+landscape. The [phone collage](../ios/evidence/mobile-parity-phone.png) and
+[iPad collage](../ios/evidence/mobile-parity-ipad.png) contain synthetic fixture
+content. Earlier failed runs exposed a cancelled first Today read, which was
+fixed and retested, and ambiguous UI automation targets for context menus and
+the error banner behind the iPad sheet. Those tests now wait for a completed pin
+and target the Settings form's error button.
+
+Claude Opus 5.5 independently reviewed the full diff and follow-up fixes. Review
+prompted fixes for duplicate reply/tool rendering, upload staging and draft-load
+races, approval summary privacy, account-owned Settings saves, OS notification
+re-enable, selected home state and accessible action names. The final follow-up
+also permits staging attachments during a send or another upload, matching web.
+The final review found no blockers. Three optional follow-ups were applied:
+offline files now stage for reconnect, an oversized pick fills available slots
+and explains the skipped files, and discarding a failed Settings save clears
+its matching error. All four affected upload/queue unit checks passed in
+`.private/ios-test-20261016T233132Z-54306.xcresult`.
+
+Physical-device APNs delivery, actual microphone/provider audio, external account
+sign-in and device accessibility acceptance remain distinct from simulator and
+transport checks. The controls and fixtures do not establish those results.
+
 ## October 16 shared UI main refresh
 
 Normal merge `804cffe` incorporates main at `66215ac` into PR #135 without

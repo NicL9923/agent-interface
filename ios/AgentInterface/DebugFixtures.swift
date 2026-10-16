@@ -37,7 +37,15 @@
           ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
         ]
       }
+      if environment["AGENT_INTERFACE_UI_MIXED_TOOL"] == "1" {
+        FixtureProtocol.preferences["presentation"] = "advanced"
+        FixtureProtocol.messages = [
+          ["id": "mixed", "role": "assistant", "text": "Fixture single visible reply", "reasoning": "Fixture grouped reasoning", "toolCall": ["id": "mixed-call", "name": "fixture_search", "status": "completed", "result": "Fixture tool result"]],
+          ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
+        ]
+      }
       await store.refreshBootstrap()
+      if environment["AGENT_INTERFACE_UI_HOME"] != "1" { await store.select(store.selectedBotId) }
       store.startPolling()
       return true
     }
@@ -89,6 +97,8 @@
     static var avatar: [String: Any] = [
       "mode": "geometric", "shape": "blob", "color": "#1084FE", "eyes": "oval", "accessory": "none",
     ]
+    static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
+    static var inference: [String: Any] = ["reasoning": "medium", "speed": "normal"]
     static var ranchModel = (provider: "openrouter", model: "configured-model")
     static var bots: [[String: Any]] {
       [
@@ -97,6 +107,7 @@
           "instructions": "Be clear and useful.", "model": ranchModel.model,
           "provider": ranchModel.provider, "shared": true, "activity": "idle", "avatar": avatar,
           "enabledMcpServers": ["existing-calendar"],
+          "lastMessage": ["text": "The north gate battery needs replacing.", "at": ISO8601DateFormatter().string(from: Date())],
         ],
         [
           "id": "kitchen", "name": "Kitchen companion", "model": "configured-model", "shared": true,
@@ -386,9 +397,19 @@
             return item
           }
         }
+      } else if path == "/api/preferences/models" {
+        Self.preferences["modelFavorites"] = body["modelFavorites"]
+        object = ["modelFavorites": Self.preferences["modelFavorites"] ?? []]
+      } else if path.hasSuffix("/inference") {
+        if method == "PATCH" { for (key, value) in body { Self.inference[key] = value } }
+        object = Self.inference
       } else if path == "/api/preferences" {
-        if method == "PATCH" { Self.preferences = body }
-        object = Self.preferences
+        if method == "PATCH" && Self.preferencesFailures > 0 {
+          Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
+        } else {
+          if method == "PATCH" { let favorites = Self.preferences["modelFavorites"]; Self.preferences = body; Self.preferences["modelFavorites"] = favorites }
+          object = Self.preferences
+        }
       } else if path.hasSuffix("/avatar") {
         Self.avatar = body
         object = body

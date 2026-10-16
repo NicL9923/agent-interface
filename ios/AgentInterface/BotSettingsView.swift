@@ -3,9 +3,15 @@ import UniformTypeIdentifiers
 
 struct BotSettingsView: View {
   var bot: Bot?
+  var close: (() -> Void)? = nil
   @EnvironmentObject private var store: AppStore
   @Environment(\.dismiss) private var dismiss
   @State private var form = BotInput()
+  @State private var savedForm = BotInput()
+  @State private var savedAvatar = AvatarConfig()
+  @State private var savedCapabilities: [String: Set<String>] = [:]
+  @State private var discardConfirm = false
+  @State private var initialized = false
   @State private var avatar = AvatarConfig()
   @State private var lastDrawn = AvatarConfig()
   @State private var lastPortrait: AvatarConfig?
@@ -29,7 +35,7 @@ struct BotSettingsView: View {
   @State private var catalogReady: Set<String> = []
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
-  let tabs = ["Details", "Avatar", "Connections", "Passwords & logins", "Memory", "Tools", "Skills", "Routines"]
+  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Passwords & logins"]
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
@@ -75,19 +81,27 @@ struct BotSettingsView: View {
           case "Skills": capabilities("skills")
           default: routineList
           }
-        }.disabled(busy) }
+        }.householdListBackground().disabled(busy) }
       }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
-            Button("Close") { dismiss() }.disabled(busy)
+            Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
           }
         }
         .onAppear {
+          guard !initialized else { return }
+          initialized = true
           form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
+          savedForm = form
           avatar = bot?.avatar ?? AvatarConfig()
+          savedAvatar = avatar
           if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
         }
         .task(id: tab) { await loadTab() }
+        .interactiveDismissDisabled(dirty || busy)
+        .confirmationDialog("Discard your unsaved changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
+          Button("Discard changes", role: .destructive) { closeSheet() }
+        }
         .onChange(of: avatar) { _, value in
           if value.mode != "portrait" {
             lastDrawn = value
@@ -96,9 +110,9 @@ struct BotSettingsView: View {
           }
         }
         .confirmationDialog(
-          "Change the shared model for both household members?", isPresented: $confirmModel,
+          "Hermes asks for confirmation before using this model.", isPresented: $confirmModel,
           titleVisibility: .visible
-        ) { Button("Change shared model") { saveBot(confirmed: true) } }
+        ) { Button("Confirm this model") { saveBot(confirmed: true) } }
         .confirmationDialog(
           "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
           titleVisibility: .visible
@@ -117,7 +131,7 @@ struct BotSettingsView: View {
               store.deletedBotId = id
               try await api.delete("/bots/\(APIClient.component(id))")
               await store.refreshBootstrap()
-              dismiss()
+              closeSheet()
             }
           }
         }
@@ -156,35 +170,14 @@ struct BotSettingsView: View {
     Section("Instructions") {
       TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel(
         "Assistant instructions")
-      Button("Enable interactive replies") {
+      Button(form.instructions.contains("When a checklist, itinerary, or calendar proposal would help") ? "Interactive replies enabled" : "Enable interactive replies") {
         if !form.instructions.contains("When a checklist, itinerary, or calendar proposal would help") { form.instructions += "\n\n" + NativeInteractiveReplyInstructions }
       }
       Text("Adds editable instructions for checklists, itineraries, and calendar proposals. Save the assistant to apply.").font(.caption).foregroundStyle(.secondary)
     }
-    Section("Model and provider") {
-      let choices = Array(
-        Set((store.bootstrap?.bots ?? []).map { ($0.provider ?? "") + "|" + $0.model })
-      ).sorted()
-      if !choices.isEmpty {
-        Menu("Choose an existing model") {
-          ForEach(choices, id: \.self) { choice in
-            let pieces = choice.components(separatedBy: "|")
-            Button(pieces.joined(separator: " / ")) {
-              form.provider = pieces[0].isEmpty ? nil : pieces[0]
-              form.model = pieces.dropFirst().joined(separator: "|")
-            }
-          }
-        }
-      }
-      TextField("Model identifier", text: $form.model).textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-      TextField(
-        "Provider identifier",
-        text: Binding(get: { form.provider ?? "" }, set: { form.provider = $0.isEmpty ? nil : $0 })
-      ).textInputAutocapitalization(.never).autocorrectionDisabled()
-      Text(
-        "Connect and check providers in Connections. A shared assistant uses one model for everyone."
-      ).font(.caption).foregroundStyle(.secondary)
+    ModelCatalogSections(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy) {
+      form.model = $0.model
+      form.provider = $0.provider
     }
     Section("Existing MCP connections") {
       let identifiers = Array(
@@ -415,6 +408,7 @@ struct BotSettingsView: View {
             }.map(\.id)
             try await store.perform(
               "/bots/\(APIClient.component(bot.id))/\(kind)", ["ids": ids], method: "PUT")
+            savedCapabilities[kind] = Set(ids)
             notice = "Saved \(kind)."
           }
         }.disabled(!store.supports(kind) || !store.connected || !catalogReady.contains(kind))
@@ -508,8 +502,9 @@ struct BotSettingsView: View {
         bot.map { "/bots/\(APIClient.component($0.id))" } ?? "/bots", value,
         method: bot == nil ? "POST" : "PATCH")
       await store.refreshBootstrap()
+      savedForm = form
       notice = bot?.shared == true ? "Changes saved for the household." : "Assistant saved."
-      if bot == nil { dismiss() }
+      if bot == nil { closeSheet() }
     }
   }
   private func saveAvatar() {
@@ -520,6 +515,7 @@ struct BotSettingsView: View {
       let _: AvatarConfig = try await api.write(
         "/bots/\(APIClient.component(bot.id))/avatar", value, method: "PUT")
       await store.refreshBootstrap()
+      savedAvatar = avatar
       notice = "Avatar saved."
     }
   }
@@ -553,11 +549,20 @@ struct BotSettingsView: View {
       notice = "Portrait uploaded. Save avatar to apply it."
     }
   }
+  private func closeSheet() { if let close { close() } else { dismiss() } }
+  private var dirty: Bool {
+    guard initialized else { return false }
+    return form != savedForm || avatar != savedAvatar || ["tools", "skills"].contains { kind in
+      guard let saved = savedCapabilities[kind] else { return false }
+      return Set((kind == "tools" ? tools : skills).filter { $0.enabled || $0.required == true }.map(\.id)) != saved
+    }
+  }
   private func loadTab() async {
     guard let bot, let api = store.api else { return }
     let kind = tab.lowercased()
     let currentId = UUID()
     loadId = currentId
+    if ["tools", "skills"].contains(kind), catalogReady.contains(kind) { return }
     if ["tools", "skills"].contains(kind) {
       catalogReady.remove(kind)
       catalogLoading.insert(kind)
@@ -569,6 +574,7 @@ struct BotSettingsView: View {
           "/bots/\(APIClient.component(bot.id))/\(kind)")
         guard !Task.isCancelled, loadId == currentId else { return }
         if kind == "tools" { tools = values } else { skills = values }
+        savedCapabilities[kind] = Set(values.filter { $0.enabled || $0.required == true }.map(\.id))
         catalogReady.insert(kind)
       }
       if tab == "Routines", store.supports("routines") {

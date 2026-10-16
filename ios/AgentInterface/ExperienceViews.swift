@@ -8,6 +8,36 @@ struct TodayItem: Decodable, Identifiable {
   var id: String { botId }
 }
 struct TodayEvent: Decodable, Identifiable { var id: String; var botId: String; var kind: String; var title: String; var body: String?; var occurredAt: String; var routineId: String? }
+/// Mirrors src/shared/event-copy.ts. Approval details stay in their conversation.
+enum EventCopy {
+  static func excerpt(_ source: String?, limit: Int = 180) -> String {
+    var text = source ?? ""
+    for (pattern, replacement) in [
+      (#"(?s)```.*?(```|$)"#, " "),
+      (#"!?\[([^\]]*)\]\([^)]*\)"#, "$1"),
+      (#"(?m)^\s{0,3}(#{1,6}|[-*+]|\d+[.)]|>)\s+"#, ""),
+      (#"(\*\*|__|`|~~)"#, ""), (#"\s+"#, " "),
+    ] { text = text.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression) }
+    text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard text.count > limit else { return text }
+    let cut = String(text.prefix(limit))
+    let lastSpace = cut.lastIndex(of: " ").map { cut.distance(from: cut.startIndex, to: $0) } ?? 0
+    return String(cut.prefix(max(lastSpace, Int(Double(limit) * 0.6))))
+      .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:.–-"))) + "…"
+  }
+  static func headline(_ event: TodayEvent) -> String {
+    // Avoid exposing commands or credentials in the overview, including custom approval titles.
+    if event.kind == "approval" { return "Needs your approval to continue." }
+    let body = excerpt(event.body)
+    let generic = event.title.range(of: #"^(Hermes (completed|failed|interrupted)|Approval requested)$"#, options: .regularExpression) != nil
+    if !generic { return body.isEmpty ? excerpt(event.title) : excerpt(event.title, limit: 80) + ": " + body }
+    switch event.kind {
+    case "failed": return body.isEmpty ? "Couldn't finish. Open the chat to see what happened." : "Couldn't finish: " + body
+    case "interrupted": return body.isEmpty ? "Stopped before finishing. Review it before retrying." : body
+    default: return body.isEmpty ? "Finished. Open the chat for the reply." : body
+    }
+  }
+}
 struct TodayOverview: Decodable {
   var generatedAt: String; var since: String; var items: [TodayItem]; var events: [TodayEvent]; var unavailableBots: [String]; var frontier: String; var hasMore: Bool; var upcoming: [Routine]?
   func recentMessage(_ item: TodayItem) -> TodayMessage? {
@@ -18,61 +48,124 @@ struct TodayOverview: Decodable {
 struct TodayView: View {
   var openBot: () -> Void
   @EnvironmentObject private var store: AppStore
+  @Environment(\.colorScheme) private var scheme
   @State private var value: TodayOverview?
   @State private var error: String?
   @State private var busy = false
   @State private var loadId = UUID()
   var body: some View {
     List {
+      Group {
       if let error { Section { ErrorBanner(message: error); Button("Retry overview") { Task { await load() } } } }
       if value == nil && error == nil { Section { ProgressView("Checking your assistants…") } }
-      if let value, !value.events.isEmpty {
-        Section("Since you were away") {
+      if let value {
+        Section {
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: 20) { counts(value) }
+            VStack(alignment: .leading, spacing: 10) { counts(value) }
+          }.accessibilityElement(children: .combine).accessibilityLabel("Household activity")
+        }
+        Section("Needs your attention") {
+          if attention(value).isEmpty { Text("No pending requests in the assistants we could check.").foregroundStyle(.secondary) }
+          ForEach(attention(value)) { item in
+            assistantRow(item, detail: item.approvals.first { $0.status == "pending" }?.title ?? item.attention.first?.title ?? item.activity.detail ?? item.activity.state.label)
+          }
+        }
+        Section {
+          if let since = ServerDate.parse(value.since) { Text("Since \(since.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
+          if value.events.isEmpty { Text("No new recorded results yet.").foregroundStyle(.secondary) }
           ForEach(value.events) { event in
-            Button { openBot(); Task { await store.select(event.botId); if let routineId = event.routineId { store.routineResult = RoutineResultDestination(botId: event.botId, routineId: routineId) } } } label: {
+            Button { open(event.botId, routine: event.routineId) } label: {
               VStack(alignment: .leading, spacing: 4) {
-                Text(event.title).font(.headline)
-                if let body = event.body { Text(body).font(.footnote).foregroundStyle(.secondary) }
+                Text(store.bootstrap?.bots.first { $0.id == event.botId }?.name ?? "Assistant").font(.headline).foregroundStyle(Color.primary)
+                Text(EventCopy.headline(event)).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
                 if let date = ServerDate.parse(event.occurredAt) { Text(date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
+              }
+            }.accessibilityIdentifier("today.event." + event.id)
+          }
+          if value.hasMore { Text("More results are waiting. Mark this page caught up to see the next page.").font(.footnote).foregroundStyle(.secondary) }
+          Button(value.hasMore ? "Mark page caught up" : "Mark caught up") { markCaughtUp(value) }
+            .disabled(busy || !store.connected).accessibilityIdentifier("markTodaySeen")
+        } header: { Text("Since you were away") }
+        if let upcoming = value.upcoming, !upcoming.isEmpty {
+          Section("Scheduled next") {
+            ForEach(upcoming) { row in
+              Button { open(row.botId, routine: row.id) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(row.name).font(.headline).foregroundStyle(Color.primary)
+                  Text(store.bootstrap?.bots.first { $0.id == row.botId }?.name ?? "Assistant").font(.caption).foregroundStyle(.secondary)
+                  if let date = row.nextRunAt.flatMap(ServerDate.parse) { Text(date.formatted()).font(.caption).foregroundStyle(.secondary) }
+                }
               }
             }
           }
         }
-      }
-      if let upcoming = value?.upcoming, !upcoming.isEmpty { Section("Scheduled next") {
-        ForEach(upcoming) { row in Button { openBot();Task { await store.select(row.botId);store.routineResult=RoutineResultDestination(botId:row.botId,routineId:row.id) } } label: { VStack(alignment:.leading) { Text(row.name);if let date=row.nextRunAt.flatMap(ServerDate.parse) { Text(date.formatted()).font(.caption).foregroundStyle(.secondary) } } } }
-      } }
-      ForEach(value?.items ?? []) { item in
-        Section {
-          Button {
-            openBot(); Task { await store.select(item.botId) }
-          } label: {
-            HStack {
-              VStack(alignment: .leading, spacing: 6) {
-                Text(item.botName).font(.headline)
-                ActivityLabel(state: item.activity.state)
-                if let detail = item.activity.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+        if !active(value).isEmpty {
+          Section("At work") { ForEach(active(value)) { item in assistantRow(item, detail: item.activity.detail ?? item.activity.state.label) } }
+        }
+        if value.items.contains(where: { !$0.files.isEmpty }) {
+          Section("Recent files") {
+            ForEach(value.items.filter { !$0.files.isEmpty }) { item in
+              Button { open(item.botId) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(item.botName).font(.headline).foregroundStyle(Color.primary)
+                  Text(item.files.suffix(3).map(\.name).joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+                }
               }
-              Spacer(); Image(systemName: "chevron.right")
             }
-          }.accessibilityIdentifier("today.bot.\(item.botId)")
-          if !item.approvals.isEmpty { Label("\(item.approvals.count) decision(s) waiting", systemImage: "hand.raised").foregroundStyle(Palette.attention) }
-          ForEach(item.attention) { attention in Text(attention.title).font(.subheadline) }
-          if let message = value?.recentMessage(item) { MarkdownView(text: String(message.text.prefix(800))).font(.footnote) }
-          ForEach(item.files) { file in FileAttachmentView(file: file) }
-          if let error = item.error { ErrorBanner(message: error) }
+          }
+        }
+        ForEach(value.items.filter { $0.error != nil }) { item in
+          Section(item.botName) { ErrorBanner(message: item.error!) }
+        }
+        if !value.unavailableBots.isEmpty {
+          Section { Text("Couldn't check \(value.unavailableBots.count) assistant(s). Their current activity is unknown.").foregroundStyle(.secondary) }
+        }
+        Section {
+          Text("Checked \(ServerDate.parse(value.generatedAt)?.formatted(date: .omitted, time: .shortened) ?? value.generatedAt) · updates every 30 seconds").font(.caption).foregroundStyle(.secondary)
         }
       }
-      if let value, value.items.isEmpty { Section { Text("No assistant work to show yet.").foregroundStyle(.secondary) } }
-      if let value, !value.unavailableBots.isEmpty { Section { Text("Some assistants could not be checked. Pull to refresh for current status.").foregroundStyle(.secondary) } }
-      if let value {
-        Section {
-          if value.hasMore { Text("More results are waiting. Mark this page caught up to see the next page.").font(.footnote).foregroundStyle(.secondary) }
-          Button(value.hasMore ? "Mark page caught up" : "Mark caught up") { markCaughtUp(value) }.disabled(busy || !store.connected).accessibilityIdentifier("markTodaySeen")
-        } footer: { Text("Checked \(ServerDate.parse(value.generatedAt)?.formatted(date: .omitted, time: .shortened) ?? value.generatedAt)") }
-      }
-    }.householdListBackground().accessibilityIdentifier("todayOverview").navigationTitle("Today").refreshable { await load() }.onAppear { Task { await load() } }
+      }.listRowBackground(Palette.raised(scheme))
+    }.listSectionSpacing(18).householdListBackground().accessibilityIdentifier("todayOverview").navigationTitle("Today").navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Refresh") { Task { await load() } }.disabled(busy) } }
+      .refreshable { await load() }
+      // Split-view reparenting can cancel a view task during a phone push. The initial
+      // read belongs to this account/load ID and may finish across that transition.
+      .onAppear { Task { await load() } }
       .onChange(of: store.scope) { _, _ in value = nil; Task { await load() } }
+      .task(id: store.scope) {
+        while !Task.isCancelled {
+          do { try await Task.sleep(for: .seconds(30)) } catch { return }
+          await load()
+        }
+      }
+  }
+  @ViewBuilder private func counts(_ value: TodayOverview) -> some View {
+    Text("\(attention(value).count)").bold() + Text(" need you")
+    Text("\(active(value).count)").bold() + Text(" at work")
+    Text("\(value.events.filter { $0.kind == "completed" }.count)").bold() + Text(value.hasMore ? " finished on this page" : " finished since your last visit")
+  }
+  private func attention(_ value: TodayOverview) -> [TodayItem] {
+    value.items.filter { $0.error == nil && ($0.approvals.contains { $0.status == "pending" } || !$0.attention.isEmpty || [.blocked, .interrupted, .failed].contains($0.activity.state)) }
+  }
+  private func active(_ value: TodayOverview) -> [TodayItem] {
+    value.items.filter { $0.error == nil && [.thinking, .working, .waiting].contains($0.activity.state) }
+  }
+  private func assistantRow(_ item: TodayItem, detail: String) -> some View {
+    Button { open(item.botId) } label: {
+      HStack(spacing: 12) {
+        AvatarView(avatar: store.bootstrap?.bots.first { $0.id == item.botId }?.avatar ?? AvatarConfig(), state: item.activity.state, size: 42, name: item.botName, forceReducedMotion: true)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(item.botName).font(.headline).foregroundStyle(Color.primary)
+          Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+        }
+        Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+      }
+    }.accessibilityIdentifier("today.bot.\(item.botId)")
+  }
+  private func open(_ bot: String, routine: String? = nil) {
+    openBot()
+    Task { await store.select(bot); if let routine { store.routineResult = RoutineResultDestination(botId: bot, routineId: routine) } }
   }
   private func load() async {
     guard let api = store.api, let scope = store.scope else { return }

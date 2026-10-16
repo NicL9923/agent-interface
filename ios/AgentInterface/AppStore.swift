@@ -30,12 +30,19 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var loading = false
   @Published var sending = false
   @Published var uploading = false
+  @Published var attachmentUploads: [AttachmentUpload] = []
   @Published var appUnavailable = false
   @Published var interruptionReviewed = false
   @Published var authConfig: AuthConfig?
   @Published var restoring = false
   @Published var sessionExpired = false
-  @Published var notificationStatus = "Notifications are off"
+  @Published var conversationRequest: UUID?
+  @Published var preferencesSaving = false
+  @Published var preferencesSaveFailed = false
+  @Published var preferencesDraft: Preferences?
+  private var preferencesFailureMessage: String?
+  private var queuedPreferences: Preferences?
+  @Published var notificationStatus = "Notification permission is managed by iOS"
   @Published var openedFile: PreviewFile?
   @Published var upgradeStatus: UpgradeStatus?
   @Published var upgradeBusy = false
@@ -88,7 +95,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   var active: Bool { activity.active }
   var canSend: Bool {
-    draftReady && connected && !sending && !uploading && pending == nil
+    draftReady && connected && !sending && !uploading && !attachmentUploads.contains { $0.botId == selectedBotId } && pending == nil
       && (draft.text.count <= 50000)
       && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !draft.attachments.isEmpty)
@@ -313,11 +320,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         receipt = nil
         sending = false
         uploading = false
+        clearUploads()
         interruptionReviewed = false
         resetUpgrade()
+        resetPreferenceSaves()
       }
       bootstrap = value
       api.csrf = value.csrfToken
+      Task { await self.drainUploads() }
       appUnavailable = false
       failures = 0
       if pending == nil { pending = read(key("pending")) }
@@ -329,7 +339,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           value.bots.first { $0.id == last }?.id ?? value.bots.first {
             $0.id == value.preferences.defaultBotId
           }?.id ?? value.bots.first?.id
-        await select(next)
+        await select(next, navigate: false)
       }
     } catch is CancellationError {} catch {
       guard generation == currentGeneration else { return }
@@ -340,6 +350,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// Another member made the open assistant personal, or it was deleted: return home and stop asking for it.
   func leave(_ id: String) async {
+    for upload in attachmentUploads.filter({ $0.botId == id }) { removeUpload(upload.id) }
     conversationCache[id] = nil
     if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
     error = nil
@@ -349,12 +360,13 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     leftBotId = id
   }
   private static func missing(_ error: Error) -> Bool { (error as? APIError)?.code == "assistant_not_found" }
-  func select(_ id: String?) async {
+  func select(_ id: String?, navigate: Bool = true) async {
     if id != nil { stayHome = false; notice = nil }
     persistDraft()
     flushDraft()
     selectionGeneration = UUID()
     selectedBotId = id
+    if id != nil && navigate { conversationRequest = UUID() }
     conversation = id.flatMap { conversationCache[$0] }
     draftReady = false
     interruptionReviewed = false
@@ -814,14 +826,49 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       throw error
     }
   }
-  func setPreferences(_ value: Preferences) async {
-    guard let api else { return }
+  @discardableResult func setPreferences(_ value: Preferences) async -> Bool {
+    guard let api else { return false }
     let currentGeneration = generation
     do {
-      let saved: Preferences = try await api.write("/preferences", value, method: "PATCH")
-      guard currentGeneration == generation else { return }
+      var update = value
+      update.modelFavorites = nil
+      let saved: Preferences = try await api.write("/preferences", update, method: "PATCH")
+      guard currentGeneration == generation else { return false }
       bootstrap?.preferences = saved
-    } catch { if currentGeneration == generation { report(error) } }
+      return true
+    } catch { if currentGeneration == generation { report(error) }; return false }
+  }
+  /// Account-owned queue survives closing Settings. A slow earlier save cannot win over a later edit.
+  func queuePreferences(_ value: Preferences) {
+    if preferencesSaveFailed && error == preferencesFailureMessage { error = nil }
+    preferencesFailureMessage = nil
+    preferencesDraft = value; queuedPreferences = value; preferencesSaveFailed = false
+    guard !preferencesSaving else { return }
+    preferencesSaving = true
+    let currentGeneration = generation
+    Task {
+      defer { if currentGeneration == generation { preferencesSaving = false } }
+      while let next = queuedPreferences, currentGeneration == generation {
+        queuedPreferences = nil
+        let saved = await setPreferences(next)
+        guard currentGeneration == generation else { return }
+        if !saved { preferencesSaveFailed = true; preferencesFailureMessage = error; return }
+      }
+      if currentGeneration == generation { preferencesDraft = nil }
+    }
+  }
+  func discardPreferenceChanges() {
+    if error == preferencesFailureMessage { error = nil }
+    queuedPreferences = nil; preferencesDraft = nil; preferencesSaveFailed = false; preferencesFailureMessage = nil
+  }
+  private func resetPreferenceSaves() {
+    queuedPreferences = nil; preferencesDraft = nil; preferencesSaveFailed = false; preferencesFailureMessage = nil; preferencesSaving = false
+  }
+  func togglePin(_ id: String) async {
+    guard var preferences = preferencesDraft ?? bootstrap?.preferences else { return }
+    if preferences.favorites.contains(id) { preferences.favorites.removeAll { $0 == id } }
+    else { preferences.favorites.append(id) }
+    queuePreferences(preferences)
   }
   func markRead(_ messageId: String?) {
     guard let id = selectedBotId, let api else { return }
@@ -840,41 +887,85 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     return conversation?.readPosition?.messageId ?? local?.messageId
   }
   func attach(urls: [URL]) async {
-    guard let api, let id = selectedBotId, draftReady, !uploading else { return }
-    guard draft.attachments.count + urls.count <= 10 else {
-      error = "Attach up to 10 files per message."
-      return
-    }
-    let currentGeneration = generation
-    uploading = true
-    defer { if currentGeneration == generation { uploading = false } }
-    let localKey = key("draft", id)
+    guard let id = selectedBotId, draftReady else { return }
+    var slots = max(0, 10 - draft.attachments.count - attachmentUploads.filter({ $0.botId == id }).count)
+    var overflow = 0
+    var staged: [UUID] = []
     for url in urls {
       let accessed = url.startAccessingSecurityScopedResource()
       defer { if accessed { url.stopAccessingSecurityScopedResource() } }
       do {
         let resource = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-        guard (resource.fileSize ?? 0) <= 20 * 1024 * 1024 else {
-          throw APIError(message: "Files must be no larger than 20 MB.", status: 400)
+        guard (resource.fileSize ?? 0) <= 20 * 1024 * 1024 else { throw APIError(message: "Files must be no larger than 20 MB.", status: 400) }
+        let mime = ["md", "markdown", "csv"].contains(url.pathExtension.lowercased()) ? "text/plain" :
+          resource.contentType?.preferredMIMEType ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        guard ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"].contains(mime) else {
+          throw APIError(message: "Choose a PNG, JPEG, WebP, GIF, PDF, or text file.", status: 400)
         }
-        let mime =
-          resource.contentType?.preferredMIMEType ?? UTType(filenameExtension: url.pathExtension)?
-          .preferredMIMEType ?? "application/octet-stream"
-        let file = try await api.upload(
-          botId: id, name: url.lastPathComponent, mime: mime, data: Data(contentsOf: url))
-        guard currentGeneration == generation else { return }
-        if selectedBotId == id {
-          var next = draft
-          next.attachments.append(file)
-          updateDraft(next)
-        } else {
-          var target: Draft = read(localKey) ?? Draft()
-          target.attachments.append(file)
-          target.dirty = true
-          save(target, localKey)
-          try await saveDraft(target, botId: id)
-        }
-      } catch { if currentGeneration == generation { report(error) } }
+        guard slots > 0 else { overflow += 1; continue }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("upload-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let copy = directory.appendingPathComponent(url.lastPathComponent)
+        do { try FileManager.default.copyItem(at: url, to: copy) }
+        catch { try? FileManager.default.removeItem(at: directory); throw error }
+        let upload = AttachmentUpload(botId: id, url: copy, name: url.lastPathComponent, mime: mime)
+        attachmentUploads.append(upload); staged.append(upload.id); slots -= 1
+      } catch { report(error) }
+    }
+    if overflow > 0 { error = "A message can carry up to 10 attachments, so \(overflow) \(overflow == 1 ? "wasn't" : "weren't") added." }
+    if !staged.isEmpty { await drainUploads() }
+  }
+  func removeUpload(_ id: UUID) {
+    guard let upload = attachmentUploads.first(where: { $0.id == id }) else { return }
+    try? FileManager.default.removeItem(at: upload.url.deletingLastPathComponent())
+    attachmentUploads.removeAll { $0.id == id }
+  }
+  private func clearUploads() { for id in attachmentUploads.map(\.id) { removeUpload(id) } }
+  func retryUpload(_ uploadId: UUID) async {
+    guard let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }), !attachmentUploads[index].uploading else { return }
+    attachmentUploads[index].error = nil
+    await drainUploads()
+  }
+  /// Only queued files start automatically. A failed attempt always waits for explicit Retry.
+  func drainUploads() async {
+    guard !uploading, connected, api != nil else { return }
+    let currentGeneration = generation
+    uploading = true
+    defer { if currentGeneration == generation { uploading = false } }
+    while currentGeneration == generation, connected,
+      let next = attachmentUploads.first(where: { !$0.uploading && $0.error == nil }) {
+      await uploadAttachment(next.id)
+    }
+  }
+  private func uploadAttachment(_ uploadId: UUID) async {
+    guard let api, let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) else { return }
+    let upload = attachmentUploads[index]
+    attachmentUploads[index].uploading = true; attachmentUploads[index].error = nil
+    let currentGeneration = generation
+    do {
+      let data = try Data(contentsOf: upload.url)
+      guard data.count <= 20 * 1024 * 1024 else { throw APIError(message: "Files must be no larger than 20 MB.", status: 400) }
+      let file = try await api.upload(botId: upload.botId, name: upload.name, mime: upload.mime, data: data)
+      guard currentGeneration == generation, attachmentUploads.contains(where: { $0.id == uploadId }) else { return }
+      // No network replay: Retry uploads only this file and never sends the message.
+      if selectedBotId == upload.botId && draftReady {
+        var next = draft; next.attachments.append(file); updateDraft(next)
+        removeUpload(uploadId)
+      } else {
+        let localKey = key("draft", upload.botId)
+        var target: Draft = read(localKey) ?? Draft()
+        target.attachments.append(file); target.dirty = true; target.seq = (target.seq ?? 0) + 1
+        save(target, localKey)
+        // A draft read already in flight must merge this cached attachment, not replace it.
+        if selectedBotId == upload.botId { draft = target }
+        removeUpload(uploadId)
+        try await saveDraft(target, botId: upload.botId)
+      }
+    } catch {
+      guard currentGeneration == generation else { return }
+      if let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) {
+        attachmentUploads[index].uploading = false; attachmentUploads[index].error = error.localizedDescription
+      } else { report(error) }
     }
   }
   func attachAppleSnapshot(_ data: Data, botId: String) async throws {
@@ -894,7 +985,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     guard target.attachments.count < 10 else { throw APIError(message: "This draft already has 10 attachments. Send or remove one first.", status: 400) }
     uploading = true
-    defer { if currentGeneration == generation { uploading = false } }
+    defer { if currentGeneration == generation { uploading = false; Task { await self.drainUploads() } } }
     let file = try await api.upload(botId: botId, name: "apple-selected-snapshot.txt", mime: "text/plain", data: data)
     guard currentGeneration == generation else { throw CancellationError() }
     // Draft editing remains possible during uploads. Read it again before appending.
@@ -976,9 +1067,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     receipt = nil
     sending = false
     uploading = false
+    clearUploads()
     appUnavailable = false
     sessionExpired = false
     resetUpgrade()
+    resetPreferenceSaves()
     return true
   }
   private func resetUpgrade() {
