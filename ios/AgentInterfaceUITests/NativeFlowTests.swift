@@ -36,6 +36,7 @@ final class NativeFlowTests: XCTestCase {
     let scheduled = app.buttons["Scheduled jobs"]
     for _ in 0..<4 { if scheduled.isHittable { break }; app.swipeUp() }
     scheduled.tap()
+    app.buttons["Bunny care"].tap()
     XCTAssertTrue(handoff.waitForExistence(timeout: 5))
     let expanded = XCTAttachment(screenshot: app.screenshot())
     expanded.name = "Scheduled job details expanded"
@@ -150,8 +151,8 @@ final class NativeFlowTests: XCTestCase {
   func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
     let app = app(upgradeUncertain: true)
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    if !app.buttons["Your preferences"].exists { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["Your preferences"].tap()
+    if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["Settings"].tap()
     for _ in 0..<5 {
       if app.buttons["Hermes updates"].isHittable { break }
       app.swipeUp()
@@ -200,7 +201,7 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Ranch hand is working"].waitForExistence(timeout: 10))
     app.buttons["Reasoning"].tap()
     XCTAssertTrue(app.staticTexts["Fixture exposed reasoning: current weather needs a fresh forecast."].exists)
-    app.buttons["Activity details"].tap()
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tap()
     app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "web_search")).firstMatch.tap()
     XCTAssertTrue(app.staticTexts["{\"query\":\"Texas ranch weather forecast\"}"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture native live activity and exposed tool details")
@@ -238,8 +239,8 @@ final class NativeFlowTests: XCTestCase {
   func testNativeFailedUpdateOffersGuardedRecovery() {
     let app = app(upgradeFailed: true)
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    if !app.buttons["Your preferences"].exists { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["Your preferences"].tap()
+    if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["Settings"].tap()
     for _ in 0..<6 { if app.buttons["Hermes updates"].isHittable { break }; app.swipeUp() }
     app.buttons["Hermes updates"].tap()
     XCTAssertTrue(app.buttons["restartHermesService"].waitForExistence(timeout: 10))

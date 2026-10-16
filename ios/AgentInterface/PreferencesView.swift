@@ -1,178 +1,200 @@
 import SwiftUI
 
 struct PreferencesView: View {
+  var close: (() -> Void)? = nil
   @EnvironmentObject private var store: AppStore
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.colorScheme) private var scheme
   @State private var preferences = Preferences()
   @State private var sectionName = ""
-  @State private var saving = false
+  private var saving: Bool { store.preferencesSaving }
+  private var saveFailed: Bool { store.preferencesSaveFailed }
+  @State private var discardConfirm = false
+  @State private var loaded = false
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
-  @State private var notificationBusy = false
-  @State private var liveActivities = true
-  /// Read once on appear; the system setting does not change while this sheet is open.
-  @State private var liveActivitiesAllowed = true
   var body: some View {
     NavigationStack {
       Form {
+        Group {
+        Section {
+          HStack(spacing: 14) {
+            AccountAvatar(member: store.bootstrap?.user, size: 52)
+            VStack(alignment: .leading, spacing: 4) {
+              Text(store.bootstrap?.user.name ?? "").font(.headline)
+              Text(store.bootstrap?.user.email ?? "").font(.subheadline).foregroundStyle(.secondary)
+            }
+          }.padding(.vertical, 8)
+        }
+        Section {
+          NavigationLink {
+            HermesUpgradeView()
+          } label: {
+            settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
+              detail: store.connected ? "Connected" + (store.bootstrap?.connection.version.map { " · \($0)" } ?? "") : "Reconnecting")
+          }.accessibilityIdentifier("Hermes updates")
+          if let url = try? store.api?.url("/?computer=1") {
+            Link(destination: url) {
+              settingsRow("Computer", icon: "desktopcomputer", detail: "Shared desktop and terminal")
+            }.accessibilityIdentifier("sharedComputer")
+          }
+          NavigationLink { IntegrationsView() } label: {
+            settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
+          }
+        }
         if let error = store.error {
-          Section { ErrorBanner(message: error, dismiss: { store.error = nil }) }
+          Section {
+            ErrorBanner(message: error, dismiss: { store.error = nil })
+          }
         }
-        Section("Your preferences") {
-          Picker("Presentation", selection: $preferences.presentation) {
-            Text("Simple").tag("simple")
-            Text("Advanced").tag("advanced")
+        if saveFailed { Section { Button("Retry saving settings") { enqueueSave() } } }
+        Section("Display") {
+          Picker("Appearance", selection: $preferences.theme) {
+            Text("Follow device").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
           }
-          Picker("Theme", selection: $preferences.theme) {
-            Text("System").tag("system")
-            Text("Light").tag("light")
-            Text("Dark").tag("dark")
+          HStack {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Advanced details")
+              Text("Reasoning, tool inputs and the model menu").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Toggle("Advanced details", isOn: Binding(get: { preferences.presentation == "advanced" }, set: { preferences.presentation = $0 ? "advanced" : "simple" }))
+              .labelsHidden().fixedSize().accessibilityIdentifier("advancedDetails")
           }
-          Picker("Start page",selection:Binding(get:{preferences.startPage ?? "today"},set:{preferences.startPage=$0})) { Text("Today").tag("today");Text("Assistant").tag("assistant") }
+          Picker("Start page", selection: Binding(get: { preferences.startPage ?? (preferences.defaultBotId == nil ? "today" : "assistant") }, set: { preferences.startPage = $0 })) {
+            Text("Today").tag("today"); Text("Assistant").tag("assistant")
+          }
           defaultPicker
-        }
-        Section("Favorites") {
-          ForEach(store.bootstrap?.bots ?? []) { bot in
-            Toggle(bot.name, isOn: membership(bot.id, \Preferences.favorites))
+        }.disabled(store.sessionExpired)
+        Section {
+          Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
+            var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
+          })) {
+            Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
           }
+          Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in
+            var settings = notificationPreferences; settings.quietStart = enabled ? "22:00" : nil
+            settings.quietEnd = enabled ? "07:00" : nil; preferences.notifications = settings
+          }))
+          if preferences.notifications?.quietStart != nil {
+            DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
+            DatePicker("Until", selection: quietTime(start: false), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
+          }
+        } header: { Text("Notifications") } footer: {
+          if preferences.notifications?.quietStart != nil {
+            Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
+          }
+          Text(store.notificationStatus).font(.footnote).foregroundStyle(Palette.muted)
+          if let url = URL(string: UIApplication.openSettingsURLString) { Link("Manage device permissions in iOS Settings", destination: url) }
+        }.disabled(store.sessionExpired)
+        if !(store.bootstrap?.bots.isEmpty ?? true) {
+          Section {
+            ForEach(store.bootstrap?.bots ?? []) { bot in
+              Toggle(isOn: membership(bot.id, \Preferences.followBots)) {
+                HStack(spacing: 10) {
+                  AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: bot.name, forceReducedMotion: true)
+                  Text(bot.name)
+                }
+              }
+            }
+          } header: { Text("Follow all activity") } footer: {
+            Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
+          }.disabled(store.sessionExpired)
         }
         ForEach(preferences.sections) { section in sectionEditor(section) }
-        Section("Add section") {
-          TextField("Section name", text: $sectionName)
+        Section("Home sections") {
+          TextField("New section, like Around the house", text: $sectionName).accessibilityLabel("New section name")
           Button("Add section") {
-            preferences.sections.append(
-              BotSection(
-                id: UUID().uuidString,
-                name: sectionName.trimmingCharacters(in: .whitespacesAndNewlines), botIds: []))
+            preferences.sections.append(BotSection(id: UUID().uuidString, name: sectionName.trimmingCharacters(in: .whitespacesAndNewlines), botIds: []))
             sectionName = ""
-          }.disabled(
-            sectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              || preferences.sections.count >= 30)
-        }
+          }.disabled(sectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || preferences.sections.count >= 30)
+        }.disabled(store.sessionExpired)
         Section {
-          Picker("Batch updates",selection:Binding(get:{preferences.notifications?.batchMinutes ?? 0},set:{ value in var settings=preferences.notifications ?? NotificationPreferences(timezone:TimeZone.current.identifier,batchMinutes:0);settings.batchMinutes=value;preferences.notifications=settings })) { Text("As they arrive").tag(0);Text("Every 5 minutes").tag(5);Text("Every 15 minutes").tag(15);Text("Hourly").tag(60) }
-          Toggle("Quiet hours",isOn:Binding(get:{preferences.notifications?.quietStart != nil},set:{ enabled in var settings=preferences.notifications ?? NotificationPreferences(timezone:TimeZone.current.identifier,batchMinutes:0);settings.quietStart=enabled ? "22:00" : nil;settings.quietEnd=enabled ? "07:00" : nil;preferences.notifications=settings }))
-          if preferences.notifications?.quietStart != nil {
-            TextField("Quiet start (HH:mm)",text:Binding(get:{preferences.notifications?.quietStart ?? "22:00"},set:{preferences.notifications?.quietStart=$0})).keyboardType(.numbersAndPunctuation)
-            TextField("Quiet end (HH:mm)",text:Binding(get:{preferences.notifications?.quietEnd ?? "07:00"},set:{preferences.notifications?.quietEnd=$0})).keyboardType(.numbersAndPunctuation)
-            Text("\(preferences.notifications?.timezone ?? TimeZone.current.identifier). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.").font(.caption).foregroundStyle(.secondary)
-          }
-          Text(store.notificationStatus).font(.footnote).foregroundStyle(.secondary)
-          Button("Enable device notifications") {
-            notification { await NotificationController.shared.enable() }
-          }
-          Button("Disable device notifications") {
-            notification { await NotificationController.shared.disable() }
-          }
-          if let id = store.selectedBotId {
-            Button("Send test notification") {
-              notification { await NotificationController.shared.test(botId: id) }
-            }
-          }
-          Button("Open iOS notification settings") {
-            if let url = URL(string: UIApplication.openSettingsURLString) {
-              UIApplication.shared.open(url)
-            }
-          }
-          ForEach(store.bootstrap?.bots ?? []) { bot in
-            Toggle(
-              "Follow all \(bot.name) activity", isOn: membership(bot.id, \Preferences.followBots))
-          }
-        } header: {
-          Text("Notifications")
-        } footer: {
-          Text(
-            "By default, completion and approval notifications go to task participants. Following an assistant includes all its activity. Routine recipients are selected in each routine."
-          )
-        }
-        .disabled(notificationBusy || store.sessionExpired)
-        Section {
-          Toggle("Live Activities", isOn: $liveActivities).accessibilityIdentifier("liveActivitiesToggle")
-            .onChange(of: liveActivities) { _, value in
-              guard value != LiveActivityController.shared.enabled else { return }
-              Task { await LiveActivityController.shared.setEnabled(value) }
-            }
-          if !liveActivitiesAllowed {
-            Text("Live Activities are off for WildBots in iOS Settings.").font(.footnote).foregroundStyle(.secondary)
-          }
-        } header: {
-          Text("Lock Screen")
-        } footer: {
-          Text("Shows assistants that are working or waiting for you on the Lock Screen and in the Dynamic Island on this device.")
-        }
-        if let url = try? store.api?.url("/?computer=1") {
-          Section {
-            Link(destination: url) {
-              Label("Open computer in browser", systemImage: "desktopcomputer")
-            }.accessibilityIdentifier("sharedComputer")
-          } header: {
-            Text("Computer")
-          } footer: {
-            Text(
-              "Use the shared desktop and VPS terminal in your browser. Sign in there with your household account if asked."
-            )
-          }
-        }
-        Section("Connection") {
-          LabeledContent("Server", value: store.host)
-          if let version = store.bootstrap?.connection.version {
-            LabeledContent("Hermes", value: version)
-          }
-          if let detail = store.bootstrap?.connection.detail {
-            Text(detail).font(.footnote).foregroundStyle(.secondary)
-          }
-          Button("Reconnect now") { Task { await store.reconnect() } }
-          NavigationLink("Integrations") { IntegrationsView() }
-          NavigationLink("Passwords & logins") { VaultView() }
-          NavigationLink("Hermes updates") { HermesUpgradeView() }
-          Button("Change server") { changeServerConfirm = true }
-        }
-        Section("About") { AppVersionRows(update: store.appUpdate) }
-        Section("Account") {
-          Text(store.bootstrap?.user.name ?? "")
-          Text(store.bootstrap?.user.email ?? "").font(.footnote).foregroundStyle(.secondary)
           if store.sessionExpired { Button("Sign in again") { Task { await store.signIn() } } }
           Button("Sign out", role: .destructive) { signOutConfirm = true }
         }
+        Section("About") { AppVersionRows(update: store.appUpdate); NavigationLink("Connection") { connection } }
         #if DEBUG
           Section("Development") { NavigationLink("Avatar specimen") { AvatarSpecimenView() } }
         #endif
-      }.navigationTitle("Your preferences").navigationBarTitleDisplayMode(.inline)
+        Section {
+          VStack(spacing: 6) {
+            Text("w.").font(.largeTitle.bold()).foregroundStyle(Palette.accent)
+            Text("WildBots").font(.headline)
+            if let version = store.bootstrap?.connection.version { Text("Hermes \(version)").font(.caption).foregroundStyle(.secondary) }
+          }.frame(maxWidth: .infinity).padding(.vertical, 12)
+        }.listRowBackground(Color.clear)
+        }.listRowBackground(Palette.raised(scheme))
+      }.listSectionSpacing(18).contentMargins(.top, 12, for: .scrollContent)
+        .householdListBackground().navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
-          ToolbarItem(placement: .confirmationAction) {
-            Button(saving ? "Saving…" : "Save") {
-              saving = true
-              Task {
-                await store.setPreferences(preferences)
-                saving = false
-              }
-            }.disabled(saving || store.sessionExpired)
+          ToolbarItem(placement: .cancellationAction) { Button("Close") { if saveFailed { discardConfirm = true } else { closeSheet() } } }
+          ToolbarItem(placement: .status) {
+            if saving { ProgressView("Saving…") }
+            else if saveFailed { Text("Settings not saved").foregroundStyle(Palette.danger) }
           }
         }
-        .onAppear {
-          preferences = store.bootstrap?.preferences ?? Preferences()
-          liveActivities = LiveActivityController.shared.enabled
-          liveActivitiesAllowed = LiveActivityController.shared.systemAllowed
+        .onAppear { preferences = store.preferencesDraft ?? store.bootstrap?.preferences ?? Preferences(); loaded = true }
+        .onChange(of: store.bootstrap?.preferences) { _, value in
+          if let value, !saving && !saveFailed { preferences = value }
         }
-        .confirmationDialog(
-          "Sign out on this device? Your personal drafts stay saved for your next sign-in.",
-          isPresented: $signOutConfirm, titleVisibility: .visible
-        ) {
-          Button("Sign out", role: .destructive) { Task { if await store.signOut() { dismiss() } } }
+        .onChange(of: preferences) { _, value in
+          if loaded && value != store.preferencesDraft && value != store.bootstrap?.preferences { enqueueSave() }
         }
-        .confirmationDialog(
-          "Change the app server? Sign-out will revoke this device's session and notifications first.",
-          isPresented: $changeServerConfirm, titleVisibility: .visible
-        ) {
-          Button("Change server") {
-            Task {
-              await store.changeConnection()
-              if store.api == nil { dismiss() }
-            }
-          }
+        .interactiveDismissDisabled(saveFailed)
+        .confirmationDialog("Settings could not be saved. Discard these changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
+          Button("Discard changes", role: .destructive) { store.discardPreferenceChanges(); closeSheet() }
+        }
+        .onChange(of: store.scope) { _, _ in dismiss() }
+        .confirmationDialog("Sign out on this device? Your personal drafts stay saved for your next sign-in.", isPresented: $signOutConfirm, titleVisibility: .visible) {
+          Button("Sign out", role: .destructive) { Task { if await store.signOut() { closeSheet() } } }
+        }
+        .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
+          Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
     }
+  }
+  private var notificationPreferences: NotificationPreferences {
+    preferences.notifications ?? NotificationPreferences(timezone: TimeZone.current.identifier, batchMinutes: 0)
+  }
+  private func settingsRow(_ title: String, icon: String, detail: String) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: icon).foregroundStyle(Palette.accent).frame(width: 24)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).foregroundStyle(Color.primary)
+        Text(detail).font(.caption).foregroundStyle(Palette.muted)
+      }
+    }.padding(.vertical, 4)
+  }
+  private var connection: some View {
+    Form {
+      Section {
+        NavigationLink("Hermes updates") { HermesUpgradeView() }
+        LabeledContent("Server", value: store.host)
+        if let detail = store.bootstrap?.connection.detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
+        Button("Reconnect now") { Task { await store.reconnect() } }
+        NavigationLink("Passwords & logins") { VaultView() }
+        Button("Change server") { changeServerConfirm = true }
+      }
+    }.householdListBackground().navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
+  }
+  private func closeSheet() { if let close { close() } else { dismiss() } }
+  private func enqueueSave() { store.queuePreferences(preferences) }
+  private func quietTime(start: Bool) -> Binding<Date> {
+    Binding(get: {
+      let value = (start ? preferences.notifications?.quietStart : preferences.notifications?.quietEnd) ?? (start ? "22:00" : "07:00")
+      let parts = value.split(separator: ":").compactMap { Int($0) }
+      var calendar = Calendar.current
+      calendar.timeZone = TimeZone(identifier: notificationPreferences.timezone) ?? .current
+      return calendar.date(from: DateComponents(year: 2026, month: 1, day: 1, hour: parts.first ?? 0, minute: parts.count > 1 ? parts[1] : 0)) ?? Date()
+    }, set: { date in
+      var calendar = Calendar.current
+      calendar.timeZone = TimeZone(identifier: notificationPreferences.timezone) ?? .current
+      let value = String(format: "%02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
+      var settings = notificationPreferences
+      if start { settings.quietStart = value } else { settings.quietEnd = value }
+      preferences.notifications = settings
+    })
   }
   private func membership(_ id: String, _ keyPath: WritableKeyPath<Preferences, [String]>)
     -> Binding<Bool>
@@ -193,8 +215,8 @@ struct PreferencesView: View {
     let selection = Binding<String>(
       get: { preferences.defaultBotId ?? "" },
       set: { value in preferences.defaultBotId = value.isEmpty ? nil : value })
-    return Picker("Default assistant", selection: selection) {
-      Text("First available").tag("")
+    return Picker("Open by default", selection: selection) {
+      Text("First assistant").tag("")
       ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) }
     }
   }
@@ -232,13 +254,6 @@ struct PreferencesView: View {
           preferences.sections[index].botIds.removeAll { $0 == botId }
         }
       })
-  }
-  private func notification(_ operation: @escaping () async -> Void) {
-    notificationBusy = true
-    Task {
-      await operation()
-      notificationBusy = false
-    }
   }
 }
 

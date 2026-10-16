@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 import Foundation
 import CryptoKit
 @testable import AgentInterface
@@ -36,6 +37,8 @@ private final class NativeMockServer: @unchecked Sendable {
     private var delayed: [String: () -> Void] = [:]
     private var currentUser = "one"
     private var messageStatus = 200
+    private var uploadStatus = 200
+    private var pushAvailable = true
     private var run = "run-one"
     private var state = "idle"
     private var logoutStatus = 200
@@ -64,6 +67,8 @@ private final class NativeMockServer: @unchecked Sendable {
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
     var requests: [URLRequest] { lock.withLock { recorded } }
     func interrupt(runId: String) { lock.withLock { run = runId; state = "interrupted" } }
+    func failUploads(_ fail: Bool) { lock.withLock { uploadStatus = fail ? 503 : 200 } }
+    func configurePush(_ available: Bool) { lock.withLock { pushAvailable = available } }
     func failLogout(status: Int = 503, code: String? = nil) { lock.withLock { logoutStatus = status; logoutCode = code } }
     func failAuthConfig(_ fail: Bool = true) { lock.withLock { authConfigStatus = fail ? 503 : 200 } }
     /// Answers bootstrap with an error, like the app server's "sign in required" 401.
@@ -310,7 +315,11 @@ private final class NativeMockServer: @unchecked Sendable {
                 clearDraft(request.url!.pathComponents.dropLast().last ?? "", sent: text, base: payload?["draftBaseRevision"] as? Int)
             }
             data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"]) : Self.json(["error": "Synthetic admission failure"])
-        } else if path.hasSuffix("/uploads") { data = Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) }
+        } else if path.hasSuffix("/uploads") {
+            status = lock.withLock { uploadStatus }
+            data = status == 200 ? Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) : Self.json(["error": "Synthetic upload failure"])
+        }
+        else if path == "/api/native/push/config" { data = Self.json(["available": lock.withLock { pushAvailable }]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
         else if path == "/api/auth/logout" {
             let failure = lock.withLock { (status: logoutStatus, code: logoutCode) }
@@ -386,6 +395,113 @@ private final class NativeMockServer: @unchecked Sendable {
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("native.\(scope).") { UserDefaults.standard.removeObject(forKey: key) }
         }
         NativeMockProtocol.remove(host: server.origin.host!)
+    }
+
+    func testNotificationPermissionAutomaticallyAsksOnceAndRegistersWithoutLegacyOptIn() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var status: UNAuthorizationStatus = .notDetermined
+        var requests = 0, registrations = 0
+        let controller = NotificationController(permissions: NotificationPermissions(status: { status }, request: {
+            requests += 1; status = .authorized; return true
+        }), register: { registrations += 1 }, unregister: {})
+        controller.store = value
+        await controller.synchronize()
+        XCTAssertEqual(requests, 1); XCTAssertEqual(registrations, 1)
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize()
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/native/push/device" }.count, 1)
+        status = .denied
+        await controller.synchronize()
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(server.requests.last?.httpMethod, "DELETE")
+        XCTAssertEqual(server.requests.last?.url?.path, "/api/native/push/device")
+        XCTAssertNil(controller.token)
+        status = .authorized
+        await controller.synchronize()
+        XCTAssertEqual(registrations, 2, "Re-enabling in iOS Settings registers with APNs again")
+        XCTAssertEqual(requests, 1)
+    }
+    func testDeniedPermissionDoesNotReaskAndUnavailableServerDoesNotPrompt() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var status: UNAuthorizationStatus = .notDetermined
+        var requested = 0
+        let controller = NotificationController(permissions: NotificationPermissions(status: { status }, request: { requested += 1; return false }), register: { XCTFail("Must not register") }, unregister: {})
+        controller.store = value
+        server.configurePush(false)
+        await controller.synchronize()
+        XCTAssertEqual(requested, 0)
+        status = .denied
+        server.configurePush(true)
+        await controller.synchronize(); await controller.synchronize()
+        XCTAssertEqual(requested, 0)
+    }
+    func testNotificationPermissionAnswerCannotRegisterAnotherAccount() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let controller = NotificationController(permissions: NotificationPermissions(status: { .notDetermined }, request: {
+            server.user = "two"; await value.refreshBootstrap(); return true
+        }), register: { XCTFail("Old permission answer must not register another account") }, unregister: {})
+        controller.store = value
+        await controller.synchronize()
+        XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/native/push/device" })
+    }
+    func testFailedAttachmentBlocksSendUntilRetryOrRemovalAndNeverSendsAutomatically() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-upload-\(UUID().uuidString).txt")
+        try Data("Attachment to keep".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        server.failUploads(true)
+        value.sending = true
+        await value.attach(urls: [file])
+        value.sending = false
+        XCTAssertEqual(value.attachmentUploads.count, 1); XCTAssertNotNil(value.attachmentUploads.first?.error)
+        XCTAssertFalse(value.canSend); XCTAssertTrue(value.draft.attachments.isEmpty)
+        server.failUploads(false)
+        await value.retryUpload(try XCTUnwrap(value.attachmentUploads.first?.id))
+        XCTAssertTrue(value.attachmentUploads.isEmpty); XCTAssertEqual(value.draft.attachments.count, 1)
+        XCTAssertTrue(value.canSend); XCTAssertEqual(server.requestCount("/api/bots/bot/messages"), 0)
+        server.failUploads(true)
+        await value.attach(urls: [file])
+        value.removeUpload(try XCTUnwrap(value.attachmentUploads.first?.id))
+        XCTAssertTrue(value.canSend)
+    }
+    func testAttachmentBatchKeepsAvailableFilesAndExplainsOverflow() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-slots-\(UUID().uuidString).txt")
+        try Data("Next attachment".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        value.draft.attachments = (0..<9).map { FileRef(id: "existing-\($0)", name: "Existing.txt", mime: "text/plain") }
+        await value.attach(urls: [file, file])
+        XCTAssertEqual(value.draft.attachments.count, 10)
+        XCTAssertEqual(value.error, "A message can carry up to 10 attachments, so 1 wasn't added.")
+        XCTAssertTrue(value.attachmentUploads.isEmpty)
+    }
+
+    func testPreferencesQueueFinishesAfterSheetClosureAndSerializesNewerEdits() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var first = try XCTUnwrap(value.bootstrap?.preferences); first.theme = "dark"
+        server.hold("/api/preferences")
+        value.queuePreferences(first)
+        try await server.waitForHeld("/api/preferences")
+        var second = first; second.presentation = "advanced"
+        value.queuePreferences(second)
+        XCTAssertTrue(value.preferencesSaving)
+        server.release("/api/preferences")
+        for _ in 0..<200 { if !value.preferencesSaving { break }; try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(value.preferencesSaving); XCTAssertFalse(value.preferencesSaveFailed)
+        XCTAssertEqual(value.bootstrap?.preferences.theme, "dark")
+        XCTAssertEqual(value.bootstrap?.preferences.presentation, "advanced")
+        XCTAssertEqual(server.requestCount("/api/preferences"), 2)
+        XCTAssertNil(value.preferencesDraft)
+    }
+    func testSettingsSaveDoesNotResendStaleModelFavorites() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var preferences = try XCTUnwrap(value.bootstrap?.preferences)
+        preferences.modelFavorites = [ModelChoice(provider: "old", model: "stale")]
+        let saved = await value.setPreferences(preferences)
+        XCTAssertTrue(saved)
+        let request = try XCTUnwrap(server.requests.last { $0.url?.path == "/api/preferences" })
+        let body = try XCTUnwrap(NativeMockServer.body(request))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(object["modelFavorites"])
     }
 
     func testBackendJSONContractsIncludeNullableCSRFAndISOExpiry() throws {
@@ -830,6 +946,7 @@ private final class NativeMockServer: @unchecked Sendable {
 
     func testDiscardingAnotherAssistantsUnconfirmedSendWorksOfflineAndLandsInItsDraft() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts("other")
         value.pending = PendingSubmission(requestId: "lost", botId: "other", text: "Lost message", attachments: [], reviewedInterruption: false)
         server.setOffline(true)
         value.discardUnconfirmedSubmission()
@@ -1095,6 +1212,41 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft.text, "server draft for two")
     }
 
+    func testUploadFinishingWhileReturningDraftLoadsKeepsTheFile() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts("bot")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-loading-\(UUID().uuidString).txt")
+        try Data("Keep this file".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        let uploadPath = "/api/bots/bot/uploads", draftPath = "/api/bots/bot/draft"
+        server.hold(uploadPath)
+        let upload = Task { await value.attach(urls: [file]) }
+        try await server.waitForHeld(uploadPath)
+        await value.select("other")
+        server.holdNext(draftPath)
+        let returning = Task { await value.select("bot") }
+        try await server.waitForHeld(draftPath)
+        XCTAssertFalse(value.draftReady)
+        server.release(uploadPath); await upload.value
+        let cached = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(cached?.attachments.map(\.id), ["file.signature"])
+        server.release(draftPath); await returning.value
+        XCTAssertEqual(value.draft.attachments.map(\.id), ["file.signature"])
+        XCTAssertTrue(value.attachmentUploads.isEmpty)
+    }
+    func testQueuedUploadStartsAfterConnectionReturnsWithoutSendingMessage() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-queued-\(UUID().uuidString).txt")
+        try Data("Queued attachment".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        value.bootstrap?.connection.connected = false
+        await value.attach(urls: [file])
+        XCTAssertEqual(value.attachmentUploads.count, 1); XCTAssertNil(value.attachmentUploads.first?.error)
+        XCTAssertEqual(server.requestCount("/api/bots/bot/uploads"), 0)
+        value.bootstrap?.connection.connected = true
+        await value.drainUploads()
+        XCTAssertTrue(value.attachmentUploads.isEmpty); XCTAssertEqual(value.draft.attachments.count, 1)
+        XCTAssertEqual(server.requestCount("/api/bots/bot/messages"), 0)
+    }
+
     func testDelayedPreferencesCannotReplaceNewIdentityPreferencesAndFailedLogoutRetainsToken() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var preferences = Preferences(); preferences.theme = "dark"
@@ -1102,7 +1254,7 @@ private final class NativeMockServer: @unchecked Sendable {
         let operation = Task { await value.setPreferences(preferences) }
         try await server.waitForHeld("/api/preferences")
         server.user = "two"; await value.refreshBootstrap()
-        server.release("/api/preferences"); await operation.value
+        server.release("/api/preferences"); _ = await operation.value
         XCTAssertEqual(value.bootstrap?.preferences.theme, "system")
         server.failLogout(); let signedOut = await value.signOut()
         XCTAssertFalse(signedOut); XCTAssertEqual(value.api?.token, "synthetic-native-session")

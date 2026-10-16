@@ -25,6 +25,7 @@ import UserNotifications
           if phase == .active {
             Task {
               await store.resume()
+              await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
             }
           } else {
@@ -32,15 +33,18 @@ import UserNotifications
             LiveActivityController.shared.background()
           }
         }
-        .onChange(of: store.bootstrap?.user.id) { _, id in
-          if id != nil { Task { await NotificationController.shared.synchronize() } }
+        .onChange(of: store.connected) { _, connected in
+          if connected { Task { await NotificationController.shared.synchronize() } }
         }
         // Sign-out, another account or another server: the old account's activity ends, and
         // the new one starts from its own state.
         .onChange(of: store.scope) { old, new in
           Task {
             if old != nil { await LiveActivityController.shared.endAll(unregister: false) }
-            if new != nil { await LiveActivityController.shared.foreground() }
+            if new != nil {
+              await NotificationController.shared.synchronize()
+              await LiveActivityController.shared.foreground()
+            }
           }
         }
         // Widget and Live Activity taps. The sign-in callback never arrives here: the
@@ -105,7 +109,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var pendingBotId: String?
   var pendingRoutineId: String?
   var pendingURL: String?
-  private var preferenceKey: String? { store?.scope.map { "push.enabled.\($0)" } }
+  private let permissions: NotificationPermissions
+  private let register: @MainActor () -> Void
+  private let unregister: @MainActor () -> Void
+  private var synchronizing = false
+  private var synchronizeAgain = false
+  init(permissions: NotificationPermissions = .system,
+    register: @escaping @MainActor () -> Void = { UIApplication.shared.registerForRemoteNotifications() },
+    unregister: @escaping @MainActor () -> Void = { UIApplication.shared.unregisterForRemoteNotifications() }) {
+    self.permissions = permissions; self.register = register; self.unregister = unregister
+  }
   static func botId(from value: String, origin: URL) -> String? {
     guard value.hasPrefix("/"), !value.hasPrefix("//"),
       let url = URL(string: value, relativeTo: origin)?.absoluteURL, url.scheme == origin.scheme,
@@ -120,83 +133,55 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     UserDefaults.standard.set(value, forKey: "push.deviceId")
     return value
   }
-  func enable() async {
-    guard let store, let api = store.api else { return }
-    let currentToken = api.token
-    let currentScope = store.scope
-    let enabledKey = preferenceKey
-    do {
-      let config: PushConfig = try await api.get("/native/push/config")
-      guard config.available else {
-        store.notificationStatus =
-          "The self-hoster must configure Apple push notifications on this server."
-        return
-      }
-      let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [
-        .alert, .sound, .badge,
-      ])
-      guard currentToken == api.token, currentScope == store.scope else { return }
-      if allowed {
-        if let key = enabledKey { UserDefaults.standard.set(true, forKey: key) }
-        UIApplication.shared.registerForRemoteNotifications()
-        store.notificationStatus = "Registering this device…"
-      } else {
-        store.notificationStatus = "Notifications are denied. Enable them in iOS Settings."
-      }
-    } catch {
-      if currentToken == api.token, currentScope == store.scope {
-        store.notificationStatus = error.localizedDescription
-      }
-    }
-  }
+  /// iOS owns permission. Ask once after household sign-in, then reconcile on foreground.
   func synchronize() async {
-    guard let store, let api = store.api, api.token != nil, store.bootstrap != nil else { return }
-    let currentToken = api.token
-    let settings = await UNUserNotificationCenter.current().notificationSettings()
-    guard currentToken == api.token else { return }
-    if let key = preferenceKey, UserDefaults.standard.bool(forKey: key),
-      settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
-    {
-      if let token {
-        do {
-          let _: EmptyResponse = try await api.write(
-            "/native/push/device", PushDevice(deviceId: deviceId, token: token), method: "PUT")
-          if currentToken == api.token {
-            store.notificationStatus = "Notifications enabled on this device"
-          }
-        } catch {
-          if currentToken == api.token { store.notificationStatus = error.localizedDescription }
-        }
-      } else {
-        UIApplication.shared.registerForRemoteNotifications()
-      }
-    } else {
-      store.notificationStatus =
-        settings.authorizationStatus == .denied
-        ? "Notifications are denied in iOS Settings" : "Notifications are off"
-    }
+    guard !synchronizing else { synchronizeAgain = true; return }
+    synchronizing = true
+    defer { synchronizing = false }
+    repeat {
+      synchronizeAgain = false
+      await synchronizeDevice()
+    } while synchronizeAgain
     await openPendingConversation()
   }
-  func disable() async {
-    guard let store, let api = store.api else { return }
+  private func synchronizeDevice() async {
+    guard let store, let api = store.api, let currentScope = store.scope,
+      api.token != nil, store.bootstrap != nil, !store.sessionExpired else { return }
     let currentToken = api.token
-    let currentScope = store.scope
-    let enabledKey = preferenceKey
+    func current() -> Bool { store.api === api && api.token == currentToken && store.scope == currentScope }
     do {
-      let _: EmptyResponse = try await api.write(
-        "/native/push/device", ["deviceId": deviceId], method: "DELETE")
-      guard currentToken == api.token, currentScope == store.scope else { return }
-      if let key = enabledKey { UserDefaults.standard.set(false, forKey: key) }
-      UIApplication.shared.unregisterForRemoteNotifications()
-      store.notificationStatus = "Notifications disabled on this device"
-    } catch { if currentToken == api.token, currentScope == store.scope { store.report(error) } }
-  }
-  func test(botId: String) async {
-    guard let store else { return }
-    do {
-      try await store.perform("/native/push/test", ["botId": botId])
-      store.notificationStatus = "Test queued. Confirm its arrival on this device."
-    } catch { store.report(error) }
+      var status = await permissions.status()
+      guard current() else { return }
+      if status == .denied {
+        unregister()
+        token = nil
+        let _: EmptyResponse = try await api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
+        if current() { store.notificationStatus = "Notifications are managed in iOS Settings" }
+        return
+      }
+      let config: PushConfig = try await api.get("/native/push/config")
+      guard current() else { return }
+      guard config.available else {
+        store.notificationStatus = "Apple push notifications are unavailable on this server"
+        return
+      }
+      if status == .notDetermined {
+        let allowed = try await permissions.request()
+        guard current() else { return }
+        status = allowed ? .authorized : .denied
+      }
+      guard status == .authorized || status == .provisional || status == .ephemeral else {
+        store.notificationStatus = "Notifications are managed in iOS Settings"
+        return
+      }
+      if let token {
+        let _: EmptyResponse = try await api.write("/native/push/device", PushDevice(deviceId: deviceId, token: token), method: "PUT")
+        if current() { store.notificationStatus = "Notifications enabled on this device" }
+      } else {
+        register()
+        store.notificationStatus = "Registering this device…"
+      }
+    } catch { if current() { store.notificationStatus = error.localizedDescription } }
   }
   func openPendingConversation() async {
     if let pendingURL, let origin = store?.api?.baseURL, store?.bootstrap != nil {
@@ -219,4 +204,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
     pendingRoutineId = nil
   }
+}
+
+/// Injectable system boundary lets tests exercise grant, denial, and account changes without
+/// displaying an OS alert. Production always uses UNUserNotificationCenter.
+struct NotificationPermissions {
+  var status: () async -> UNAuthorizationStatus
+  var request: () async throws -> Bool
+  static let system = NotificationPermissions(
+    status: { await UNUserNotificationCenter.current().notificationSettings().authorizationStatus },
+    request: { try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) })
 }

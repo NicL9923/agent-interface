@@ -1,17 +1,17 @@
 import SwiftUI
 
+enum HomeDestination { case conversation, today, groups, find }
+
 struct RootView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var preferencesOpen = false
-  @State private var discoveryOpen = false
+  @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
   @Environment(\.scenePhase) private var scenePhase
   @State private var initialScope: String?
-  @State private var todayOpen = false
-  @State private var groupsOpen = false
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
   var body: some View {
@@ -26,18 +26,18 @@ struct RootView: View {
             columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn
           ) {
             BotListView(
-              openPreferences: { preferencesOpen = true }, create: { creatingBot = true },
-              openBot: { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail },
-              openToday: { discoveryOpen = false; todayOpen = true; groupsOpen = false; compactColumn = .detail },
-              openGroups: { discoveryOpen = false; groupsOpen = true; todayOpen = false; compactColumn = .detail },
-              openDiscovery: { discoveryOpen = true; groupsOpen = false; todayOpen = false; compactColumn = .detail })
+              destination: destination, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
+              openBot: { destination = .conversation; compactColumn = .detail },
+              openToday: { destination = .today; compactColumn = .detail },
+              openGroups: { destination = .groups; compactColumn = .detail },
+              openDiscovery: { destination = .find; compactColumn = .detail })
           } detail: {
-            if discoveryOpen {
+            if destination == .find {
               DiscoveryView()
-            } else if groupsOpen {
+            } else if destination == .groups {
               GroupChatsView()
-            } else if todayOpen {
-              TodayView(openBot: { todayOpen = false; compactColumn = .detail })
+            } else if destination == .today {
+              TodayView(openBot: { destination = .conversation; compactColumn = .detail })
             } else if let bot = store.bot {
               ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
             } else {
@@ -58,31 +58,30 @@ struct RootView: View {
       checkShares()
       if let scope, scope != initialScope {
         initialScope=scope
-        todayOpen=(store.bootstrap?.preferences.startPage == "today" || store.bootstrap?.preferences.startPage != "assistant" && store.bootstrap?.preferences.defaultBotId == nil) && store.routineResult == nil
-        if todayOpen { compactColumn = .detail }
+        let today=(store.bootstrap?.preferences.startPage == "today" || store.bootstrap?.preferences.startPage != "assistant" && store.bootstrap?.preferences.defaultBotId == nil) && store.routineResult == nil
+        destination = today ? .today : .conversation
+        compactColumn = .sidebar
       }
     }
-    .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot).environmentObject(store) }
-    .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil).environmentObject(store) }
-    .sheet(isPresented: $preferencesOpen) { PreferencesView().environmentObject(store) }
+    .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).environmentObject(store) }
+    .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).environmentObject(store) }
+    .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).environmentObject(store) }
     .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea() }
     .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.environmentObject(store) }
-    .onReceive(store.$todayRequest) { request in if request != nil { todayOpen=true;groupsOpen=false;discoveryOpen=false;compactColumn = .detail } }
+    .onReceive(store.$todayRequest) { request in if request != nil { destination = .today;compactColumn = .detail } }
     .onReceive(store.$leftBotId) { id in
       guard let id else { return }
       if settingsBot?.id == id { settingsBot = nil }
       if store.routineResult?.botId == id { store.routineResult = nil }
       // Only a person looking at its conversation is taken home; Today and the other views stay.
-      if !discoveryOpen && !todayOpen && !groupsOpen { compactColumn = .sidebar }
+      if destination == .conversation { compactColumn = .sidebar }
     }
-    .onReceive(store.$selectedBotId) { id in
-      if id != nil { discoveryOpen = false; todayOpen = false; groupsOpen = false; compactColumn = .detail }
+    .onReceive(store.$conversationRequest) { request in
+      if request != nil { destination = .conversation; compactColumn = .detail }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in
       if let old, old != new {
-        discoveryOpen = false
-        todayOpen = false
-        groupsOpen = false
+        destination = .conversation
         preferencesOpen = false
         settingsBot = nil
         creatingBot = false
@@ -220,117 +219,188 @@ struct AvatarTrio: View {
 struct BotListView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.horizontalSizeClass) private var sizeClass
+  var destination: HomeDestination
   var openPreferences: () -> Void
+  var edit: (Bot) -> Void
   var create: () -> Void
   var openBot: () -> Void
   var openToday: () -> Void
   var openGroups: () -> Void
   var openDiscovery: () -> Void
+  private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
   var body: some View {
-    List {
-      if let notice = store.notice {
-        Section {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 20) {
+        if let notice = store.notice {
           HStack(alignment: .top) {
             Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
-            Button { store.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
+            Button { store.notice = nil } label: { Image(systemName: "xmark") }
               .accessibilityLabel("Dismiss")
-          }.accessibilityIdentifier("homeNotice")
+          }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
+            .accessibilityIdentifier("homeNotice")
         }
-      }
-      Section {
-        Button(action: openToday) { Label("Today", systemImage: "sun.max") }.accessibilityIdentifier("openToday")
-        Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.accessibilityIdentifier("openGroups")
-        Button(action: openDiscovery) { Label("Search & saved", systemImage: "magnifyingglass") }.accessibilityIdentifier("openDiscovery")
-      }
-      if let bootstrap = store.bootstrap {
         if !store.connected {
-          Section {
-            Text(
-              store.sessionExpired
-                ? "Sign in again to continue"
-                : "Connection lost. Loaded conversations and drafts are kept."
-            ).font(.footnote).foregroundStyle(.secondary)
+          VStack(alignment: .leading, spacing: 8) {
+            Text(store.sessionExpired ? "Sign in again to continue" : "Connection lost. Loaded conversations and drafts are kept.")
+              .font(.footnote).foregroundStyle(.secondary)
             Button(store.sessionExpired ? "Sign in again" : "Reconnect now") {
-              Task {
-                if store.sessionExpired { await store.signIn() } else { await store.reconnect() }
-              }
+              Task { if store.sessionExpired { await store.signIn() } else { await store.reconnect() } }
             }
           }
         }
-        ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
-          Section(group.title) {
-            ForEach(group.bots) { bot in row(bot) }
-            if group.id == "remaining" && bootstrap.bots.isEmpty {
-              Text("Create your first assistant.").foregroundStyle(.secondary)
+        if let bootstrap = store.bootstrap {
+          let pinned = bootstrap.preferences.pinnedAssistants(bootstrap.bots)
+          if !pinned.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: sizeClass == .compact ? 100 : 76), spacing: 8)], alignment: .center, spacing: 12) {
+              ForEach(pinned) { bot in pinnedTile(bot) }
+            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (sizeClass == .compact ? 112 : 86))
+              .frame(maxWidth: .infinity)
+              .accessibilityElement(children: .contain).accessibilityLabel("Pinned assistants")
+          }
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { householdLinks }
+            VStack(alignment: .leading, spacing: 8) { householdLinks }
+          }
+          ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
+            VStack(alignment: .leading, spacing: 4) {
+              if !group.title.isEmpty { Text(group.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 10) }
+              LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
+            }
+          }
+          if bootstrap.bots.isEmpty {
+            ContentUnavailableView {
+              Label("Your assistants", systemImage: "bubble.left.and.bubble.right")
+            } description: {
+              Text("No assistants are available from Hermes yet.")
+            } actions: {
+              Button("Create an assistant", action: create).buttonStyle(.borderedProminent)
+                .disabled(!store.supports("botConfiguration") || !store.connected)
             }
           }
         }
-      }
-    }.householdListBackground()
-      .navigationTitle("Your assistants")
+      }.padding(16)
+    }.background(homeBackground)
+      .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(homeBackground, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button(action: openPreferences) { Image(systemName: "slider.horizontal.3") }
-            .accessibilityLabel("Your preferences")
+          Button(action: openPreferences) {
+            AccountAvatar(member: store.bootstrap?.user, size: 40)
+              .overlay(alignment: .bottomTrailing) {
+                Circle().fill(store.connected ? Palette.accent : Palette.attention)
+                  .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
+              }
+          }.accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
         }
-        ToolbarItem(placement: .topBarTrailing) {
-          Button(action: create) { Image(systemName: "plus") }.accessibilityLabel(
-            "Create assistant"
-          ).disabled(!store.supports("botConfiguration") || !store.connected)
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button(action: openDiscovery) { Image(systemName: "magnifyingglass") }
+            .accessibilityLabel("Search & saved").accessibilityIdentifier("openDiscovery")
+          Button(action: create) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
+            .disabled(!store.supports("botConfiguration") || !store.connected)
         }
-      }
-      .refreshable { await store.refreshBootstrap() }
+      }.refreshable { await store.refreshBootstrap() }
+  }
+  @ViewBuilder private var householdLinks: some View {
+    Button(action: openToday) { Label("Today", systemImage: "sun.max") }.buttonStyle(HomeLinkStyle(selected: destination == .today)).accessibilityIdentifier("openToday")
+    Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(HomeLinkStyle(selected: destination == .groups)).accessibilityIdentifier("openGroups")
+  }
+  private func state(_ bot: Bot) -> ActivityState {
+    !store.connected ? .disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
+  }
+  private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
+  private func pinnedTile(_ bot: Bot) -> some View {
+    let activity = state(bot)
+    return Button { open(bot) } label: {
+      VStack(spacing: 8) {
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
+          size: sizeClass == .compact ? 92 : 60, name: bot.name, forceReducedMotion: true)
+          .overlay(alignment: .bottomTrailing) {
+            Image(systemName: "pin.fill").font(.system(size: 11)).padding(5)
+              .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
+          }
+        Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+          .lineLimit(2).multilineTextAlignment(.center)
+        if activity != .idle && activity != .done { ActivityLabel(state: activity) }
+      }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+    }.buttonStyle(.plain)
+      .background(destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
+      .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
+      .accessibilityIdentifier("bot.\(bot.id)")
+      .contextMenu { botMenu(bot) }
   }
   private func row(_ bot: Bot) -> some View {
-    let state =
-      !store.connected
-      ? ActivityState.disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
-    // The list says what each assistant is doing in words, not only through motion.
-    let reportsActivity = store.connected && state != .idle
-    return Button {
-      openBot()
-      Task { await store.select(bot.id) }
-    } label: {
+    let activity = state(bot)
+    return Button { open(bot) } label: {
       HStack(spacing: 12) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, name: bot.name)
-        VStack(alignment: .leading, spacing: 3) {
-          Text(bot.name).foregroundStyle(.primary).font(.headline)
-          if reportsActivity {
-            ActivityLabel(state: state)
-          } else {
-            Text(bot.shared ? "Shared assistant" : "Personal assistant")
-              .font(.caption).foregroundStyle(.secondary)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
+          size: 52, name: bot.name, forceReducedMotion: true)
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(alignment: .firstTextBaseline) {
+            Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+            Spacer(minLength: 8)
+            if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+          }
+          if activity != .idle && activity != .done { ActivityLabel(state: activity) }
+          else {
+            Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
+              .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
           }
         }
-        Spacer(minLength: 0)
-        if store.bootstrap?.preferences.favorites.contains(bot.id) == true {
-          Image(systemName: "star.fill").font(.caption).foregroundStyle(Palette.accent)
-            .accessibilityLabel("Favorite")
-        }
-        if bot.id == store.selectedBotId {
-          Image(systemName: "checkmark").foregroundStyle(Palette.accent)
-        }
-      }.padding(.vertical, 4)
-    }.accessibilityIdentifier("bot.\(bot.id)").listRowBackground(Palette.raised(scheme))
-      .contextMenu {
-        Button(
-          store.bootstrap?.preferences.favorites.contains(bot.id) == true
-            ? "Remove favorite" : "Favorite", systemImage: "star"
-        ) {
-          Task {
-            guard var p = store.bootstrap?.preferences else { return }
-            if p.favorites.contains(bot.id) {
-              p.favorites.removeAll { $0 == bot.id }
-            } else {
-              p.favorites.append(bot.id)
-            }
-            await store.setPreferences(p)
-          }
-        }
-        Button("Open conversation", systemImage: "bubble.left") {
-          Task { await store.select(bot.id) }
-        }
+      }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
+    }.buttonStyle(.plain)
+      .background(destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
+      .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
+      .accessibilityIdentifier("bot.\(bot.id)")
+      .contextMenu { botMenu(bot) }
+  }
+  @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
+    Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin" : "Pin to top", systemImage: "pin") {
+      Task { await store.togglePin(bot.id) }
+    }.disabled(!store.connected || store.sessionExpired)
+    Button("Assistant settings", systemImage: "gearshape") { edit(bot) }
+  }
+}
+private struct HomeLinkStyle: ButtonStyle {
+  var selected: Bool
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.font(.subheadline).padding(.horizontal, 14).frame(minHeight: 44)
+      .foregroundStyle(selected ? Palette.accent : Palette.muted)
+      .background(selected || configuration.isPressed ? Palette.accentSoft : Color.clear, in: Capsule())
+      .overlay(Capsule().stroke(Palette.line, lineWidth: 1))
+  }
+}
+struct AccountAvatar: View {
+  var member: Member?
+  var size: CGFloat = 44
+  var body: some View {
+    let initials = (member?.name ?? "").split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+    ZStack {
+      Circle().fill(Palette.accentSoft)
+      Text(initials).font(.system(size: size * 0.34, weight: .semibold)).foregroundStyle(Palette.accent)
+      if let picture = member?.picture, let url = URL(string: picture), url.scheme == "https" {
+        AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Color.clear }
       }
+    }.frame(width: size, height: size).clipShape(Circle()).accessibilityHidden(true)
+  }
+}
+private struct AssistantListDate: View {
+  var date: Date
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: 60)) { context in
+      Text(label(now: context.date)).font(.caption).foregroundStyle(.secondary).fixedSize()
+    }
+  }
+  private func label(now: Date) -> String {
+    let calendar = Calendar.current
+    if calendar.isDate(date, inSameDayAs: now) || date > now { return date.formatted(date: .omitted, time: .shortened) }
+    if calendar.isDateInYesterday(date) { return "Yesterday" }
+    if let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day, days < 7 {
+      return date.formatted(.dateTime.weekday(.abbreviated))
+    }
+    return calendar.component(.year, from: date) == calendar.component(.year, from: now)
+      ? date.formatted(.dateTime.month(.abbreviated).day()) : date.formatted(date: .abbreviated, time: .omitted)
   }
 }
 

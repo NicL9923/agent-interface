@@ -34,11 +34,11 @@ final class TabletPresentationTests: XCTestCase {
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture iPad native assistant settings")
     app.buttons["Close"].tap()
-    if !app.buttons["Your preferences"].exists, app.buttons["Show Sidebar"].exists {
+    if !app.buttons["Settings"].exists, app.buttons["Show Sidebar"].exists {
       app.buttons["Show Sidebar"].tap()
     }
-    app.buttons["Your preferences"].tap()
-    XCTAssertTrue(app.buttons["Save"].waitForExistence(timeout: 5))
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture iPad personal preferences")
     let specimen = app.buttons["Avatar specimen"]
     for _ in 0..<8 {

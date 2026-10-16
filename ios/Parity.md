@@ -5,17 +5,16 @@ The native implementation uses the web client's settled scope in
 means the native control and authenticated request path exist. The validation
 ledger remains the repository's single source for tested code-state hashes.
 
-The native unit run passed 119 tests on Xcode 27 and iOS 27. The subsequent Today
-frontier update passed eight focused unit tests and two phone UI flows. October 1 focused
-simulator UI checks covered account health, the real Calendar permission prompt
-and denial, confirmed service recovery, and disconnect followed by a refreshed
-account state using Hermes's actual response shape. Reminder selection excludes
-the day after the selected Through date. Focused phone fixture
-UI checks covered upgrade qualification, uncertain install recovery, verification,
-and live activity with exposed reasoning and tool arguments. Previous tablet fixture
-UI checks passed in light and dark appearance. The root agent also validated
-system-browser sign-in, Keychain storage, canonical chat, the full tool catalog,
-and avatar settings against the isolated real Hermes instance.
+The October 16 parity update aligns home, account Settings, conversation turns,
+the composer, model selection, artifacts and Today with the web client. Device
+permissions use iOS. Current results and code-state fingerprints are recorded in
+[the validation ledger](../docs/ValidationLedger.md).
+
+The [phone comparison](evidence/mobile-parity-phone.png) and
+[iPad comparison](evidence/mobile-parity-ipad.png) show synthetic fixture content
+in light and dark appearance. They establish native layout and controls.
+Earlier real-Hermes checks cover system-browser sign-in, Keychain storage,
+canonical chat, the tool catalog and avatar settings against an isolated server.
 
 ![Tablet avatar specimen in both themes, using explicit fixture content](evidence/tablet-avatar-review.png)
 
@@ -32,7 +31,7 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Feature | Native implementation | Validation |
 | --- | --- | --- |
 | Agent messages | Incoming native envelope and outgoing `message_agent` handoff render separately and remain visible in Simple mode; attributed household messages retain their sender | Swift envelope, sender and visible-history regressions; web envelope tests |
-| Composer model switch (model only) | Advanced presentation lists the profile's Hermes model catalog in the composer, saves through the existing assistant update and asks before a model Hermes wants confirmed; disabled when the assistant's instructions are unknown. The web composer's reasoning-level and speed controls and model favorites are not native yet (see Known gaps) | Phone fixture UI switches the model; web unit tests cover the full-field resend, confirmation and late-answer handling. Not exercised against a real Hermes catalog from iOS |
+| Composer model and inference | Advanced presentation opens the same searchable Hermes catalog used by assistant settings, with provider groups, warnings, unavailable selections, refresh and account model favorites. Reasoning and Normal/Fast/Ultrafast speed use the conversation inference endpoint. Shared model changes retain Hermes confirmation. | Native protocol and fixture checks are recorded in the current validation ledger. Signed-device use against a real provider remains external acceptance |
 | Routine results | Saved run picker and output in settings and Today; routine push links open the results sheet | Native decoding and phone fixture flow; real native profile-scoped output probe and server access checks in the main ledger |
 | Group chats | Local 2–6 member room creation, thread replies, persistent send retry, polled native messages/status, approval and stop controls; coordinator availability gates sending; a group with your personal assistant says only you will see it, and a group that disappears stops polling and clears its name, members and messages | Native protocol decoding and phone creation/send fixture flow; real native coordinator admission, deduplication, log and stop probe in the main ledger |
 | Today overview | Recent canonical events and date-filtered replies, pending decisions, live status and files, per-assistant read failure, canonical conversation links, explicit account-level Mark caught up acknowledges the exact returned ingestion frontier, with page-by-page catch-up for queued results | Native recency tests reject old and undated summaries; phone and iPad fixture UI exercised recent event/reply and conversation navigation; affected native unit and phone UI checks verified exact snapshot acknowledgment, queued pages, and late imported events dated before the prior recap marker |
@@ -56,15 +55,15 @@ working avatars and Advanced disclosures using explicitly exposed fixture data.
 | Avatar editor | Live preview with state chips, segmented style that keeps color, eyes, accessory and eye tuning across styles, mini-avatar tiles for shape, character, eyes and accessory, swatches and custom color, eye sliders with percentages and Reset eyes | Simulator screenshot tour |
 | Avatar motion | Ported from `src/components/avatar-motion.ts` with the same constants: 280 ms shape morph, expression smoothing (0.09 s) and symbol morph (0.13 s), arrival boop, blink and gaze wander, sphere-projected face that hides far-side features, working scan and spin with trails that wrap behind and in front of the body, trail carry-over between states, two-turn done celebration that settles into happy eyes, failed shake, thinking dots, blocked exclamation. Connection lost and interrupted never move. Badges only for done, failed, connection lost and interrupted; portraits badge every state except ready, thinking and working. Web-only so far: held tool props while working | Native motion tests mirror `tests/avatar-motion.test.ts`; native specimen inspection remains recorded separately from web reference acceptance |
 | Reduced motion and accessibility | System reduced motion halts loops/rotation/trails, the assistant list states each non-idle activity in words, stable state language, native Dynamic Type and controls, labelled actions | Native specimen toggle; physical VoiceOver and large Dynamic Type acceptance remains external |
-| Preferences | Simple/advanced presentation, system/light/dark themes, favorites, sections, default bot, follow all activity | Native preferences forms and tablet visual inspection; same persisted per-user server contract |
-| Shared computer | Preferences opens the configured app server's `/?computer=1` in the system browser for the shared desktop and VPS terminal; browser sign-in stays separate from the native token | Native link uses the existing same-origin URL builder; rendered interaction validation recorded in the main ledger |
-| Hermes updates | Preferences entry, installed/candidate versions, check and compatibility details, confirmed pinned-revision install, progress polling, guarded restart/retry/cancel recovery from server action availability, safe-boundary guidance, uncertain recovery without replay, rollback/failure guidance, busy-bot/admin/unavailable guidance; shared server bearer authorization | Native contract tests for authenticated requests, stale candidates, stale recovery operation IDs, uncertain install/control recovery and identity fences; focused phone fixture UI covered guarded restart recovery in addition to qualification, uncertain admission, progress and verification |
-| Integration accounts | Preferences and per-assistant Connections view; checked/configured/expired/permission/outage states, safe account identity and access details, Connect/Reconnect/Disconnect, setup fields, custom MCP and browser sign-in with durable flow polling | Native build and explicit simulator fixture account check and disconnect; real provider sign-in remains external acceptance |
+| Settings and home | Account menu, pinned avatars in saved order, message previews and dates, pin actions in the header and context menu, home sections, account/connection links, Appearance, Advanced details, start page, delivery rules and following. Settings writes changes in order and exposes retry on failure. | Native unit and phone/tablet fixture checks in the current ledger |
+| Shared computer | Settings opens the configured app server's `/?computer=1` in the system browser for the shared desktop and VPS terminal; browser sign-in stays separate from the native token | Native link uses the existing same-origin URL builder; rendered interaction validation recorded in the main ledger |
+| Hermes updates | Settings entry, installed/candidate versions, check and compatibility details, confirmed pinned-revision install, progress polling, guarded restart/retry/cancel recovery from server action availability, safe-boundary guidance, uncertain recovery without replay, rollback/failure guidance, busy-bot/admin/unavailable guidance; shared server bearer authorization | Native contract tests for authenticated requests, stale candidates, stale recovery operation IDs, uncertain install/control recovery and identity fences; focused phone fixture UI covered guarded restart recovery in addition to qualification, uncertain admission, progress and verification |
+| Integration accounts | Settings and per-assistant Connections view; checked/configured/expired/permission/outage states, safe account identity and access details, Connect/Reconnect/Disconnect, setup fields, custom MCP and browser sign-in with durable flow polling | Native build and explicit simulator fixture account check and disconnect; real provider sign-in remains external acceptance |
 | Apple Calendar and Reminders | EventKit full-access permission requested explicitly, selected calendars/lists and bounded date window, sanitized preview, refresh, explicit upload into the chosen assistant draft; user sends it from the conversation | Native upload/draft-preservation contract test and simulator permission status/selection view; physical-device permission and real account data sharing remain external acceptance |
-| Native notifications | APNs device registration/opt-out/test, task/routine/follow recipients, validated cold/warm conversation tap | Native route tests and simulated server delivery tests; signed physical-phone delivery remains external |
-| Live Activity | One aggregate activity per device from the server's state: Lock Screen header and up to four rows with live elapsed timers, Dynamic Island compact, minimal and expanded views tinted by the first row, out-of-date rendering after the 15-minute stale date. Starts in the foreground after an accepted send with a local `starting` row, or on foreground when the state has active rows; registers each push token, re-registers on foreground, ends extra and other-account activities, unregisters when the activity ends, and follows a per-device Preferences switch | Unit tests decode the documented state and the server fixture, including unknown phases and epoch seconds, and cover hero labels, stale rows and seeding. Views rendered to PNG in light and dark. Not established: ActivityKit start and APNs push updates, which need a signed physical device with the push entitlement |
+| Native notifications | Automatic iOS authorization after sign-in when supported, foreground registration reconciliation, server unregister on OS denial, task/routine/follow recipients, validated cold/warm conversation tap | Native route tests and simulated server delivery tests; signed physical-phone delivery remains external |
+| Live Activity | One aggregate activity per device from the server's state: Lock Screen header and up to four rows with live elapsed timers, Dynamic Island compact, minimal and expanded views tinted by the first row, out-of-date rendering after the 15-minute stale date. Starts in the foreground after an accepted send with a local `starting` row, or on foreground when the state has active rows; registers each push token, re-registers on foreground, ends extra and other-account activities, unregisters when the activity ends, and follows iOS Live Activities authorization | Unit tests decode the documented state and the server fixture, including unknown phases and epoch seconds, and cover hero labels, stale rows and seeding. Views rendered to PNG in light and dark. Not established: ActivityKit start and APNs push updates, which need a signed physical device with the push entitlement |
 | Widgets | One Assistants widget in small, medium, large and Lock Screen rectangular, circular and inline sizes. Reads only an App Group snapshot of names, states, avatar colors, favorites and privacy-sensitive message previews; no sign-in token. Shows its time, says "Open WildBots to refresh" after 30 minutes, and opens `agentinterface://open?bot=ID` | Unit tests cover ordering, staleness, the reload rule, sign-out removal and deep link mapping. Views rendered to PNG in light, dark and vibrant. Home Screen placement and redaction on a locked device remain physical-device acceptance |
-| App updates | A banner above the main UI and a Preferences About row open the server's HTTPS update link when this build is older than `nativeApp.latestBuild` | Unit tests for behind, equal, ahead, missing and non-HTTPS links; phone fixture UI asserts the banner and both Update buttons without opening the link |
+| App updates | A banner above the main UI and a Settings About row open the server's HTTPS update link when this build is older than `nativeApp.latestBuild` | Unit tests for behind, equal, ahead, missing and non-HTTPS links; phone fixture UI asserts the banner and both Update buttons without opening the link |
 | iPad | Adaptive native NavigationSplitView, readable-width transcript, native sheets | Tablet fixture UI navigation, settings and nine-state specimen exercised; portrait/landscape screenshots inspected in both themes |
 
 The [routine output and group discussion review](evidence/native-collaboration-phone-review.png)
@@ -92,13 +91,18 @@ The [cancelled login-save review](evidence/native-vault-add-cancel-phone-review.
 shows a fixture that saves before losing its response: the form clears and blocks
 another Save, then dismissal refreshes metadata to reveal the stored login.
 
-## Known gaps
+## Native platform choices
 
-Web composer features that the native app does not have yet:
+Device permissions and Live Activities belong to iOS Settings. WildBots retains
+account-level batching, quiet hours and assistant following. Computer opens the
+shared desktop and terminal in the system browser. Voice playback uses the device
+voice, and calendar proposals use Apple's review editor.
 
-- Reasoning level and speed controls (`PATCH /bots/:id/inference`). The native
-  composer switches the model only.
-- Model favorites in the picker (`preferences.modelFavorites`).
+Conversation history groups reasoning and tool receipts by turn, with separate
+coordination categories. The file browser includes type and filename filters.
+The composer keeps tools below the text field, offers the system photo picker,
+and retains failed uploads for Retry or Remove before allowing Send. Assistant
+settings asks before discarding unsaved edits.
 
 ## External acceptance
 
@@ -111,7 +115,7 @@ These checks require an installed signed build or configured external services:
 - Complete real Google household sign-in on the configured production origin.
 - Install the app on a physical iPhone, register its APNs token, close the app,
   receive a real completion and approval notification, and confirm each opens
-  the correct saved conversation. Test native notification opt-out after relaunch.
+  the correct saved conversation. Deny permission in iOS Settings, return to the app, and verify that its server registration is removed. Re-enable permission and verify registration after relaunch.
 - Inspect the native avatar specimen in motion at sidebar and expanded sizes,
   comparing all nine states with the original web specimen and reference
   inventory. Quantitative pixel equality with proprietary upstream animations is
@@ -130,7 +134,7 @@ The native app has search, account-scoped saved conversation/reply/output refere
 automation next runs and failures, recipients, pause/resume, and separately labelled
 reported and estimated main-session usage. Starter prompts remain editable drafts.
 Simple-mode tool receipts use native outcomes and reported result links. Today is the
-initial screen unless preferences or a notification choose another destination.
+default detail screen on iPad. Phones open home; a notification opens its destination.
 
 The embedded share extension and app use `group.dev.agentinterface.shared` for
 bounded, account-bound queued captures without sharing authentication tokens.

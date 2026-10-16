@@ -43,7 +43,7 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.preferences.notifications?.batchMinutes, 15); XCTAssertEqual($0.preferences.sections.first?.botIds, ["household", "garden"])
       XCTAssertEqual($0.capabilities["imageGeneration"]?.supported, false); XCTAssertNotNil($0.capabilities["imageGeneration"]?.reason)
       XCTAssertEqual($0.connection.code, "ready"); XCTAssertNotNil($0.connection.lastConnectedAt)
-      XCTAssertEqual($0.preferences.assistantGroups($0.bots).map(\.title), ["Home", "More assistants"])
+      XCTAssertEqual($0.preferences.pinnedAssistants($0.bots).map(\.id), $0.preferences.favorites)
       XCTAssertEqual($0.nativeApp, NativeAppInfo(latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT"))
       XCTAssertEqual(AppUpdate.evaluate($0.nativeApp, installedBuild: 11), .available(URL(string: "https://testflight.apple.com/join/CONTRACT")!))
     },

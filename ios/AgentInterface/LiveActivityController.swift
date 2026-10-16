@@ -55,23 +55,14 @@ struct LiveActivityRegistration: Encodable {
     "/native/live-activity?deviceId=\(Self.deviceId(for: scope))"
   }
 
-  static func enabledKey(_ scope: String) -> String { "liveActivity.enabled.\(scope)" }
-  /// Per device and account, on unless the person turned it off.
-  var enabled: Bool {
-    guard let scope = store?.scope else { return false }
-    return UserDefaults.standard.object(forKey: Self.enabledKey(scope)) as? Bool ?? true
-  }
+  /// The operating system owns the device preference, as it does notification permission.
+  var enabled: Bool { store?.scope != nil }
   var systemAllowed: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
   private var running: [Live] { Live.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
   private func content(_ state: AssistantActivityState) -> ActivityContent<AssistantActivityState> {
     ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))
   }
 
-  func setEnabled(_ value: Bool) async {
-    guard let scope = store?.scope else { return }
-    UserDefaults.standard.set(value, forKey: Self.enabledKey(scope))
-    if value { await foreground() } else { await endAll(unregister: true) }
-  }
   /// After a send the server accepted: show the assistant as starting right away.
   func sent(to botId: String) async {
     guard let store, let api = store.api, let scope = store.scope, enabled, systemAllowed else { return }

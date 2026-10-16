@@ -22,9 +22,8 @@ The selected provider starts expanded. Search the catalog, refresh it after
 changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
 confirmation. In Advanced presentation, the model button in the web and iOS composers switches
-the assistant's model from the same catalog without opening settings. The web dialog
-also controls reasoning effort and Normal/Fast/Ultrafast speed for the current
-conversation. Hermes validates support for the selected model.
+the assistant's model from the same catalog without opening settings. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
+conversation. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
 
 An assistant is either shared with the household or personal. A personal assistant
 is private to its owner in WildBots: nobody else sees it in lists, Today, search,
@@ -35,8 +34,10 @@ recorded stay visible to everyone. WildBots hides a personal assistant, but the
 Hermes dashboard is household-wide, so anyone with dashboard access can still reach
 its memory and logins.
 
-Web Settings > Notifications, or the same section in iOS Preferences, shows whether this account has notifications enabled
-on the current device. Turn the switch on or off there. A new browser asks once
+Web Settings > Notifications shows whether this account has notifications enabled
+on the current device. Turn the browser switch on or off there. The iOS app asks
+through the system permission prompt after household sign-in when the server supports
+Apple push. Manage device permission in iOS Settings. A new browser asks once
 whether to enable notifications and explains where to change the setting later.
 On iPhone or iPad, add the app to the Home Screen and open it before enabling
 notifications.
@@ -174,7 +175,7 @@ Its **Automations** tab lists next runs, recent execution or delivery failures, 
 
 Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include.
 
-An empty web conversation offers a role discussion using the assistant's description and fills an editable draft. iOS starter actions remain available from the **+** menu. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
+An empty conversation on web and iOS offers a role discussion using the assistant's description and fills an editable draft. iOS starter actions remain available from the **+** menu. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 

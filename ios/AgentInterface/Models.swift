@@ -94,6 +94,7 @@ struct Preferences: Codable, Equatable {
   var presentation = "simple"
   var theme = "system"
   var favorites: [String] = []
+  var modelFavorites: [ModelChoice]?
   var defaultBotId: String?
   var sections: [BotSection] = []
   var followBots: [String] = []
@@ -133,7 +134,7 @@ struct LastMessage: Codable, Equatable {
   var text: String
   var at: String?
 }
-struct BotInput: Encodable {
+struct BotInput: Encodable, Equatable {
   var confirmModel = false
   var name = ""
   var description = ""
@@ -158,6 +159,16 @@ struct BotInput: Encodable {
     guard let bot else { return false }
     return !shared && (bot.shared || bot.ownerId == nil)
   }
+}
+/// A file staged on this device until upload succeeds or the person removes it.
+struct AttachmentUpload: Identifiable {
+  var id = UUID()
+  var botId: String
+  var url: URL
+  var name: String
+  var mime: String
+  var error: String?
+  var uploading = false
 }
 struct FileRef: Codable, Identifiable, Equatable {
   var id: String
@@ -224,7 +235,9 @@ struct Message: Codable, Identifiable {
     default: return "Tool calls"
     }
   }
-  var isConversationVisible: Bool { !isInternalActivity && (!isToolActivity || toolCall != nil || !(files?.isEmpty ?? true)) }
+  var isConversationVisible: Bool {
+    !isInternalActivity && role != "tool" && (role != "assistant" || isAgentExchange || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(files?.isEmpty ?? true))
+  }
   var agentEnvelope: (name: String, body: String)? {
     guard role == "user", sender == nil else { return nil }
     let pattern = #"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#
@@ -400,6 +413,20 @@ struct CoordinationGroup: Identifiable {
 struct ConversationTurn: Identifiable {
   var id: String
   var messages: [Message]
+  var visibleMessages: [Message] { messages.filter(\.isConversationVisible) }
+  var reasoning: [String] { messages.filter { !$0.isInternalActivity && $0.role == "assistant" }.compactMap {
+    let text = $0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return text.isEmpty ? nil : text
+  } }
+  var activityGroups: [CoordinationGroup] {
+    var groups: [CoordinationGroup] = []
+    for message in messages where message.isInternalActivity || message.isToolActivity || message.toolCall != nil {
+      let label = message.isInternalActivity ? message.activityGroup : "Tool calls"
+      if let index = groups.firstIndex(where: { $0.id == label }) { groups[index].messages.append(message) }
+      else { groups.append(CoordinationGroup(id: label, messages: [message])) }
+    }
+    return groups
+  }
   var coordinationGroups: [CoordinationGroup] {
     var groups: [CoordinationGroup] = []
     for message in messages where message.isInternalActivity {
@@ -437,10 +464,25 @@ struct Conversation: Codable {
       if turns.isEmpty || message.role == "user" { turns.append(ConversationTurn(id: message.id, messages: [])) }
       turns[turns.count - 1].messages.append(message)
     }
-    let known = Set(messages.compactMap { $0.toolCall?.id })
-    for message in activityMessages where message.isInternalActivity && message.toolCall != nil && !known.contains(message.toolCall!.id) {
-      if turns.isEmpty { turns.append(ConversationTurn(id: "live-activity", messages: [])) }
-      turns[turns.count - 1].messages.append(message)
+    for call in toolCalls ?? [] {
+      let matches = turns.indices.flatMap { turn in
+        turns[turn].messages.indices.filter { turns[turn].messages[$0].toolCall?.id == call.id }.map { (turn, $0) }
+      }
+      if matches.count == 1, let (turn, message) = matches.first {
+        let previous = turns[turn].messages[message].toolCall!
+        var merged = call
+        merged.arguments = call.arguments ?? previous.arguments
+        merged.result = call.result ?? previous.result
+        merged.error = call.error ?? previous.error
+        merged.startedAt = call.startedAt ?? previous.startedAt
+        merged.completedAt = call.completedAt ?? previous.completedAt
+        if call.status == "running" && previous.status != "running" { merged.status = previous.status }
+        turns[turn].messages[message].toolCall = merged
+      }
+      else {
+        if turns.isEmpty { turns.append(ConversationTurn(id: "live-activity", messages: [])) }
+        turns[turns.count - 1].messages.append(Message(id: "live-" + call.id, role: "tool", text: "", toolCall: call))
+      }
     }
     return turns
   }
@@ -628,23 +670,26 @@ enum ConnectionAddress {
 }
 
 extension Preferences {
-  /// Sidebar groups: each listed section, then every remaining assistant once.
-  /// Favorites lead each group, matching the web sidebar.
+  /// Pinned assistants appear once, in the person's saved pin order.
+  func pinnedAssistants(_ bots: [Bot]) -> [Bot] {
+    var seen: Set<String> = []
+    return favorites.compactMap { id in
+      guard seen.insert(id).inserted else { return nil }
+      return bots.first { $0.id == id }
+    }
+  }
+  /// The list below the pins follows the web's sections and original roster order.
   func assistantGroups(_ bots: [Bot]) -> [AssistantGroup] {
-    let favored = Set(favorites)
-    func ordered(_ group: [Bot]) -> [Bot] {
-      group.enumerated().sorted {
-        let (a, b) = (favored.contains($0.element.id), favored.contains($1.element.id))
-        return a != b ? a : $0.offset < $1.offset
-      }.map(\.element)
+    let unpinned = bots.filter { !favorites.contains($0.id) }
+    var seen: Set<String> = []
+    var groups: [AssistantGroup] = []
+    for section in sections {
+      let rows = unpinned.filter { section.botIds.contains($0.id) && seen.insert($0.id).inserted }
+      if !rows.isEmpty { groups.append(AssistantGroup(id: "section:" + section.id, title: section.name, bots: rows)) }
     }
-    let sectioned = Set(sections.flatMap(\.botIds))
-    var groups = sections.map { section in
-      AssistantGroup(id: "section:" + section.id, title: section.name, bots: ordered(bots.filter { section.botIds.contains($0.id) }))
-    }
-    let remaining = bots.filter { !sectioned.contains($0.id) }
-    if !remaining.isEmpty || bots.isEmpty {
-      groups.append(AssistantGroup(id: "remaining", title: sections.isEmpty ? "Assistants" : "More assistants", bots: ordered(remaining)))
+    let remaining = unpinned.filter { !seen.contains($0.id) }
+    if !remaining.isEmpty {
+      groups.append(AssistantGroup(id: "remaining", title: sections.isEmpty ? "" : "More assistants", bots: remaining))
     }
     return groups
   }
@@ -656,6 +701,8 @@ struct ModelProviderInfo: Decodable, Identifiable {
   var id: String
   var name: String
   var aliases: [String]?
+  var authenticated: Bool?
+  var warning: String?
   var models: [ModelInfo]
   /// Saved assistants may name a provider by an alias Hermes still accepts.
   func matches(_ provider: String?) -> Bool { provider == id || (provider.map { aliases?.contains($0) == true } ?? false) }
@@ -665,4 +712,11 @@ struct ModelInfo: Decodable, Identifiable {
   var name: String
   var available: Bool
 }
-struct ModelChoice: Equatable { var provider: String; var model: String }
+struct ModelChoice: Codable, Equatable, Hashable { var provider: String; var model: String }
+struct ModelFavorites: Codable { var modelFavorites: [ModelChoice] }
+struct InferenceSettings: Codable, Equatable {
+  var reasoning: String
+  var speed: String
+  static let reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+  static let speeds = ["normal", "fast", "ultrafast"]
+}

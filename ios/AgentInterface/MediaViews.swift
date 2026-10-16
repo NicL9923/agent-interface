@@ -64,6 +64,43 @@ struct FileAttachmentView: View {
       "Download and preview this file. Share or save it from the preview.")
   }
 }
+struct ConversationFilesView: View {
+  @EnvironmentObject private var store: AppStore
+  @Environment(\.dismiss) private var dismiss
+  @State private var filter = "All"
+  @State private var search = ""
+  private let kinds = ["All", "Images", "Documents", "Text", "Audio", "Video", "Other"]
+  private func kind(_ file: FileRef) -> String {
+    if file.mime.hasPrefix("image/") { return "Images" }
+    if file.mime == "application/pdf" { return "Documents" }
+    if file.mime.hasPrefix("text/") { return "Text" }
+    if file.mime.hasPrefix("audio/") { return "Audio" }
+    if file.mime.hasPrefix("video/") { return "Video" }
+    return "Other"
+  }
+  private var files: [FileRef] { store.conversationFiles.filter {
+    (filter == "All" || kind($0) == filter) && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search))
+  } }
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          Picker("File type", selection: $filter) { ForEach(kinds, id: \.self) { Text($0).tag($0) } }
+          if store.loadingEarlierFiles { ProgressView("Loading files from earlier in the conversation…") }
+        }
+        if files.isEmpty && !store.loadingEarlierFiles {
+          if search.isEmpty && filter == "All" {
+            ContentUnavailableView("No artifacts yet", systemImage: "doc", description: Text("Generated outputs and files shared in this conversation will appear here."))
+          } else { ContentUnavailableView.search(text: search.isEmpty ? filter : search) }
+        }
+        ForEach(files) { FileAttachmentView(file: $0) }
+      }.householdListBackground().searchable(text: $search, prompt: "Find a file")
+        .navigationTitle("Artifacts").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        .task { await store.loadEarlierFiles() }
+    }
+  }
+}
 struct FilePreview: UIViewControllerRepresentable {
   var file: PreviewFile
   func makeCoordinator() -> Coordinator { Coordinator(url: file.url) }

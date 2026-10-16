@@ -62,10 +62,9 @@ final class ExperienceFlowTests: XCTestCase {
     }
     app.buttons["openToday"].tap()
     XCTAssertTrue(app.staticTexts["Since you were away"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Fixture: pasture inspection finished."].waitForExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(app.staticTexts["Fixture routine completed"].waitForExistence(timeout: 5))
     capture(app, name: "Native Today overview")
-    app.buttons["today.bot.ranch"].tap()
+    app.buttons["today.event.fixture-completed"].tap()
     XCTAssertTrue(app.buttons["Record voice message"].waitForExistence(timeout: 5)); app.buttons["Record voice message"].tap()
     XCTAssertTrue(app.navigationBars["Voice message"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Add text to draft"].exists)

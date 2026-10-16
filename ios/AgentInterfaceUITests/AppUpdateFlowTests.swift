@@ -16,14 +16,14 @@ final class AppUpdateFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["A new version of WildBots is available"].exists)
     XCTAssertTrue(app.buttons["appUpdateButton"].isHittable)
     // Home keeps the banner too.
-    if !app.buttons["Your preferences"].exists { app.navigationBars.buttons.firstMatch.tap() }
-    XCTAssertTrue(app.buttons["Your preferences"].waitForExistence(timeout: 5))
+    if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["appUpdateButton"].isHittable)
     let home = XCTAttachment(screenshot: app.screenshot())
     home.name = "Update banner on home"
     home.lifetime = .keepAlways
     add(home)
-    app.buttons["Your preferences"].tap()
+    app.buttons["Settings"].tap()
     let update = app.buttons["preferencesUpdateButton"]
     for _ in 0..<8 where !update.isHittable { app.swipeUp() }
     XCTAssertTrue(update.isHittable)
