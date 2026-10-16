@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-10-16T01:35:23.468645+00:00",
+  "revision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "upstreamMainRevision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "latestAtVerification": true,
+  "repairDiffSha256": "30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1",
+  "services": {
+    "agent-interface": true,
+    "hermes-dashboard": true,
+    "hermes-gateway": true,
+    "hermes-computer": true,
+    "agent-interface-terminal": true,
+    "caddy": true,
+    "wg-quick@wg0": true
+  },
+  "publicReadiness": true,
+  "publicWebBuild": "c229c9a8afdba23d",
+  "anonymousHttpStatus": {
+    "appBootstrap": 401,
+    "nativeConfig": 401,
+    "nativeProfiles": 401
+  },
+  "maintenanceAndDrainCleared": true,
+  "currentAppRelease": "release-d49dab01-20261016T011914Z",
+  "updaterOperationId": "bcd2578d-c377-4b77-97ec-c31b1da2b486",
+  "updaterPhase": "succeeded",
+  "updaterChecks": {
+    "source": "passed",
+    "repair": "passed",
+    "upstream": "passed",
+    "staging": "passed",
+    "dependencies": "passed",
+    "integration": "passed",
+    "regressions": "passed",
+    "quiescence": "passed",
+    "backup": "passed",
+    "install": "passed",
+    "verify": "passed",
+    "release": "passed"
+  },
+  "sourceCommit": "d49dab010607fba42d3d96cfd2214ea2823bdb5e",
+  "priorHermesRevision": "6ebd92d93852b7f33ca3bdb2c6c3d0fc997ce46f",
+  "integrationDigest": "d14652cb7b391b9945350728d197cccb4b9faf3b7ee9a54bf61868753c5abc1c",
+  "qualifiedRuntimeFingerprint": {
+    "dependenciesSha256": "38453b81999bc829a38eb7ab4f42e271e09110fabfb675cfd2cfcc88941126c1",
+    "interpreterSha256": "8dfa9757a52b9c3edf1dedaaa2a7a8c40ea4beb058f20e90bdd47b48f3b1b176"
+  },
+  "installedAndVerifiedRuntimeExactlyMatchedQualification": true,
+  "newNativeGenerationRequired": true,
+  "protectedSettingsAndServiceDefinitionsPreserved": true,
+  "originalGoogleHttpAndFreshWebsocket": true,
+  "bothDiscordConnected": true,
+  "nativeMaintenanceOwnershipAndReleaseVerified": true,
+  "coldBackupRetained": true,
+  "coldBackupSha256": {
+    "source.tar.gz": "263a33609611708c0aee918f24a5013f3d9d7846dd78a048bc8b9e07d1a4a607",
+    "home.tar.gz": "b5dfed80e6da583ba0160f06e5c9ba9ff58c0acef3833c37524c528df3682d95"
+  },
+  "sharedOAuthRegressionCases": 5,
+  "googleRegressionCases": 13,
+  "googleFixtureSha256": "964f0bd42d595f7cc1c455d5c02e3971defd001ae8242a966e3e6a02398479fd",
+  "modelAndTerminalSmokes": {
+    "default": {
+      "passed": true,
+      "model": null,
+      "modelIdReportedByGateway": false,
+      "processExitCode": 0,
+      "terminalExecuted": true,
+      "terminalExitCode": 0,
+      "terminalOutputMatched": true,
+      "finalExitCode": 0
+    },
+    "kimberly": {
+      "passed": true,
+      "model": null,
+      "modelIdReportedByGateway": false,
+      "processExitCode": 0,
+      "terminalExecuted": true,
+      "terminalExitCode": 0,
+      "terminalOutputMatched": true,
+      "finalExitCode": 0
+    }
+  },
+  "modelSmokeNote": "Native gateway stream does not report its model ID; each configured profile completed an actual terminal tool call and final response.",
+  "browserAcceptanceReceipt": "hermes-browser-recovery-acceptance-20261015.json",
+  "browserAdapterSha256": "0f15fc9b2a2dec5715cf1620ba589b9b6fbf9ddaadae06808b44d4a59d5f5eb7",
+  "browserAcceptanceReused": "Same candidate revision and unchanged adapter bytes; helper-only update does not affect that check."
+}
