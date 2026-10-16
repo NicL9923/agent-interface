@@ -1,5 +1,29 @@
 # Validation ledger
 
+## October 15 asynchronous browser recovery
+
+Real-browser acceptance exposed an existing race: Chrome can acknowledge a
+closed tab before removing it from target discovery. The recovery fence stayed
+closed and a later cleanup succeeded, but immediate recovery reported failure.
+Recovery now waits up to three seconds for every recorded target to disappear,
+including a target that disappears between discovery and the close request.
+Unconfirmed closure still blocks both bot and human input.
+
+Implementation: GPT-6.1 Sol. Source fingerprint:
+`sha256:14814b967c76c13c6b69ad2db97e59cffede01db05b5332db2fe825a9e0fe33b`.
+All 23 focused computer tests and Ruff 0.17.0 passed. Three deterministic
+regressions cover delayed removal, an already-closed target and a target that
+remains present despite a close acknowledgement or error. Claude Opus 5.5
+independently reviewed the full code diff with no actionable findings and ran
+the three new regressions successfully.
+
+The [real-browser receipt](evidence/hermes-browser-recovery-acceptance-20261015.json)
+binds the adapter hash to Hermes `acc3cada0da8`. Actual native dispatch exercised
+separate persistent bot tabs, human takeover, a caught asynchronous CDP timeout,
+cleanup of only the interrupted tabs and restored control. Existing browser tabs
+were preserved and no recovery fence remained. Full disposable qualification and
+production activation are recorded separately.
+
 ## October 15 Hermes shared-browser compatibility
 
 Hermes `acc3cada0da86c81efc8aa6c5a291989549ca900` adds a `real_profile`

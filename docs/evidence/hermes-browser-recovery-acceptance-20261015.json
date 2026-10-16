@@ -1,0 +1,12 @@
+{
+  "revision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "checks": {
+    "actual_native_browser_exec_shares_browser_with_separate_persistent_bot_tabs": true,
+    "actual_native_human_lease_blocks_default_browser_exec": true,
+    "actual_ipc_timeout_closes_original_and_switched_targets_and_preserves_other_sessions": true,
+    "actual_timeout_recovery_reopens_bot_and_human_control": true
+  },
+  "desktopHardware": "real supervised native desktop and fixed-CDP Chrome",
+  "computerAdapterSha256": "0f15fc9b2a2dec5715cf1620ba589b9b6fbf9ddaadae06808b44d4a59d5f5eb7",
+  "sourceFingerprint": "sha256:14814b967c76c13c6b69ad2db97e59cffede01db05b5332db2fe825a9e0fe33b"
+}

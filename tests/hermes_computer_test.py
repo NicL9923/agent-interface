@@ -1,6 +1,7 @@
 """Shared computer admission and identity checks without a desktop dependency."""
 import contextlib
 import importlib.util
+import io
 import json
 import multiprocessing
 import os
@@ -9,6 +10,7 @@ import tempfile
 import threading
 import time
 import subprocess
+import sys
 import types
 import unittest
 from unittest.mock import patch
@@ -53,6 +55,59 @@ def try_lock(path, queue):
             queue.put("acquired")
     except computer.ComputerError:
         queue.put("busy")
+
+
+class BrowserTargetRecoveryTests(unittest.TestCase):
+    def recover(self, disappear_after, close_error=False):
+        clock = [0.0]
+        queries, closed = [], []
+        request = {}
+
+        def send(message):
+            request.update(json.loads(message))
+
+        def receive(timeout):
+            if request["method"] == "Target.getTargets":
+                queries.append(True)
+                present = ["unrelated"]
+                if disappear_after is None or len(queries) <= disappear_after:
+                    present.append("interrupted")
+                result = {"targetInfos": [{"targetId": target} for target in present]}
+            else:
+                closed.append(request["params"]["targetId"])
+                if close_error:
+                    return json.dumps({"id": request["id"], "error": {"message": "No target with given id found"}})
+                result = {"success": True}
+            return json.dumps({"id": request["id"], "result": result})
+
+        socket = types.SimpleNamespace(send=send, recv=receive)
+        ipc = types.SimpleNamespace(identify=lambda *a, **k: None,
+            pid_path=lambda name: types.SimpleNamespace(exists=lambda: False), ping=lambda *a, **k: False)
+        admin = types.SimpleNamespace(_fingerprinted_pending_generation=lambda path: None)
+        modules = {"browser_harness": types.SimpleNamespace(_ipc=ipc, admin=admin),
+            "websockets.sync.client": types.SimpleNamespace(connect=lambda *a, **k: contextlib.nullcontext(socket))}
+        opener = types.SimpleNamespace(open=lambda *a, **k: io.BytesIO(
+            b'{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser"}'))
+        record = {"endpoint": "http://127.0.0.1:9222", "targets": ["interrupted"]}
+        with (patch.dict(sys.modules, modules), patch.dict(os.environ, {"BU_NAME": "recovery-test"}),
+              patch.object(sys, "stdin", io.StringIO(json.dumps(record))),
+              patch("urllib.request.build_opener", return_value=opener),
+              patch.object(time, "monotonic", side_effect=lambda: clock[0]),
+              patch.object(time, "sleep", side_effect=lambda duration: clock.__setitem__(0, clock[0] + duration))):
+            exec(computer.HARNESS_RECOVERY, {})
+        self.assertEqual(closed, ["interrupted"])
+        return len(queries)
+
+    def test_waits_until_asynchronously_closed_target_disappears(self):
+        self.assertEqual(self.recover(disappear_after=3), 4)
+
+    def test_target_disappearing_before_close_is_already_recovered(self):
+        self.assertEqual(self.recover(disappear_after=1, close_error=True), 2)
+
+    def test_close_acknowledgement_or_error_cannot_hide_a_running_target(self):
+        for close_error in (False, True):
+            with self.subTest(close_error=close_error), self.assertRaisesRegex(RuntimeError, "still running"):
+                self.recover(disappear_after=None, close_error=close_error)
 
 
 class ComputerFixture(unittest.TestCase):
