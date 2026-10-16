@@ -80,11 +80,19 @@ if targets:
                     return result.get('result', {})
         present = {item['targetId'] for item in cdp('Target.getTargets')['targetInfos']}
         for target in targets & present:
-            if not cdp('Target.closeTarget', {'targetId': target}).get('success'):
-                raise RuntimeError('An interrupted browser target could not be closed')
-        present = {item['targetId'] for item in cdp('Target.getTargets')['targetInfos']}
-        if targets & present:
-            raise RuntimeError('An interrupted browser target is still running')
+            try:
+                cdp('Target.closeTarget', {'targetId': target})
+            except RuntimeError:
+                pass  # It may have disappeared already; the poll below proves closure.
+        # Chrome acknowledges close before removing the target from discovery.
+        deadline = time.monotonic() + 3
+        while True:
+            present = {item['targetId'] for item in cdp('Target.getTargets')['targetInfos']}
+            if not targets & present:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError('An interrupted browser target is still running')
+            time.sleep(.05)
 """
 
 
