@@ -156,9 +156,13 @@ struct HistoryMessageRow: View {
       content
       ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
     }.padding(.leading, saved ? 12 : 0)
-      .overlay(alignment: .leading) { if saved { Rectangle().fill(Palette.accent).frame(width: 3) } }
-      .accessibilityElement(children: .contain).accessibilityIdentifier("historyMessage-" + message.id)
-      .accessibilityValue(saved ? "Saved reply" : "")
+      .overlay(alignment: .leading) {
+        // The web marks the saved reply with an accent border; VoiceOver hears it as well.
+        if saved {
+          Rectangle().fill(Palette.accent).frame(width: 3)
+            .accessibilityElement().accessibilityLabel("Saved reply").accessibilityIdentifier("savedReplyMarker-" + message.id)
+        }
+      }
   }
   private var label: String {
     message.presentationOrigin?.kind == "scheduled" ? "Scheduled" : message.isInternalActivity ? "Activity" : message.role.capitalized

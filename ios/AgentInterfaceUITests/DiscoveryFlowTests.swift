@@ -19,8 +19,8 @@ final class DiscoveryFlowTests:XCTestCase {
     XCTAssertTrue(app.buttons["savedItem-saved-2"].waitForExistence(timeout:5));app.buttons["savedItem-saved-2"].tap()
     let saved=app.staticTexts["Fixture saved reply: brisket on Sunday."]
     expectation(for:NSPredicate(format:"hittable == true"),evaluatedWith:saved);waitForExpectations(timeout:10)
-    XCTAssertEqual(app.descendants(matching:.any)["historyMessage-history-saved"].value as? String,"Saved reply")
-    XCTAssertNotEqual(app.descendants(matching:.any)["historyMessage-history-reply"].value as? String,"Saved reply")
+    XCTAssertTrue(app.descendants(matching:.any)["savedReplyMarker-history-saved"].exists,app.debugDescription)
+    XCTAssertEqual(app.descendants(matching:.any).matching(NSPredicate(format:"identifier BEGINSWITH %@","savedReplyMarker-")).count,1)
     for _ in 0..<20 where !app.staticTexts["Fixture: five easy dinners."].isHittable { app.swipeDown() }
     XCTAssertTrue(app.staticTexts["Use **only** pantry staples"].exists,app.debugDescription)
     XCTAssertTrue(app.staticTexts["Kitchen companion → Ranch hand"].exists,app.debugDescription)
