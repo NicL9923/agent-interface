@@ -544,9 +544,13 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       conversationRefreshedAt = now()
       apply(value, botId: id)
     } catch is CancellationError {} catch {
-      if selectedGeneration == selectionGeneration && Self.missing(error) {
+      // A failure that a newer read or a wider window has already overtaken says nothing current.
+      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
+        read > appliedConversationRead
+      else { return }
+      if Self.missing(error) {
         await leave(id)
-      } else if selectedGeneration == selectionGeneration && read > appliedConversationRead {
+      } else {
         appUnavailable = true
         failures += 1
         report(error)
@@ -562,12 +566,22 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let selectedGeneration = selectionGeneration
     loadingEarlier = true
     defer { loadingEarlier = false }
+    conversationReads += 1
+    let read = conversationReads
     do {
       let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration else { return }
       windowGeneration += 1
       historyStarts[id] = value.messages.first?.id
+      guard read > appliedConversationRead else {
+        // A newer read landed while this page loaded. Keep the wider window, but read it fresh
+        // instead of showing this older snapshot of the recent turns.
+        await refreshConversation()
+        return
+      }
+      appliedConversationRead = read
+      hearReplies(in: value, botId: id)
       apply(value, botId: id)
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration { report(error) }

@@ -6,6 +6,9 @@ struct HermesUpgradeView: View {
   @State private var confirmedRevision: String?
   @State private var showInstallConfirmation = false
   @State private var recoveryAction: String?
+  /// The operation on screen when the confirmation opened. Confirming acts on it alone, so a newer
+  /// operation started elsewhere meanwhile is never cancelled or restarted by mistake.
+  @State private var recoveryOperation: String?
   @State private var showRecoveryConfirmation = false
   @State private var detailsExpanded = false
   private var status: UpgradeStatus? { store.upgradeStatus }
@@ -44,8 +47,8 @@ struct HermesUpgradeView: View {
         isPresented: $showRecoveryConfirmation, titleVisibility: .visible
       ) {
         Button(recoveryAction == "cancel" ? "Yes, cancel update" : "Yes, restart Hermes", role: recoveryAction == "cancel" ? .destructive : nil) {
-          guard let action = recoveryAction else { return }
-          control(action)
+          guard let action = recoveryAction, let operationId = recoveryOperation else { return }
+          Task { await store.controlUpgrade(action, operationId: operationId) }
         }
         Button("Keep current state", role: .cancel) {}
       }
@@ -186,7 +189,8 @@ struct HermesUpgradeView: View {
 
   private func confirm(_ action: String) {
     recoveryAction = action
-    showRecoveryConfirmation = true
+    recoveryOperation = status?.operationId
+    showRecoveryConfirmation = recoveryOperation != nil
   }
   private func control(_ action: String) {
     guard let operationId = status?.operationId else { return }

@@ -114,6 +114,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   private(set) var register: @MainActor () -> Void
   private(set) var unregister: @MainActor () -> Void
   private var busy = false
+  /// A sync asked for while Enable or Disable ran, such as after an account switch. It runs when they finish.
+  private var syncAfterBusy = false
   private var synchronizing = false
   private var synchronizeAgain = false
   init(permissions: NotificationPermissions = .system,
@@ -167,7 +169,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   }
   private func isGranted(_ status: UNAuthorizationStatus) -> Bool { status == .authorized || status == .provisional || status == .ephemeral }
   private func synchronizeDevice() async {
-    guard !busy, let session = session() else { return }
+    if busy { syncAfterBusy = true; return }
+    guard let session = session() else { return }
     let store = session.store, api = session.api
     do {
       let status = await permissions.status()
@@ -188,7 +191,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         return
       }
       // Someone who allowed notifications before the switch existed keeps them until they turn them off.
-      guard intent != .off else { store.deviceNotifications = .disabledByChoice; return }
+      if intent == .off {
+        // Removing again is harmless and clears a registration a failed cleanup left behind.
+        let _: EmptyResponse = try await api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
+        if session.current && !busy { store.deviceNotifications = .disabledByChoice }
+        return
+      }
       try await sendRegistration(with: session)
     } catch { if session.current && !busy { store.deviceNotifications = .failed(error.localizedDescription) } }
   }
@@ -217,7 +225,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     NotificationIntent.rememberPrompt(store)
     store.deviceNotifications.busy = true
     store.deviceNotifications.error = nil
-    defer { busy = false; if session.current { store.deviceNotifications.busy = false } }
+    defer { finishBusy(session) }
     do {
       var status = await permissions.status()
       guard session.current else { return }
@@ -239,7 +247,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     busy = true
     store.deviceNotifications.busy = true
     store.deviceNotifications.error = nil
-    defer { busy = false; if session.current { store.deviceNotifications.busy = false } }
+    defer { finishBusy(session) }
     let intent = NotificationIntent.key(store)
     NotificationIntent.write(.off, key: intent)
     do {
@@ -252,6 +260,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       // The server may still deliver here, so the switch stays on and the check can be retried.
       NotificationIntent.write(.on, key: intent)
       if session.current { store.deviceNotifications.error = error.localizedDescription }
+    }
+  }
+  private func finishBusy(_ session: Session) {
+    busy = false
+    if session.current { session.store.deviceNotifications.busy = false }
+    if syncAfterBusy || !session.current {
+      syncAfterBusy = false
+      Task { await synchronize() }
     }
   }
   /// The person answered "Not now". The card does not return for this account on this device.

@@ -57,6 +57,8 @@
 	<true/>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Choose reminder lists to preview and share a snapshot with your assistant. Nothing is shared automatically.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo to attach to your message. Nothing is sent until you choose Send.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record a voice message for transcription on your app server. Review the transcript before sending.</string>
 	<key>NSLocalNetworkUsageDescription</key>

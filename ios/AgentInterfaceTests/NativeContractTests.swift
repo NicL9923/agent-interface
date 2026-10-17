@@ -551,6 +551,22 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(server.requests.last { $0.url?.path == path }?.httpMethod, "DELETE", "The late registration is removed again")
         XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
     }
+    func testAnAccountSwitchDuringTurnOffSyncsTheNewAccountWhenItEnds() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize()
+        let path = "/api/native/push/device"
+        server.holdNext(path)
+        let turningOff = Task { await controller.disable() }
+        try await server.waitForHeld(path)
+        server.user = "two"; await value.refreshBootstrap()
+        value.deviceNotifications = DeviceNotificationState()
+        await controller.synchronize()
+        server.release(path); await turningOff.value
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(value.deviceNotifications, .enabledState, "The new account's own state replaces Checking")
+    }
     func testFailedTurnOffKeepsSwitchOnAndRetryRecovers() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
@@ -1032,6 +1048,35 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertFalse(continues); XCTAssertTrue(value.sessionExpired)
         server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(server.conversationQueries.count, reads, "The stream ends with polling, so no read follows a notice")
+    }
+
+    func testAnOlderMissingAssistantErrorCannotCloseAConversationANewerReadShowed() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.holdNext(path)
+        let older = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        await value.refreshConversation()
+        server.hideBot(); server.release(path); await older.value
+        XCTAssertEqual(value.selectedBotId, "bot", "Only a current read may close the conversation")
+        XCTAssertNil(value.notice)
+    }
+
+    func testAnEarlierPageAnsweringAfterANewerReadKeepsTheNewerTurns() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m11")
+        // The page is read now and answered later, after a newer turn has been shown.
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        server.serveHistory(ids(1...31))
+        await value.refreshConversation()
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m01", "The wider window is kept")
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m31", "The newer turn is not undone by the older page")
     }
 
     func testWithoutAStreamTheConversationIsPolledEveryPass() async throws {
