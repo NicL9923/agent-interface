@@ -98,6 +98,7 @@
     static var todaySince = "2026-09-30T13:30:00Z"
     static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
     static var upgradePhase = "idle"
+    static var upgradeOperation = "check"
     static var integrationChecked = false
     static var integrationDisconnected = false
     static var upgradeReadsRemaining = 0
@@ -266,7 +267,9 @@
       } else if path.contains("/vault/logins/"), method == "DELETE" {
         Self.vaultItems.removeAll { $0["id"] as? String == request.url!.lastPathComponent }; object = ["removed": true]
       } else if path.hasSuffix("/bitwarden/unlock") {
-        Self.vaultUnlocked = true
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT_UNLOCK_FAILS"] == "1" {
+          status = 503; object = ["error": "Fixture connection lost during unlock"]
+        } else { Self.vaultUnlocked = true }
       } else if path.hasSuffix("/bitwarden/lock") {
         Self.vaultUnlocked = false
       } else if path.hasSuffix("/sources/bitwarden"), method == "PUT" {
@@ -332,14 +335,22 @@
       } else if path.hasPrefix("/api/integrations/") && path.hasSuffix("/check") {
         Self.integrationChecked = true
         object = ["id": "workspace", "name": "Google Workspace", "category": "productivity", "owner": "Hermes", "profile": "ranch", "status": "connected", "detail": "Fixture check passed.", "permissions": [], "actions": ["connect": true, "check": true, "disconnect": false], "setup": [], "capabilities": [], "botIds": ["ranch"]]
+      } else if path == "/api/computer" {
+        let unavailable = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] == "1"
+        object = ["available": !unavailable, "running": !unavailable, "browserReady": !unavailable, "label": "Fixture host",
+          "reason": unavailable ? "The fixture desktop is stopped." as Any : NSNull(),
+          "control": ["kind": "bot", "name": "Ranch hand"],
+          "terminal": ["available": false, "target": ""]]
       } else if path.hasPrefix("/api/hermes/upgrade") {
         if path.hasSuffix("/control") {
           Self.upgradePhase = "recovering"
           Self.upgradeReadsRemaining = 1
         } else if path.hasSuffix("/check") {
+          Self.upgradeOperation = "check"
           Self.upgradePhase = "qualifying"
           Self.upgradeReadsRemaining = 1
         } else if path.hasSuffix("/install") {
+          Self.upgradeOperation = "install"
           Self.upgradePhase = "installing"
           Self.upgradeReadsRemaining = 3
           if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_UNCERTAIN"] == "1" {
@@ -356,7 +367,7 @@
           default: break
           }
         }
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed" }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed"; Self.upgradeOperation = "install" }
         let phase = Self.upgradePhase
         let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": "compatibility", "label": "App compatibility", "status": phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
         let fixtureMessage: String
@@ -373,7 +384,7 @@
           "message": fixtureMessage,
           "checks": fixtureChecks,
           "canCheck": ["idle", "ready", "succeeded"].contains(phase),
-          "canInstall": phase == "ready", "canRetry": phase == "failed", "canCancel": phase == "failed", "canRestartService": phase == "failed", "operationId": "fixture-update", "busyBots": [],
+          "canInstall": phase == "ready", "canRetry": phase == "failed", "canCancel": phase == "failed" || phase == "qualifying", "canRestartService": phase == "failed", "operationId": "fixture-update", "operation": Self.upgradeOperation, "busyBots": [],
         ]
         if status == 503 {
           object = ["error": "Fixture connection lost during update admission"]

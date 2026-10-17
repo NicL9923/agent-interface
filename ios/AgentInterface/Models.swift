@@ -46,11 +46,15 @@ struct AvatarConfig: Codable, Equatable {
     "diamond", "sparkle", "clover", "heart", "cookie", "pentagon", "burst", "alien", "ghost",
     "flower", "sun",
   ]
-  static let families: [(id: String, label: String)] = [
+  static let everydayFamilies: [(id: String, label: String)] = [
     ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"),
+  ]
+  /// Listed under their own "Seasonal" heading, like the web editor.
+  static let seasonalFamilies: [(id: String, label: String)] = [
     ("pumpkin", "Pumpkin"), ("santa", "Santa"), ("rudolph", "Rudolph"),
     ("turkey", "Turkey"), ("bunny", "Easter Bunny"),
   ]
+  static var families: [(id: String, label: String)] { everydayFamilies + seasonalFamilies }
   static let seasonalColors = [
     "pumpkin": "#FF9800", "santa": "#F2B08B", "rudolph": "#97683D",
     "turkey": "#97683D", "bunny": "#F5E9D8",
@@ -504,6 +508,11 @@ struct UpgradeCheck: Codable, Identifiable {
   var label: String
   var status: String
   var detail: String?
+  /// "Passed · detail", as the web's test details read.
+  var summary: String {
+    let word = status == "passed" ? "Passed" : status == "failed" ? "Failed" : status == "running" ? "Running" : "Waiting"
+    return detail.map { "\(word) · \($0)" } ?? word
+  }
 }
 struct UpgradeStatus: Codable {
   var available: Bool
@@ -518,26 +527,97 @@ struct UpgradeStatus: Codable {
   var canCancel: Bool?
   var canRestartService: Bool?
   var operationId: String?
+  /// "check" only finds and tests an update in a copy; "install" changes Hermes. Older servers omit it.
+  var operation: String?
   var error: String?
   var checkedAt: String?
   var updatedAt: String?
   var busyBots: [String]
   var inProgress: Bool { ["checking", "qualifying", "installing", "verifying", "recovering"].contains(phase) }
   var installing: Bool { ["installing", "verifying"].contains(phase) }
+}
+/// How the Hermes updates screen reads a status, ported from the web panel so both clients agree.
+extension UpgradeStatus {
+  enum StepState: String { case waiting, active, done, failed }
+  private static let installPhases: Set = ["installing", "verifying", "recovering", "rolled_back"]
+  /// A status without `operation` is an install only once it reaches an install phase.
+  var isInstall: Bool { (operation ?? (Self.installPhases.contains(phase) ? "install" : "check")) == "install" }
+  var stopped: Bool { ["blocked", "failed", "cancelled"].contains(phase) }
+  var upToDate: Bool { phase == "idle" && !(checkedAt ?? "").isEmpty && candidate == nil }
   var title: String {
     switch phase {
-    case "checking": "Checking for an update"
-    case "qualifying": "Checking compatibility"
-    case "ready": "Update ready"
-    case "installing": "Updating Hermes"
-    case "verifying": "Verifying Hermes"
+    case "idle": upToDate ? "Hermes is up to date" : "Hermes updates"
+    case "checking": "Looking for an update"
+    case "qualifying": "Testing the update"
+    case "ready": "Update tested and ready"
+    case "installing": "Installing the update"
+    case "verifying": "Making sure everything works"
+    case "succeeded": isInstall ? "Hermes is up to date" : "Hermes is ready"
+    case "blocked": isInstall ? "The update was stopped safely" : "This update needs a look"
+    case "failed": isInstall ? "The update couldn't finish" : "The check didn't finish"
+    case "rolled_back": "The previous version is restored"
     case "recovering": "Restoring the connection"
-    case "cancelled": "Update cancelled"
-    case "succeeded": "Hermes is up to date"
-    case "rolled_back": "Previous version restored"
-    case "blocked": "Update needs attention"
-    case "failed": "Update could not finish"
-    default: available ? "Keep Hermes up to date" : "Updates aren't available"
+    case "cancelled": isInstall ? "The update was cancelled" : "Check stopped"
+    default: "Hermes updates"
+    }
+  }
+  /// The sentence under the title: the server's message unless a check just found nothing to install.
+  func description(loading: Bool) -> String {
+    if upToDate { return "You're running the newest Hermes." }
+    if !message.isEmpty { return message }
+    return loading ? "Getting the current version and update status…" : "Find the newest Hermes and test it before installing it."
+  }
+  /// Find, test in a copy, then install. Only the last changes Hermes.
+  var steps: [(name: String, state: StepState)] {
+    let install = isInstall
+    let find: StepState = phase == "checking" && candidate == nil ? .active
+      : candidate != nil ? .done : stopped && !install ? .failed : .waiting
+    let tested = ["ready", "installing", "verifying", "recovering", "rolled_back"].contains(phase)
+    let test: StepState = phase == "qualifying" || phase == "checking" && candidate != nil ? .active
+      : tested || install ? .done : stopped && candidate != nil ? .failed : .waiting
+    let last: StepState = ["installing", "verifying", "recovering"].contains(phase) ? .active
+      : phase == "succeeded" && install ? .done
+      : install && (stopped || phase == "rolled_back") ? .failed : .waiting
+    return [("Find", find), ("Test in a copy", test), ("Install", last)]
+  }
+  /// A check's own retry is just "Check again", so retry and cancel belong to installs.
+  var showsRecovery: Bool { isInstall && (canRetry == true || canCancel == true) || canRestartService == true }
+  /// Stopping a check needs no confirmation because nothing has changed yet.
+  var canStopCheck: Bool { inProgress && !isInstall && canCancel == true }
+  var checksPassed: Int { checks.filter { $0.status == "passed" }.count }
+  /// The primary button reads Install once a tested update is waiting, otherwise it runs a check.
+  var installsNext: Bool { canInstall && candidate != nil }
+  func actionLabel(submitting: Bool, uncertain: Bool) -> String {
+    if submitting { return installsNext ? "Starting the install…" : "Starting the check…" }
+    if uncertain { return "Checking update status…" }
+    if inProgress { return isInstall ? "Installing…" : "Testing…" }
+    return installsNext ? "Install update" : stopped && !isInstall ? "Check again" : "Check for an update"
+  }
+  func actionHint(uncertain: Bool) -> String {
+    if inProgress || uncertain { return "You can close this. Progress continues on the server." }
+    return installsNext ? "Installing briefly reconnects Hermes. Conversations and drafts stay saved."
+      : "A check finds the newest Hermes and tests it in a separate copy. Nothing is installed until you choose Install."
+  }
+}
+/// The shared desktop's availability and who is driving it, from GET /api/computer.
+struct ComputerStatus: Decodable, Equatable {
+  struct Control: Decodable, Equatable {
+    var kind: String
+    var name: String?
+    var mine: Bool?
+  }
+  var available: Bool
+  var reason: String?
+  var control: Control
+  /// What the Settings row says under "Computer", worded like the web panel.
+  var detail: String {
+    guard available else { return reason?.isEmpty == false ? reason! : "Desktop unavailable" }
+    switch control.kind {
+    case "human":
+      return control.mine == true ? "Watching. Take over to control the desktop."
+        : "\(control.name ?? "A household member") has control"
+    case "bot": return "\(control.name ?? "An assistant") is using the computer"
+    default: return "Watching. Assistants can use this computer."
     }
   }
 }

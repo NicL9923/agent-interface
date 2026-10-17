@@ -37,13 +37,13 @@ struct PreferencesView: View {
           }.accessibilityIdentifier("Hermes updates")
           if let url = try? store.api?.url("/?computer=1") {
             Link(destination: url) {
-              settingsRow("Computer", icon: "desktopcomputer", detail: "Shared desktop and terminal")
-            }.accessibilityIdentifier("sharedComputer")
+              settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
+            }.disabled(store.computerStatus?.available == false).accessibilityIdentifier("sharedComputer")
           }
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
           }.accessibilityIdentifier("Integrations")
-        }
+        }.task { await watchComputer() }
         if let error = store.error {
           Section {
             ErrorBanner(message: error, dismiss: { store.error = nil })
@@ -156,6 +156,13 @@ struct PreferencesView: View {
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
+    }
+  }
+  /// The web panel polls the shared computer every few seconds while open; Settings checks while it is shown.
+  private func watchComputer() async {
+    while !Task.isCancelled {
+      await store.refreshComputer()
+      do { try await Task.sleep(for: .seconds(10)) } catch { return }
     }
   }
   private var notificationPreferences: NotificationPreferences {

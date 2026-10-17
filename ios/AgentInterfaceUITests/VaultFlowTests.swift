@@ -1,12 +1,13 @@
 import XCTest
 
 final class VaultFlowTests: XCTestCase {
-  private func launch(uncertain: Bool = false, cancelledAdd: Bool = false) -> XCUIApplication {
+  private func launch(uncertain: Bool = false, cancelledAdd: Bool = false, unlockFails: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_VAULT"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    if unlockFails { app.launchEnvironment["AGENT_INTERFACE_UI_VAULT_UNLOCK_FAILS"] = "1" }
     if cancelledAdd { app.launchEnvironment["AGENT_INTERFACE_UI_VAULT_ADD_CANCELLED"] = "1" }
     if uncertain { app.launchEnvironment["AGENT_INTERFACE_UI_SECURE_UNCERTAIN"] = "1" }
     app.launch(); return app
@@ -43,6 +44,43 @@ final class VaultFlowTests: XCTestCase {
     field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()
     XCTAssertTrue(app.buttons["Lock Bitwarden fixture"].waitForExistence(timeout: 5))
     capture(app, name: "Native available password source controls")
+  }
+  func testFailedUnlockKeepsTheSheetOpenWithItsErrorAndLocksVaultActionsUntilReload() {
+    let app = launch(unlockFails: true)
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
+    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
+    XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
+    let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
+    field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()
+    let message = "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared."
+    XCTAssertTrue(app.staticTexts["vault.unlockError"].waitForExistence(timeout: 5), "The error shows in the sheet that asked for the password")
+    XCTAssertEqual(app.staticTexts["vault.unlockError"].label, message)
+    XCTAssertTrue(app.secureTextFields["vault.unlockPassword"].exists, "The sheet stays open until Hermes answers")
+    XCTAssertFalse(app.buttons["vault.unlock"].isEnabled)
+    capture(app, name: "Native failed unlock stays in the sheet")
+    app.buttons["Cancel"].tap()
+    let banner = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "could not confirm this change")).firstMatch
+    for _ in 0..<5 { if banner.exists { break }; app.collectionViews["vaultForm"].swipeDown() }
+    XCTAssertTrue(banner.exists, "The unconfirmed change is explained on the vault screen")
+    reveal(app.buttons["vault.add"], app: app, container: app.collectionViews["vaultForm"])
+    XCTAssertFalse(app.buttons["vault.add"].isEnabled, "An unconfirmed change locks vault actions")
+    reveal(unlock, app: app, container: app.collectionViews["vaultForm"])
+    XCTAssertFalse(unlock.isEnabled)
+    let reload = app.buttons["vault.reload"]; reveal(reload, app: app, container: app.collectionViews["vaultForm"]); reload.tap()
+    reveal(app.buttons["vault.add"], app: app, container: app.collectionViews["vaultForm"])
+    expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["vault.add"]); waitForExpectations(timeout: 5)
+    XCTAssertFalse(banner.exists)
+  }
+  func testAddLoginExplainsABadAddressBeforeSaving() {
+    let app = launch()
+    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
+    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
+    XCTAssertTrue(app.buttons["vault.add"].waitForExistence(timeout: 5)); app.buttons["vault.add"].tap()
+    field("vault.loginOrigin", app: app, value: "library.example.test")
+    XCTAssertTrue(app.staticTexts["vault.originError"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["vault.originError"].label, "Enter the website address through the hostname, such as https://example.com.")
+    let save = app.buttons["vault.saveLogin"]; reveal(save, app: app, container: app.collectionViews["vaultAddForm"])
+    XCTAssertFalse(save.isEnabled)
   }
   func testCancelledAddRequiresReviewOfPotentiallySavedLogin() {
     let app = launch(cancelledAdd: true)
