@@ -13,12 +13,13 @@ repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo_dir"
 mkdir -p .private
 result_path=".private/ios-${operation}-$(date -u +%Y%m%dT%H%M%SZ)-$$.xcresult"
-derived_data=.private/ios-build
+# Concurrent runs need separate derived data; IOS_DERIVED_DATA selects it.
+derived_data=${IOS_DERIVED_DATA:-.private/ios-build}
 extra_options=(-parallel-testing-enabled NO)
 if [[ "$operation" == live ]]; then
   # This smoke check refuses non-loopback hosts and servers without explicit local test auth.
   node .agents/tools/native-smoke.mjs http://127.0.0.1:3004
-  derived_data=.private/ios-live-build
+  derived_data=${IOS_DERIVED_DATA:-.private/ios-live-build}
   extra_options+=(-only-testing:AgentInterfaceUITests/LiveConnectionTests 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS')
   operation=test
 fi

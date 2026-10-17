@@ -24,13 +24,19 @@ final class ScreenshotTourTests: XCTestCase {
 
     for (identifier, name, ready) in [
       ("openToday", "17-today", "todayOverview"), ("openGroups", "18-group-chats", "New group"),
-      ("openDiscovery", "19-search", "Search answers, files, or a topic"),
+      ("openDiscovery", "19-search", "Search conversations"),
     ] {
       app.buttons[identifier].tap()
       XCTAssertTrue(app.descendants(matching: .any)[ready].waitForExistence(timeout: 10))
       try capture(name)
       goToAssistantList(app)
     }
+    app.buttons["openDiscovery"].tap()
+    XCTAssertTrue(app.buttons["Saved items"].waitForExistence(timeout: 10))
+    app.buttons["Saved items"].tap()
+    XCTAssertTrue(app.buttons["savedItem-saved-1"].waitForExistence(timeout: 10))
+    try capture("19b-search-saved")
+    goToAssistantList(app)
 
     openPreferences(app)
     scrollUntilHittable(app, app.descendants(matching: .any)["sharedComputer"])
@@ -95,6 +101,10 @@ final class ScreenshotTourTests: XCTestCase {
     }
     try capture("16-specimen-matrix")
     back(app, from: "Avatar specimen")
+    // Back on Settings, scrolled to the bottom where the home sections and About rows sit.
+    try capture("06c-preferences-scrolled")
+    app.swipeDown()
+    try capture("06d-preferences-sections")
 
     // Dark mode through the app's own theme preference, which drives preferredColorScheme.
     // The picker's element type varies by iOS release; its label stays stable.
@@ -121,7 +131,7 @@ final class ScreenshotTourTests: XCTestCase {
     // A fresh launch with the working fixture shows the activity avatar and live activity row.
     app.terminate()
     app = launch(liveActivity: true)
-    XCTAssertTrue(app.staticTexts["Ranch hand is working"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 15))
     try capture("03-conversation-working")
     goToAssistantList(app)
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))

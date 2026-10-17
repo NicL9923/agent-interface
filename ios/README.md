@@ -30,8 +30,9 @@ editing the actual Hermes profile documents, plus routine recipes, timezone and
 next-run previews, and a confirmed **Try once** action.
 
 The conversation microphone records up to two minutes, transcribes on the app
-server, and opens an editable transcript before adding it to the draft. **Read
-aloud** uses the device's iOS voice with an explicit Stop control. The composer's **+** menu attaches files and lists starter actions; an empty conversation offers an editable role discussion. In Advanced presentation, the composer's
+server, and opens an editable transcript before adding it to the draft. The composer's
+**Listen to reply** reads the latest reply with the device's iOS voice and has an explicit Stop control. The paperclip
+attaches photos or files; an empty conversation offers an editable role discussion. In Advanced presentation, the composer's
 model picker searches the profile's model catalog, saves model favorites, and controls
 conversation reasoning and speed. Hermes still requires confirmation for warned models. Interactive
 reply instructions are opt-in in assistant settings. Checklists and itinerary

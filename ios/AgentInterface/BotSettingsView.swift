@@ -31,188 +31,204 @@ struct BotSettingsView: View {
   @State private var portraitPrompt = ""
   @State private var editingRoutine: Routine?
   @State private var addingRoutine = false
-  @State private var mcpId = ""
+  @State private var mcpText = ""
+  @State private var templates: [RoutineTemplate] = []
+  @State private var deletingRoutine: Routine?
   @State private var catalogReady: Set<String> = []
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
-  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Passwords & logins"]
-  var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        HStack(spacing: 8) {
-          ForEach(tabs.prefix(2), id: \.self) { title in
-            Button(title) { tab = title }.buttonStyle(.bordered).tint(
-              tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
-          }
-          Spacer(minLength: 0)
-          Menu {
-            ForEach(tabs.dropFirst(2), id: \.self) { title in
-              Button {
-                tab = title
-              } label: {
-                if tab == title { Label(title, systemImage: "checkmark") }
-                else { Text(title) }
-              }
-            }
+  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Logins"]
+  // Split out of body so the type checker stays fast on slower CI machines.
+  private var tabBar: some View {
+    HStack(spacing: 8) {
+      ForEach(tabs.prefix(2), id: \.self) { title in
+        Button(title) { tab = title }.buttonStyle(.bordered).tint(
+          tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
+      }
+      Spacer(minLength: 0)
+      Menu {
+        ForEach(tabs.dropFirst(2), id: \.self) { title in
+          Button {
+            tab = title
           } label: {
-            Label(tabs.prefix(2).contains(tab) ? "More" : tab, systemImage: "chevron.down")
-              .font(.subheadline).lineLimit(1).padding(.horizontal, 10).frame(minHeight: 44)
-          }.tint(tabs.prefix(2).contains(tab) ? .secondary : Palette.accent)
-            .accessibilityLabel("More settings")
-            .accessibilityValue(tabs.prefix(2).contains(tab) ? "" : tab)
-            .accessibilityIdentifier("settingsMore")
-        }.font(.subheadline).padding(.horizontal).padding(.vertical, 6)
-        if let error {
-          ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
-        }
-        if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
-        if tab == "Connections" {
-          if let bot { IntegrationsView(botId: bot.id) }
-          else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
-        } else if tab == "Passwords & logins" {
-          if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its logins.").padding(); Spacer() }
-        } else if tab == "Memory" {
-          if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before inspecting memory.").padding(); Spacer() }
-        } else { Form {
-          switch tab {
-          case "Details": details
-          case "Avatar": avatarEditor
-          case "Tools": capabilities("tools")
-          case "Skills": capabilities("skills")
-          default: routineList
-          }
-        }.householdListBackground().disabled(busy) }
-      }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
+            if tab == title { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
           }
         }
-        .onAppear {
-          guard !initialized else { return }
-          initialized = true
-          form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
-          savedForm = form
-          avatar = bot?.avatar ?? AvatarConfig()
-          savedAvatar = avatar
-          if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
-        }
-        .task(id: tab) { await loadTab() }
-        .interactiveDismissDisabled(dirty || busy)
-        .confirmationDialog("Discard your unsaved changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
-          Button("Discard changes", role: .destructive) { closeSheet() }
-        }
-        .onChange(of: avatar) { _, value in
-          if value.mode != "portrait" {
-            lastDrawn = value
-          } else if !(value.src ?? "").isEmpty {
-            lastPortrait = value
-          }
-        }
-        .confirmationDialog(
-          "Hermes asks for confirmation before using this model.", isPresented: $confirmModel,
-          titleVisibility: .visible
-        ) { Button("Confirm this model") { saveBot(confirmed: true) } }
-        .confirmationDialog(
-          "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
-          titleVisibility: .visible
-        ) {
-          Button("Make it personal", role: .destructive) { saveBot(personal: true) }
-        } message: {
-          Text("It will disappear for the rest of the household, along with its conversation, routines and group chats.")
-        }
-        .confirmationDialog(
-          "Delete \(bot?.name ?? "this assistant")?", isPresented: $deleteConfirm,
-          titleVisibility: .visible
-        ) {
-          Button("Delete assistant", role: .destructive) {
-            action {
-              guard let id = bot?.id, let api = store.api else { return }
-              store.deletedBotId = id
-              try await api.delete("/bots/\(APIClient.component(id))")
-              await store.refreshBootstrap()
-              closeSheet()
-            }
-          }
-        }
-        .fileImporter(
-          isPresented: $portraitImport, allowedContentTypes: [.png, .jpeg, .webP],
-          allowsMultipleSelection: false
-        ) { result in
-          switch result {
-          case .success(let urls): if let url = urls.first { uploadPortrait(url) }
-          case .failure(let error): self.error = error.localizedDescription
-          }
-        }
-        .sheet(item: $editingRoutine) { routine in
-          RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).environmentObject(
-            store)
-        }
-        .sheet(isPresented: $addingRoutine) {
-          if let bot {
-            RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
-              .environmentObject(store)
-          }
-        }
+      } label: {
+        Label(tabs.prefix(2).contains(tab) ? "More" : tab, systemImage: "chevron.down")
+          .font(.subheadline).lineLimit(1).padding(.horizontal, 10).frame(minHeight: 44)
+      }.tint(tabs.prefix(2).contains(tab) ? .secondary : Palette.accent)
+        .accessibilityLabel("More settings")
+        .accessibilityValue(tabs.prefix(2).contains(tab) ? "" : tab)
+        .accessibilityIdentifier("settingsMore")
+    }.font(.subheadline).padding(.horizontal).padding(.vertical, 6)
+  }
+  @ViewBuilder private var tabContent: some View {
+    if let error {
+      ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
     }
+    if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
+    if tab == "Connections" {
+      if let bot { IntegrationsView(botId: bot.id) }
+      else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
+    } else if tab == "Logins" {
+      if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its Hermes logins.").padding(); Spacer() }
+    } else if tab == "Memory" {
+      if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before viewing its Hermes memory.").padding(); Spacer() }
+    } else { Form {
+      switch tab {
+      case "Details": details
+      case "Avatar": avatarEditor
+      case "Tools": capabilities("tools")
+      case "Skills": capabilities("skills")
+      default: routineList
+      }
+    }.householdListBackground().disabled(busy) }
+  }
+  var body: some View {
+    NavigationStack { routinePresentations(editor) }
+  }
+  private var editor: some View {
+    VStack(spacing: 0) {
+      tabBar
+      tabContent
+    }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
+        }
+      }
+      .onAppear {
+        guard !initialized else { return }
+        initialized = true
+        form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
+        savedForm = form
+        mcpText = form.enabledMcpServers.joined(separator: ", ")
+        avatar = bot?.avatar ?? AvatarConfig()
+        savedAvatar = avatar
+        if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
+      }
+      .task(id: tab) { await loadTab() }
+      .interactiveDismissDisabled(dirty || busy)
+      .confirmationDialog("Discard your unsaved changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
+        Button("Discard changes", role: .destructive) { closeSheet() }
+      }
+      .onChange(of: avatar) { _, value in
+        if value.mode != "portrait" {
+          lastDrawn = value
+        } else if !(value.src ?? "").isEmpty {
+          lastPortrait = value
+        }
+      }
+      .confirmationDialog(
+        "Hermes asks for confirmation before using this model.", isPresented: $confirmModel,
+        titleVisibility: .visible
+      ) { Button("Confirm this model") { saveBot(confirmed: true) } }
+      .confirmationDialog(
+        "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
+        titleVisibility: .visible
+      ) {
+        Button("Make it personal", role: .destructive) { saveBot(personal: true) }
+      } message: {
+        Text("It will disappear for the rest of the household, along with its conversation, routines and group chats.")
+      }
+      .confirmationDialog(
+        "Delete \(bot?.name ?? "this assistant")?", isPresented: $deleteConfirm,
+        titleVisibility: .visible
+      ) {
+        Button("Delete assistant", role: .destructive) {
+          action {
+            guard let id = bot?.id, let api = store.api else { return }
+            store.deletedBotId = id
+            try await api.delete("/bots/\(APIClient.component(id))")
+            await store.refreshBootstrap()
+            closeSheet()
+          }
+        }
+      }
+      .fileImporter(
+        isPresented: $portraitImport, allowedContentTypes: [.png, .jpeg, .webP],
+        allowsMultipleSelection: false
+      ) { result in
+        switch result {
+        case .success(let urls): if let url = urls.first { uploadPortrait(url) }
+        case .failure(let error): self.error = error.localizedDescription
+        }
+      }
+  }
+  private func routinePresentations(_ content: some View) -> some View {
+    content
+      .confirmationDialog(
+        "Delete \(deletingRoutine?.name ?? "this routine")?",
+        isPresented: Binding(get: { deletingRoutine != nil }, set: { if !$0 { deletingRoutine = nil } }),
+        titleVisibility: .visible, presenting: deletingRoutine
+      ) { routine in
+        Button("Delete routine", role: .destructive) {
+          action {
+            try await store.api?.delete("/routines/\(APIClient.component(routine.id))")
+            await loadTab()
+          }
+        }
+      }
+      .sheet(item: $editingRoutine) { routine in
+        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).environmentObject(
+          store)
+      }
+      .sheet(isPresented: $addingRoutine) {
+        if let bot {
+          RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
+            .environmentObject(store)
+        }
+      }
   }
   @ViewBuilder private var details: some View {
-    Section("Assistant") {
-      TextField("Name", text: $form.name)
-      TextField("Description", text: $form.description, axis: .vertical).lineLimit(2...4)
-      Toggle("Shared with the household", isOn: $form.shared)
-      Text(
-        form.shared
-          ? "Everyone in your household can use a shared assistant."
-          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins."
-      ).font(.caption).foregroundStyle(.secondary)
-    }
-    Section("Instructions") {
-      TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel(
-        "Assistant instructions")
-      Button(form.instructions.contains("When a checklist, itinerary, or calendar proposal would help") ? "Interactive replies enabled" : "Enable interactive replies") {
-        if !form.instructions.contains("When a checklist, itinerary, or calendar proposal would help") { form.instructions += "\n\n" + NativeInteractiveReplyInstructions }
-      }
-      Text("Adds editable instructions for checklists, itineraries, and calendar proposals. Save the assistant to apply.").font(.caption).foregroundStyle(.secondary)
-    }
-    ModelCatalogSections(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy) {
-      form.model = $0.model
-      form.provider = $0.provider
-    }
-    Section("Existing MCP connections") {
-      let identifiers = Array(
-        Set(
-          (store.bootstrap?.bots ?? []).flatMap { $0.enabledMcpServers ?? [] }
-            + form.enabledMcpServers)
-      ).sorted()
-      ForEach(identifiers, id: \.self) { id in
-        Toggle(
-          id,
-          isOn: Binding(
-            get: { form.enabledMcpServers.contains(id) },
-            set: {
-              if $0 {
-                form.enabledMcpServers.append(id)
-              } else {
-                form.enabledMcpServers.removeAll { $0 == id }
-              }
-            }))
-      }
-      TextField("Already configured server identifier", text: $mcpId).textInputAutocapitalization(
-        .never
-      ).autocorrectionDisabled()
-      Button("Enable existing connection") {
-        let id = mcpId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !form.enabledMcpServers.contains(id) { form.enabledMcpServers.append(id) }
-        mcpId = ""
-      }.disabled(mcpId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-      Text(
-        "Establish new service connections in Hermes first, then enable their existing identifiers here."
-      ).font(.caption).foregroundStyle(.secondary)
-    }
     Section {
       unavailable("botConfiguration")
-      Button(bot == nil ? "Create assistant" : "Save assistant") { saveBot() }.disabled(
+    }
+    Section("Name") { TextField("Name", text: $form.name) }
+    Section("Description") { TextField("Description", text: $form.description, axis: .vertical).lineLimit(1...4) }
+    Section("Instructions") {
+      TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel("Assistant instructions")
+        .overlay(alignment: .topLeading) {
+          if form.instructions.isEmpty {
+            Text("How should this assistant help?").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
+          }
+        }
+    }
+    Section {
+      Button(interactiveEnabled ? "Interactive replies enabled" : "Enable interactive replies") {
+        form.instructions = (form.instructions.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + NativeInteractiveReplyInstructions)
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+      }.disabled(busy || interactiveEnabled)
+    } footer: {
+      Text("Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.")
+    }
+    Section {
+      ModelSelectionRow(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy || !store.supports("botConfiguration")) {
+        form.model = $0.model
+        form.provider = $0.provider
+      }
+    } header: { Text("Model") } footer: {
+      Text("Model choices come from your connected Hermes providers. Star models to keep them handy.")
+    }
+    Section {
+      Toggle("Shared with your household", isOn: $form.shared)
+    } footer: {
+      Text(
+        form.shared
+          ? "This assistant has one shared model. Provider and model changes are visible to both people."
+          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins.")
+    }
+    Section {
+      TextField("Existing server ids, separated by commas", text: $mcpText, axis: .vertical)
+        .textInputAutocapitalization(.never).autocorrectionDisabled()
+        .onChange(of: mcpText) { _, value in form.enabledMcpServers = BotInput.serverIds(value) }
+    } header: { Text("Enabled existing MCP servers") } footer: {
+      Text("Only existing Hermes connections can be configured here.")
+    }
+    Section {
+      Button(bot == nil ? "Create assistant" : "Save changes") { saveBot() }.disabled(
         !store.supports("botConfiguration") || !store.connected
           || form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           || form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -223,12 +239,11 @@ struct BotSettingsView: View {
       }
     }
   }
+  private var interactiveEnabled: Bool { form.instructions.contains(NativeInteractiveReplyInstructions) }
   @ViewBuilder private var avatarEditor: some View {
-    if bot == nil {
-      Section { Text("Create the assistant before configuring its avatar.") }
-    } else {
+    Group {
       Section {
-        AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? "Assistant")
+        AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name)
       }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
       Section("Style") {
         Picker("Style", selection: Binding(get: { avatar.mode }, set: switchAvatarMode)) {
@@ -242,11 +257,11 @@ struct BotSettingsView: View {
           Text("Portraits stay still. Activity appears in a separate state indicator.")
             .font(.caption).foregroundStyle(.secondary)
           Button("Upload portrait") { portraitImport = true }.disabled(
-            !store.supports("uploads") || !store.connected)
+            bot == nil || !store.supports("uploads") || !store.connected)
           unavailable("uploads")
           TextField("Describe a portrait", text: $portraitPrompt, axis: .vertical).lineLimit(2...5)
           Button("Generate portrait") { generatePortrait() }.disabled(
-            !store.supports("portraitGeneration") || !store.connected
+            bot == nil || !store.supports("portraitGeneration") || !store.connected
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || portraitPrompt.count > 2000)
           unavailable("portraitGeneration")
@@ -302,7 +317,8 @@ struct BotSettingsView: View {
       }
       Section {
         Button("Save avatar") { saveAvatar() }.disabled(
-          !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
+          bot == nil || !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
+        if bot == nil { Text("Create the assistant before saving an avatar.").font(.footnote).foregroundStyle(.secondary) }
       }
     }
   }
@@ -364,7 +380,7 @@ struct BotSettingsView: View {
     Section {
       unavailable(kind)
       if bot == nil {
-        Text("Create the assistant before changing \(kind).")
+        Text("Create the assistant before configuring its capabilities.")
       } else {
         let items = kind == "tools" ? tools : skills
         ForEach(items) { item in
@@ -418,17 +434,30 @@ struct BotSettingsView: View {
   @ViewBuilder private var routineList: some View {
     Section {
       unavailable("routines")
-      Text("Routines keep working while you are away. Choose notification recipients explicitly.")
+      Text("Routines keep working when you are away. Choose notification recipients explicitly.")
         .font(.footnote).foregroundStyle(.secondary)
     }
     if let bot {
+      if !templates.isEmpty {
+        Section("Routine recipes") {
+          ForEach(templates) { template in
+            Button {
+              editingRoutine = Routine(id: "", botId: bot.id, name: template.name, prompt: template.prompt, schedule: template.schedule, enabled: false, recipientIds: [store.bootstrap?.user.id].compactMap { $0 })
+            } label: {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(template.name).font(.headline).foregroundStyle(.primary)
+                Text(template.description).font(.caption).foregroundStyle(.secondary)
+              }
+            }.disabled(!store.supports("routines") || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
+          }
+        }
+      }
       ForEach(routines) { routine in
         Section(routine.name) {
           Text(routine.schedule).font(.subheadline)
+          Text(routine.enabled ? "Active" : "Paused").font(.caption).foregroundStyle(.secondary)
           Text(routine.prompt).font(.footnote).lineLimit(6)
-          LabeledContent("Status", value: routine.enabled ? "Active" : "Paused")
-          Button("Edit") { editingRoutine = routine }
-          NavigationLink("View results") { RoutineResultsView(botId: routine.botId, routineId: routine.id) }
+          RoutineEnhancements(routine: routine, disabled: !store.supports("routines"))
           Button(routine.enabled ? "Pause" : "Resume") {
             action {
               guard let api = store.api else { return }
@@ -439,6 +468,8 @@ struct BotSettingsView: View {
               await loadTab()
             }
           }
+          Button("Edit") { editingRoutine = routine }
+          Button("Delete", role: .destructive) { deletingRoutine = routine }
         }
       }
       Section {
@@ -580,6 +611,7 @@ struct BotSettingsView: View {
       if tab == "Routines", store.supports("routines") {
         let all: [Routine] = try await api.get("/routines")
         routines = all.filter { $0.botId == bot.id }
+        templates = try await api.get("/routines/templates")
       }
     } catch is CancellationError {} catch {
       if loadId == currentId { self.error = error.localizedDescription }
@@ -594,7 +626,8 @@ struct RoutineEditor: View {
   @State private var busy = false
   @State private var error: String?
   @State private var deleteConfirm = false
-  @State private var schedulePreviewValid = false
+  @State private var previewedSchedule = ""
+  private var schedulePreviewValid: Bool { previewedSchedule == routine.schedule }
   var body: some View {
     NavigationStack {
       Form {
@@ -607,7 +640,9 @@ struct RoutineEditor: View {
           Toggle("Enabled", isOn: $routine.enabled)
           if routine.enabled && !schedulePreviewValid { Text("Preview this schedule before saving an enabled routine.").font(.caption).foregroundStyle(.secondary) }
         }
-        RoutinePreviewControls(routine: $routine, previewValid: $schedulePreviewValid)
+        Section {
+          RoutineSchedulePreview(botId: routine.botId, schedule: routine.schedule, onReady: { previewedSchedule = $0 })
+        }
         Section {
           ForEach(recipients) { user in
             Toggle(
@@ -624,7 +659,7 @@ struct RoutineEditor: View {
           Text("Notify these household members")
         } footer: {
           Text(
-            "No selected recipients means no completion notification. Results remain in this assistant's conversation."
+            "No selected recipients means no completion notification. Routine results remain in the assistant conversation."
           )
         }
         if !routine.id.isEmpty {
@@ -635,7 +670,7 @@ struct RoutineEditor: View {
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
           ToolbarItem(placement: .confirmationAction) {
-            Button(busy ? "Saving…" : "Save") { save() }.disabled(
+            Button(busy ? "Saving…" : routine.id.isEmpty ? "Add routine" : "Save routine") { save() }.disabled(
               busy || !store.connected
                 || routine.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -803,5 +838,12 @@ private struct ChipFlow: Layout {
       }
       y += rowHeight + spacing
     }
+  }
+}
+
+extension BotInput {
+  /// The web field's comma-separated list of existing MCP server ids.
+  static func serverIds(_ text: String) -> [String] {
+    text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
   }
 }

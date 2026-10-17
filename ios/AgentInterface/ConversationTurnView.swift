@@ -23,7 +23,7 @@ struct ConversationTurnView: View {
               else if advanced { ToolActivityView(message: message) }
               else { ActionReceiptView(call: call) }
             } else {
-              DisclosureGroup(message.presentationOrigin?.title ?? message.activityGroup) {
+              DisclosureGroup((message.presentationOrigin?.title ?? message.activityGroup) + (message.createdAt.map { When.format($0, inline: true) }.flatMap { $0.isEmpty ? nil : " · \($0)" } ?? "")) {
                 Text(message.text.isEmpty ? "No result was exposed by Hermes." : message.text).font(.footnote).textSelection(.enabled)
               }
             }
@@ -62,7 +62,7 @@ struct ApprovalDecisionView: View {
       Text("Your decision needed").font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       Text(approval.title).font(.headline)
       MarkdownView(text: approval.detail)
-      if let expiry = approval.expiresAt.flatMap(ServerDate.parse) { Text("Expires \(expiry.formatted())").font(.caption).foregroundStyle(.secondary) }
+      if let expiry = approval.expiresAt, !When.format(expiry).isEmpty { Text("Expires \(When.format(expiry, inline: true))").font(.caption).foregroundStyle(.secondary) }
       HStack {
         Button(decision == "approved" ? settled ? "Approved" : "Approving…" : "Approve") { decide("approved") }.buttonStyle(.borderedProminent)
         Button(decision == "denied" ? settled ? "Declined" : "Declining…" : "Decline") { decide("denied") }.buttonStyle(.bordered)

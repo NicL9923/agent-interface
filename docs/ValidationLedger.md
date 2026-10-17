@@ -1,5 +1,54 @@
 # Validation ledger
 
+## October 17 native mobile and web parity follow-up
+
+Based on `5c6e500`. Claude Opus 5.5 orchestrated, Claude Opus 5.5 and Sonnet 5.5
+implemented. The iOS composer uses the web paperclip, placeholders, icon-only
+model button, "Stop response" and a single **Listen to reply**; iOS starters are
+removed, as on web since `3bd1810`. The header order is files, settings, pin
+with a file count. The transcript shows the web working sentence and the same
+tool props on the working avatar, plus the web connection card. Home, Today,
+Search & saved, group chats and Settings follow web layout, subtitles and copy.
+Assistant settings collapse the model catalog; memory, routines and reply cards
+gain the web actions. `When.swift` ports the web relative timestamps, and both
+clients now keep the clock time for scheduled times in another year. Group chats
+keep native list-to-detail navigation. Version 1.0 build 3 is set across all
+three bundles.
+
+Final source fingerprint, excluding this ledger:
+`sha256:51baa1bdf7ca0da5d1e09ebd540a9f11c1c6f84fbcfb2f95e18965e21ed55e26`.
+Native application source: `sha256:a01c6713239fb7ae0ed8c985f69b969ad1e2033782725f90e0c1cd7a625ec98c`.
+Native tests: `sha256:57c5cf8bf7d363111526add80933a28a8a4c2629570bd558b508c89e6a79bee9`.
+
+Xcode 27.1 on iOS 27.0 simulators with ad hoc signing. The full native suite on
+iPhone 18 Pro `39F5329D-FA70-4259-9B8A-6AECECDE2227` passed at the combined
+implementation commit: 168 unit tests with two optional skips and 34 UI tests
+with two skips, no failures (`.private/ios-test-20261017T042626Z-70763.xcresult`).
+After review fixes, the affected settings units, all seven experience flows and
+the composer flow passed on iPhone, and the tablet layout plus five parity flows
+passed on iPad `0EC750D2-1DB5-4FD6-945F-3869E8D4ADB0`. The screenshot tour, broken
+since PR #141, passes again. At the final fingerprint, the 168-test unit suite
+passed again (`.private/ios-test-20261017T045606Z-89208.xcresult`); the final
+change touched only scheduled-time labels and the build number. CI's Xcode 26.6
+could not type-check the grown assistant settings body, so it was split into
+members; afterwards the assistant catalog, all experience and vault flows passed
+locally (`.private/ios-test-20261017T050208Z-12608.xcresult`) and CI's native
+unit job passed. All 751 web
+tests passed on Node 24.21 and Node 26.10, and the production build produced
+web build `5ce8edf382a7555b`.
+
+The [phone collage](../ios/evidence/mobile-parity-phone.png) shows the final
+tour with synthetic fixture content, including the magnifier prop during a
+running web search. Prop rendering was compared with web captures of the same
+avatars.
+
+GPT-6.1 Sol independently reviewed the full diff. Round one found itinerary note
+typing lost during a save, stale schedule previews, next-year schedule times
+without a clock time, and an assertion that could not fail; all were fixed.
+Round two verified those fixes and found next-year calendar proposals without a
+start time, a defect shared with web, which both clients now fix. No production
+web deployment is part of this change.
+
 ## October 16 native mobile and web parity
 
 The mobile update is based on `c1010178a24b973fcaf156b2974ca9b741d2658d`,

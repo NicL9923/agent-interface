@@ -465,6 +465,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var hasConversationFiles: Bool {
     !conversationFiles.isEmpty || (conversation?.earlierFiles ?? 0) > 0
   }
+  /// The header badge count, as the web counts it: known files plus earlier ones not yet fetched.
+  var conversationFileCount: Int {
+    conversationFiles.count + (currentEarlierFiles == nil ? conversation?.earlierFiles ?? 0 : 0)
+  }
   private var currentEarlierFiles: EarlierFilePage? {
     guard let id = selectedBotId, let page = earlierFileCache[id],
       page.sessionId == conversation?.sessionId,

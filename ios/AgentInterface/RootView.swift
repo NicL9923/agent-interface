@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 
 enum HomeDestination { case conversation, today, groups, find }
@@ -228,6 +229,8 @@ struct BotListView: View {
   var openToday: () -> Void
   var openGroups: () -> Void
   var openDiscovery: () -> Void
+  @StateObject private var reachability = NetworkReachability()
+  private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
   var body: some View {
     ScrollView {
@@ -240,13 +243,10 @@ struct BotListView: View {
           }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
             .accessibilityIdentifier("homeNotice")
         }
-        if !store.connected {
+        if store.sessionExpired {
           VStack(alignment: .leading, spacing: 8) {
-            Text(store.sessionExpired ? "Sign in again to continue" : "Connection lost. Loaded conversations and drafts are kept.")
-              .font(.footnote).foregroundStyle(.secondary)
-            Button(store.sessionExpired ? "Sign in again" : "Reconnect now") {
-              Task { if store.sessionExpired { await store.signIn() } else { await store.reconnect() } }
-            }
+            Text("Sign in again to continue").font(.footnote).foregroundStyle(.secondary)
+            Button("Sign in again") { Task { await store.signIn() } }
           }
         }
         if let bootstrap = store.bootstrap {
@@ -264,7 +264,10 @@ struct BotListView: View {
           }
           ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
             VStack(alignment: .leading, spacing: 4) {
-              if !group.title.isEmpty { Text(group.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 10) }
+              if !group.title.isEmpty {
+                Text(group.title).font(.caption2.weight(.semibold)).tracking(1.1).textCase(.uppercase)
+                  .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
+              }
               LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
             }
           }
@@ -281,7 +284,7 @@ struct BotListView: View {
         }
       }.padding(16)
     }.background(homeBackground)
-      .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline)
+      .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline).homeTitleHidden()
       .toolbarBackground(homeBackground, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -293,6 +296,9 @@ struct BotListView: View {
               }
           }.accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
         }
+        if !store.connected && !store.sessionExpired {
+          ToolbarItem(placement: .topBarLeading) { syncPill }
+        }
         ToolbarItemGroup(placement: .topBarTrailing) {
           Button(action: openDiscovery) { Image(systemName: "magnifyingglass") }
             .accessibilityLabel("Search & saved").accessibilityIdentifier("openDiscovery")
@@ -301,8 +307,18 @@ struct BotListView: View {
         }
       }.refreshable { await store.refreshBootstrap() }
   }
+  /// Web's header status while the connection is down: a spinner while retrying, still when the device is offline.
+  private var syncPill: some View {
+    Button { Task { await store.reconnect() } } label: {
+      HStack(spacing: 7) {
+        SyncSpinner(spinning: !reachability.offline)
+        Text(reachability.offline ? "Offline" : "Reconnecting").font(.subheadline).foregroundStyle(Palette.muted)
+      }
+    }.buttonStyle(.plain).accessibilityIdentifier("homeSync")
+      .accessibilityHint("Loaded conversations and drafts are kept. Tap to reconnect now.")
+  }
   @ViewBuilder private var householdLinks: some View {
-    Button(action: openToday) { Label("Today", systemImage: "sun.max") }.buttonStyle(HomeLinkStyle(selected: destination == .today)).accessibilityIdentifier("openToday")
+    Button(action: openToday) { Label("Today", systemImage: "calendar") }.buttonStyle(HomeLinkStyle(selected: destination == .today)).accessibilityIdentifier("openToday")
     Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(HomeLinkStyle(selected: destination == .groups)).accessibilityIdentifier("openGroups")
   }
   private func state(_ bot: Bot) -> ActivityState {
@@ -325,7 +341,7 @@ struct BotListView: View {
       }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
         .contentShape(RoundedRectangle(cornerRadius: 16))
     }.buttonStyle(.plain)
-      .background(destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
+      .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
       .contextMenu { botMenu(bot) }
@@ -350,7 +366,7 @@ struct BotListView: View {
         }
       }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
     }.buttonStyle(.plain)
-      .background(destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
+      .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
       .contextMenu { botMenu(bot) }
@@ -369,6 +385,68 @@ private struct HomeLinkStyle: ButtonStyle {
       .foregroundStyle(selected ? Palette.accent : Palette.muted)
       .background(selected || configuration.isPressed ? Palette.accentSoft : Color.clear, in: Capsule())
       .overlay(Capsule().stroke(Palette.line, lineWidth: 1))
+  }
+}
+/// Web's `spinner` icon: an open arc that turns while the app retries.
+private struct SyncSpinner: View {
+  var spinning: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var turn = false
+  var body: some View {
+    Circle().trim(from: 0, to: 0.75).stroke(Palette.muted, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+      .frame(width: 16, height: 16).rotationEffect(.degrees(spinning && !reduceMotion && turn ? 360 : 0))
+      .animation(spinning && !reduceMotion ? .linear(duration: 0.9).repeatForever(autoreverses: false) : .default, value: turn)
+      .onAppear { turn = true }.accessibilityHidden(true)
+  }
+}
+@MainActor final class NetworkReachability: ObservableObject {
+  @Published private(set) var offline = false
+  private let monitor = NWPathMonitor()
+  init() {
+    monitor.pathUpdateHandler = { [weak self] path in Task { @MainActor in self?.offline = path.status != .satisfied } }
+    monitor.start(queue: DispatchQueue(label: "dev.agentinterface.reachability"))
+  }
+  deinit { monitor.cancel() }
+}
+/// Lays children left to right and wraps to a new line when the row is full, like a flex-wrap container.
+struct WrapLayout: Layout {
+  var spacing: CGFloat = 8
+  var lineSpacing: CGFloat = 8
+  private func arrange(_ width: CGFloat, _ subviews: Subviews) -> (frames: [CGRect], size: CGSize) {
+    var frames: [CGRect] = []
+    var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
+    for subview in subviews {
+      let size = subview.sizeThatFits(ProposedViewSize(width: width.isFinite ? width : nil, height: nil))
+      if x > 0 && x + size.width > width { x = 0; y += lineHeight + lineSpacing; lineHeight = 0 }
+      frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+      x += size.width + spacing; lineHeight = max(lineHeight, size.height); widest = max(widest, x - spacing)
+    }
+    return (frames, CGSize(width: widest, height: y + lineHeight))
+  }
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    arrange(proposal.width ?? .infinity, subviews).size
+  }
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    for (subview, frame) in zip(subviews, arrange(bounds.width, subviews).frames) {
+      subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
+    }
+  }
+}
+extension View {
+  /// Home has no title in the web app; the string stays as the name of the back button on pushed screens.
+  @ViewBuilder func homeTitleHidden() -> some View {
+    if #available(iOS 26, *) { toolbar(removing: .title) } else { self }
+  }
+  /// The web's two-line view header: title over a one-line subtitle, with the title kept for navigation and accessibility.
+  func viewHeader(_ title: String, _ subtitle: String) -> some View {
+    navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar {
+      ToolbarItem(placement: .principal) {
+        VStack(spacing: 1) {
+          Text(title).font(.headline).lineLimit(1)
+          Text(subtitle).font(.caption2).foregroundStyle(Palette.muted).lineLimit(1).minimumScaleFactor(0.8)
+        }.accessibilityElement(children: .ignore).accessibilityLabel(title + ". " + subtitle)
+      }
+    }
   }
 }
 struct AccountAvatar: View {
@@ -392,16 +470,7 @@ private struct AssistantListDate: View {
       Text(label(now: context.date)).font(.caption).foregroundStyle(.secondary).fixedSize()
     }
   }
-  private func label(now: Date) -> String {
-    let calendar = Calendar.current
-    if calendar.isDate(date, inSameDayAs: now) || date > now { return date.formatted(date: .omitted, time: .shortened) }
-    if calendar.isDateInYesterday(date) { return "Yesterday" }
-    if let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day, days < 7 {
-      return date.formatted(.dateTime.weekday(.abbreviated))
-    }
-    return calendar.component(.year, from: date) == calendar.component(.year, from: now)
-      ? date.formatted(.dateTime.month(.abbreviated).day()) : date.formatted(date: .abbreviated, time: .omitted)
-  }
+  private func label(now: Date) -> String { When.listDate(date, now: now) }
 }
 
 /// An assistant's current activity in words, with a dot in the state's color.
