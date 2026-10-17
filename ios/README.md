@@ -182,8 +182,9 @@ Apple references checked October 16, 2026: [create an app record](https://develo
 and [internal testers and build expiry](https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers/).
 
 The server owns execution and notification delivery while the app is closed.
-The foreground client polls canonical conversation state with bounded requests
-and backoff. Reads keep the last response and its ETag in memory, so an unchanged
+The foreground client follows the open conversation's event stream and reads it
+on each change notice, polling every 30 seconds while the stream is live and every
+1.5 seconds without one, with backoff. Bootstrap refreshes every 8 seconds. Reads keep the last response and its ETag in memory, so an unchanged
 response arrives as an empty 304; sign-out and identity changes clear them. It
 preserves drafts and admission IDs; it never automatically resubmits a message.
 Use authenticated Quick Look previews to share or save images, PDFs, and text files.
