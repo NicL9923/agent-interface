@@ -164,10 +164,18 @@
       if path == "/api/search" {
         object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list."]],"unavailableBots":[]]
       } else if path.contains("/history/") {
-        object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":[["id":"history-reply","role":"assistant","text":"Fixture: five easy dinners."]]]
+        // A person's Markdown stays literal, an assistant's exchange is its card, and the saved
+        // reply sits below the fold so opening it has to scroll there.
+        let filler: [[String: Any]] = (1...12).map { ["id": "history-filler-\($0)", "role": "assistant", "text": "History filler \($0).\n\n" + Array(repeating: "Earlier dinner planning notes.", count: 6).joined(separator: "\n\n")] }
+        let lead: [[String: Any]] = [["id":"history-reply","role":"assistant","text":"Fixture: five easy dinners."],
+          ["id":"history-user","role":"user","text":"Use **only** pantry staples"],
+          ["id":"history-agent","role":"user","text":"Pantry list is ready","origin":["kind":"agent","visibility":"conversation","name":"Kitchen companion"]]]
+        let saved: [[String: Any]] = [["id":"history-saved","role":"assistant","text":"Fixture saved reply: brisket on Sunday."]]
+        object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":lead + filler + saved]
       } else if path == "/api/saved" {
         if method == "POST" { object = ["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"] }
-        else { object = [["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"]] }
+        else { object = [["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"],
+          ["id":"saved-2","botId":"ranch","kind":"session","sessionId":"history-1","messageId":"history-saved","offset":0,"title":"Brisket reply","createdAt":"2026-10-02T12:05:00Z"]] }
       } else if path.hasSuffix("/starters") {
         object = [["id":"meals","title":"Plan dinners","prompt":"Help me plan five easy dinners. Ask about our preferences first."]]
       } else if path == "/api/automations" {

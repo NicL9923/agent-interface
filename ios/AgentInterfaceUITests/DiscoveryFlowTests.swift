@@ -9,6 +9,23 @@ final class DiscoveryFlowTests:XCTestCase {
     let composer=app.textFields["messageComposer"];XCTAssertTrue(composer.waitForExistence(timeout:5),app.debugDescription)
     XCTAssertTrue((composer.value as? String)?.contains("https://example.invalid/shared-page") == true,app.debugDescription)
   }
+  /// As the web's history view: a saved reply opens highlighted and in view, a person's text is
+  /// not Markdown, and an assistant's exchange shows as its card.
+  func testSavedReplyOpensHighlightedAndScrolledIntoView() {
+    let app=XCUIApplication();app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_RESET"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"]=UUID().uuidString;app.launch()
+    if !app.buttons["openDiscovery"].waitForExistence(timeout:3) { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["openDiscovery"].tap()
+    XCTAssertTrue(app.buttons["Saved items"].waitForExistence(timeout:5));app.buttons["Saved items"].tap()
+    XCTAssertTrue(app.buttons["savedItem-saved-2"].waitForExistence(timeout:5));app.buttons["savedItem-saved-2"].tap()
+    let saved=app.staticTexts["Fixture saved reply: brisket on Sunday."]
+    expectation(for:NSPredicate(format:"hittable == true"),evaluatedWith:saved);waitForExpectations(timeout:10)
+    XCTAssertEqual(app.descendants(matching:.any)["historyMessage-history-saved"].value as? String,"Saved reply")
+    XCTAssertNotEqual(app.descendants(matching:.any)["historyMessage-history-reply"].value as? String,"Saved reply")
+    for _ in 0..<20 where !app.staticTexts["Fixture: five easy dinners."].isHittable { app.swipeDown() }
+    XCTAssertTrue(app.staticTexts["Use **only** pantry staples"].exists,app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Kitchen companion → Ranch hand"].exists,app.debugDescription)
+    let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="Native saved reply history";attachment.lifetime = .keepAlways;add(attachment)
+  }
   func testSearchSavedItemsAutomationAndEditableStarter() {
     let app=XCUIApplication();app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_RESET"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"]=UUID().uuidString;app.launch()
     if !app.buttons["openDiscovery"].waitForExistence(timeout:3) { app.navigationBars.buttons.firstMatch.tap() }

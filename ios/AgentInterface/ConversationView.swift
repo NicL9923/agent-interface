@@ -491,12 +491,10 @@ struct ConversationView: View {
     }
   }
 }
+/// A conversation row. Tool calls and reasoning render in the turn's groups, not here.
 struct MessageView: View {
   var message: Message
-  var advanced: Bool
   var continued = false
-  var groupedReasoning = false
-  var groupedActivity = false
   @Environment(\.unobservedStore) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
@@ -509,19 +507,8 @@ struct MessageView: View {
       }
       if message.isAgentExchange {
         AgentExchangeView(message: message, recipient: store?.bot?.name ?? "Assistant")
-      } else if message.isToolActivity {
-        if !groupedActivity {
-          if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
-        }
-      } else {
+      } else if !message.isToolActivity {
         ReplyContentView(message: message)
-        if !groupedActivity && advanced && message.toolCall != nil { ToolActivityView(message: message) }
-        if !groupedActivity && !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
-      }
-      if advanced && !groupedReasoning, let reasoning = message.reasoning, !reasoning.isEmpty {
-        DisclosureGroup("Reasoning") {
-          MarkdownView(text: reasoning).font(.footnote).foregroundStyle(.secondary)
-        }
       }
       ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
     }.padding(message.role == "user" && !message.isAgentExchange ? 14 : 0).background(
@@ -563,36 +550,56 @@ struct AgentExchangeView: View {
       .overlay(alignment: .leading) { Rectangle().fill(Palette.accent).frame(width: 3) }
   }
 }
+/// A tool call's detail, as the web's ToolCallDetail: identifiers and times, then the call's
+/// arguments, result and error as preformatted text.
 struct ToolActivityView: View {
   var message: Message
   @Environment(\.transcriptConnected) private var connected
   var body: some View {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 8) {
-        if let call = message.toolCall {
-          LabeledContent("Call", value: call.id).font(.caption).textSelection(.enabled)
-          if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
-          if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
+        if let call = message.toolCall { times(call) }
+        if let arguments = message.toolCall?.arguments { section("Arguments", arguments) }
+        if let result { section("Result", result) }
+        if let error = message.toolCall?.error, !error.isEmpty { section("Error", error, danger: true) }
+        if let waiting = Self.waiting(message.toolCall, result: result, connected: connected) {
+          Text(waiting).font(.footnote).foregroundStyle(.secondary)
         }
-        if let arguments = message.toolCall?.arguments, !arguments.isEmpty {
-          Text("Arguments").font(.caption.bold())
-          Text(arguments).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-        }
-        if let error = message.toolCall?.error, !error.isEmpty {
-          Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
-        }
-        let result = message.toolResult
-        if !result.isEmpty { MarkdownView(text: result).font(.footnote) }
-      }.padding(.vertical, 4)
+      }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
     } label: {
       HStack {
         Label(message.displayToolName, systemImage: "wrench.and.screwdriver").font(.caption.bold())
         Spacer()
-        if let status = message.toolCall?.status {
-          Text(status == "running" && !connected ? "Last seen running" : status.capitalized).font(.caption).foregroundStyle(.secondary)
+        if let call = message.toolCall {
+          Text(Self.status(call.status, connected: connected)).font(.caption)
+            .foregroundStyle(call.status == "failed" ? Palette.danger : .secondary)
         }
       }
     }
+  }
+  /// The call's own result, or the text of a tool row that carries it.
+  private var result: String? {
+    message.toolCall?.result ?? (message.toolResult.isEmpty ? nil : message.toolResult)
+  }
+  @ViewBuilder private func times(_ call: ToolCall) -> some View {
+    LabeledContent("Call") { Text(call.id).font(.system(.caption, design: .monospaced)) }.font(.caption).textSelection(.enabled)
+    if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
+    if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
+  }
+  private func section(_ title: String, _ text: String, danger: Bool = false) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.caption.bold()).accessibilityAddTraits(.isHeader)
+      Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }.foregroundStyle(danger ? Palette.danger : Color.primary)
+  }
+  static func status(_ status: String, connected: Bool) -> String {
+    status == "running" ? connected ? "Running" : "Last seen running" : status == "failed" ? "Failed" : "Completed"
+  }
+  /// What a running call with no result yet is waiting for.
+  static func waiting(_ call: ToolCall?, result: String?, connected: Bool) -> String? {
+    guard call?.status == "running", result == nil else { return nil }
+    return connected ? "Waiting for the result from Hermes." : "The current tool status will be checked when Hermes reconnects."
   }
 }
 struct AttentionView: View {
@@ -608,7 +615,7 @@ struct AttentionView: View {
       Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : "Continue in Hermes")
         .font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       Text(request.title).font(.headline)
-      MarkdownView(text: request.detail)
+      Text(request.detail).textSelection(.enabled)
       if request.kind == "clarify" {
         ForEach(request.questions ?? []) { question in
           VStack(alignment: .leading, spacing: 6) {

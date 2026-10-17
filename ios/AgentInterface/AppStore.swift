@@ -86,9 +86,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private struct EarlierFilePage {
     var sessionId: String?
     var before: String?
-    var files: [FileRef]
+    var messages: [EarlierFiles.Entry]
   }
   @Published var loadingEarlierFiles = false
+  /// The bot and session whose earlier files failed to load, shown as a notice in the file list
+  /// instead of an error banner. Opening the list again retries, as on the web.
+  @Published private var earlierFilesFailure: String?
   @Published var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
@@ -446,14 +449,16 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if selectedGeneration == selectionGeneration { report(error) }
     }
   }
-  /// Every file reference the open conversation knows, oldest first.
-  var conversationFiles: [FileRef] {
-    var seen = Set<String>()
-    var files: [FileRef] = []
-    for file in loadedEarlierFiles + (conversation?.files ?? []) where seen.insert(file.id).inserted {
-      files.append(file)
-    }
-    return files
+  /// Every file the open conversation knows, oldest first, with where it came from.
+  var conversationArtifacts: [Artifact] {
+    Artifacts.list(conversation, earlier: currentEarlierFiles?.messages ?? [])
+  }
+  var conversationFiles: [FileRef] { conversationArtifacts.map(\.file) }
+  var earlierFilesFailed: Bool {
+    earlierFilesFailure != nil && earlierFilesFailure == earlierFilesKey
+  }
+  private var earlierFilesKey: String? {
+    selectedBotId.map { "\($0):\(conversation?.sessionId ?? "")" }
   }
   /// Whether the file list has anything to show or fetch.
   var hasConversationFiles: Bool {
@@ -470,7 +475,6 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { return nil }
     return page
   }
-  private var loadedEarlierFiles: [FileRef] { currentEarlierFiles?.files ?? [] }
   /// Fetches the files of the history before the loaded window. Called when the file list opens.
   func loadEarlierFiles() async {
     guard let id = selectedBotId, let api, let current = conversation,
@@ -478,16 +482,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { return }
     let selectedGeneration = selectionGeneration
     let before = current.messages.first?.id
+    let key = earlierFilesKey
+    earlierFilesFailure = nil
     loadingEarlierFiles = true
     defer { loadingEarlierFiles = false }
     do {
       let suffix = before.map { "?before=\(APIClient.component($0))" } ?? ""
       let page: EarlierFiles = try await api.get("/bots/\(APIClient.component(id))/files\(suffix)")
       guard selectedGeneration == selectionGeneration else { return }
-      earlierFileCache[id] = EarlierFilePage(
-        sessionId: current.sessionId, before: before, files: page.messages.flatMap { $0.files ?? [] })
+      earlierFileCache[id] = EarlierFilePage(sessionId: current.sessionId, before: before, messages: page.messages)
     } catch is CancellationError {} catch {
-      if selectedGeneration == selectionGeneration { report(error) }
+      if selectedGeneration == selectionGeneration { earlierFilesFailure = key }
     }
   }
   private func apply(_ value: Conversation, botId id: String) {
