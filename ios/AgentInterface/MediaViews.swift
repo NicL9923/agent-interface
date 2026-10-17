@@ -1,3 +1,4 @@
+import ImageIO
 import QuickLook
 import SwiftUI
 
@@ -34,9 +35,9 @@ struct AuthenticatedImage: View {
         }
         let data = try await api.data(path: path)
         guard !Task.isCancelled else { return }
-        image = UIImage(data: data)
+        image = Self.downsampled(data)
         failed = image == nil
-        if let image { Self.cache.setObject(image, forKey: key, cost: data.count) }
+        if let image, let cgImage = image.cgImage { Self.cache.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height) }
       } catch is CancellationError {} catch { failed = true }
     }
   }
@@ -46,6 +47,18 @@ struct AuthenticatedImage: View {
     cache.totalCostLimit = 64 * 1024 * 1024
     return cache
   }()
+  /// Wide enough for a full-width transcript image on any iPhone or iPad. A camera photo decoded
+  /// at full size would hold about 46 MB; Quick Look still opens the original.
+  static let maxPixelSize = 1600
+  static func downsampled(_ data: Data) -> UIImage? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+    return UIImage(cgImage: image)
+  }
   private static func cacheKey(_ path: String, _ store: AppStore?) -> NSString {
     "\(store?.scope ?? ""):\(path)" as NSString
   }

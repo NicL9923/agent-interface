@@ -27,12 +27,12 @@ on the app server. When more results are waiting, mark the displayed page caught
 up to load the next page. Late imported events stay visible until acknowledged.
 Assistant settings include **Memory** for inspecting and
 editing the actual Hermes profile documents, plus routine recipes, timezone and
-next-run previews, and a confirmed **Try once** action.
+next-run previews, and a single-tap **Try once** action.
 
 The conversation microphone records up to two minutes, transcribes on the app
-server, and opens an editable transcript before adding it to the draft. The composer's
-**Listen to reply** reads the latest reply with the device's iOS voice and has an explicit Stop control. The paperclip
-attaches photos or files; an empty conversation offers an editable role discussion. In Advanced presentation, the composer's
+server when you stop, and adds the text to the draft for review, as on the web. The composer's
+**Listen to reply** plays the latest reply through the server's configured Hermes speech and has an explicit Stop control. The paperclip
+attaches photos, a new camera photo or files; you can also paste or drop images, and a hardware keyboard's Return sends. An empty conversation offers an editable role discussion. In Advanced presentation, the composer's
 model picker searches the profile's model catalog, saves model favorites, and controls
 conversation reasoning and speed. Hermes still requires confirmation for warned models. Interactive
 reply instructions are opt-in in assistant settings. Checklists and itinerary
@@ -123,13 +123,15 @@ avatar specimen for all nine activity states and all three avatar modes.
 
 Select your development team in Xcode, choose a bundle identifier registered to
 that team, and enable the Push Notifications capability for that identifier.
-After household sign-in, the app requests notification permission through iOS
-when the server supports Apple push. It asks only while permission is undetermined,
-reconciles registration on foreground, and removes its server registration if
-permission was denied. iOS Settings owns permission and Live Activities. Batching,
-quiet hours, and assistant following remain account preferences in WildBots. The
-notification status includes a link to iOS Settings. This replaces the earlier
-in-app opt-outs; existing devices follow their current iOS permission after updating. Debug signing uses the development APNs entitlement;
+After household sign-in, when the server supports Apple push, the app asks once in
+its own card whether to enable notifications on this device, as the web does. iOS
+shows its permission prompt only after Enable; "Not now" is remembered for the
+account. Settings has a switch that registers or unregisters this device with the
+server. The app reconciles registration on foreground and removes its server
+registration if permission was denied. iOS Settings owns permission and Live
+Activities, and Settings links there when iOS has denied it. Batching, quiet hours,
+and assistant following remain account preferences in WildBots. Devices that had
+already allowed notifications stay enabled after updating. Debug signing uses the development APNs entitlement;
 Release uses production. The server's configured APNs topic and environment must
 match the signed app. Server setup is documented with the native API contract.
 No team, signing credentials, or provisioning profiles are checked in.

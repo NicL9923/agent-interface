@@ -99,6 +99,9 @@ final class HomeParityTests: XCTestCase {
     XCTAssertEqual(GroupLimits.clip(String(repeating: "n", count: 130), to: GroupLimits.name).count, 100)
     XCTAssertEqual(GroupLimits.clip(String(repeating: "m", count: 17_000), to: GroupLimits.message).count, 16_000)
     XCTAssertEqual(GroupLimits.clip("fits", to: GroupLimits.message), "fits")
+    // The server counts UTF-16 units, so each emoji uses two and is never split.
+    XCTAssertEqual(GroupLimits.clip(String(repeating: "🐴", count: 9), to: 5), "🐴🐴")
+    XCTAssertFalse(GroupLimits.fits(String(repeating: "🐴", count: 8_001), GroupLimits.message), "A restored long draft cannot send")
   }
   func testGroupAuthorMatchesTheEventActorAsWellAsThePayloadMember() throws {
     let room = try JSONDecoder().decode(GroupRoom.self, from: Data(#"{"room_id":"r","name":"Gate","members":[{"member_id":"m1","profile":"ranch","handle":"ranch","display_name":"Ranch hand"},{"member_id":"m2","profile":"kitchen","handle":"kitchen"}]}"#.utf8))

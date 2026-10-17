@@ -94,7 +94,21 @@ struct GroupEvent: Decodable, Identifiable {
 enum GroupLimits {
   static let name = 100
   static let message = 16000
-  static func clip(_ value: String, to limit: Int) -> String { value.count > limit ? String(value.prefix(limit)) : value }
+  /// Counted in UTF-16 units, as the browser's `maxLength` and the server's validation count.
+  static func clip(_ value: String, to limit: Int) -> String {
+    guard value.utf16.count > limit else { return value }
+    var used = 0
+    var end = value.startIndex
+    // Whole characters only, so an emoji is never split.
+    for index in value.indices {
+      let size = value[index].utf16.count
+      if used + size > limit { break }
+      used += size
+      end = value.index(after: index)
+    }
+    return String(value[..<end])
+  }
+  static func fits(_ value: String, _ limit: Int) -> Bool { value.utf16.count <= limit }
 }
 /// A group creation that may have reached Hermes. Its request ID is kept until Hermes answers, so a retry cannot make a second room.
 enum GroupCreation {
@@ -339,7 +353,8 @@ struct GroupConversationView: View {
           TextField("Message the group… use @handle to address one assistant", text: Binding(get: { draft }, set: { draft = GroupLimits.clip($0, to: GroupLimits.message) }), axis: .vertical).lineLimit(1...6)
             .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
             .accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
-          let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          // A draft saved before the input limit existed can be longer; it stays editable but cannot send.
+          let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && GroupLimits.fits(draft, GroupLimits.message)
           Button { Task { await send() } } label: {
             Image(systemName: busy ? "hourglass" : "arrow.up").font(.headline).frame(width: 44, height: 44)
               .foregroundStyle(ready ? Palette.surface(scheme) : Palette.muted)
@@ -347,6 +362,7 @@ struct GroupConversationView: View {
           }.buttonStyle(.plain).disabled(!ready).accessibilityLabel("Send to group")
         }
       }
+      if !GroupLimits.fits(draft, GroupLimits.message) { Text("Messages can contain up to 16,000 characters.").font(.caption).foregroundStyle(Palette.danger) }
       Text(status).font(.caption).foregroundStyle(.secondary)
     }.padding(12).background(.regularMaterial)
   }

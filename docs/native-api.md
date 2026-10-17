@@ -207,7 +207,8 @@ Web and native clients share these authenticated operations. See
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
-automatically. iOS read aloud uses the device voice; transcription uses Hermes.
+automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from Hermes, as
+the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
 
 ## Native notifications
 

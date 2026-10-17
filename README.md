@@ -35,9 +35,10 @@ Hermes dashboard is household-wide, so anyone with dashboard access can still re
 its memory and logins.
 
 Web Settings > Notifications shows whether this account has notifications enabled
-on the current device. Turn the browser switch on or off there. The iOS app asks
-through the system permission prompt after household sign-in when the server supports
-Apple push. Manage device permission in iOS Settings. A new browser asks once
+on the current device. Turn the browser switch on or off there. The iOS app asks the
+same question in its own card after household sign-in when the server supports Apple
+push, shows the system permission prompt only after Enable, and has the same switch
+in Settings. Manage device permission in iOS Settings. A new browser asks once
 whether to enable notifications and explains where to change the setting later.
 On iPhone or iPad, add the app to the Home Screen and open it before enabling
 notifications.
@@ -166,8 +167,7 @@ Hermes's durable receipts.
 The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
-send. **Listen to reply** reads the latest reply: web uses Hermes speech and iOS
-uses the device voice.
+send. **Listen to reply** reads the latest reply with Hermes speech on web and iOS.
 
 **Search & saved** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
 

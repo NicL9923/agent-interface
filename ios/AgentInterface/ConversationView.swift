@@ -23,8 +23,6 @@ struct ConversationView: View {
   @State private var jumpingUntil = Date.distantPast
   @State private var earlierEdgeVisible = false
   @State private var unseen = 0
-  /// Replies already accounted for, so VoiceOver reads each new one once, as the web's live region does.
-  @State private var replyWatch: ReplyWatch?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
   @State private var composerFocused = false
@@ -151,7 +149,6 @@ struct ConversationView: View {
         following = true
         placed = false
         unseen = 0
-        replyWatch = nil
         visibleMessage = nil
         earlierFailed = false
         scrollToLatest(proxy)
@@ -176,19 +173,15 @@ struct ConversationView: View {
         }
       }
       .onChange(of: latestTrigger) { _, _ in following = true; scrollToLatest(proxy) }
-      .onChange(of: store.conversation) { _, conversation in announceReply(conversation) }
+      // VoiceOver reads each settled reply once, as the web's live region does.
+      .onChange(of: store.replyAnnouncement) { _, reply in
+        if let reply, reply.botId == bot.id { AccessibilityNotification.Announcement("\(bot.name) replied: \(reply.text)").post() }
+      }
       .onDisappear {
         readSaveTask?.cancel()
         if let id = readPosition { store.markRead(id) }
       }
     }
-  }
-  /// Reads a settled new reply aloud for VoiceOver, worded as the web's status region.
-  private func announceReply(_ conversation: Conversation?) {
-    guard let conversation, conversation.botId == bot.id else { return }
-    let (next, reply) = ReplyWatch.next(replyWatch ?? ReplyWatch(), conversation, baseline: replyWatch == nil)
-    replyWatch = next
-    if let reply { AccessibilityNotification.Announcement("\(bot.name) replied: \(ReplyWatch.snippet(reply.text))").post() }
   }
   /// Content grew or the reader scrolled. Growth keeps a follower at the end; a scroll decides
   /// whether the reader is following, as the web's scroll handler does.

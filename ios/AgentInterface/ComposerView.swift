@@ -37,7 +37,8 @@ struct ComposerView: View {
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
         discardConfirm: $discardConfirm, modelOpen: $modelOpen))
       .onAppear { configureVoice() }
-      .onChange(of: bot.id) { _, _ in voice.reset(); configureVoice() }
+      // A recording belongs to one account's assistant; a new identity or server starts afresh.
+      .onChange(of: "\(store.scope ?? "")|\(bot.id)") { _, _ in voice.reset(); configureVoice() }
       .onChange(of: voiceDisabled) { _, disabled in if disabled && voice.state != .idle { voice.cancel() } }
       .onChange(of: scenePhase) { _, phase in
         if phase != .active && [.requesting, .recording].contains(voice.state) { voice.cancel() }

@@ -33,8 +33,10 @@ struct DeviceNotificationState: Equatable {
   static func read(_ store: AppStore) -> NotificationIntent? {
     key(store).flatMap { UserDefaults.standard.string(forKey: $0) }.flatMap(NotificationIntent.init)
   }
-  static func write(_ value: NotificationIntent, _ store: AppStore) {
-    if let key = key(store) { UserDefaults.standard.set(value.rawValue, forKey: key) }
+  static func write(_ value: NotificationIntent, _ store: AppStore) { write(value, key: key(store)) }
+  /// Writes to a key captured earlier, so a late result never changes another account's choice.
+  static func write(_ value: NotificationIntent, key: String?) {
+    if let key { UserDefaults.standard.set(value.rawValue, forKey: key) }
   }
   static func promptKey(_ store: AppStore) -> String? { store.key("notificationPrompt") }
   static func prompted(_ store: AppStore) -> Bool { promptKey(store).flatMap { UserDefaults.standard.string(forKey: $0) } != nil }

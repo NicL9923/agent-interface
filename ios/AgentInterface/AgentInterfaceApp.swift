@@ -196,7 +196,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   private func sendRegistration(with session: Session) async throws {
     if let token {
       let _: EmptyResponse = try await session.api.write("/native/push/device", PushDevice(deviceId: deviceId, token: token), method: "PUT")
-      if session.current { session.store.deviceNotifications = .enabledState }
+      guard session.current else { return }
+      // Turned off while this registration was in flight: the server must end without it.
+      if NotificationIntent.read(session.store) == .off {
+        let _: EmptyResponse = try await session.api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
+        if session.current { session.store.deviceNotifications = .disabledByChoice }
+        return
+      }
+      session.store.deviceNotifications = .enabledState
     } else {
       register()
       session.store.deviceNotifications = .registering
@@ -233,15 +240,17 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     store.deviceNotifications.busy = true
     store.deviceNotifications.error = nil
     defer { busy = false; if session.current { store.deviceNotifications.busy = false } }
-    NotificationIntent.write(.off, store)
+    let intent = NotificationIntent.key(store)
+    NotificationIntent.write(.off, key: intent)
     do {
       let _: EmptyResponse = try await session.api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
+      guard session.current else { return }
       unregister()
       token = nil
-      if session.current { store.deviceNotifications = .disabledByChoice }
+      store.deviceNotifications = .disabledByChoice
     } catch {
       // The server may still deliver here, so the switch stays on and the check can be retried.
-      NotificationIntent.write(.on, store)
+      NotificationIntent.write(.on, key: intent)
       if session.current { store.deviceNotifications.error = error.localizedDescription }
     }
   }

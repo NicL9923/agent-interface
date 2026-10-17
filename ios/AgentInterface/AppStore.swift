@@ -85,6 +85,16 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var streamHeardAt: ContinuousClock.Instant?
   private var conversationRefreshedAt: ContinuousClock.Instant?
   private var conversationRefreshing = false
+  /// Conversation reads overlap: polls, change notices, selection and pull to refresh each start
+  /// one. A response older than one already applied is dropped, so it cannot undo newer state.
+  private var conversationReads = 0
+  private var appliedConversationRead = 0
+  /// Replies already accounted for in the open conversation. As in the web's conversation hook,
+  /// the first successful read after opening is the baseline, even when it matches the cache.
+  private var replyWatch: ReplyWatch?
+  private var announcements = 0
+  /// The latest settled reply for VoiceOver, numbered so a repeat of the same words is read again.
+  @Published private(set) var replyAnnouncement: ReplyAnnouncement?
   private var conversationRefreshAgain = false
   /// While the stream is live, change notices drive updates and this slow poll covers a stream
   /// that fails unnoticed, as on the web. Server pings arrive every 25 seconds.
@@ -309,6 +319,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
     {
       sessionExpired = true
+      stopStream()
       error =
         "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
       return false
@@ -323,10 +334,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     return true
   }
+  private func hearReplies(in value: Conversation, botId id: String) {
+    let (next, reply) = ReplyWatch.next(replyWatch ?? ReplyWatch(), value, baseline: replyWatch == nil)
+    replyWatch = next
+    guard let reply else { return }
+    announcements += 1
+    replyAnnouncement = ReplyAnnouncement(id: announcements, botId: id, text: ReplyWatch.snippet(reply.text))
+  }
   /// Ends polling and the change stream together, so neither outlives the other.
   private func stopPolling() {
     pollTask?.cancel()
     pollTask = nil
+    stopStream()
+  }
+  private func stopStream() {
     eventTask?.cancel()
     eventTask = nil
     eventBotId = nil
@@ -362,7 +383,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
             if line.hasPrefix("data:") && line != "data: ping" { self.requestConversationRefresh() }
           }
         } catch {}
-        guard let self, !Task.isCancelled else { return }
+        guard let self, !Task.isCancelled, !self.sessionExpired else { return }
         self.streamHeardAt = nil
         failures += 1
         try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
@@ -485,6 +506,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if cached?.dirty == true { draftReady = true }
     // Like the web, a chat opens at its latest page; the window grows from there.
     historyStarts[id] = nil
+    replyWatch = nil
     let selectedGeneration = selectionGeneration
     do {
       // The draft is a quick local read. It settles first so the conversation's copy merges onto it.
@@ -509,18 +531,22 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let requestedWindow = windowGeneration
     let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
       ?? "turns=\(Self.historyPageTurns)"
+    conversationReads += 1
+    let read = conversationReads
     do {
       let value: Conversation = try await api.get(conversationPath(id, query: query))
-      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration else {
-        return
-      }
+      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
+        read > appliedConversationRead
+      else { return }
+      appliedConversationRead = read
+      hearReplies(in: value, botId: id)
       historyStarts[id] = value.messages.first?.id
       conversationRefreshedAt = now()
       apply(value, botId: id)
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration && Self.missing(error) {
         await leave(id)
-      } else if selectedGeneration == selectionGeneration {
+      } else if selectedGeneration == selectionGeneration && read > appliedConversationRead {
         appUnavailable = true
         failures += 1
         report(error)
@@ -1390,4 +1416,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
 struct PreviewFile: Identifiable {
   let id = UUID()
   var url: URL
+}
+/// A reply for VoiceOver to read, worded as the web's status region.
+struct ReplyAnnouncement: Equatable {
+  var id: Int
+  var botId: String
+  var text: String
 }

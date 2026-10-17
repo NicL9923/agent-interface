@@ -235,7 +235,8 @@ private final class NativeMockServer: @unchecked Sendable {
         return Self.json(body)
     }
     private func messageBody(_ id: String) -> [String: Any] {
-        var message: [String: Any] = ["id": id, "role": "user", "text": id]
+        // History IDs that start with "reply" are the assistant's answers.
+        var message: [String: Any] = ["id": id, "role": id.hasPrefix("reply") ? "assistant" : "user", "text": id]
         let owned: [String] = lock.withLock { fileOwners[id] ?? [] }
         if !owned.isEmpty { message["files"] = owned.map { (file: String) -> [String: Any] in fileBody(file) } }
         return message
@@ -535,6 +536,20 @@ private final class NativeMockServer: @unchecked Sendable {
         await controller.synchronize()
         XCTAssertEqual(notifications.devicePuts(server), 1); XCTAssertEqual(value.deviceNotifications, .enabledState)
         XCTAssertEqual(notifications.requests, 0)
+    }
+    func testTurningOffDuringAnInFlightRegistrationEndsUnregistered() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        let path = "/api/native/push/device"
+        server.holdNext(path)
+        let sync = Task { await controller.synchronize() }
+        try await server.waitForHeld(path)
+        await controller.disable()
+        XCTAssertEqual(notifications.deviceDeletes(server), 1)
+        server.release(path); await sync.value
+        XCTAssertEqual(server.requests.last { $0.url?.path == path }?.httpMethod, "DELETE", "The late registration is removed again")
+        XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
     }
     func testFailedTurnOffKeepsSwitchOnAndRetryRecovers() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
@@ -978,6 +993,45 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(polls(), connected + 2, "A slow poll still covers a stream that failed unnoticed")
         time += .seconds(61); _ = await value.pollOnce()
         XCTAssertEqual(polls(), connected + 3, "A silent stream falls back to polling every pass")
+    }
+
+    func testAnOlderConversationReadCannotUndoANewerOne() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        server.holdNext(path)
+        let older = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        server.serveHistory(ids(1...31))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m31")
+        // The held read answers last, with what the server had when it was asked.
+        server.serveHistory(ids(1...30)); server.release(path); await older.value
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m31", "A late, older response must not remove the newer reply")
+    }
+
+    func testTheFirstReadAfterOpeningIsTheAnnouncementBaselineEvenWhenUnchanged() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["m01", "reply-1"])
+        await value.refreshConversation()
+        await value.select("bot")
+        XCTAssertNil(value.replyAnnouncement, "Reopening reads the same conversation as the cache, quietly")
+        server.serveHistory(["m01", "reply-1", "m02", "reply-2"])
+        await value.refreshConversation()
+        XCTAssertEqual(value.replyAnnouncement?.text, "reply-2", "The next reply is new, not a baseline")
+    }
+
+    func testAnExpiringSignInStopsTheChangeStreamToo() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveEventStreams()
+        _ = await value.pollOnce(); try await Task.sleep(for: .milliseconds(150))
+        let reads = server.conversationQueries.count
+        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), forKey: "connection.expiry.\(server.origin.absoluteString)")
+        defer { UserDefaults.standard.removeObject(forKey: "connection.expiry.\(server.origin.absoluteString)") }
+        let continues = await value.pollOnce()
+        XCTAssertFalse(continues); XCTAssertTrue(value.sessionExpired)
+        server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(server.conversationQueries.count, reads, "The stream ends with polling, so no read follows a notice")
     }
 
     func testWithoutAStreamTheConversationIsPolledEveryPass() async throws {
