@@ -33,6 +33,10 @@ struct ComposerTextView: UIViewRepresentable {
     view.accessibilityLabel = label
     view.onReturn = onReturn
     view.onPasteImages = onPasteImages
+    // Only a change asked for here moves focus. An update still carrying the value from before
+    // a tap must not take the keyboard away again.
+    guard focused != context.coordinator.focused else { return }
+    context.coordinator.focused = focused
     if focused && editable && !view.isFirstResponder {
       DispatchQueue.main.async { view.becomeFirstResponder() }
     } else if !focused && view.isFirstResponder {
@@ -49,29 +53,41 @@ struct ComposerTextView: UIViewRepresentable {
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   final class Coordinator: NSObject, UITextViewDelegate {
     var parent: ComposerTextView
+    /// The focus last applied or reported.
+    var focused = false
     init(_ parent: ComposerTextView) { self.parent = parent }
     func textViewDidChange(_ view: UITextView) { parent.text = view.text }
-    func textViewDidBeginEditing(_ view: UITextView) { if !parent.focused { parent.focused = true } }
-    func textViewDidEndEditing(_ view: UITextView) { if parent.focused { parent.focused = false } }
+    func textViewDidBeginEditing(_ view: UITextView) {
+      focused = true
+      if !parent.focused { parent.focused = true }
+    }
+    func textViewDidEndEditing(_ view: UITextView) {
+      focused = false
+      if parent.focused { parent.focused = false }
+    }
   }
 }
 
 final class ComposerUITextView: UITextView {
   var onReturn: (() -> Void)?
   var onPasteImages: (([Data]) -> Void)?
-  /// Key commands come only from hardware keyboards, so the on-screen Return still starts a line.
-  override var keyCommands: [UIKeyCommand]? {
-    let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(returnPressed))
-    send.wantsPriorityOverSystemBehavior = true
-    return (super.keyCommands ?? []) + [send]
-  }
-  @objc private func returnPressed() {
-    // Return first confirms text still being composed, such as Japanese input.
-    if markedTextRange != nil {
-      unmarkText()
-      return
-    }
+  /// Presses come only from hardware keyboards, so the on-screen Return still starts a line.
+  override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    guard presses.count == 1, let key = presses.first?.key,
+      Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil)
+    else { return super.pressesBegan(presses, with: event) }
     onReturn?()
+  }
+  override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    // The release of a Return that sent, so the text view never sees half a press.
+    if presses.count == 1, let key = presses.first?.key, Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil) { return }
+    super.pressesEnded(presses, with: event)
+  }
+  /// Return sends, as Enter does on the web. Shift-Return starts a line, and Return while text is
+  /// still being composed, such as Japanese input, confirms it.
+  static func sends(_ key: UIKeyboardHIDUsage, _ modifiers: UIKeyModifierFlags, composing: Bool) -> Bool {
+    (key == .keyboardReturnOrEnter || key == .keypadEnter) && !composing
+      && modifiers.intersection([.shift, .alternate, .command, .control]).isEmpty
   }
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
     if action == #selector(paste(_:)), Self.pastedImagesOnly { return isEditable }

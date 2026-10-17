@@ -1342,6 +1342,14 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft.text += "a"
         XCTAssertFalse(value.canSend)
     }
+    func testHardwareReturnSendsUnlessShiftedOrComposing() {
+        XCTAssertTrue(ComposerUITextView.sends(.keyboardReturnOrEnter, [], composing: false))
+        XCTAssertTrue(ComposerUITextView.sends(.keypadEnter, [], composing: false))
+        XCTAssertTrue(ComposerUITextView.sends(.keyboardReturnOrEnter, .alphaShift, composing: false), "Caps Lock is not Shift")
+        XCTAssertFalse(ComposerUITextView.sends(.keyboardReturnOrEnter, .shift, composing: false))
+        XCTAssertFalse(ComposerUITextView.sends(.keyboardReturnOrEnter, [], composing: true))
+        XCTAssertFalse(ComposerUITextView.sends(.keyboardA, [], composing: false))
+    }
     func testATranscriptJoinsTheDraftOnItsOwnLine() throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         XCTAssertTrue(value.appendTranscript("Check the gate", botId: "bot"))
