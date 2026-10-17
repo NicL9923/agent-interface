@@ -32,6 +32,7 @@ final class WhenTests: XCTestCase {
     XCTAssertEqual(when(at(13, 9)), "Tue 9:00\u{202F}AM")
     XCTAssertEqual(when(at(2, 11)), "Oct 2, 11:00\u{202F}AM")
     XCTAssertEqual(when(at(2, 11, year: 2025)), "Oct 2, 2025")
+    XCTAssertEqual(when(at(4, 7, month: 1, year: 2027), relative: false), "Jan 4, 2027, 7:00\u{202F}AM")
     XCTAssertEqual(when(at(15, 21, 48), inline: true), "yesterday, 9:48\u{202F}PM")
     XCTAssertEqual(when(at(13, 9), inline: true), "Tue 9:00\u{202F}AM")
     XCTAssertEqual(when(at(13, 10), from: at(13, 9)), "10:00\u{202F}AM")

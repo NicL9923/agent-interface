@@ -71,6 +71,7 @@ describe("timestamp labels", () => {
     expect(label(at(10, 3, 19, 2), { relative: false })).toBe("Today, 7:02 PM");
     expect(label(at(10, 4, 19), { relative: false, from: at(10, 4, 18) })).toBe("7:00 PM");
     expect(label(at(10, 5, 9), { relative: false, from: at(10, 4, 18) })).toBe("Mon 9:00 AM");
+    expect(label(at(1, 4, 7, 0, 2027), { relative: false })).toBe("Jan 4, 2027, 7:00 AM");
   });
 
   it("accepts server ISO strings and epoch values and ignores invalid input", () => {

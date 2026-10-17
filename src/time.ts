@@ -5,7 +5,7 @@ export type WhenOptions = {
   locale?: string;
   // Lowercases a leading relative word for use inside a sentence ("Since yesterday, 6:38 PM").
   inline?: boolean;
-  // False for scheduled times such as calendar events, which read better as clock times.
+  // False for scheduled times such as calendar events, which read better as clock times and keep the time in other years.
   relative?: boolean;
   // Omits the day when the value falls on the same day as this one, as in a range end.
   from?: Instant;
@@ -28,7 +28,7 @@ export function formatWhen(value: Instant, { now = Date.now(), locale, inline = 
     : Math.abs(days) < 7 ? `${date.toLocaleDateString(locale, { weekday: "short" })} ${time}`
     : date.getFullYear() === current.getFullYear()
       ? `${date.toLocaleDateString(locale, { month: "short", day: "numeric" })}, ${time}`
-      : date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
+      : `${date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" })}${relative ? "" : `, ${time}`}`;
   return inline && /^(Just|In |Today|Yesterday|Tomorrow)/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
 }
 export function formatFull(value: Instant, locale?: string) {

@@ -4,7 +4,7 @@ import Foundation
 enum When {
   /// "Just now", "10 min ago", "In 59 min", then "Today, 9:48 PM", "Yesterday, …", a weekday or a date.
   /// `inline` lowercases a leading relative word for use inside a sentence ("Since yesterday, 6:38 PM").
-  /// `relative: false` suits scheduled times such as calendar events, which read better as clock times.
+  /// `relative: false` suits scheduled times such as calendar events, which read better as clock times and keep the time in other years.
   /// `from` omits the day when the value falls on the same day, as in a range end.
   static func format(
     _ date: Date, now: Date = .now, inline: Bool = false, relative: Bool = true, from: Date? = nil,
@@ -29,7 +29,7 @@ enum When {
     } else if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
       label = "\(formatted(date, "MMMd", calendar: calendar, locale: locale)), \(time)"
     } else {
-      label = formatted(date, "yMMMd", calendar: calendar, locale: locale)
+      label = formatted(date, "yMMMd", calendar: calendar, locale: locale) + (relative ? "" : ", \(time)")
     }
     guard inline, ["Just", "In ", "Today", "Yesterday", "Tomorrow"].contains(where: label.hasPrefix) else { return label }
     return label.prefix(1).lowercased() + label.dropFirst()
