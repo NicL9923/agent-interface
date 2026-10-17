@@ -38,138 +38,149 @@ struct BotSettingsView: View {
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
   let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Logins"]
-  var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        HStack(spacing: 8) {
-          ForEach(tabs.prefix(2), id: \.self) { title in
-            Button(title) { tab = title }.buttonStyle(.bordered).tint(
-              tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
-          }
-          Spacer(minLength: 0)
-          Menu {
-            ForEach(tabs.dropFirst(2), id: \.self) { title in
-              Button {
-                tab = title
-              } label: {
-                if tab == title { Label(title, systemImage: "checkmark") }
-                else { Text(title) }
-              }
-            }
+  // Split out of body so the type checker stays fast on slower CI machines.
+  private var tabBar: some View {
+    HStack(spacing: 8) {
+      ForEach(tabs.prefix(2), id: \.self) { title in
+        Button(title) { tab = title }.buttonStyle(.bordered).tint(
+          tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
+      }
+      Spacer(minLength: 0)
+      Menu {
+        ForEach(tabs.dropFirst(2), id: \.self) { title in
+          Button {
+            tab = title
           } label: {
-            Label(tabs.prefix(2).contains(tab) ? "More" : tab, systemImage: "chevron.down")
-              .font(.subheadline).lineLimit(1).padding(.horizontal, 10).frame(minHeight: 44)
-          }.tint(tabs.prefix(2).contains(tab) ? .secondary : Palette.accent)
-            .accessibilityLabel("More settings")
-            .accessibilityValue(tabs.prefix(2).contains(tab) ? "" : tab)
-            .accessibilityIdentifier("settingsMore")
-        }.font(.subheadline).padding(.horizontal).padding(.vertical, 6)
-        if let error {
-          ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
-        }
-        if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
-        if tab == "Connections" {
-          if let bot { IntegrationsView(botId: bot.id) }
-          else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
-        } else if tab == "Logins" {
-          if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its Hermes logins.").padding(); Spacer() }
-        } else if tab == "Memory" {
-          if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before viewing its Hermes memory.").padding(); Spacer() }
-        } else { Form {
-          switch tab {
-          case "Details": details
-          case "Avatar": avatarEditor
-          case "Tools": capabilities("tools")
-          case "Skills": capabilities("skills")
-          default: routineList
-          }
-        }.householdListBackground().disabled(busy) }
-      }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
+            if tab == title { Label(title, systemImage: "checkmark") }
+            else { Text(title) }
           }
         }
-        .onAppear {
-          guard !initialized else { return }
-          initialized = true
-          form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
-          savedForm = form
-          mcpText = form.enabledMcpServers.joined(separator: ", ")
-          avatar = bot?.avatar ?? AvatarConfig()
-          savedAvatar = avatar
-          if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
-        }
-        .task(id: tab) { await loadTab() }
-        .interactiveDismissDisabled(dirty || busy)
-        .confirmationDialog("Discard your unsaved changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
-          Button("Discard changes", role: .destructive) { closeSheet() }
-        }
-        .onChange(of: avatar) { _, value in
-          if value.mode != "portrait" {
-            lastDrawn = value
-          } else if !(value.src ?? "").isEmpty {
-            lastPortrait = value
-          }
-        }
-        .confirmationDialog(
-          "Hermes asks for confirmation before using this model.", isPresented: $confirmModel,
-          titleVisibility: .visible
-        ) { Button("Confirm this model") { saveBot(confirmed: true) } }
-        .confirmationDialog(
-          "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
-          titleVisibility: .visible
-        ) {
-          Button("Make it personal", role: .destructive) { saveBot(personal: true) }
-        } message: {
-          Text("It will disappear for the rest of the household, along with its conversation, routines and group chats.")
-        }
-        .confirmationDialog(
-          "Delete \(bot?.name ?? "this assistant")?", isPresented: $deleteConfirm,
-          titleVisibility: .visible
-        ) {
-          Button("Delete assistant", role: .destructive) {
-            action {
-              guard let id = bot?.id, let api = store.api else { return }
-              store.deletedBotId = id
-              try await api.delete("/bots/\(APIClient.component(id))")
-              await store.refreshBootstrap()
-              closeSheet()
-            }
-          }
-        }
-        .fileImporter(
-          isPresented: $portraitImport, allowedContentTypes: [.png, .jpeg, .webP],
-          allowsMultipleSelection: false
-        ) { result in
-          switch result {
-          case .success(let urls): if let url = urls.first { uploadPortrait(url) }
-          case .failure(let error): self.error = error.localizedDescription
-          }
-        }
-        .confirmationDialog(
-          "Delete \(deletingRoutine?.name ?? "this routine")?",
-          isPresented: Binding(get: { deletingRoutine != nil }, set: { if !$0 { deletingRoutine = nil } }),
-          titleVisibility: .visible, presenting: deletingRoutine
-        ) { routine in
-          Button("Delete routine", role: .destructive) {
-            action {
-              try await store.api?.delete("/routines/\(APIClient.component(routine.id))")
-              await loadTab()
-            }
-          }
-        }
-        .sheet(item: $editingRoutine) { routine in
-          RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).environmentObject(
-            store)
-        }
-        .sheet(isPresented: $addingRoutine) {
-          if let bot {
-            RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
-              .environmentObject(store)
-          }
-        }
+      } label: {
+        Label(tabs.prefix(2).contains(tab) ? "More" : tab, systemImage: "chevron.down")
+          .font(.subheadline).lineLimit(1).padding(.horizontal, 10).frame(minHeight: 44)
+      }.tint(tabs.prefix(2).contains(tab) ? .secondary : Palette.accent)
+        .accessibilityLabel("More settings")
+        .accessibilityValue(tabs.prefix(2).contains(tab) ? "" : tab)
+        .accessibilityIdentifier("settingsMore")
+    }.font(.subheadline).padding(.horizontal).padding(.vertical, 6)
+  }
+  @ViewBuilder private var tabContent: some View {
+    if let error {
+      ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
     }
+    if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
+    if tab == "Connections" {
+      if let bot { IntegrationsView(botId: bot.id) }
+      else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
+    } else if tab == "Logins" {
+      if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its Hermes logins.").padding(); Spacer() }
+    } else if tab == "Memory" {
+      if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before viewing its Hermes memory.").padding(); Spacer() }
+    } else { Form {
+      switch tab {
+      case "Details": details
+      case "Avatar": avatarEditor
+      case "Tools": capabilities("tools")
+      case "Skills": capabilities("skills")
+      default: routineList
+      }
+    }.householdListBackground().disabled(busy) }
+  }
+  var body: some View {
+    NavigationStack { routinePresentations(editor) }
+  }
+  private var editor: some View {
+    VStack(spacing: 0) {
+      tabBar
+      tabContent
+    }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
+        }
+      }
+      .onAppear {
+        guard !initialized else { return }
+        initialized = true
+        form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
+        savedForm = form
+        mcpText = form.enabledMcpServers.joined(separator: ", ")
+        avatar = bot?.avatar ?? AvatarConfig()
+        savedAvatar = avatar
+        if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
+      }
+      .task(id: tab) { await loadTab() }
+      .interactiveDismissDisabled(dirty || busy)
+      .confirmationDialog("Discard your unsaved changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
+        Button("Discard changes", role: .destructive) { closeSheet() }
+      }
+      .onChange(of: avatar) { _, value in
+        if value.mode != "portrait" {
+          lastDrawn = value
+        } else if !(value.src ?? "").isEmpty {
+          lastPortrait = value
+        }
+      }
+      .confirmationDialog(
+        "Hermes asks for confirmation before using this model.", isPresented: $confirmModel,
+        titleVisibility: .visible
+      ) { Button("Confirm this model") { saveBot(confirmed: true) } }
+      .confirmationDialog(
+        "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
+        titleVisibility: .visible
+      ) {
+        Button("Make it personal", role: .destructive) { saveBot(personal: true) }
+      } message: {
+        Text("It will disappear for the rest of the household, along with its conversation, routines and group chats.")
+      }
+      .confirmationDialog(
+        "Delete \(bot?.name ?? "this assistant")?", isPresented: $deleteConfirm,
+        titleVisibility: .visible
+      ) {
+        Button("Delete assistant", role: .destructive) {
+          action {
+            guard let id = bot?.id, let api = store.api else { return }
+            store.deletedBotId = id
+            try await api.delete("/bots/\(APIClient.component(id))")
+            await store.refreshBootstrap()
+            closeSheet()
+          }
+        }
+      }
+      .fileImporter(
+        isPresented: $portraitImport, allowedContentTypes: [.png, .jpeg, .webP],
+        allowsMultipleSelection: false
+      ) { result in
+        switch result {
+        case .success(let urls): if let url = urls.first { uploadPortrait(url) }
+        case .failure(let error): self.error = error.localizedDescription
+        }
+      }
+  }
+  private func routinePresentations(_ content: some View) -> some View {
+    content
+      .confirmationDialog(
+        "Delete \(deletingRoutine?.name ?? "this routine")?",
+        isPresented: Binding(get: { deletingRoutine != nil }, set: { if !$0 { deletingRoutine = nil } }),
+        titleVisibility: .visible, presenting: deletingRoutine
+      ) { routine in
+        Button("Delete routine", role: .destructive) {
+          action {
+            try await store.api?.delete("/routines/\(APIClient.component(routine.id))")
+            await loadTab()
+          }
+        }
+      }
+      .sheet(item: $editingRoutine) { routine in
+        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).environmentObject(
+          store)
+      }
+      .sheet(isPresented: $addingRoutine) {
+        if let bot {
+          RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
+            .environmentObject(store)
+        }
+      }
   }
   @ViewBuilder private var details: some View {
     Section {
