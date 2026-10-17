@@ -142,18 +142,29 @@ struct GroupChatsView: View {
       if let catalog, catalog.supported { roomsSection(catalog) }
     }.householdListBackground().viewHeader("Group chats", "Two to six assistants in one conversation").refreshable { await load() }
       // Rooms other members create show up without a manual refresh, like the web's 15 second poll.
+      // Split-view reparenting can cancel a view task during a phone push, so the first read
+      // does not depend on one; the poll below only keeps it fresh.
+      .onAppear { pendingCreate = GroupCreation.pending(scope: store.scope); Task { await load() } }
       .task(id: store.scope) {
-        pendingCreate = GroupCreation.pending(scope: store.scope)
         while !Task.isCancelled {
-          await load()
           do { try await Task.sleep(for: .seconds(15)) } catch { return }
+          await load()
         }
       }
-      .onChange(of: store.scope) { _, _ in catalog = nil; opened = nil }
-      .navigationDestination(item: $opened) { room in GroupConversationView(room: room, canSend: catalog?.canSend ?? false) }
+      .onChange(of: store.scope) { _, scope in
+        catalog = nil; opened = nil; pendingCreate = GroupCreation.pending(scope: scope)
+        Task { await load() }
+      }
+      // The split view's detail column honors the legacy link, not a value destination, for a push by code.
+      .background { openedLink }
       .sheet(isPresented: $creating, onDismiss: sheetDismissed) {
         NavigationStack { GroupCreateView(onCreated: { created = $0 }) }.appStore(store)
       }
+  }
+  @ViewBuilder private var openedLink: some View {
+    NavigationLink(isActive: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
+      if let room = opened { GroupConversationView(room: room, canSend: catalog?.canSend ?? false) }
+    } label: { EmptyView() }.hidden()
   }
   private func roomsSection(_ catalog: GroupCatalog) -> some View {
     Section {

@@ -131,7 +131,7 @@ final class ExperienceFlowTests: XCTestCase {
     app.buttons["Create group"].tap()
     // The new room opens by itself, as on the web.
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
-    XCTAssertTrue(composer.waitForExistence(timeout: 5)); composer.tap(); composer.typeText("Check the gate together")
+    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.tap(); composer.typeText("Check the gate together")
     app.buttons["Send to group"].tap()
     XCTAssertTrue(app.staticTexts["Check the gate together"].waitForExistence(timeout: 5))
     capture(app, name: "Native group discussion")

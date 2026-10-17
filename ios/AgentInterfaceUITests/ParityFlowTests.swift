@@ -220,7 +220,7 @@ final class ParityFlowTests: XCTestCase {
     let app = launch(["OUTAGE"])
     XCTAssertTrue(app.staticTexts["Can't reach the app right now. We'll keep trying."].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.buttons["Try again"].exists)
-    XCTAssertTrue(app.buttons["changeServer"].exists, "A wrong address must not strand anyone")
+    XCTAssertTrue(app.buttons["Change server"].waitForExistence(timeout: 5), "A wrong address must not strand anyone: " + app.debugDescription)
     XCTAssertFalse(app.buttons["householdSignIn"].exists)
   }
   func testHomeWithoutHermesShowsSetupPanelAndExplainsBlockedCreate() {
@@ -240,9 +240,11 @@ final class ParityFlowTests: XCTestCase {
     let toggle = app.switches["deviceNotifications"]
     XCTAssertTrue(toggle.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
-    toggle.tap()
-    expectation(for: NSPredicate(format: "value == %@", "0"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
-    XCTAssertTrue(app.staticTexts["Notifications are disabled on this device. You can enable them here later."].exists)
+    // A labelled row switch holds the real control; tapping the row's centre can miss it.
+    (toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle).tap()
+    expectation(for: NSPredicate(format: "value == %@", "0"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
+    // The explanatory text sits below the fold in a lazy list, so the switch's own label is the check.
+    expectation(for: NSPredicate(format: "label CONTAINS %@", "Disabled"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
   }
   func testNotNowHidesNotificationPromptAndSettingsCanStillEnable() {
     let app = launch(["PUSH"])
