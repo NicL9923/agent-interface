@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { hash } from "../src/server/auth.js";
 import type { Runtime } from "../src/shared/types.js";
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): Promise<unknown> }[] = [];
@@ -30,17 +31,17 @@ function runtimeDouble() {
 }
 async function setup() {
   const fake = runtimeDouble();
-  const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fake.runtime, { background: false });
+  const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fake.runtime, { background: false });
   apps.push(app);
   const base = await app.listen({ port: 0, host: "127.0.0.1" });
   const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
   const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
   const { csrfToken } = await signIn.json() as { csrfToken: string };
-  return { ...fake, app, base, cookie, csrfToken };
+  return { ...fake, app, store, base, cookie, csrfToken };
 }
 /** Reads server-sent text as it arrives, so a test can wait for the next notice. */
-async function stream(url: string, cookie: string) {
-  const response = await fetch(url, { headers: { cookie } });
+async function stream(url: string, cookie: string, headers: Record<string, string> = { cookie }) {
+  const response = await fetch(url, { headers });
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let text = "", done = false;
   const pump = (async () => {
@@ -119,6 +120,22 @@ describe("conversation change stream", () => {
     await events.until(() => events.done);
     expect(events.notices()).toBe(0);
     expect(s.watchers.get("shared")?.size).toBe(0);
+  });
+
+  it("serves the iOS app's bearer session and ends when that session is revoked", async () => {
+    const s = await setup();
+    const token = randomBytes(32).toString("base64url");
+    s.store.nativeSession(hash(token), "local-one", Date.now() + 60_000);
+    const events = await stream(`${s.base}/api/bots/shared/events`, "", { authorization: `Bearer ${token}` });
+    expect(events.response.status).toBe(200);
+    await events.until(() => events.text.includes("retry"));
+    s.change("shared");
+    await events.until(() => events.notices() === 1);
+    s.store.deleteNativeSession(hash(token));
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    s.change("shared");
+    await events.until(() => events.done);
+    expect(events.notices()).toBe(1);
   });
 
   it("closes open streams when the app shuts down", async () => {
