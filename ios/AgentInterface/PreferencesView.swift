@@ -40,7 +40,7 @@ struct PreferencesView: View {
           }
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
-          }
+          }.accessibilityIdentifier("Integrations")
         }
         if let error = store.error {
           Section {

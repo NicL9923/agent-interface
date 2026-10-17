@@ -392,16 +392,7 @@ private struct AssistantListDate: View {
       Text(label(now: context.date)).font(.caption).foregroundStyle(.secondary).fixedSize()
     }
   }
-  private func label(now: Date) -> String {
-    let calendar = Calendar.current
-    if calendar.isDate(date, inSameDayAs: now) || date > now { return date.formatted(date: .omitted, time: .shortened) }
-    if calendar.isDateInYesterday(date) { return "Yesterday" }
-    if let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day, days < 7 {
-      return date.formatted(.dateTime.weekday(.abbreviated))
-    }
-    return calendar.component(.year, from: date) == calendar.component(.year, from: now)
-      ? date.formatted(.dateTime.month(.abbreviated).day()) : date.formatted(date: .abbreviated, time: .omitted)
-  }
+  private func label(now: Date) -> String { When.listDate(date, now: now) }
 }
 
 /// An assistant's current activity in words, with a dot in the state's color.
