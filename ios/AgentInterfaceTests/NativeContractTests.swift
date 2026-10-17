@@ -19,6 +19,13 @@ private final class NativeMockProtocol: URLProtocol, @unchecked Sendable {
     }
     override func stopLoading() {}
     func fail(_ error: URLError) { client?.urlProtocol(self, didFailWithError: error) }
+    /// Opens a server event stream that stays open until the client goes away.
+    func openStream() {
+        guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream; charset=utf-8"]) else { return }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("retry: 3000\n\n".utf8))
+    }
+    func send(_ text: String) { client?.urlProtocol(self, didLoad: Data(text.utf8)) }
     func respond(status: Int, data: Data, headers: [String: String] = [:]) {
         guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "application/json"]) { value, _ in value }) else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -141,8 +148,18 @@ private final class NativeMockServer: @unchecked Sendable {
         changeDraft(bot, text: text, reason: "edit")
         return (200, Self.json(draftRecord(bot)!))
     }
+    private var streaming = false
+    private var streams: [NativeMockProtocol] = []
+    /// Answers change-stream requests with an open stream instead of a JSON body.
+    func serveEventStreams() { lock.withLock { streaming = true } }
+    /// A change notice, as the server sends one when the conversation changes.
+    func notifyChange() { for stream in lock.withLock({ streams }) { stream.send("data: change\n\n") } }
     func receive(_ protocolInstance: NativeMockProtocol) {
         let path = protocolInstance.request.url!.path
+        if path.hasSuffix("/events"), lock.withLock({ streaming }) {
+            lock.withLock { recorded.append(protocolInstance.request); streams.append(protocolInstance) }
+            protocolInstance.openStream(); return
+        }
         let delay = lock.withLock {
             recorded.append(protocolInstance.request)
             if heldPaths.contains(path) || heldOnce.remove(path) != nil { held[path] = protocolInstance; return true }
@@ -705,19 +722,19 @@ private final class NativeMockServer: @unchecked Sendable {
         let tick = { (seconds: Double) in time += .seconds(seconds); _ = await value.pollOnce() }
         _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), 1, "A fresh poll loop starts from current data")
-        for _ in 0..<30 { await tick(1.5) }
+        for _ in 0..<5 { await tick(1.5) }
         XCTAssertEqual(bootstraps(), 1, "Bootstrap must not ride the 1.5 second conversation cadence")
-        XCTAssertEqual(polls(), 31)
-        await tick(30)
-        XCTAssertEqual(bootstraps(), 2, "The slow timer refreshes bootstrap about once a minute")
+        XCTAssertEqual(polls(), 6)
+        await tick(1)
+        XCTAssertEqual(bootstraps(), 2, "Like the web, bootstrap refreshes every 8 seconds")
         await value.refreshBootstrap()
-        await tick(59)
+        await tick(7)
         XCTAssertEqual(bootstraps(), 3, "An action's refresh restarts the timer")
         await tick(2)
         XCTAssertEqual(bootstraps(), 4)
         value.suspend(); _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), 5, "Returning to the foreground refreshes at once")
-        XCTAssertEqual(polls(), 35)
+        XCTAssertEqual(polls(), 10)
     }
 
     func testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing() async throws {
@@ -834,6 +851,35 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.conversation?.messages.first?.id, "m41")
         await value.refreshConversation()
         XCTAssertEqual(server.conversationQueries.last, "start=m41", "The window then stays where it opened")
+    }
+
+    func testALiveChangeStreamReplacesFastConversationPollingLikeTheWeb() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        let polls = { server.conversationQueries.count }
+        let settle = { try await Task.sleep(for: .milliseconds(150)) }
+        server.serveEventStreams()
+        _ = await value.pollOnce(); try await settle()
+        XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
+        let connected = polls()
+        XCTAssertGreaterThanOrEqual(connected, 2, "Connecting reads the conversation, since earlier notices were lost")
+        for _ in 0..<10 { time += .seconds(1.5); _ = await value.pollOnce() }
+        XCTAssertEqual(polls(), connected, "A live stream replaces the 1.5 second conversation poll")
+        server.notifyChange(); try await settle()
+        XCTAssertEqual(polls(), connected + 1, "A change notice reads the conversation")
+        time += .seconds(30); _ = await value.pollOnce()
+        XCTAssertEqual(polls(), connected + 2, "A slow poll still covers a stream that failed unnoticed")
+        time += .seconds(61); _ = await value.pollOnce()
+        XCTAssertEqual(polls(), connected + 3, "A silent stream falls back to polling every pass")
+    }
+
+    func testWithoutAStreamTheConversationIsPolledEveryPass() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        for _ in 0..<4 { _ = await value.pollOnce(); time += .seconds(1.5) }
+        XCTAssertEqual(server.conversationQueries.count, 4)
     }
 
     func testFailedEarlierHistoryReportsWithoutMarkingTheServerUnavailable() async throws {

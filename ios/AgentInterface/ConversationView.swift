@@ -29,6 +29,8 @@ struct ConversationView: View {
   @State private var jumpingUntil = Date.distantPast
   @State private var earlierEdgeVisible = false
   @State private var unseen = 0
+  /// Replies already accounted for, so VoiceOver reads each new one once, as the web's live region does.
+  @State private var replyWatch: ReplyWatch?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var modelOpen = false
   @State private var fileSheetOpen = false
@@ -192,6 +194,7 @@ struct ConversationView: View {
         following = true
         placed = false
         unseen = 0
+        replyWatch = nil
         visibleMessage = nil
         earlierFailed = false
         scrollToLatest(proxy)
@@ -216,31 +219,39 @@ struct ConversationView: View {
         }
       }
       .onChange(of: latestTrigger) { _, _ in following = true; scrollToLatest(proxy) }
+      .onChange(of: store.conversation) { _, conversation in announceReply(conversation) }
       .onDisappear {
         readSaveTask?.cancel()
         if let id = readPosition { store.markRead(id) }
       }
     }
   }
+  /// Reads a settled new reply aloud for VoiceOver, worded as the web's status region.
+  private func announceReply(_ conversation: Conversation?) {
+    guard let conversation, conversation.botId == bot.id else { return }
+    let (next, reply) = ReplyWatch.next(replyWatch ?? ReplyWatch(), conversation, baseline: replyWatch == nil)
+    replyWatch = next
+    if let reply { AccessibilityNotification.Announcement("\(bot.name) replied: \(ReplyWatch.snippet(reply.text))").post() }
+  }
   /// Content grew or the reader scrolled. Growth keeps a follower at the end; a scroll decides
   /// whether the reader is following, as the web's scroll handler does.
   private func contentMoved(to next: TranscriptMetrics, _ proxy: ScrollViewProxy) {
     let previous = content
     content = next
+    let atLatest = next.top + next.height - viewportHeight < 100
+    // History pages in only once the opened chat is seen at its end, not while it is still at
+    // the top waiting for the first scroll.
+    if atLatest && following && store.conversation != nil { placed = true }
     if next.height != previous.height {
       if following { scrollToLatest(proxy) }
       return
     }
-    let atLatest = next.top + next.height - viewportHeight < 100
     if atLatest || Date() >= jumpingUntil { following = atLatest }
     if atLatest { unseen = 0; jumpingUntil = .distantPast }
   }
   /// Waits for the layout pass that changed the content, then shows its end.
   private func scrollToLatest(_ proxy: ScrollViewProxy) {
-    Task { @MainActor in
-      proxy.scrollTo("latest", anchor: .bottom)
-      if store.conversation != nil { placed = true }
-    }
+    Task { @MainActor in proxy.scrollTo("latest", anchor: .bottom) }
   }
   private func jumpToLatest(_ proxy: ScrollViewProxy) {
     following = true
@@ -791,4 +802,67 @@ struct CheckboxStyle: ToggleStyle {
 struct TranscriptMetrics: Equatable {
   var top: CGFloat = 0
   var height: CGFloat = 0
+}
+
+/// Which reply to read out after a refresh, ported from the web's src/app/reply-announcement.ts.
+/// Only a message after the last one seen counts, so history, the first load and a switch stay
+/// quiet, and a reply waits until the assistant stops working, so it is read once.
+struct ReplyWatch: Equatable {
+  struct Heard: Equatable { var text: String; var turn: String? }
+  /// The newest saved message already accounted for. Pages of older history never move it.
+  var lastId: String?
+  /// A reply that arrived while the assistant was still working.
+  var waiting: Message?
+  /// An unsaved reply already read, or already there on load, until its saved rows arrive.
+  var heard: Heard?
+  // Hermes shows the unsaved tail of a reply as a message replaced by saved rows with new IDs.
+  private static func saved(_ message: Message) -> Bool { !message.id.hasSuffix("-inflight") }
+  private static func speakable(_ message: Message) -> Bool {
+    message.role == "assistant" && !message.isInternalActivity && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  static func next(_ watch: ReplyWatch, _ conversation: Conversation, baseline: Bool) -> (ReplyWatch, Message?) {
+    let messages = conversation.messages
+    // A turn is named by the prompt that opened it, so the same words in a later turn are new.
+    func turn(at index: Int) -> String? { messages[...index].last { $0.role == "user" }?.id }
+    let unsaved = messages.last.flatMap { !saved($0) && speakable($0) ? $0 : nil }
+    let unsavedHeard = unsaved.map { Heard(text: $0.text, turn: turn(at: messages.count - 1)) }
+    let lastId = messages.last(where: saved)?.id
+    let known = watch.lastId.flatMap { id in messages.firstIndex { $0.id == id } }
+    // A conversation that no longer holds the last message seen was replaced, not extended.
+    if baseline || watch.lastId != nil && known == nil { return (ReplyWatch(lastId: lastId, heard: unsavedHeard), nil) }
+    let start = (known ?? -1) + 1
+    let arrivedAt = start < messages.count ? messages[start...].lastIndex { saved($0) && speakable($0) } : nil
+    let arrived = arrivedAt.map { messages[$0] }
+    let heard = watch.heard
+    func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    // The saved rows of a reply that was already read replace it silently.
+    if unsaved == nil, let arrived, let arrivedAt, let heard, trimmed(arrived.text) == trimmed(heard.text), turn(at: arrivedAt) == heard.turn {
+      return (ReplyWatch(lastId: lastId), nil)
+    }
+    let unread = unsaved != nil && (unsaved?.text != heard?.text || unsavedHeard?.turn != heard?.turn) ? unsaved : nil
+    let latest = unsaved != nil ? unread : arrived
+    let reply = latest ?? (unsaved != nil ? nil : watch.waiting.map { waiting in messages.first { $0.id == waiting.id } ?? waiting })
+    if let reply, ![.thinking, .working].contains(conversation.activity.state) {
+      return (ReplyWatch(lastId: lastId, heard: reply.id == unsaved?.id ? unsavedHeard : heard), reply)
+    }
+    return (ReplyWatch(lastId: lastId, waiting: reply, heard: heard), nil)
+  }
+  /// Markdown read aloud as written would spell out its symbols, so keep only the words.
+  static func snippet(_ text: String) -> String {
+    var plain = text
+    for (pattern, template) in snippetRules {
+      plain = pattern.stringByReplacingMatches(in: plain, range: NSRange(plain.startIndex..., in: plain), withTemplate: template)
+    }
+    plain = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard plain.count > 200 else { return plain }
+    return String(plain.prefix(200)).trimmingCharacters(in: .whitespaces) + "…"
+  }
+  private static let snippetRules: [(NSRegularExpression, String)] = [
+    (#"^(```|~~~)[^\n]*\n[\s\S]*?^\1\s*$"#, " "),
+    (#"!?\[([^\]]*)\]\([^)]*\)"#, "$1"),
+    (#"^\s{0,3}(?:#{1,6}|>|[-*+]|\d+[.)])\s+"#, ""),
+    (#"^\s*\|?[\s:|-]+\|[\s:|-]*$"#, " "),
+    (#"[`*_~|]"#, ""),
+    (#"\s+"#, " "),
+  ].map { (try! NSRegularExpression(pattern: $0.0, options: .anchorsMatchLines), $0.1) }
 }

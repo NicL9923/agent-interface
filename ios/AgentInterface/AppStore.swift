@@ -57,6 +57,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
+  /// The open conversation's change stream, as the web subscribes to it, and when it last spoke.
+  private var eventTask: Task<Void, Never>?
+  private var eventBotId: String?
+  private var streamHeardAt: ContinuousClock.Instant?
+  private var conversationRefreshedAt: ContinuousClock.Instant?
+  private var conversationRefreshing = false
+  private var conversationRefreshAgain = false
+  /// While the stream is live, change notices drive updates and this slow poll covers a stream
+  /// that fails unnoticed, as on the web. Server pings arrive every 25 seconds.
+  static let streamFallbackInterval: Duration = .seconds(30)
+  static let streamSilence: Duration = .seconds(60)
   private var draftTask: Task<Void, Never>?
   /// Set while an edit waits for its save, so leaving can send it now instead of dropping it.
   private var scheduledDraftSave: UUID?
@@ -254,7 +265,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       .first { $0.isKeyWindow } ?? ASPresentationAnchor()
   }
   func startPolling() {
-    pollTask?.cancel()
+    stopPolling()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
         guard let self, await self.pollOnce() else { return }
@@ -275,14 +286,72 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
       return false
     }
+    watchConversation()
     await refreshBootstrap(ifDue: true)
-    await refreshConversation()
+    if conversationDue { await refreshConversation() }
     await reconcilePending()
     return true
   }
-  func suspend() {
+  /// Ends polling and the change stream together, so neither outlives the other.
+  private func stopPolling() {
     pollTask?.cancel()
     pollTask = nil
+    eventTask?.cancel()
+    eventTask = nil
+    eventBotId = nil
+    streamHeardAt = nil
+  }
+  /// Without a live stream the conversation is polled every pass, as before streams existed.
+  private var conversationDue: Bool {
+    guard let heard = streamHeardAt, let refreshed = conversationRefreshedAt,
+      eventBotId == selectedBotId, now() - heard < Self.streamSilence
+    else { return true }
+    return now() - refreshed >= Self.streamFallbackInterval
+  }
+  /// Follows the selected assistant's change stream, reconnecting with a growing delay.
+  private func watchConversation() {
+    guard eventBotId != selectedBotId || eventTask == nil else { return }
+    eventTask?.cancel()
+    streamHeardAt = nil
+    eventBotId = selectedBotId
+    guard let id = selectedBotId, let api else { eventTask = nil; return }
+    eventTask = Task { [weak self] in
+      var failures = 0
+      while !Task.isCancelled {
+        do {
+          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events")
+          guard let self, !Task.isCancelled else { return }
+          failures = 0
+          self.streamHeardAt = self.now()
+          // Notices sent before the subscription are lost, so connecting counts as one.
+          self.requestConversationRefresh()
+          for try await line in lines {
+            guard !Task.isCancelled else { return }
+            self.streamHeardAt = self.now()
+            if line.hasPrefix("data:") && line != "data: ping" { self.requestConversationRefresh() }
+          }
+        } catch {}
+        guard let self, !Task.isCancelled else { return }
+        self.streamHeardAt = nil
+        failures += 1
+        try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
+      }
+    }
+  }
+  /// One refresh at a time; a notice during one asks for one more after it.
+  private func requestConversationRefresh() {
+    if conversationRefreshing { conversationRefreshAgain = true; return }
+    conversationRefreshing = true
+    Task {
+      repeat {
+        conversationRefreshAgain = false
+        await refreshConversation()
+      } while conversationRefreshAgain
+      conversationRefreshing = false
+    }
+  }
+  func suspend() {
+    stopPolling()
     // The next poll loop starts with a fresh bootstrap.
     bootstrapRefreshedAt = nil
     persistDraft()
@@ -382,23 +451,23 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     let cached: Draft? = read(key("draft", id))
     draft = cached ?? Draft()
-    // As on the web, a cached copy is usable at once while the server's copy is read.
-    if cached != nil { draftReady = true }
+    if cached?.dirty == true { draftReady = true }
     // Like the web, a chat opens at its latest page; the window grows from there.
     historyStarts[id] = nil
     let selectedGeneration = selectionGeneration
-    // The draft and the conversation load together, as the web's separate hooks do.
-    async let conversationLoaded: Void = refreshConversation()
     do {
+      // The draft is a quick local read. It settles first so the conversation's copy merges onto it.
       let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(id))/draft")
-      if selectionGeneration == selectedGeneration { loadDraft(remote, botId: id) }
+      guard selectionGeneration == selectedGeneration else { return }
+      loadDraft(remote, botId: id)
     } catch {
-      if selectionGeneration == selectedGeneration {
-        if Self.missing(error) { await conversationLoaded; await leave(id); return }
-        if cached?.dirty != true { report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
-      }
+      guard selectionGeneration == selectedGeneration else { return }
+      if Self.missing(error) { await leave(id); return }
+      draftReady = cached != nil
+      // The web's wording. Polls keep reading the draft with the conversation.
+      if cached?.dirty != true { report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
     }
-    await conversationLoaded
+    await refreshConversation()
   }
   private func conversationPath(_ id: String, query: String) -> String {
     "/bots/\(APIClient.component(id))/conversation?\(query)"
@@ -415,6 +484,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         return
       }
       historyStarts[id] = value.messages.first?.id
+      conversationRefreshedAt = now()
       apply(value, botId: id)
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration && Self.missing(error) {
@@ -1038,7 +1108,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           "Signed out on this device only. The server could not be reached, so this device's session stays valid there until it expires, and notifications may still be delivered. Sign in on that server again to revoke it."
       }
     }
-    pollTask?.cancel()
+    stopPolling()
     draftTask?.cancel()
     scheduledDraftSave = nil
     fileTask?.cancel()
@@ -1144,7 +1214,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if let apiError = error as? APIError, apiError.isSessionExpired {
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
-      pollTask?.cancel()
+      stopPolling()
       sessionExpired = true
     }
   }

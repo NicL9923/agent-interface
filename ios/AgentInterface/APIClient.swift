@@ -107,6 +107,7 @@ extension Data {
     self.baseURL = baseURL
     if let session {
       self.session = session
+      injectedSession = true
     } else {
       let config = URLSessionConfiguration.ephemeral
       config.urlCache = nil
@@ -222,6 +223,34 @@ extension Data {
       remember(path, etag: json ? response.value(forHTTPHeaderField: "ETag") : nil, data: data)
     }
     return data
+  }
+  /// Event streams stay open for hours, so they get their own session without the resource
+  /// timeout. Tests that supply a session stream through it.
+  private var injectedSession = false
+  private lazy var streamSession: URLSession = {
+    if injectedSession { return session }
+    let config = URLSessionConfiguration.ephemeral
+    config.urlCache = nil
+    config.requestCachePolicy = .reloadIgnoringLocalCacheData
+    // The server pings every 25 seconds; a longer silence is a dead connection.
+    config.timeoutIntervalForRequest = 70
+    config.timeoutIntervalForResource = 24 * 60 * 60
+    config.httpCookieStorage = session.configuration.httpCookieStorage
+    return URLSession(configuration: config, delegate: SameOriginRedirectDelegate(origin: baseURL), delegateQueue: nil)
+  }()
+  /// The lines of a server event stream. Anything but an open stream throws.
+  func events(_ path: String) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
+    var request = URLRequest(url: try url(path))
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    let (bytes, response) = try await streamSession.bytes(for: request)
+    let http = response as? HTTPURLResponse
+    guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
+      bytes.task.cancel()
+      throw APIError(message: "The change stream is unavailable.", status: http?.statusCode ?? 0)
+    }
+    return bytes.lines
   }
   func get<T: Decodable>(_ path: String) async throws -> T {
     try Self.decode(await data(path: "/api" + path), from: "/api" + path)

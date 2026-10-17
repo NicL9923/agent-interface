@@ -175,10 +175,14 @@ final class ParityFlowTests: XCTestCase {
     waitForExpectations(timeout: 10)
     let jump = app.buttons["Jump to latest"]
     XCTAssertFalse(jump.exists)
-    // The first page holds turns 41 to 60; reading back past it loads turn 40 and earlier.
+    // The first page holds turns 41 to 60. Opening at the end must not page in more.
     let earlier = app.staticTexts["Fixture question 35"]
-    for _ in 0..<40 where !earlier.exists { app.swipeDown(velocity: .fast) }
-    XCTAssertTrue(earlier.exists, "Earlier history did not load while scrolling up")
+    XCTAssertFalse(earlier.exists, "Opening at the latest message loaded earlier history")
+    // Reading back pages in turns 21 to 40, then 1 to 20, until the conversation's start.
+    let start = app.staticTexts["This is the start of your conversation with Ranch hand."]
+    for _ in 0..<30 where !start.exists { app.swipeDown(velocity: .fast) }
+    XCTAssertTrue(start.exists, "Earlier history did not load while scrolling up")
+    XCTAssertTrue(earlier.exists)
     XCTAssertTrue(jump.waitForExistence(timeout: 5))
     jump.tap()
     expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: latest)
