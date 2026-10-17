@@ -51,7 +51,6 @@ private final class NativeMockServer: @unchecked Sendable {
     private var conversationStatus = 200
     private var botHidden = false
     private var assistantsChanged = 0
-    private var failAnchoredOnce = false
     private var history: [String]?
     private var heldOnce: Set<String> = []
     private var fileOwners: [String: [String]] = [:]
@@ -78,7 +77,6 @@ private final class NativeMockServer: @unchecked Sendable {
     func requestCount(_ path: String) -> Int { requests.filter { $0.url?.path == path }.count }
     func disconnect(_ value: Bool = true) { lock.withLock { connected = !value } }
     /// Fails the next conversation request that starts at a message, as a saved reading position does.
-    func failNextAnchoredConversation() { lock.withLock { failAnchoredOnce = true } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     /// Another member made "bot" their personal assistant: it leaves the roster and its routes answer 404.
     func hideBot() { lock.withLock { botHidden = true } }
@@ -290,12 +288,6 @@ private final class NativeMockServer: @unchecked Sendable {
         else if path == "/api/bots/bot/files" { data = earlierFilesData(query: request.url?.query) }
         else if path.hasSuffix("/conversation") {
             status = lock.withLock { conversationStatus }
-            let anchored: Bool = lock.withLock {
-                guard failAnchoredOnce, request.url?.query?.hasPrefix("start=") == true else { return false }
-                failAnchoredOnce = false
-                return true
-            }
-            if anchored { status = 503 }
             data = status == 200 ? conversationData(request.url!.pathComponents.dropLast().last ?? "bot", query: request.url?.query) : Self.json(["error": "Synthetic conversation outage"])
         }
         else if path.hasSuffix("/draft") && request.httpMethod == "PUT" && lock.withLock({ draftSavesFail }) {
@@ -834,39 +826,14 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.conversationFiles.map(\.id), ["only.txt"])
     }
 
-    func testASavedReadingPositionOlderThanTheLatestPageOpensTheWindowThatEndsAtIt() async throws {
+    func testASavedReadingPositionStillOpensTheLatestPageLikeTheWeb() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.serveHistory(ids(1...60)); server.serveReadAnchor("m35")
         await value.refreshConversation()
-        XCTAssertEqual(server.conversationQueries, ["turns=20", "start=m35&turns=20"])
-        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m35")
-        XCTAssertEqual(value.conversation?.messages.first?.id, "m15", "The page reaches back 20 turns from the saved message")
+        XCTAssertEqual(server.conversationQueries, ["turns=20"], "Opening never waits on a second page for an old position")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m41")
         await value.refreshConversation()
-        XCTAssertEqual(server.conversationQueries.last, "start=m15", "The window stays where the position put it")
-    }
-
-    func testAFailedSavedPositionFetchKeepsRestorationPendingUntilThePollRetries() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        var time = ContinuousClock.now
-        value.now = { time }
-        server.serveHistory(ids(1...60)); server.serveReadAnchor("m35")
-        server.failNextAnchoredConversation()
-        await value.refreshConversation()
-        XCTAssertTrue(value.conversation?.messages.isEmpty ?? true, "The latest page must not stand in for the saved position")
-        XCTAssertNotNil(value.error); XCTAssertFalse(value.connected)
-        XCTAssertFalse(server.requests.contains { $0.url?.path.hasSuffix("/read-position") == true })
-        time += .seconds(2); _ = await value.pollOnce()
-        XCTAssertEqual(server.conversationQueries, ["turns=20", "start=m35&turns=20", "turns=20", "start=m35&turns=20"])
-        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m35")
-        XCTAssertTrue(value.connected)
-    }
-
-    func testRecentOrMissingReadingPositionsStayOnTheLatestPage() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        server.serveHistory(ids(1...60)); server.serveReadAnchor("m58")
-        await value.refreshConversation()
-        XCTAssertEqual(server.conversationQueries, ["turns=20"])
-        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m58")
+        XCTAssertEqual(server.conversationQueries.last, "start=m41", "The window then stays where it opened")
     }
 
     func testFailedEarlierHistoryReportsWithoutMarkingTheServerUnavailable() async throws {

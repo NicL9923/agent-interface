@@ -217,7 +217,7 @@ struct VaultView: View {
       }
       .sheet(isPresented: $adding, onDismiss: { Task { await refresh() } }) {
         if let api = store.api {
-          AddVaultLoginView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Login saved in Hermes." }).environmentObject(store)
+          AddVaultLoginView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Login saved in Hermes." }).appStore(store)
         }
       }
       .sheet(item: $unlocking, onDismiss: { unlockPassword = "" }) { source in

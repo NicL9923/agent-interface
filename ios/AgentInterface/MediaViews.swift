@@ -3,7 +3,7 @@ import SwiftUI
 
 struct AuthenticatedImage: View {
   let path: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
   @State private var image: UIImage?
   @State private var failed = false
   var body: some View {
@@ -16,11 +16,14 @@ struct AuthenticatedImage: View {
       } else {
         ProgressView()
       }
-    }.task(id: path + (store.scope ?? "")) {
+    }.task(id: path + (store?.scope ?? "")) {
+      let key = Self.cacheKey(path, store)
+      // An image shown before returns at once instead of downloading again on every scroll.
+      if let cached = Self.cache.object(forKey: key) { image = cached; failed = false; return }
       image = nil
       failed = false
       do {
-        guard let api = store.api, !path.isEmpty else {
+        guard let api = store?.api, !path.isEmpty else {
           failed = true
           return
         }
@@ -33,16 +36,26 @@ struct AuthenticatedImage: View {
         guard !Task.isCancelled else { return }
         image = UIImage(data: data)
         failed = image == nil
+        if let image { Self.cache.setObject(image, forKey: key, cost: data.count) }
       } catch is CancellationError {} catch { failed = true }
     }
+  }
+  /// Decoded images by server, identity and path, bounded like a browser's memory cache.
+  private static let cache: NSCache<NSString, UIImage> = {
+    let cache = NSCache<NSString, UIImage>()
+    cache.totalCostLimit = 64 * 1024 * 1024
+    return cache
+  }()
+  private static func cacheKey(_ path: String, _ store: AppStore?) -> NSString {
+    "\(store?.scope ?? ""):\(path)" as NSString
   }
 }
 struct FileAttachmentView: View {
   var file: FileRef
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
   var body: some View {
     Button {
-      store.open(file)
+      store?.open(file)
     } label: {
       VStack(alignment: .leading, spacing: 8) {
         if file.mime.hasPrefix("image/") {
@@ -128,7 +141,7 @@ struct FilePreview: UIViewControllerRepresentable {
 struct MarkdownView: View {
   let text: String
   @Environment(\.colorScheme) private var scheme
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
   struct Block: Identifiable {
     var id: Int
     var kind: String
@@ -297,7 +310,7 @@ struct MarkdownView: View {
       .environment(
         \.openURL,
         OpenURLAction { url in
-          if url.path.hasPrefix("/api/files/"), let origin = store.api?.baseURL,
+          if url.path.hasPrefix("/api/files/"), let store, let origin = store.api?.baseURL,
             url.host == nil
               || url.host == origin.host && url.scheme == origin.scheme && url.port == origin.port
           {

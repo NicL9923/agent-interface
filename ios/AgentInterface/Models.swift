@@ -177,7 +177,7 @@ struct FileRef: Codable, Identifiable, Equatable {
   var size: Int?
   var url: String?
 }
-struct Sender: Codable {
+struct Sender: Codable, Equatable {
   var id: String
   var name: String
 }
@@ -188,7 +188,7 @@ struct MessageOrigin: Codable, Equatable {
   var name: String?
   var handle: String?
 }
-struct Message: Codable, Identifiable {
+struct Message: Codable, Identifiable, Equatable {
   var id: String
   var role: String
   var text: String
@@ -204,17 +204,8 @@ struct Message: Codable, Identifiable {
     if let origin { return origin }
     if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name) }
     if role == "user" {
-      if text.range(of: #"^\[Cronjob "[^\n]+" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "scheduled", visibility: "activity")
-      }
-      if text.range(of: #"^\[Cron delivery: [^\n\]]+\]"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "scheduled", visibility: "conversation")
-      }
-      if text.range(of: #"^(Subagent Tasks? (Completed|Failed|Interrupted|Incomplete):|\[IMPORTANT: (Background )?[Ss]ubagent|\[ASYNC (DELEGATION )?(BATCH )?COMPLETE\b|A background (subagent|fan-out of \d+ subagent\(s\)) you dispatched earlier has finished\.)"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "subagent", visibility: "activity")
-      }
-      if text.range(of: #"^(Background Process (Completed|Failed|Output|Interrupted)|\[IMPORTANT: Background process |\[Background process \S+ heartbeat #)"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "process", visibility: "activity")
+      if let kind = Self.originPatterns.first(where: { Self.matches($0.pattern, text) }) {
+        return MessageOrigin(kind: kind.kind, visibility: kind.visibility)
       }
     }
     let names = displayToolName.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -240,8 +231,8 @@ struct Message: Codable, Identifiable {
   }
   var agentEnvelope: (name: String, body: String)? {
     guard role == "user", sender == nil else { return nil }
-    let pattern = #"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#
-    guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+    guard text.hasPrefix("Message from ") || text.hasPrefix("[Message from agent "),
+      let match = Self.envelopePattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
       let bodyRange = Range(match.range(at: 4), in: text),
       let nameRange = Range(match.range(at: 1).location == NSNotFound ? match.range(at: 3) : match.range(at: 1), in: text)
     else { return nil }
@@ -254,8 +245,20 @@ struct Message: Codable, Identifiable {
     let canonical = role == "tool" || toolCall == nil ? text : ""
     return toolCall?.result ?? canonical
   }
+  // Compiled once. Rows read a message's origin on every render, so per-call compilation added up.
+  private static func regex(_ pattern: String) -> NSRegularExpression { try! NSRegularExpression(pattern: pattern) }
+  private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+    regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+  }
+  private static let originPatterns: [(pattern: NSRegularExpression, kind: String, visibility: String)] = [
+    (regex(#"^\[Cronjob "[^\n]+" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]"#), "scheduled", "activity"),
+    (regex(#"^\[Cron delivery: [^\n\]]+\]"#), "scheduled", "conversation"),
+    (regex(#"^(Subagent Tasks? (Completed|Failed|Interrupted|Incomplete):|\[IMPORTANT: (Background )?[Ss]ubagent|\[ASYNC (DELEGATION )?(BATCH )?COMPLETE\b|A background (subagent|fan-out of \d+ subagent\(s\)) you dispatched earlier has finished\.)"#), "subagent", "activity"),
+    (regex(#"^(Background Process (Completed|Failed|Output|Interrupted)|\[IMPORTANT: Background process |\[Background process \S+ heartbeat #)"#), "process", "activity"),
+  ]
+  private static let envelopePattern = regex(#"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#)
 }
-struct ToolCall: Codable, Identifiable {
+struct ToolCall: Codable, Identifiable, Equatable {
   var id: String
   var name: String
   var arguments: String?
@@ -265,25 +268,25 @@ struct ToolCall: Codable, Identifiable {
   var startedAt: String?
   var completedAt: String?
 }
-struct Approval: Codable, Identifiable {
+struct Approval: Codable, Identifiable, Equatable {
   var id: String
   var title: String
   var detail: String
   var status: String
   var expiresAt: String?
 }
-struct Activity: Codable {
+struct Activity: Codable, Equatable {
   var state: ActivityState
   var detail: String?
   var runId: String?
   var updatedAt: String?
 }
-struct Question: Codable, Identifiable {
+struct Question: Codable, Identifiable, Equatable {
   var id: String
   var prompt: String
   var options: [String]?
 }
-struct Attention: Codable, Identifiable {
+struct Attention: Codable, Identifiable, Equatable {
   var id: String
   var kind: String
   var title: String
@@ -291,7 +294,7 @@ struct Attention: Codable, Identifiable {
   var questions: [Question]?
   var secure: SecureRequest? = nil
 }
-struct ReadPosition: Codable {
+struct ReadPosition: Codable, Equatable {
   var messageId: String?
   var scrollTop: Double? = nil
 }
@@ -406,11 +409,11 @@ struct EarlierFiles: Decodable {
   }
   var messages: [Entry]
 }
-struct CoordinationGroup: Identifiable {
+struct CoordinationGroup: Identifiable, Equatable {
   var id: String
   var messages: [Message]
 }
-struct ConversationTurn: Identifiable {
+struct ConversationTurn: Identifiable, Equatable {
   var id: String
   var messages: [Message]
   var visibleMessages: [Message] { messages.filter(\.isConversationVisible) }
@@ -436,7 +439,7 @@ struct ConversationTurn: Identifiable {
     return groups
   }
 }
-struct Conversation: Codable {
+struct Conversation: Codable, Equatable {
   var attention: [Attention]?
   var botId: String
   var sessionId: String?
@@ -488,14 +491,6 @@ struct Conversation: Codable {
   }
   var visibleMessages: [Message] {
     messages.filter { $0.isConversationVisible }
-  }
-  func restorableReadAnchor(_ saved: String?) -> String? {
-    guard let saved else { return nil }
-    if visibleMessages.contains(where: { $0.id == saved }) { return saved }
-    guard let index = messages.firstIndex(where: { $0.id == saved }) else { return nil }
-    return messages.dropFirst(index + 1).first {
-      $0.isConversationVisible
-    }?.id
   }
 }
 struct UpgradeRevision: Codable {

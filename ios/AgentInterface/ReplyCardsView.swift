@@ -145,7 +145,8 @@ struct ReplyContentView: View {
 struct InteractiveReplyCard: View {
   var card: ReplyCard
   var messageId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
+  @Environment(\.transcriptConnected) private var connected
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()
   @State private var draft = ReplyCardState()
@@ -154,7 +155,7 @@ struct InteractiveReplyCard: View {
   @State private var editing: String?
   @State private var eventOpen = false
   enum Status { case loading, ready, saving, failed }
-  private var busy: Bool { status == .loading || status == .saving || !store.connected }
+  private var busy: Bool { status == .loading || status == .saving || !connected }
   private var typeLabel: String { card.type == "event" ? "Calendar proposal" : card.type == "itinerary" ? "Itinerary" : "Checklist" }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -189,11 +190,11 @@ struct InteractiveReplyCard: View {
       }
       if let error {
         ErrorBanner(message: error)
-        if status == .failed && saved != draft { Button("Retry saving") { save(draft) }.buttonStyle(.bordered).disabled(!store.connected) }
-        else { Button("Reload saved state") { Task { await load() } }.buttonStyle(.bordered).disabled(!store.connected) }
+        if status == .failed && saved != draft { Button("Retry saving") { save(draft) }.buttonStyle(.bordered).disabled(!connected) }
+        else { Button("Reload saved state") { Task { await load() } }.buttonStyle(.bordered).disabled(!connected) }
       }
     }.padding(14).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
-      .task(id: "\(store.scope ?? ""):\(messageId):\(card.id)") { await load() }
+      .task(id: "\(store?.scope ?? ""):\(messageId):\(card.id)") { await load() }
       .sheet(isPresented: $eventOpen) { CalendarProposalEditor(card: card) }
   }
   private func itineraryItem(_ item: ReplyCardItem) -> some View {
@@ -216,19 +217,19 @@ struct InteractiveReplyCard: View {
       }
     }
   }
-  private var path: String { "/bots/\(APIClient.component(store.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
+  private var path: String { "/bots/\(APIClient.component(store?.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
   private func load() async {
-    guard card.type != "event", let api = store.api else { return }
-    let scope = store.scope; status = .loading; error = nil
-    do { let value: ReplyCardState = try await api.get(path); guard store.scope == scope, store.api === api else { return }; saved = value; draft = value; status = .ready }
-    catch { if store.scope == scope { self.error = error.localizedDescription; status = .failed } }
+    guard card.type != "event", let api = store?.api else { return }
+    let scope = store?.scope; status = .loading; error = nil
+    do { let value: ReplyCardState = try await api.get(path); guard store?.scope == scope, store?.api === api else { return }; saved = value; draft = value; status = .ready }
+    catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
   }
   private func save(_ value: ReplyCardState) {
-    guard let api = store.api, !busy else { return }
-    let scope = store.scope; let route = path; draft = value; status = .saving; error = nil
+    guard let api = store?.api, !busy else { return }
+    let scope = store?.scope; let route = path; draft = value; status = .saving; error = nil
     Task {
-      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store.scope == scope, store.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
-      catch { if store.scope == scope { self.error = error.localizedDescription; status = .failed } }
+      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store?.scope == scope, store?.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
+      catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
     }
   }
 }

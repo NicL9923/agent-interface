@@ -161,6 +161,30 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts.matching(identifier: "Fixture single visible reply").count, 1)
   }
+  /// Like the web, a chat opens at its latest message, pages in earlier turns near the top, and
+  /// the jump control returns to the end.
+  func testLongChatOpensAtLatestPagesEarlierAndJumpsBack() {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launchEnvironment["AGENT_INTERFACE_UI_LONG_HISTORY"] = "1"
+    app.launch()
+    let latest = app.staticTexts["Fixture answer 60."]
+    expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: latest)
+    waitForExpectations(timeout: 10)
+    let jump = app.buttons["Jump to latest"]
+    XCTAssertFalse(jump.exists)
+    // The first page holds turns 41 to 60; reading back past it loads turn 40 and earlier.
+    let earlier = app.staticTexts["Fixture question 35"]
+    for _ in 0..<40 where !earlier.exists { app.swipeDown(velocity: .fast) }
+    XCTAssertTrue(earlier.exists, "Earlier history did not load while scrolling up")
+    XCTAssertTrue(jump.waitForExistence(timeout: 5))
+    jump.tap()
+    expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: latest)
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: jump)
+    waitForExpectations(timeout: 10)
+  }
   func testTodayAndTabletLayout() throws {
     let app = launch(home: true)
     XCTAssertTrue(app.buttons["openToday"].waitForExistence(timeout: 10))

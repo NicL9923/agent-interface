@@ -172,13 +172,13 @@ struct BotSettingsView: View {
         }
       }
       .sheet(item: $editingRoutine) { routine in
-        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).environmentObject(
+        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).appStore(
           store)
       }
       .sheet(isPresented: $addingRoutine) {
         if let bot {
           RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
-            .environmentObject(store)
+            .appStore(store)
         }
       }
   }

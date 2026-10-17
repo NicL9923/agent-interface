@@ -118,7 +118,7 @@ struct GroupChatsView: View {
     }.householdListBackground().viewHeader("Group chats", "Two to six assistants in one conversation").refreshable { await load() }
       .onAppear { Task { await load() } }
       .onChange(of: store.scope) { _, _ in catalog = nil; Task { await load() } }
-      .sheet(isPresented: $creating, onDismiss: { Task { await load() } }) { NavigationStack { GroupCreateView() }.environmentObject(store) }
+      .sheet(isPresented: $creating, onDismiss: { Task { await load() } }) { NavigationStack { GroupCreateView() }.appStore(store) }
   }
   private func load() async {
     guard let api = store.api else { return }; let scope = store.scope

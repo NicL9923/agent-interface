@@ -7,7 +7,7 @@ import UserNotifications
   @Environment(\.scenePhase) private var scenePhase
   var body: some Scene {
     WindowGroup {
-      RootView().environmentObject(store)
+      RootView().appStore(store)
         .fontDesign(.rounded).tint(Palette.accent)
         .preferredColorScheme(
           store.bootstrap?.preferences.theme == "dark"

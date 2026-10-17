@@ -51,7 +51,7 @@ struct RootView: View {
       }
     }
     .background(Palette.surface(scheme))
-    .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture:capture).environmentObject(store) }
+    .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture:capture).appStore(store) }
     .onAppear { checkShares() }
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
@@ -64,11 +64,11 @@ struct RootView: View {
         compactColumn = .sidebar
       }
     }
-    .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).environmentObject(store) }
-    .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).environmentObject(store) }
-    .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).environmentObject(store) }
+    .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).appStore(store) }
+    .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store) }
+    .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store) }
     .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea() }
-    .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.environmentObject(store) }
+    .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.appStore(store) }
     .onReceive(store.$todayRequest) { request in if request != nil { destination = .today;compactColumn = .detail } }
     .onReceive(store.$leftBotId) { id in
       guard let id else { return }

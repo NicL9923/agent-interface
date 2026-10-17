@@ -9,7 +9,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot() } }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
   var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
-  @Published var conversation: Conversation?
+  @Published var conversation: Conversation? {
+    didSet { if conversation != oldValue { turns = conversation?.presentationTurns ?? [] } }
+  }
+  /// The open conversation grouped into turns, computed once per change instead of on every render.
+  private(set) var turns: [ConversationTurn] = []
   @Published var selectedBotId: String?
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
@@ -66,7 +70,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   static let historyPageTurns = 20
   /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
   /// it, a foreground return and pull to refresh all refresh it sooner.
-  static let bootstrapInterval: Duration = .seconds(60)
+  static let bootstrapInterval: Duration = .seconds(8)
   /// Tests substitute a clock they advance by hand.
   var now: () -> ContinuousClock.Instant = { .now }
   private var bootstrapRefreshedAt: ContinuousClock.Instant?
@@ -378,19 +382,23 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     let cached: Draft? = read(key("draft", id))
     draft = cached ?? Draft()
-    if cached?.dirty == true { draftReady = true }
+    // As on the web, a cached copy is usable at once while the server's copy is read.
+    if cached != nil { draftReady = true }
+    // Like the web, a chat opens at its latest page; the window grows from there.
+    historyStarts[id] = nil
     let selectedGeneration = selectionGeneration
+    // The draft and the conversation load together, as the web's separate hooks do.
+    async let conversationLoaded: Void = refreshConversation()
     do {
       let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(id))/draft")
-      guard selectionGeneration == selectedGeneration else { return }
-      loadDraft(remote, botId: id)
-      await refreshConversation()
+      if selectionGeneration == selectedGeneration { loadDraft(remote, botId: id) }
     } catch {
-      guard selectionGeneration == selectedGeneration else { return }
-      if Self.missing(error) { await leave(id); return }
-      draftReady = cached != nil
-      report(error)
+      if selectionGeneration == selectedGeneration {
+        if Self.missing(error) { await conversationLoaded; await leave(id); return }
+        if cached?.dirty != true { report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
+      }
     }
+    await conversationLoaded
   }
   private func conversationPath(_ id: String, query: String) -> String {
     "/bots/\(APIClient.component(id))/conversation?\(query)"
@@ -402,17 +410,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
       ?? "turns=\(Self.historyPageTurns)"
     do {
-      var value: Conversation = try await api.get(conversationPath(id, query: query))
-      // A saved reading position older than the latest page is opened by loading the page that
-      // ends at it, so it can be restored instead of falling back to the latest message. A
-      // failure here throws, so nothing is applied or pinned and the next poll tries again.
-      if historyStarts[id] == nil, (value.earlier ?? 0) > 0,
-        let saved = savedAnchor(value, botId: id),
-        !value.messages.contains(where: { $0.id == saved })
-      {
-        value = try await api.get(
-          conversationPath(id, query: "start=\(APIClient.component(saved))&turns=\(Self.historyPageTurns)"))
-      }
+      let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration else {
         return
       }
@@ -447,10 +445,6 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration { report(error) }
     }
-  }
-  private func savedAnchor(_ value: Conversation, botId id: String) -> String? {
-    let local: ReadPosition? = read(key("read", id))
-    return value.readPosition?.messageId ?? local?.messageId
   }
   /// Every file reference the open conversation knows, oldest first.
   var conversationFiles: [FileRef] {
@@ -502,7 +496,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     {
       interruptionReviewed = false
     }
-    conversation = value
+    // An unchanged poll leaves the transcript alone instead of rendering it again.
+    if conversation != value { conversation = value }
     conversationCache[id] = value
     // Polling also brings in a draft changed on another device, or a send made there, and
     // settles a copy kept unsaved while saves were in flight.
@@ -877,18 +872,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func markRead(_ messageId: String?) {
     guard let id = selectedBotId, let api else { return }
     let position = ReadPosition(messageId: messageId)
-    let currentGeneration = generation
-    save(position, key("read", id))
+    // A reading position is a hint, so a failed save stays quiet, as on the web.
     Task {
-      do {
-        let _: ReadPosition = try await api.write(
-          "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
-      } catch { if currentGeneration == self.generation { self.report(error) } }
+      let _: ReadPosition? = try? await api.write(
+        "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
     }
-  }
-  func readMessageId() -> String? {
-    let local: ReadPosition? = read(key("read", selectedBotId))
-    return conversation?.readPosition?.messageId ?? local?.messageId
   }
   func attach(urls: [URL]) async {
     guard let id = selectedBotId, draftReady else { return }

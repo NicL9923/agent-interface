@@ -37,6 +37,13 @@
           ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
         ]
       }
+      if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
+        // Enough turns for three history pages, with replies tall enough to scroll.
+        FixtureProtocol.messages = (1...60).flatMap { turn -> [[String: Any]] in
+          [["id": "prompt-\(turn)", "role": "user", "text": "Fixture question \(turn)"],
+           ["id": "reply-\(turn)", "role": "assistant", "text": "Fixture answer \(turn).\n\n" + Array(repeating: "A line of synthetic history so each turn takes some room.", count: 4).joined(separator: "\n\n")]]
+        }
+      }
       if environment["AGENT_INTERFACE_UI_MIXED_TOOL"] == "1" {
         FixtureProtocol.preferences["presentation"] = "advanced"
         FixtureProtocol.messages = [
@@ -197,6 +204,20 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
+          // The server's history window (src/shared/history.ts): `start` pins the oldest loaded
+          // message, `turns` adds that many turns above it, and no start means the latest page.
+          let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+          let start = query.first { $0.name == "start" }?.value
+          var turns = Int(query.first { $0.name == "turns" }?.value ?? "") ?? 0
+          var end = start.flatMap { id in Self.messages.firstIndex { $0["id"] as? String == id } } ?? -1
+          if end < 0 { end = Self.messages.count; turns = max(turns, 20) }
+          var from = end
+          while from > 0 && turns > 0 { from -= 1; if Self.messages[from]["role"] as? String == "user" { turns -= 1 } }
+          var window = object as! [String: Any]
+          window["messages"] = Array(Self.messages[from...]); window["earlier"] = from; window["earlierFiles"] = 0
+          object = window
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           object = [
             "botId": path.components(separatedBy: "/")[3],

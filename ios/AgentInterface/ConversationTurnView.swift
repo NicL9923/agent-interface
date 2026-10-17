@@ -1,9 +1,41 @@
 import SwiftUI
 
-struct ConversationTurnView: View {
+/// The store as transcript rows read it: without observing it, so a keystroke or poll elsewhere
+/// does not render every message again. The web memoizes its turns for the same reason.
+private struct UnobservedStoreKey: EnvironmentKey { static let defaultValue: AppStore? = nil }
+/// Whether Hermes is reachable, for rows that show "Last seen running".
+private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+  var unobservedStore: AppStore? {
+    get { self[UnobservedStoreKey.self] }
+    set { self[UnobservedStoreKey.self] = newValue }
+  }
+  var transcriptConnected: Bool {
+    get { self[TranscriptConnectedKey.self] }
+    set { self[TranscriptConnectedKey.self] = newValue }
+  }
+}
+extension View {
+  /// Provides the store to screens, which observe it, and to transcript rows, which do not.
+  func appStore(_ store: AppStore) -> some View {
+    environmentObject(store).environment(\.unobservedStore, store)
+  }
+}
+
+/// The loaded turns. Equatable, so the transcript renders again only when they change.
+struct TranscriptTurns: View, Equatable {
+  var turns: [ConversationTurn]
+  var advanced: Bool
+  var body: some View {
+    ForEach(turns) { ConversationTurnView(turn: $0, advanced: advanced) }
+  }
+}
+
+struct ConversationTurnView: View, Equatable {
   var turn: ConversationTurn
   var advanced: Bool
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.transcriptConnected) private var connected
+  static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced }
   var body: some View {
     let visible = turn.visibleMessages
     VStack(alignment: .leading, spacing: 18) {
@@ -34,7 +66,7 @@ struct ConversationTurnView: View {
             Text(group.id)
             Text("\(group.messages.count)").font(.caption).foregroundStyle(.secondary)
             if group.messages.contains(where: { $0.toolCall?.status == "running" }) {
-              Text(store.connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(.secondary)
+              Text(connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(.secondary)
             }
           }
         }.font(.subheadline).accessibilityIdentifier(group.id)

@@ -16,13 +16,20 @@ struct ConversationView: View {
   @State private var earlierFailed = false
   @State private var actionBusy = false
   @State private var visibleMessage: String?
-  @State private var restoredBot: String?
+  @State private var openedBot: String?
   @State private var readSaveTask: Task<Void, Never>?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
-  @State private var nearBottom = true
+  @State private var content = TranscriptMetrics()
+  /// Following keeps the latest message in view as replies and cards grow, as on the web.
+  @State private var following = true
+  /// Set once the opened chat sits at its latest message, so history only pages in after that.
+  @State private var placed = false
+  /// A smooth jump reports positions short of the end until it lands.
+  @State private var jumpingUntil = Date.distantPast
   @State private var earlierEdgeVisible = false
   @State private var unseen = 0
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var modelOpen = false
   @State private var fileSheetOpen = false
   @FocusState private var composerFocused: Bool
@@ -74,9 +81,9 @@ struct ConversationView: View {
       }
     }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
-    .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).environmentObject(store) }
-    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().environmentObject(store) }
-    .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).environmentObject(store) }
+    .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).appStore(store) }
+    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store) }
+    .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).appStore(store) }
     .photosPicker(isPresented: $importPhotos, selection: $photos, maxSelectionCount: 10, matching: .images)
     .onChange(of: photos) { _, selection in
       guard !selection.isEmpty else { return }
@@ -115,7 +122,9 @@ struct ConversationView: View {
   private var transcript: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 18) {
+        // Not lazy: like the web's page, every loaded turn has a real height, so the latest
+        // message and a held place can be scrolled to exactly.
+        VStack(alignment: .leading, spacing: 18) {
           if (store.conversation?.earlier ?? 0) > 0 {
             Button { loadEarlier(proxy) } label: {
               HStack(spacing: 7) {
@@ -124,9 +133,9 @@ struct ConversationView: View {
               }
             }.buttonStyle(.bordered).disabled(store.loadingEarlier || !store.connected).frame(maxWidth: .infinity)
               .onGeometryChange(for: Bool.self) { geometry in geometry.frame(in: .named("transcript")).maxY >= -600 } action: { earlierEdgeVisible = $0 }
-              .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(nearBottom)") {
+              .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(placed)") {
                 // A failed page waits for the button, as on the web, instead of retrying on every scroll.
-                guard earlierEdgeVisible, !nearBottom, !earlierFailed, restoredBot == bot.id, store.connected, !store.loadingEarlier else { return }
+                guard earlierEdgeVisible, placed, !earlierFailed, store.connected, !store.loadingEarlier else { return }
                 loadEarlier(proxy)
               }
           }
@@ -148,9 +157,7 @@ struct ConversationView: View {
               if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
             }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
-          ForEach(store.conversation?.presentationTurns ?? []) { turn in
-            ConversationTurnView(turn: turn, advanced: advanced)
-          }
+          TranscriptTurns(turns: store.turns, advanced: advanced)
           if ![.idle, .done].contains(store.activity) { liveActivity }
           // Questions and secure requests come before approvals, as on the web.
           ForEach(store.conversation?.attention ?? []) { request in
@@ -159,14 +166,14 @@ struct ConversationView: View {
           ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
             approval in approvalCard(approval)
           }
-          Color.clear.frame(height: 1).id("latest").onGeometryChange(for: CGFloat.self) {
-            $0.frame(in: .named("transcript")).maxY
-          } action: { bottom in
-            nearBottom = bottom <= viewportHeight + 120
-            if nearBottom { unseen = 0 }
-          }
+          Color.clear.frame(height: 1).id("latest")
         }.scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(
           maxWidth: .infinity)
+          .environment(\.transcriptConnected, store.connected)
+          .onGeometryChange(for: TranscriptMetrics.self) { geometry in
+            let frame = geometry.frame(in: .named("transcript"))
+            return TranscriptMetrics(top: frame.minY, height: frame.height)
+          } action: { contentMoved(to: $0, proxy) }
       }
       .scrollPosition(id: $visibleMessage, anchor: .top)
       .coordinateSpace(name: "transcript")
@@ -174,71 +181,93 @@ struct ConversationView: View {
         $0.size.height
       } action: {
         viewportHeight = $0
+        // The keyboard or a rotation resizes the view; a follower stays at the end.
+        if following { scrollToLatest(proxy) }
       }
       .scrollDismissesKeyboard(.interactively)
       .onChange(of: store.conversation?.botId, initial: true) { _, id in
-        guard let id, id != restoredBot else { return }
-        restoredBot = id
-        nearBottom = true
+        guard let id, id != openedBot else { return }
+        // Like the web, a chat always opens at its latest message.
+        openedBot = id
+        following = true
+        placed = false
+        unseen = 0
         visibleMessage = nil
-        if let message = store.conversation?.restorableReadAnchor(store.readMessageId()) {
-          // The lazy bottom sentinel may never load here, so assume the user is away
-          // from the latest message until it appears.
-          nearBottom = message == store.conversation?.messages.last?.id
-          visibleMessage = message
-          proxy.scrollTo(message, anchor: .top)
-        } else if store.conversation?.messages.isEmpty == true {
-          proxy.scrollTo("welcome", anchor: .top)
-        } else {
-          proxy.scrollTo("latest", anchor: .bottom)
-        }
+        earlierFailed = false
+        scrollToLatest(proxy)
       }
       .overlay(alignment: .bottom) {
-        if !nearBottom {
-          Button {
-            proxy.scrollTo("latest", anchor: .bottom)
-            store.markRead(store.conversation?.messages.last?.id)
-          } label: {
+        if !following && store.conversation != nil {
+          Button { jumpToLatest(proxy) } label: {
             Label(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")", systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
           }.accessibilityLabel(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages"), jump to latest").padding(12).transition(.opacity)
         }
       }
-      .animation(.easeOut(duration: 0.15), value: nearBottom)
+      .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
         await store.reconcilePending()
       }
-      .onChange(of: visibleMessage) { _, id in
-        readSaveTask?.cancel()
-        guard let id, store.conversation?.messages.contains(where: { $0.id == id }) == true else {
-          return
-        }
-        readSaveTask = Task {
-          try? await Task.sleep(for: .milliseconds(350))
-          guard !Task.isCancelled else { return }
-          store.markRead(id)
-        }
-      }
+      .onChange(of: visibleMessage) { _, _ in saveReadPosition() }
       .onChange(of: store.conversation?.visibleMessages.last?.id) { old, new in
-        if let old, old != new, !nearBottom {
+        if let old, old != new, !following {
           let messages = store.conversation?.visibleMessages ?? []
           unseen += messages.firstIndex { $0.id == old }.map { messages.count - $0 - 1 } ?? 1
         }
       }
-      .onChange(of: latestTrigger) { _, _ in proxy.scrollTo("latest", anchor: .bottom) }
-      .onChange(of: store.conversation?.messages.last?.text) { _, _ in
-        if nearBottom && store.conversation?.messages.isEmpty == false {
-          proxy.scrollTo("latest", anchor: .bottom)
-        }
-      }
+      .onChange(of: latestTrigger) { _, _ in following = true; scrollToLatest(proxy) }
       .onDisappear {
         readSaveTask?.cancel()
-        if let id = visibleMessage,
-          store.conversation?.messages.contains(where: { $0.id == id }) == true
-        {
-          store.markRead(id)
-        }
+        if let id = readPosition { store.markRead(id) }
       }
+    }
+  }
+  /// Content grew or the reader scrolled. Growth keeps a follower at the end; a scroll decides
+  /// whether the reader is following, as the web's scroll handler does.
+  private func contentMoved(to next: TranscriptMetrics, _ proxy: ScrollViewProxy) {
+    let previous = content
+    content = next
+    if next.height != previous.height {
+      if following { scrollToLatest(proxy) }
+      return
+    }
+    let atLatest = next.top + next.height - viewportHeight < 100
+    if atLatest || Date() >= jumpingUntil { following = atLatest }
+    if atLatest { unseen = 0; jumpingUntil = .distantPast }
+  }
+  /// Waits for the layout pass that changed the content, then shows its end.
+  private func scrollToLatest(_ proxy: ScrollViewProxy) {
+    Task { @MainActor in
+      proxy.scrollTo("latest", anchor: .bottom)
+      if store.conversation != nil { placed = true }
+    }
+  }
+  private func jumpToLatest(_ proxy: ScrollViewProxy) {
+    following = true
+    unseen = 0
+    // A short trip glides; a long one jumps rather than scrolling through pages of history.
+    let distance = content.top + content.height - viewportHeight
+    if distance < viewportHeight * 3 && !reduceMotion {
+      jumpingUntil = Date().addingTimeInterval(1)
+      withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("latest", anchor: .bottom) }
+    } else {
+      proxy.scrollTo("latest", anchor: .bottom)
+    }
+    saveReadPosition()
+  }
+  /// The web's reading position: the latest message while following, otherwise the top one in view.
+  private var readPosition: String? {
+    let messages = store.conversation?.messages ?? []
+    if following { return messages.last?.id }
+    return visibleMessage.flatMap { id in messages.contains { $0.id == id } ? id : nil }
+  }
+  private func saveReadPosition() {
+    readSaveTask?.cancel()
+    guard placed, let id = readPosition else { return }
+    readSaveTask = Task {
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      store.markRead(id)
     }
   }
   /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
@@ -436,13 +465,15 @@ struct ConversationView: View {
       .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || store.sending)
   }
   private func loadEarlier(_ proxy: ScrollViewProxy) {
-    // Prepending would otherwise move the view; keep the oldest message in place.
-    let anchor = store.conversation?.messages.first?.id
+    let first = store.conversation?.messages.first?.id
+    // The scroll position holds the turn in view while history is added above it. Before the
+    // reader has scrolled there is none, so the oldest loaded turn is held instead.
+    let anchor = visibleMessage == nil ? store.turns.first?.id : nil
     Task {
       await store.loadEarlier()
       // The store reports a failed page as an error and leaves the window as it was.
-      earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == anchor
-      if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+      earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == first
+      if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
   private func approvalCard(_ approval: Approval) -> some View {
@@ -466,7 +497,7 @@ struct MessageView: View {
   var continued = false
   var groupedReasoning = false
   var groupedActivity = false
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -477,7 +508,7 @@ struct MessageView: View {
         }.foregroundStyle(.secondary)
       }
       if message.isAgentExchange {
-        AgentExchangeView(message: message, recipient: store.bot?.name ?? "Assistant")
+        AgentExchangeView(message: message, recipient: store?.bot?.name ?? "Assistant")
       } else if message.isToolActivity {
         if !groupedActivity {
           if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
@@ -534,7 +565,7 @@ struct AgentExchangeView: View {
 }
 struct ToolActivityView: View {
   var message: Message
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.transcriptConnected) private var connected
   var body: some View {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 8) {
@@ -558,7 +589,7 @@ struct ToolActivityView: View {
         Label(message.displayToolName, systemImage: "wrench.and.screwdriver").font(.caption.bold())
         Spacer()
         if let status = message.toolCall?.status {
-          Text(status == "running" && !store.connected ? "Last seen running" : status.capitalized).font(.caption).foregroundStyle(.secondary)
+          Text(status == "running" && !connected ? "Last seen running" : status.capitalized).font(.caption).foregroundStyle(.secondary)
         }
       }
     }
@@ -754,4 +785,10 @@ struct CheckboxStyle: ToggleStyle {
       }
     }.buttonStyle(.plain).accessibilityAddTraits(.isToggle).accessibilityValue(configuration.isOn ? "1" : "0")
   }
+}
+
+/// Where the transcript's content sits in its scroll view, for following and holding a place.
+struct TranscriptMetrics: Equatable {
+  var top: CGFloat = 0
+  var height: CGFloat = 0
 }
