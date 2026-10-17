@@ -206,7 +206,7 @@ struct InteractiveReplyCard: View {
       if let url = item.url.flatMap(URL.init(string:)) { Link("Open details", destination: url).font(.caption) }
       if editing == item.id {
         TextField("Your itinerary note", text: Binding(get: { draft.notes[item.id] ?? "" }, set: { draft.notes[item.id] = String($0.prefix(2000)) }), axis: .vertical)
-          .lineLimit(3...8).textFieldStyle(.roundedBorder)
+          .lineLimit(3...8).textFieldStyle(.roundedBorder).disabled(busy)
         HStack {
           Button("Save note") { save(draft) }.disabled(busy)
           Button("Cancel") { draft = saved; editing = nil }.disabled(busy)

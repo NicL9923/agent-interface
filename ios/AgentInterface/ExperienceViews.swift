@@ -335,13 +335,15 @@ struct MemoryDrawer: View {
 struct RoutineTemplate: Decodable, Identifiable { var id: String; var name: String; var prompt: String; var schedule: String; var description: String }
 struct SchedulePreview: Decodable {
   var botId: String; var schedule: String; var timezone: String; var nextRuns: [String]; var kind: String
-  /// Run times read in the Hermes profile's timezone, which decides when the schedule fires.
-  func label(_ run: String, now: Date = .now) -> String {
+  /// Full run date and time in the Hermes profile's timezone, which decides when the schedule fires, like the web.
+  func label(_ run: String, locale: Locale = .current) -> String {
     guard let date = ServerDate.parse(run) else { return run }
-    var calendar = Calendar.current
-    if let zone = TimeZone(identifier: timezone) { calendar.timeZone = zone; return When.format(date, now: now, relative: false, calendar: calendar) }
-    calendar.timeZone = .gmt
-    return When.format(date, now: now, relative: false, calendar: calendar) + " UTC"
+    let formatter = DateFormatter()
+    formatter.locale = locale
+    formatter.setLocalizedDateFormatFromTemplate("yMdjmmss")
+    if let zone = TimeZone(identifier: timezone) { formatter.timeZone = zone; return formatter.string(from: date) }
+    formatter.timeZone = .gmt
+    return formatter.string(from: date) + " UTC"
   }
 }
 struct RoutineRunReceipt: Codable {
@@ -384,12 +386,12 @@ struct RoutineSchedulePreview: View {
   }
   private func load() {
     guard let api = store.api else { return }; let scope = store.scope; let asked = schedule
-    busy = true; error = nil; requested = asked
+    busy = true; error = nil; preview = nil; requested = asked
     Task {
       defer { busy = false }
       do {
         let value: SchedulePreview = try await api.write("/routines/preview", ["botId": botId, "schedule": asked])
-        guard store.scope == scope, store.api === api else { return }
+        guard store.scope == scope, store.api === api, requested == asked else { return }
         preview = value; onReady?(asked)
       } catch { if store.scope == scope { self.error = error.localizedDescription } }
     }

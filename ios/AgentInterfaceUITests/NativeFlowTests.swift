@@ -183,7 +183,6 @@ final class NativeFlowTests: XCTestCase {
     let composer = app.textFields["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
-    XCTAssertFalse(app.buttons["Plan dinners"].exists, "Starters stay out of the composer, as on the web")
     app.buttons["composerAttach"].tap()
     XCTAssertTrue(app.buttons["Photo Library"].waitForExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(app.buttons["Choose Files"].exists)

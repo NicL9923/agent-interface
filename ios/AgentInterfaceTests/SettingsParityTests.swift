@@ -29,11 +29,11 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertTrue(receipt("failed", nil).finished)
     XCTAssertFalse(receipt("accepted", nil).finished)
   }
-  func testSchedulePreviewReadsRunTimesInTheHermesTimezone() {
-    let now = ServerDate.parse("2020-01-01T12:30:00Z")!
+  func testSchedulePreviewShowsFullRunTimesInTheHermesTimezone() {
+    let en = Locale(identifier: "en_US")
     let chicago = SchedulePreview(botId: "b", schedule: "0 7 * * *", timezone: "America/Chicago", nextRuns: [], kind: "cron")
-    XCTAssertTrue(chicago.label("2020-01-01T13:00:00Z", now: now).contains("7:00"), chicago.label("2020-01-01T13:00:00Z", now: now))
+    XCTAssertEqual(chicago.label("2027-01-04T13:00:00Z", locale: en), "1/4/2027, 7:00:00\u{202F}AM")
     let unknown = SchedulePreview(botId: "b", schedule: "0 7 * * *", timezone: "Not/AZone", nextRuns: [], kind: "cron")
-    XCTAssertTrue(unknown.label("2020-01-01T13:00:00Z", now: now).hasSuffix(" UTC"))
+    XCTAssertEqual(unknown.label("2027-01-04T13:00:00Z", locale: en), "1/4/2027, 1:00:00\u{202F}PM UTC")
   }
 }
