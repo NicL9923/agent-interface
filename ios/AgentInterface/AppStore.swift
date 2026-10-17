@@ -52,6 +52,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var upgradeBusy = false
   @Published var upgradeError: String?
   @Published var upgradeInstallUncertain = false
+  /// True only while a check, install or recovery request is in flight, not for status polls.
+  @Published var upgradeSubmitting = false
+  /// The shared desktop's availability for the Settings row. Nil until the first read.
+  @Published var computerStatus: ComputerStatus?
   private var upgradeRequest: UpgradeInstallRequest?
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
   var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
@@ -1141,7 +1145,16 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     upgradeBusy = false
     upgradeError = nil
     upgradeInstallUncertain = false
+    upgradeSubmitting = false
+    computerStatus = nil
     upgradeRequest = nil
+  }
+  /// A failed read keeps the last known status, like the web panel, which only notes it can't reach the computer.
+  func refreshComputer() async {
+    guard let api, api.token != nil, !sessionExpired else { return }
+    let currentGeneration = generation
+    guard let value: ComputerStatus = try? await api.get("/computer"), currentGeneration == generation else { return }
+    computerStatus = value
   }
   func refreshUpgrade() async {
     await upgradeOperation(nil)
@@ -1168,7 +1181,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     guard let api, api.token != nil, !sessionExpired, !upgradeBusy else { return }
     let currentGeneration = generation
     upgradeBusy = true
-    defer { if currentGeneration == generation { upgradeBusy = false } }
+    upgradeSubmitting = action != nil
+    defer { if currentGeneration == generation { upgradeBusy = false; upgradeSubmitting = false } }
     do {
       let value: UpgradeStatus
       if action == "install", let upgradeRequest {

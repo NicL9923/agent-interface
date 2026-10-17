@@ -22,8 +22,10 @@ struct ModelCatalogSections: View {
         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
         TextField("Find a model or provider", text: $search).autocorrectionDisabled()
           .textInputAutocapitalization(.never).accessibilityIdentifier("modelSearch")
-        Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
-          .accessibilityLabel("Refresh models").disabled(loading || disabled)
+        if ModelPickerRules.refreshVisible(error: error, providerCount: providers.count) {
+          Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+            .accessibilityLabel("Refresh models").disabled(loading)
+        }
       }
       if loading { ProgressView("Loading models from Hermes…") }
       if let error {
@@ -36,7 +38,7 @@ struct ModelCatalogSections: View {
     if !favoriteRows.isEmpty {
       Section("Favorites") {
         ForEach(favoriteRows, id: \.choice) { item in
-          row(item.provider, item.model)
+          row(item.provider, item.model, showProvider: true)
         }
       }
     }
@@ -47,25 +49,28 @@ struct ModelCatalogSections: View {
           set: { if $0 { expanded.insert(provider.id) } else { expanded.remove(provider.id) } }
         )) {
           if let warning = provider.warning { Text(warning).font(.caption).foregroundStyle(.secondary) }
-          if provider.models.isEmpty { Text("No models reported. Connect this provider in Hermes, then refresh.").font(.caption).foregroundStyle(.secondary) }
+          if provider.models.isEmpty { Text(ModelPickerRules.noModelsForProvider).font(.caption).foregroundStyle(.secondary) }
           ForEach(filtered(provider)) { model in row(provider, model) }
         } label: {
           HStack {
             Text(provider.name).foregroundStyle(.primary)
             Spacer()
-            Text("\(provider.models.count)").font(.caption).foregroundStyle(.secondary)
+            Text("\(filtered(provider).count)").font(.caption).foregroundStyle(.secondary)
           }
         }
       }
     }
     if !loading && error == nil && (providers.isEmpty || !query.isEmpty && providers.allSatisfy({ filtered($0).isEmpty })) {
-      Section { Text(query.isEmpty ? "No models were reported by Hermes." : "No models match your search.").foregroundStyle(.secondary) }
+      Section {
+        Text(query.isEmpty ? ModelPickerRules.noModelsReported : "No models match your search.").foregroundStyle(.secondary)
+        if providers.isEmpty { Button("Retry loading models") { Task { await load() } } }
+      }
     }
     Section {
       LabeledContent("Selected model", value: selection.model.isEmpty ? "None" : selection.model)
       if !selection.provider.isEmpty { LabeledContent("Provider", value: selection.provider) }
-      if !selection.model.isEmpty && !providers.contains(where: { $0.matches(selection.provider) && $0.models.contains(where: { $0.id == selection.model }) }) {
-        Text("This saved selection is not in the current catalog. It stays selected until you choose another model.").font(.caption).foregroundStyle(.secondary)
+      if !loading && error == nil && !selection.model.isEmpty && !providers.contains(where: { $0.matches(selection.provider) && $0.models.contains(where: { $0.id == selection.model }) }) {
+        Text(ModelPickerRules.savedModelKept).font(.caption).foregroundStyle(.secondary)
       }
     }
 
@@ -80,7 +85,7 @@ struct ModelCatalogSections: View {
       return (choice, provider, model)
     }
   }
-  private func row(_ provider: ModelProviderInfo, _ model: ModelInfo) -> some View {
+  private func row(_ provider: ModelProviderInfo, _ model: ModelInfo, showProvider: Bool = false) -> some View {
     let choice = ModelChoice(provider: provider.id, model: model.id)
     let selected = selection.model == model.id && provider.matches(selection.provider)
     let favorite = favorites.first { $0.model == model.id && provider.matches($0.provider) }
@@ -89,6 +94,7 @@ struct ModelCatalogSections: View {
         HStack {
           VStack(alignment: .leading, spacing: 4) {
             Text(model.name).foregroundStyle(.primary)
+            if showProvider { Text(provider.name).font(.caption).foregroundStyle(.secondary) }
             if !model.available { Text("Reconnect in Hermes to use this model").font(.caption).foregroundStyle(.secondary) }
           }.frame(maxWidth: .infinity, alignment: .leading)
           if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
@@ -97,7 +103,7 @@ struct ModelCatalogSections: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
       Button { Task { await toggleFavorite(favorite ?? choice) } } label: {
         Image(systemName: favorite == nil ? "star" : "star.fill").frame(width: 44, height: 44)
-      }.buttonStyle(.borderless).disabled(disabled || savingFavorite || favorites.count >= 100 && favorite == nil)
+      }.buttonStyle(.borderless).disabled(ModelPickerRules.starDisabled(saving: savingFavorite, favoriteCount: favorites.count, isFavorite: favorite != nil))
         .accessibilityLabel("\(favorite == nil ? "Add" : "Remove") \(model.name) \(favorite == nil ? "to" : "from") favorites")
     }
   }
@@ -260,5 +266,19 @@ struct ComposerModelSheet: View {
         if scope == store.scope { confirmation = choice; error = failure.localizedDescription }
       } catch { if scope == store.scope { self.error = error.localizedDescription } }
     }
+  }
+}
+
+/// The catalog rules that mirror the web selector, kept apart from the views so they can be tested.
+enum ModelPickerRules {
+  static let favoriteLimit = 100
+  static let noModelsForProvider = "No models reported. Check this connection in Hermes."
+  static let noModelsReported = "No connected models were reported. Connect a provider in Hermes, then retry."
+  static let savedModelKept = "Your saved model is kept. Hermes did not include it in the current catalog."
+  /// Refresh has nothing to refresh during a load error, where Retry is offered, or with an empty catalog.
+  static func refreshVisible(error: String?, providerCount: Int) -> Bool { error == nil && providerCount > 0 }
+  /// Starring is its own save, so only a pending save or a full list blocks it, not a blocked model change.
+  static func starDisabled(saving: Bool, favoriteCount: Int, isFavorite: Bool) -> Bool {
+    saving || favoriteCount >= favoriteLimit && !isFavorite
   }
 }

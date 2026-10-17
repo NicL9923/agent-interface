@@ -121,6 +121,24 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(app.buttons["Fixture fast model"].waitForExistence(timeout: 5))
     try capture("assistant-model-catalog")
   }
+  func testComputerRowReportsWhoHasControlAndDisablesWhenUnavailable() throws {
+    for unavailable in [false, true] {
+      let app = XCUIApplication()
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      if unavailable { app.launchEnvironment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] = "1" }
+      app.launch()
+      XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.buttons["openSettings"].tap()
+      let row = app.descendants(matching: .any)["sharedComputer"]
+      XCTAssertTrue(row.waitForExistence(timeout: 10))
+      let detail = unavailable ? "The fixture desktop is stopped." : "Ranch hand is using the computer"
+      expectation(for: NSPredicate(format: "label CONTAINS %@", detail), evaluatedWith: row); waitForExpectations(timeout: 10)
+      XCTAssertEqual(row.isEnabled, !unavailable)
+      app.terminate()
+    }
+  }
   func testSettingsFailureCanRetryAfterDismissingTheError() throws {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
