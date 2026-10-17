@@ -260,7 +260,9 @@ final class ParityFlowTests: XCTestCase {
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Enable notifications on this device?"]); waitForExpectations(timeout: 5)
     app.buttons["openSettings"].tap()
     let toggle = app.switches["deviceNotifications"]
-    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.
+    if !toggle.waitForExistence(timeout: 3) { scroll(app, to: toggle) }
+    XCTAssertTrue(toggle.exists)
     expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
     // A labelled row switch holds the real control; tapping the row's centre can miss it.
     (toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle).tap()
@@ -275,7 +277,9 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Enable notifications on this device?"].exists)
     app.buttons["openSettings"].tap()
     let toggle = app.switches["deviceNotifications"]
-    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.
+    if !toggle.waitForExistence(timeout: 3) { scroll(app, to: toggle) }
+    XCTAssertTrue(toggle.exists)
     XCTAssertEqual(toggle.value as? String, "0"); XCTAssertTrue(toggle.isEnabled)
   }
 }

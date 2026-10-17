@@ -567,6 +567,21 @@ private final class NativeMockServer: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(value.deviceNotifications, .enabledState, "The new account's own state replaces Checking")
     }
+    func testEnableDuringACleanupSyncEndsRegistered() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize(); await controller.disable()
+        controller.token = String(repeating: "ab", count: 32)
+        let path = "/api/native/push/device"
+        server.holdNext(path)
+        let cleanup = Task { await controller.synchronize() }
+        try await server.waitForHeld(path)
+        await controller.enable()
+        server.release(path); await cleanup.value
+        XCTAssertEqual(server.requests.last { $0.url?.path == path }?.httpMethod, "PUT", "The late removal is followed by registering again")
+        XCTAssertEqual(value.deviceNotifications, .enabledState)
+    }
     func testFailedTurnOffKeepsSwitchOnAndRetryRecovers() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller

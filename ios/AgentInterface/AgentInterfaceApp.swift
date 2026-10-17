@@ -194,7 +194,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       if intent == .off {
         // Removing again is harmless and clears a registration a failed cleanup left behind.
         let _: EmptyResponse = try await api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
-        if session.current && !busy { store.deviceNotifications = .disabledByChoice }
+        guard session.current else { return }
+        // Enable may have run while this removal was in flight; check again so its registration stands.
+        if busy { syncAfterBusy = true } else if NotificationIntent.read(store) != .off { synchronizeAgain = true } else { store.deviceNotifications = .disabledByChoice }
         return
       }
       try await sendRegistration(with: session)

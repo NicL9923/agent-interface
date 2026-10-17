@@ -44,7 +44,7 @@ struct DiscoveryView: View {
       if busy { ProgressView() }
       if let page {
         Section("Conversation history") {
-          Button { self.page = nil } label: { Label("Back to results", systemImage: "chevron.left") }
+          Button { self.page = nil; historyRequest = nil } label: { Label("Back to results", systemImage: "chevron.left") }
           Text("Read from Hermes. This view does not change the assistant’s active conversation.").font(.footnote).foregroundStyle(.secondary)
           Button("Save conversation") { Task { await perform { api in
             let _: SavedItem = try await api.write("/saved",SavedPointer(botId:page.botId,kind:"session",sessionId:page.sessionId,title:Self.conversationTitle(hits,page.sessionId))); notice = Self.savedNotice
