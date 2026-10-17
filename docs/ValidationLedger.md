@@ -1,5 +1,59 @@
 # Validation ledger
 
+## October 17 native mobile and web parity, second follow-up
+
+Based on `17e7c9f`. Claude Opus 5.5 orchestrated; Claude Opus 5.5 and Sonnet 5.5
+implemented. A side-by-side audit of both clients found the iOS transcript
+opening short of the latest message, a jump control that did nothing, and about
+forty smaller gaps.
+
+- **Transcript:** a plain stack replaces the lazy one, so the chat opens at the
+  latest message, follows replies only at the end, holds the reader's place while
+  20-turn pages load above, and Jump to latest works, as on the web. Opening no
+  longer fetches a second page for an old reading position.
+- **Loading:** rows no longer observe the whole store, unchanged polls do not
+  render, message origin patterns compile once, turns are grouped once per change,
+  and images are downsampled and cached at their decoded size.
+- **Updates:** the app follows the conversation event stream with the web's
+  30-second fallback poll, refreshes bootstrap every 8 seconds, and orders
+  overlapping reads so an older response never undoes a newer one.
+- **VoiceOver:** reads each settled reply once, ported from the web's rules.
+- **Parity work:** the web's Markdown, tool details, artifacts and agent
+  exchanges; the composer's upload progress, file rules, camera, paste, drop,
+  hardware Return, per-assistant unconfirmed sends and server speech; settings,
+  vault, integrations and Hermes update wording; launch, setup and offline states,
+  the in-app notification card and switch, group chats, search and Today.
+
+Final source fingerprint, excluding this ledger:
+`sha256:e80fa9ca6905d6126485ee5fafbd8901799234399221cad6b6c3c45646ed2999`.
+Native application source (`ios/AgentInterface`, `ios/AgentInterfaceShare`,
+`ios/AgentInterfaceWidgets`, `ios/Shared`):
+`sha256:51294b6e28bebca70b305e462881958c411d8215c92be971bd3670673d785f22`.
+Native tests: `sha256:a97297c3bc24b1a5e064415519b5793135645790e180706f921f13e32fb97ae7`.
+
+Xcode 27.1 on iOS 27.0 simulators with ad hoc signing. At `53b413b` the full
+native suite passed on iPhone 17 `0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0`: 246 unit
+tests with two optional skips and 43 UI tests with two skips, no failures
+(`/Volumes/DevSSD/scratch/agent-interface-parity/final-phone-1347.xcresult`). On
+iPad `0EC750D2-1DB5-4FD6-945F-3869E8D4ADB0` the tablet, parity and discovery flows
+passed, 15 tests (`final-ipad-1411.xcresult`). All 752 web tests passed on Node
+24.21 and Node 26.10, including a new bearer-session event stream test. The new
+long-history UI test failed before the change and passes after it. Nothing here
+was run through CI's Xcode 26.6; bodies were kept split for it.
+
+GPT-6.1 Sol reviewed the full diff in four rounds. Round one found voice
+recordings surviving an account switch, notification switch races, out-of-order
+conversation reads, oversized restored group drafts, a suppressed first
+VoiceOver reply, a stream outliving an expiring sign-in, image cache accounting
+and a stale doc. Round two found a missing camera purpose string, unrecovered
+notification cleanup, stale missing-assistant errors and earlier-page snapshots,
+an update confirmation acting on a newer operation, and late search history
+replacing a tab. Round three found a cleanup racing Enable and late paging after
+Back to results. All were fixed with regression tests where testable; round four
+found nothing further. Not established here: hardware Return, camera capture,
+server speech playback and notification delivery on a physical device. No
+production deployment is part of this change.
+
 ## October 17 native mobile and web parity follow-up
 
 Based on `5c6e500`. Claude Opus 5.5 orchestrated, Claude Opus 5.5 and Sonnet 5.5
