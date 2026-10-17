@@ -18,7 +18,7 @@ struct RootView: View {
   var body: some View {
     Group {
       if store.bootstrap == nil {
-        ConnectionView()
+        if store.connectingToHousehold { LaunchStateView() } else { ConnectionView() }
       } else {
         // Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
         VStack(spacing: 0) {
@@ -41,6 +41,8 @@ struct RootView: View {
               TodayView(openBot: { destination = .conversation; compactColumn = .detail })
             } else if let bot = store.bot {
               ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
+            } else if store.bootstrap?.bots.isEmpty == true {
+              HomeEmptyDetail(create: { creatingBot = true })
             } else {
               ContentUnavailableView(
                 "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
@@ -100,19 +102,18 @@ struct RootView: View {
 struct ConnectionView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
-  @State private var changeServerOffline = false
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 24) {
           AvatarTrio().padding(.top, 28)
           VStack(alignment: .leading, spacing: 8) {
-            Text(store.api == nil ? "Bring your assistants along" : "Your household, connected")
+            Text(store.api == nil ? WelcomeCopy.heading.replacingOccurrences(of: "\n", with: " ") : WelcomeCopy.signInHeading)
               .font(.largeTitle.bold())
             Text(
               store.api == nil
                 ? "Connect to the WildBots app server your self-hoster set up. Your assistants and their work stay on that server."
-                : "Sign in with an allowed household account. This device connects through the app server."
+                : WelcomeCopy.signInDetail
             ).foregroundStyle(.secondary)
           }
           if store.api == nil {
@@ -137,6 +138,9 @@ struct ConnectionView: View {
             }
           } else {
             Label(store.host, systemImage: "server.rack").font(.footnote).textSelection(.enabled)
+            if store.authConfig == nil && store.error == nil {
+              Text(WelcomeCopy.checkingSignIn).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("checkingSignIn")
+            }
             Button {
               Task { await store.signIn() }
             } label: {
@@ -162,17 +166,7 @@ struct ConnectionView: View {
                 "This development server also offers local test accounts in the sign-in browser."
               ).font(.footnote).foregroundStyle(.secondary)
             }
-            Button("Change server") {
-              Task { if !(await store.changeConnection()) { changeServerOffline = true } }
-            }.disabled(store.signingIn).accessibilityIdentifier("changeServer")
-              .confirmationDialog(
-                "The server didn't confirm sign-out, so it may be unreachable. If you change servers anyway, this device forgets its sign-in, but the session stays valid on the server until it expires.",
-                isPresented: $changeServerOffline, titleVisibility: .visible
-              ) {
-                Button("Change server anyway", role: .destructive) {
-                  Task { await store.changeConnection(localOnly: true) }
-                }
-              }
+            ChangeServerButton()
           }
           if let error = store.error { ErrorBanner(message: error, dismiss: { store.error = nil }) }
           Text(
@@ -229,7 +223,9 @@ struct BotListView: View {
   var openToday: () -> Void
   var openGroups: () -> Void
   var openDiscovery: () -> Void
-  @StateObject private var reachability = NetworkReachability()
+  @ObservedObject private var reachability = NetworkReachability.shared
+  @State private var checkingConnection = false
+  private var lost: Bool { store.connectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
   var body: some View {
@@ -243,6 +239,7 @@ struct BotListView: View {
           }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
             .accessibilityIdentifier("homeNotice")
         }
+        NotificationOnboardingCard()
         if store.sessionExpired {
           VStack(alignment: .leading, spacing: 8) {
             Text("Sign in again to continue").font(.footnote).foregroundStyle(.secondary)
@@ -271,16 +268,7 @@ struct BotListView: View {
               LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
             }
           }
-          if bootstrap.bots.isEmpty {
-            ContentUnavailableView {
-              Label("Your assistants", systemImage: "bubble.left.and.bubble.right")
-            } description: {
-              Text("No assistants are available from Hermes yet.")
-            } actions: {
-              Button("Create an assistant", action: create).buttonStyle(.borderedProminent)
-                .disabled(!store.supports("botConfiguration") || !store.connected)
-            }
-          }
+          if bootstrap.bots.isEmpty { emptyHome }
         }
       }.padding(16)
     }.background(homeBackground)
@@ -291,21 +279,44 @@ struct BotListView: View {
           Button(action: openPreferences) {
             AccountAvatar(member: store.bootstrap?.user, size: 40)
               .overlay(alignment: .bottomTrailing) {
-                Circle().fill(store.connected ? Palette.accent : Palette.attention)
+                Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
                   .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
               }
           }.accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
         }
-        if !store.connected && !store.sessionExpired {
+        if lost {
           ToolbarItem(placement: .topBarLeading) { syncPill }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
           Button(action: openDiscovery) { Image(systemName: "magnifyingglass") }
             .accessibilityLabel("Search & saved").accessibilityIdentifier("openDiscovery")
-          Button(action: create) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
-            .disabled(!store.supports("botConfiguration") || !store.connected)
+          Button(action: createOrExplain) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
+            .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
+            .accessibilityIdentifier("newAssistant")
         }
       }.refreshable { await store.refreshBootstrap() }
+  }
+  /// Home while there are no assistants: the setup panel if Hermes is out of reach, else the web's empty list.
+  @ViewBuilder private var emptyHome: some View {
+    if lost {
+      HermesConnectionPanel(connection: store.bootstrap?.connection, offline: reachability.offline,
+        appUnavailable: store.appUnavailable, busy: checkingConnection) {
+          checkingConnection = true
+          Task { await store.reconnect(); checkingConnection = false }
+        }
+    } else {
+      VStack(spacing: 12) {
+        Text("No assistants are available from Hermes yet.").foregroundStyle(.secondary)
+        Button("Create an assistant", action: createOrExplain).buttonStyle(.borderedProminent)
+          .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
+          .accessibilityIdentifier("createAssistant")
+        if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
+      }.frame(maxWidth: .infinity)
+    }
+  }
+  /// A disabled button gives no reason on a touch screen, so a blocked tap says why.
+  private func createOrExplain() {
+    if let reason = store.assistantSetupBlock { store.notice = reason } else { create() }
   }
   /// Web's header status while the connection is down: a spinner while retrying, still when the device is offline.
   private var syncPill: some View {
@@ -322,7 +333,7 @@ struct BotListView: View {
     Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(HomeLinkStyle(selected: destination == .groups)).accessibilityIdentifier("openGroups")
   }
   private func state(_ bot: Bot) -> ActivityState {
-    !store.connected ? .disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
+    lost ? .disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
   }
   private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
   private func pinnedTile(_ bot: Bot) -> some View {
@@ -400,6 +411,8 @@ private struct SyncSpinner: View {
   }
 }
 @MainActor final class NetworkReachability: ObservableObject {
+  /// One monitor for every screen that shows the connection.
+  static let shared = NetworkReachability()
   @Published private(set) var offline = false
   private let monitor = NWPathMonitor()
   init() {
@@ -465,18 +478,17 @@ struct AccountAvatar: View {
 }
 private struct AssistantListDate: View {
   var date: Date
+  @ObservedObject private var clock = MinuteClock.shared
   var body: some View {
-    TimelineView(.periodic(from: .now, by: 60)) { context in
-      Text(label(now: context.date)).font(.caption).foregroundStyle(.secondary).fixedSize()
-    }
+    Text(When.listDate(date, now: clock.now)).font(.caption).foregroundStyle(.secondary).fixedSize()
   }
-  private func label(now: Date) -> String { When.listDate(date, now: now) }
 }
 
 /// An assistant's current activity in words, with a dot in the state's color.
 struct ActivityLabel: View {
   var state: ActivityState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var dim = false
   private var color: Color {
     switch state {
     case .blocked: Palette.attention
@@ -488,11 +500,10 @@ struct ActivityLabel: View {
   var body: some View {
     let breathes = !reduceMotion && (state == .thinking || state == .working)
     HStack(spacing: 6) {
-      TimelineView(.animation(minimumInterval: 1 / 20, paused: !breathes)) { timeline in
-        let phase = timeline.date.timeIntervalSinceReferenceDate / 1.8 * 2 * .pi
-        Circle().fill(color).frame(width: 6, height: 6)
-          .opacity(breathes ? 0.675 + 0.325 * cos(phase) : 1)
-      }.frame(width: 6, height: 6)
+      // One repeating animation that Core Animation drives, not a timeline redrawn 20 times a second.
+      Circle().fill(color).frame(width: 6, height: 6).opacity(breathes && dim ? 0.35 : 1)
+        .animation(breathes ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default, value: dim)
+        .onAppear { dim = true }
       Text(state.label).fontWeight(.medium)
     }.font(.caption).foregroundStyle(color)
   }

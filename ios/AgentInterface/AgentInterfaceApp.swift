@@ -39,6 +39,7 @@ import UserNotifications
         // Sign-out, another account or another server: the old account's activity ends, and
         // the new one starts from its own state.
         .onChange(of: store.scope) { old, new in
+          store.deviceNotifications = DeviceNotificationState()
           Task {
             if old != nil { await LiveActivityController.shared.endAll(unregister: false) }
             if new != nil {
@@ -78,8 +79,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     _ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error
   ) {
     Task { @MainActor in
-      NotificationController.shared.store?.notificationStatus =
-        "Device registration failed: \(error.localizedDescription)"
+      NotificationController.shared.store?.deviceNotifications =
+        .failed("Device registration failed: \(error.localizedDescription)")
     }
   }
   func userNotificationCenter(
@@ -109,9 +110,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var pendingBotId: String?
   var pendingRoutineId: String?
   var pendingURL: String?
-  private let permissions: NotificationPermissions
-  private let register: @MainActor () -> Void
-  private let unregister: @MainActor () -> Void
+  private(set) var permissions: NotificationPermissions
+  private(set) var register: @MainActor () -> Void
+  private(set) var unregister: @MainActor () -> Void
+  private var busy = false
   private var synchronizing = false
   private var synchronizeAgain = false
   init(permissions: NotificationPermissions = .system,
@@ -119,6 +121,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     unregister: @escaping @MainActor () -> Void = { UIApplication.shared.unregisterForRemoteNotifications() }) {
     self.permissions = permissions; self.register = register; self.unregister = unregister
   }
+  #if DEBUG
+    /// UI tests stand in for iOS permission and APNs, which a simulator cannot grant.
+    func useFixtureSystem(permissions: NotificationPermissions) {
+      self.permissions = permissions
+      register = {}
+      unregister = {}
+      token = String(repeating: "ab", count: 32)
+    }
+  #endif
   static func botId(from value: String, origin: URL) -> String? {
     guard value.hasPrefix("/"), !value.hasPrefix("//"),
       let url = URL(string: value, relativeTo: origin)?.absoluteURL, url.scheme == origin.scheme,
@@ -133,7 +144,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     UserDefaults.standard.set(value, forKey: "push.deviceId")
     return value
   }
-  /// iOS owns permission. Ask once after household sign-in, then reconcile on foreground.
+  /// Brings this device's registration in line with what the person chose and what iOS allows.
+  /// It never asks iOS for permission: that happens only after Enable, from the in-app card or Settings.
   func synchronize() async {
     guard !synchronizing else { synchronizeAgain = true; return }
     synchronizing = true
@@ -144,44 +156,106 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     } while synchronizeAgain
     await openPendingConversation()
   }
+  /// Asks the person's account to act on this device only while the sign-in and account are the ones that began the work.
+  @MainActor private struct Session {
+    let store: AppStore, api: APIClient, scope: String, token: String?
+    var current: Bool { store.api === api && api.token == token && store.scope == scope }
+  }
+  private func session() -> Session? {
+    guard let store, let api = store.api, let scope = store.scope, api.token != nil, store.bootstrap != nil, !store.sessionExpired else { return nil }
+    return Session(store: store, api: api, scope: scope, token: api.token)
+  }
+  private func isGranted(_ status: UNAuthorizationStatus) -> Bool { status == .authorized || status == .provisional || status == .ephemeral }
   private func synchronizeDevice() async {
-    guard let store, let api = store.api, let currentScope = store.scope,
-      api.token != nil, store.bootstrap != nil, !store.sessionExpired else { return }
-    let currentToken = api.token
-    func current() -> Bool { store.api === api && api.token == currentToken && store.scope == currentScope }
+    guard !busy, let session = session() else { return }
+    let store = session.store, api = session.api
     do {
-      var status = await permissions.status()
-      guard current() else { return }
+      let status = await permissions.status()
+      guard session.current else { return }
       if status == .denied {
         unregister()
         token = nil
         let _: EmptyResponse = try await api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
-        if current() { store.notificationStatus = "Notifications are managed in iOS Settings" }
+        if session.current && !busy { store.deviceNotifications = .blocked }
         return
       }
       let config: PushConfig = try await api.get("/native/push/config")
-      guard current() else { return }
-      guard config.available else {
-        store.notificationStatus = "Apple push notifications are unavailable on this server"
+      guard session.current, !busy else { return }
+      guard config.available else { store.deviceNotifications = .unconfigured; return }
+      let intent = NotificationIntent.read(store)
+      if status == .notDetermined {
+        store.deviceNotifications = .ready(prompt: intent == nil && !NotificationIntent.prompted(store))
         return
       }
+      // Someone who allowed notifications before the switch existed keeps them until they turn them off.
+      guard intent != .off else { store.deviceNotifications = .disabledByChoice; return }
+      try await sendRegistration(with: session)
+    } catch { if session.current && !busy { store.deviceNotifications = .failed(error.localizedDescription) } }
+  }
+  /// Sends this device's token to the server, or asks iOS for one first.
+  private func sendRegistration(with session: Session) async throws {
+    if let token {
+      let _: EmptyResponse = try await session.api.write("/native/push/device", PushDevice(deviceId: deviceId, token: token), method: "PUT")
+      if session.current { session.store.deviceNotifications = .enabledState }
+    } else {
+      register()
+      session.store.deviceNotifications = .registering
+    }
+  }
+  /// The person tapped Enable, on the in-app card or the Settings switch. This is the only place iOS is asked for permission.
+  func enable() async {
+    guard !busy, let session = session(), session.store.deviceNotifications.canEnable else { return }
+    let store = session.store
+    busy = true
+    NotificationIntent.rememberPrompt(store)
+    store.deviceNotifications.busy = true
+    store.deviceNotifications.error = nil
+    defer { busy = false; if session.current { store.deviceNotifications.busy = false } }
+    do {
+      var status = await permissions.status()
+      guard session.current else { return }
       if status == .notDetermined {
         let allowed = try await permissions.request()
-        guard current() else { return }
+        guard session.current else { return }
         status = allowed ? .authorized : .denied
       }
-      guard status == .authorized || status == .provisional || status == .ephemeral else {
-        store.notificationStatus = "Notifications are managed in iOS Settings"
-        return
-      }
-      if let token {
-        let _: EmptyResponse = try await api.write("/native/push/device", PushDevice(deviceId: deviceId, token: token), method: "PUT")
-        if current() { store.notificationStatus = "Notifications enabled on this device" }
-      } else {
-        register()
-        store.notificationStatus = "Registering this device…"
-      }
-    } catch { if current() { store.notificationStatus = error.localizedDescription } }
+      guard isGranted(status) else { store.deviceNotifications = .blocked; return }
+      NotificationIntent.write(.on, store)
+      try await sendRegistration(with: session)
+      if session.current { store.deviceNotifications.prompt = false }
+    } catch { if session.current { store.deviceNotifications.enabled = false; store.deviceNotifications.error = error.localizedDescription } }
+  }
+  /// Turns notifications off for this account on this device and removes the registration from the server.
+  func disable() async {
+    guard !busy, let session = session() else { return }
+    let store = session.store
+    busy = true
+    store.deviceNotifications.busy = true
+    store.deviceNotifications.error = nil
+    defer { busy = false; if session.current { store.deviceNotifications.busy = false } }
+    NotificationIntent.write(.off, store)
+    do {
+      let _: EmptyResponse = try await session.api.write("/native/push/device", ["deviceId": deviceId], method: "DELETE")
+      unregister()
+      token = nil
+      if session.current { store.deviceNotifications = .disabledByChoice }
+    } catch {
+      // The server may still deliver here, so the switch stays on and the check can be retried.
+      NotificationIntent.write(.on, store)
+      if session.current { store.deviceNotifications.error = error.localizedDescription }
+    }
+  }
+  /// The person answered "Not now". The card does not return for this account on this device.
+  func dismissPrompt() {
+    guard let store else { return }
+    NotificationIntent.rememberPrompt(store)
+    store.deviceNotifications.prompt = false
+  }
+  func retry() async {
+    guard let store, !busy else { return }
+    store.deviceNotifications.checking = true
+    store.deviceNotifications.error = nil
+    await synchronize()
   }
   func openPendingConversation() async {
     if let pendingURL, let origin = store?.api?.baseURL, store?.bootstrap != nil {

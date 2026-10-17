@@ -8,6 +8,10 @@ struct TodayItem: Decodable, Identifiable {
   var id: String { botId }
 }
 struct TodayEvent: Decodable, Identifiable { var id: String; var botId: String; var kind: String; var title: String; var body: String?; var occurredAt: String; var routineId: String? }
+enum TodayCopy {
+  /// An error beside results that may no longer be current, as on the web.
+  static func failure(_ message: String) -> String { message + " Loaded results may be out of date." }
+}
 /// Mirrors src/shared/event-copy.ts. Approval details stay in their conversation.
 enum EventCopy {
   static func excerpt(_ source: String?, limit: Int = 180) -> String {
@@ -56,13 +60,18 @@ struct TodayView: View {
   var body: some View {
     List {
       Group {
-      if let error { Section { ErrorBanner(message: error); Button("Retry overview") { Task { await load() } } } }
+      if let error {
+        Section {
+          ErrorBanner(message: TodayCopy.failure(error))
+          if value == nil { Text("Today is unavailable right now.").foregroundStyle(.secondary); Button("Retry overview") { Task { await load(manual: true) } } }
+        }
+      }
       if value == nil && error == nil { Section { ProgressView("Checking your assistants…") } }
       if let value {
         Section {
           HStack(alignment: .top, spacing: 14) {
             WrapLayout(spacing: 14, lineSpacing: 6) { counts(value) }.frame(maxWidth: .infinity, alignment: .leading)
-            Button("Refresh") { Task { await load() } }.buttonStyle(.bordered).controlSize(.small)
+            Button("Refresh") { Task { await load(manual: true) } }.buttonStyle(.bordered).controlSize(.small)
               .disabled(busy).accessibilityIdentifier("refreshToday")
           }
         }
@@ -128,7 +137,7 @@ struct TodayView: View {
       }
       }.listRowBackground(Palette.raised(scheme))
     }.listSectionSpacing(18).householdListBackground().accessibilityIdentifier("todayOverview").viewHeader("Today", "Your assistants, at a glance")
-      .refreshable { await load() }
+      .refreshable { await load(manual: true) }
       // Split-view reparenting can cancel a view task during a phone push. The initial
       // read belongs to this account/load ID and may finish across that transition.
       .onAppear { Task { await load() } }
@@ -179,19 +188,20 @@ struct TodayView: View {
     openBot()
     Task { await store.select(bot); if let routine { store.routineResult = RoutineResultDestination(botId: bot, routineId: routine) } }
   }
-  private func load() async {
+  /// A background poll leaves the controls alone and keeps an earlier error until a read succeeds, like the web.
+  private func load(manual: Bool = false) async {
     guard let api = store.api, let scope = store.scope else { return }
-    let id = UUID(); loadId = id; busy = true; error = nil
-    defer { if loadId == id { busy = false } }
+    let id = UUID(); loadId = id; if manual { busy = true }
+    defer { if manual { busy = false } }
     do {
       let overview: TodayOverview = try await api.get("/today")
       guard !Task.isCancelled, loadId == id, store.scope == scope, store.api === api else { return }
-      value = overview
+      value = overview; error = nil
     } catch is CancellationError {} catch { if loadId == id, store.scope == scope { self.error = error.localizedDescription } }
   }
   private func markCaughtUp(_ snapshot: TodayOverview) {
     guard let api = store.api else { return }; let scope = store.scope
-    busy = true; error = nil
+    busy = true
     Task { do { try await api.markTodaySeen(snapshot); guard store.scope == scope, store.api === api else { return }; busy = false; await load() } catch { busy = false; if store.scope == scope { self.error = error.localizedDescription } } }
   }
 }
@@ -421,13 +431,13 @@ struct RoutineEnhancements: View {
           if !Task.isCancelled, !busy, let id = receipt?.requestId { await fetchRun(id) }
         }
       }
-      .confirmationDialog(retrySameRun ? "The original request may still arrive. Retry using the same saved request ID?" : "Run this saved routine now?", isPresented: $runConfirm, titleVisibility: .visible) {
-        Button(retrySameRun ? "Retry same request" : "Run once now") { startRun() }
+      .confirmationDialog("The original request may still arrive. Retry using the same saved request ID?", isPresented: $runConfirm, titleVisibility: .visible) {
+        Button("Retry same request") { startRun() }
       }
     if let receipt, !receipt.finished {
       Button(busy ? "Checking…" : "Check run status") { checkRun(receipt.requestId) }.disabled(busy || disabled || !store.connected)
     } else {
-      Button(busy ? "Starting…" : "Try once") { runConfirm = true }.disabled(busy || disabled || !store.connected)
+      Button(busy ? "Starting…" : "Try once") { startRun() }.disabled(busy || disabled || !store.connected)
     }
     if retrySameRun { Button("Retry the same request") { runConfirm = true }.disabled(busy || disabled || !store.connected) }
     if let receipt { Text(receipt.summary).font(.footnote) }
