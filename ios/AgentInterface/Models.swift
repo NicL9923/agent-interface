@@ -171,8 +171,26 @@ struct AttachmentUpload: Identifiable {
   var url: URL
   var name: String
   var mime: String
+  var size = 0
+  var status = UploadStatus.queued
+  /// The share of the file sent so far, from 0 to 1.
+  var progress = 0.0
   var error: String?
-  var uploading = false
+  var uploading: Bool { status == .uploading || status == .processing }
+  /// Records how much was sent. Once all of it is, the server is still storing the file.
+  mutating func record(sent fraction: Double) {
+    guard uploading else { return }
+    if fraction >= 1 { progress = 1; status = .processing } else { progress = max(0, fraction) }
+  }
+  /// The web's chip caption for a file still on its way.
+  var caption: String {
+    switch status {
+    case .failed: return "Didn't upload"
+    case .queued: return "Waiting…"
+    case .processing: return "Finishing…"
+    case .uploading: return "Uploading \(Int((progress * 100).rounded()))%"
+    }
+  }
 }
 struct FileRef: Codable, Identifiable, Equatable {
   var id: String

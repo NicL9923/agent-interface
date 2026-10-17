@@ -58,7 +58,7 @@ final class NativeFlowTests: XCTestCase {
   }
   func testPhoneListConversationSendAndConfiguration() {
     let app = app()
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     composer.tap()
     composer.typeText("Remember the fence inspection")
@@ -184,7 +184,7 @@ final class NativeFlowTests: XCTestCase {
   }
   func testComposerAttachMenuAndAdvancedModelSwitch() {
     var app = app()
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
     app.buttons["composerAttach"].tap()

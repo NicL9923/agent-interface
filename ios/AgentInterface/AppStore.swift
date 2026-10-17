@@ -1,4 +1,5 @@
 import AuthenticationServices
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -19,8 +20,21 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var todayRequest: UUID?
   @Published var draft = Draft()
   @Published var draftReady = false
-  @Published var pending: PendingSubmission?
-  @Published var receipt: Receipt?
+  /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
+  @Published var pendings: [String: PendingSubmission] = [:]
+  /// The open assistant's unconfirmed send. Setting one files it under its own assistant.
+  var pending: PendingSubmission? {
+    get { selectedBotId.flatMap { pendings[$0] } }
+    set {
+      if let newValue { pendings[newValue.botId] = newValue } else if let id = selectedBotId { pendings[id] = nil }
+    }
+  }
+  /// The latest submission receipt per assistant.
+  @Published var receipts: [String: Receipt] = [:]
+  var receipt: Receipt? {
+    get { selectedBotId.flatMap { receipts[$0] } }
+    set { if let id = selectedBotId { receipts[id] = newValue } }
+  }
   @Published var error: String?
   /// A short message for home, such as an assistant that is no longer available.
   @Published var notice: String?
@@ -35,6 +49,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var sending = false
   @Published var uploading = false
   @Published var attachmentUploads: [AttachmentUpload] = []
+  /// Files from the last attempt to attach that could not be added, each with its reason.
+  @Published var attachNotice: [String] = []
+  private var uploadTasks: [UUID: Task<Void, Never>] = [:]
   @Published var appUnavailable = false
   @Published var interruptionReviewed = false
   @Published var authConfig: AuthConfig?
@@ -115,12 +132,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var active: Bool { activity.active }
   var canSend: Bool {
     draftReady && connected && !sending && !uploading && !attachmentUploads.contains { $0.botId == selectedBotId } && pending == nil
-      && (draft.text.count <= 50000)
+      && draft.text.utf16.count <= Self.maxMessageLength
       && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !draft.attachments.isEmpty)
       && supports(active ? "steering" : "chat")
       && (activity != .interrupted || interruptionReviewed)
   }
+  /// The server's limit, counted in UTF-16 code units as JavaScript counts string length.
+  static let maxMessageLength = 50_000
   func supports(_ key: String) -> Bool { bootstrap?.capabilities[key]?.supported == true }
   func reason(_ key: String) -> String {
     bootstrap?.capabilities[key]?.reason
@@ -294,6 +313,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     await refreshBootstrap(ifDue: true)
     if conversationDue { await refreshConversation() }
     await reconcilePending()
+    // Files added while the connection was down start once it returns, as on the web.
+    if connected, !uploading, attachmentUploads.contains(where: { $0.status == .queued }) {
+      Task { await self.drainUploads() }
+    }
     return true
   }
   /// Ends polling and the change stream together, so neither outlives the other.
@@ -393,8 +416,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         earlierFileCache.removeAll()
         draft = Draft()
         draftReady = false
-        pending = nil
-        receipt = nil
+        pendings = [:]
+        receipts = [:]
         sending = false
         uploading = false
         clearUploads()
@@ -407,7 +430,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       Task { await self.drainUploads() }
       appUnavailable = false
       failures = 0
-      if pending == nil { pending = read(key("pending")) }
+      loadPendings(value.bots)
       if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
       } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
@@ -432,7 +455,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
     error = nil
     stayHome = true
-    if pending?.botId != id { receipt = nil }
+    if pendings[id] == nil { receipts[id] = nil }
     await select(nil)
     leftBotId = id
   }
@@ -573,6 +596,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     // An unchanged poll leaves the transcript alone instead of rendering it again.
     if conversation != value { conversation = value }
     conversationCache[id] = value
+    // The conversation carries the saved draft, so a draft that failed to load has now loaded.
+    clearDraftLoadFailure()
     // Polling also brings in a draft changed on another device, or a send made there, and
     // settles a copy kept unsaved while saves were in flight.
     if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) || draft.dirty == true && settled(id) {
@@ -605,7 +630,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     scheduledDraftSave = nil
     if !force, !settled(botId) { return false }
     let snapshot = draft
-    guard pending?.botId != botId || pending?.text != snapshot.text || pending?.attachments != snapshot.attachments
+    let sent = pendings[botId]
+    guard sent == nil || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
     else { return false }
     let currentGeneration = generation
     Task {
@@ -735,7 +761,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func send(reviewedUncertain: Bool = false) async {
     guard let api, let id = selectedBotId, !sending else { return }
     let submission: PendingSubmission
-    if reviewedUncertain, var old = pending, old.botId == id {
+    if reviewedUncertain, var old = pendings[id] {
       old.reviewedUncertain = true
       submission = old
     } else {
@@ -745,8 +771,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         attachments: draft.attachments, reviewedInterruption: interruptionReviewed,
         draftBaseRevision: draft.baseRevision ?? 0)
     }
-    pending = submission
-    save(submission, key("pending"))
+    pendings[id] = submission
+    save(submission, key("pending", id))
     // Until the server shows the send, a save of the sent text from this copy is not new work.
     markSent(submission, true)
     sending = true
@@ -757,21 +783,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let value: Receipt = try await api.write(
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
-      await handleReceipt(value)
+      await handleReceipt(value, botId: id)
       if value.status == "accepted" { Task { await LiveActivityController.shared.sent(to: id) } }
     } catch {
       guard currentGeneration == generation else { return }
       report(error)
-      if let failure = error as? APIError, (400..<500).contains(failure.status),
-        failure.status != 408
-      {
-        pending = nil
-        save(Optional<PendingSubmission>.none, key("pending"))
+      // As on the web, any answer below 500 is the server refusing the message. That includes 408:
+      // the server stopped waiting for the request before handling it.
+      if let failure = error as? APIError, (400..<500).contains(failure.status) {
+        clearPending(id)
         markSent(submission, false)
-        receipt = Receipt(
+        receipts[id] = Receipt(
           requestId: submission.requestId, status: "rejected", message: failure.message)
       } else {
-        receipt = Receipt(
+        receipts[id] = Receipt(
           requestId: submission.requestId, status: "uncertain",
           message:
             "Checking whether Hermes accepted this message. The original request ID is preserved.")
@@ -779,19 +804,42 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     await refreshConversation()
   }
+  /// Asks the server about every assistant's unconfirmed send, not only the open one, so a
+  /// message that arrived clears that assistant's draft before it is opened again.
   func reconcilePending() async {
-    guard let pending, let api, !sending else { return }
+    guard let api, !sending else { return }
     let currentGeneration = generation
-    do {
-      let value: Receipt = try await api.get(
-        "/submissions/\(APIClient.component(pending.requestId))")
-      guard currentGeneration == generation else { return }
-      await handleReceipt(value)
-    } catch { if currentGeneration == generation { report(error) } }
+    for pending in pendings.values.sorted(by: { $0.botId < $1.botId }) {
+      do {
+        let value: Receipt = try await api.get(
+          "/submissions/\(APIClient.component(pending.requestId))")
+        guard currentGeneration == generation, !sending else { return }
+        await handleReceipt(value, botId: pending.botId)
+      } catch {
+        if currentGeneration == generation { report(error) }
+        return
+      }
+    }
   }
-  private func handleReceipt(_ value: Receipt) async {
-    receipt = value
-    guard let original = pending, value.requestId == original.requestId else { return }
+  private func clearPending(_ botId: String) {
+    pendings[botId] = nil
+    save(Optional<PendingSubmission>.none, key("pending", botId))
+  }
+  /// Reads each assistant's unconfirmed send. One saved by an older version, which held a single
+  /// send for every assistant, moves to its own assistant.
+  private func loadPendings(_ bots: [Bot]) {
+    if let legacy: PendingSubmission = read(key("pending")) {
+      let current: PendingSubmission? = read(key("pending", legacy.botId))
+      if current == nil { save(legacy, key("pending", legacy.botId)) }
+      save(Optional<PendingSubmission>.none, key("pending"))
+    }
+    for bot in bots where pendings[bot.id] == nil {
+      if let stored: PendingSubmission = read(key("pending", bot.id)) { pendings[bot.id] = stored }
+    }
+  }
+  private func handleReceipt(_ value: Receipt, botId: String) async {
+    receipts[botId] = value
+    guard let original = pendings[botId], value.requestId == original.requestId else { return }
     guard value.status != "uncertain" else { return }
     if value.status == "accepted" {
       // The server clears its copy for this send, which a later save here must not mistake
@@ -809,8 +857,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
     if value.status == "rejected" || value.status == "interrupted" { markSent(original, false) }
-    pending = nil
-    save(Optional<PendingSubmission>.none, key("pending"))
+    clearPending(botId)
   }
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
@@ -830,8 +877,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Gives up on a send the server never confirmed, for example one that was lost before it
   /// arrived. The message may still show up, so its text and attachments go back into the
   /// draft of the assistant it was written for, where the person decides whether to send again.
-  func discardUnconfirmedSubmission() {
-    guard let old = pending, !sending, let localKey = key("draft", old.botId) else { return }
+  /// Without an assistant, it is the open assistant's send.
+  func discardUnconfirmedSubmission(botId: String? = nil) {
+    guard let id = botId ?? selectedBotId, let old = pendings[id], !sending,
+      let localKey = key("draft", old.botId)
+    else { return }
     let open = selectedBotId == old.botId
     // While the open assistant's draft is still loading, the in-memory draft is not its draft.
     var target = Self.draft(
@@ -842,9 +892,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
     save(true, key("recovered", old.botId))
-    pending = nil
-    save(Optional<PendingSubmission>.none, key("pending"))
-    receipt = nil
+    clearPending(id)
+    receipts[id] = nil
     if open {
       if draftReady {
         draft.sentHash = nil
@@ -855,6 +904,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       Task { try? await self.saveDraft(target, botId: old.botId) }
     }
   }
+  static let draftLoadFailure = "Your saved draft could not be loaded."
+  /// The web drops its "could not be loaded" notice once a later read of the draft succeeds.
+  private func clearDraftLoadFailure() {
+    if error?.hasPrefix(Self.draftLoadFailure) == true { error = nil }
+  }
+  /// Adds a voice transcript to the open assistant's draft on its own line, as the web does.
+  @discardableResult func appendTranscript(_ text: String, botId: String) -> Bool {
+    guard selectedBotId == botId, draftReady else { return false }
+    var next = draft
+    next.text =
+      next.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : next.text + "\n" + text
+    updateDraft(next)
+    return true
+  }
   /// Shows the draft once a read returns, merged with this device's copy. Unsaved edits that
   /// survive the merge, such as a draft recovered by Discard, then save on their base revision,
   /// so the server refuses them if it moved on.
@@ -863,6 +926,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let changed = merged.draft != draft
     draft = merged.draft
     draftReady = true
+    clearDraftLoadFailure()
     if changed { persistDraft() }
     if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
     ensureDraftSaved(botId)
@@ -952,71 +1016,152 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
     }
   }
-  func attach(urls: [URL]) async {
-    guard let id = selectedBotId, draftReady else { return }
-    var slots = max(0, 10 - draft.attachments.count - attachmentUploads.filter({ $0.botId == id }).count)
-    var overflow = 0
-    var staged: [UUID] = []
+  /// Why files cannot be attached to this assistant's draft right now, in the web's words.
+  func attachUnavailable(_ botId: String) -> String? {
+    if !supports("uploads") {
+      let reason = bootstrap?.capabilities["uploads"]?.reason ?? ""
+      return reason.isEmpty ? "Hermes can't receive files right now." : reason
+    }
+    if !draftReady || selectedBotId != botId { return "Your draft is still loading." }
+    if attachmentSlots(botId) <= 0 { return "A message can carry up to \(UploadRules.maxAttachments) attachments." }
+    return nil
+  }
+  private func attachmentSlots(_ botId: String) -> Int {
+    UploadRules.maxAttachments - draft.attachments.count - attachmentUploads.filter { $0.botId == botId }.count
+  }
+  /// Adds files to the open assistant's draft as the web composer does: every file that can't be
+  /// attached is named in one notice, with its size and the limit, and the rest upload in order.
+  func attach(urls: [URL], problems earlier: [String] = []) async {
+    guard !urls.isEmpty || !earlier.isEmpty, let id = selectedBotId else { return }
+    if let reason = attachUnavailable(id) { attachNotice = [reason]; return }
+    let slots = attachmentSlots(id)
+    var problems = earlier
+    var accepted = 0
+    var staged = false
     for url in urls {
       let accessed = url.startAccessingSecurityScopedResource()
       defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+      let name = url.lastPathComponent
       do {
         let resource = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-        guard (resource.fileSize ?? 0) <= 20 * 1024 * 1024 else { throw APIError(message: "Files must be no larger than 20 MB.", status: 400) }
-        let mime = ["md", "markdown", "csv"].contains(url.pathExtension.lowercased()) ? "text/plain" :
-          resource.contentType?.preferredMIMEType ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        guard ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"].contains(mime) else {
-          throw APIError(message: "Choose a PNG, JPEG, WebP, GIF, PDF, or text file.", status: 400)
+        let size = resource.fileSize ?? 0
+        let mime: String
+        switch UploadRules.prepare(name: name, mime: UploadRules.mime(of: url, contentType: resource.contentType), size: size) {
+        case .failure(let problem): problems.append(problem.message); continue
+        case .success(let value): mime = value
         }
-        guard slots > 0 else { overflow += 1; continue }
+        accepted += 1
+        guard accepted <= slots else { continue }
+        // The picked file may be gone once the picker closes, so upload a private copy.
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("upload-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let copy = directory.appendingPathComponent(url.lastPathComponent)
+        let copy = directory.appendingPathComponent(name)
         do { try FileManager.default.copyItem(at: url, to: copy) }
         catch { try? FileManager.default.removeItem(at: directory); throw error }
-        let upload = AttachmentUpload(botId: id, url: copy, name: url.lastPathComponent, mime: mime)
-        attachmentUploads.append(upload); staged.append(upload.id); slots -= 1
-      } catch { report(error) }
+        attachmentUploads.append(AttachmentUpload(botId: id, url: copy, name: name, mime: mime, size: size))
+        staged = true
+      } catch {
+        problems.append("\(name) can't be attached. \(error.localizedDescription)")
+      }
     }
-    if overflow > 0 { error = "A message can carry up to 10 attachments, so \(overflow) \(overflow == 1 ? "wasn't" : "weren't") added." }
-    if !staged.isEmpty { await drainUploads() }
+    if accepted > slots {
+      let left = accepted - slots
+      problems.append("A message can carry up to \(UploadRules.maxAttachments) attachments, so \(left) of these \(left == 1 ? "wasn't" : "weren't") added.")
+    }
+    attachNotice = problems
+    if staged { await drainUploads() }
   }
+  /// Attaches images that exist only in memory: a paste, a new photo or a library pick. Each gets
+  /// a readable name, such as "Pasted image 14.03.22.png", and formats the server cannot take,
+  /// such as HEIC, are converted.
+  func attach(images: [Data], named prefix: String) async {
+    guard !images.isEmpty else { return }
+    let now = Date()
+    var urls: [URL] = []
+    var problems: [String] = []
+    for (index, data) in images.enumerated() {
+      do {
+        let image = try Self.uploadableImage(data)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("image-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(UploadRules.imageName(prefix, at: now, index: index, ext: image.ext))
+        try image.data.write(to: url, options: .atomic)
+        urls.append(url)
+      } catch {
+        let name = UploadRules.imageName(prefix, at: now, index: index, ext: "png")
+        problems.append(data.count > UploadRules.maxBytes
+          ? "\(name) is \(UploadRules.formatBytes(data.count)). Each attachment can be up to \(UploadRules.formatBytes(UploadRules.maxBytes))."
+          : "\(name) can't be attached. Use \(UploadRules.kinds).")
+      }
+    }
+    await attach(urls: urls, problems: problems)
+    for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+  }
+  /// GIFs keep their animation; other images go through the share extension's conversion.
+  private static func uploadableImage(_ data: Data) throws -> (data: Data, ext: String) {
+    if let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let type = CGImageSourceGetType(source).flatMap({ UTType($0 as String) }), type == .gif,
+      data.count <= UploadRules.maxBytes
+    { return (data, "gif") }
+    return try ShareImage.prepare(data)
+  }
+  /// Cancels a file still uploading, or removes one that failed.
   func removeUpload(_ id: UUID) {
+    uploadTasks.removeValue(forKey: id)?.cancel()
+    forgetUpload(id)
+  }
+  /// Drops a file's entry and private copy without touching its upload, which may be the caller.
+  private func forgetUpload(_ id: UUID) {
     guard let upload = attachmentUploads.first(where: { $0.id == id }) else { return }
     try? FileManager.default.removeItem(at: upload.url.deletingLastPathComponent())
     attachmentUploads.removeAll { $0.id == id }
   }
   private func clearUploads() { for id in attachmentUploads.map(\.id) { removeUpload(id) } }
   func retryUpload(_ uploadId: UUID) async {
-    guard let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }), !attachmentUploads[index].uploading else { return }
+    guard let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }),
+      attachmentUploads[index].status == .failed
+    else { return }
+    attachmentUploads[index].status = .queued
+    attachmentUploads[index].progress = 0
     attachmentUploads[index].error = nil
     await drainUploads()
   }
-  /// Only queued files start automatically. A failed attempt always waits for explicit Retry.
+  /// Uploads queued files one at a time, in the order they were added. A failed attempt always
+  /// waits for explicit Retry; a file queued while disconnected starts once the connection returns.
   func drainUploads() async {
     guard !uploading, connected, api != nil else { return }
     let currentGeneration = generation
     uploading = true
     defer { if currentGeneration == generation { uploading = false } }
     while currentGeneration == generation, connected,
-      let next = attachmentUploads.first(where: { !$0.uploading && $0.error == nil }) {
-      await uploadAttachment(next.id)
+      let next = attachmentUploads.first(where: { $0.status == .queued }) {
+      let task = Task { await self.uploadAttachment(next.id) }
+      uploadTasks[next.id] = task
+      await task.value
+      uploadTasks[next.id] = nil
     }
   }
   private func uploadAttachment(_ uploadId: UUID) async {
     guard let api, let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) else { return }
     let upload = attachmentUploads[index]
-    attachmentUploads[index].uploading = true; attachmentUploads[index].error = nil
+    attachmentUploads[index].status = .uploading
+    attachmentUploads[index].progress = 0
+    attachmentUploads[index].error = nil
     let currentGeneration = generation
     do {
       let data = try Data(contentsOf: upload.url)
-      guard data.count <= 20 * 1024 * 1024 else { throw APIError(message: "Files must be no larger than 20 MB.", status: 400) }
-      let file = try await api.upload(botId: upload.botId, name: upload.name, mime: upload.mime, data: data)
+      var file = try await api.upload(botId: upload.botId, name: upload.name, mime: upload.mime, data: data) { [weak self] sent in
+        guard let self, currentGeneration == self.generation,
+          let index = self.attachmentUploads.firstIndex(where: { $0.id == uploadId })
+        else { return }
+        self.attachmentUploads[index].record(sent: sent)
+      }
       guard currentGeneration == generation, attachmentUploads.contains(where: { $0.id == uploadId }) else { return }
+      if file.size == nil { file.size = upload.size }
       // No network replay: Retry uploads only this file and never sends the message.
       if selectedBotId == upload.botId && draftReady {
         var next = draft; next.attachments.append(file); updateDraft(next)
-        removeUpload(uploadId)
+        forgetUpload(uploadId)
       } else {
         let localKey = key("draft", upload.botId)
         var target: Draft = read(localKey) ?? Draft()
@@ -1024,18 +1169,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         save(target, localKey)
         // A draft read already in flight must merge this cached attachment, not replace it.
         if selectedBotId == upload.botId { draft = target }
-        removeUpload(uploadId)
+        forgetUpload(uploadId)
         try await saveDraft(target, botId: upload.botId)
       }
+    } catch is CancellationError {
     } catch {
       guard currentGeneration == generation else { return }
       if let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) {
-        attachmentUploads[index].uploading = false; attachmentUploads[index].error = error.localizedDescription
+        attachmentUploads[index].status = .failed
+        attachmentUploads[index].error = error.localizedDescription
       } else { report(error) }
     }
   }
   func attachAppleSnapshot(_ data: Data, botId: String) async throws {
-    guard let api, connected, supports("uploads"), !uploading, !sending, pending == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
+    guard let api, connected, supports("uploads"), !uploading, !sending, pendings[botId] == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
       throw APIError(message: "Reconnect to this assistant before sharing a snapshot.", status: 409)
     }
     let currentGeneration = generation
@@ -1129,11 +1276,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     notice = nil
     draft = Draft()
     draftReady = false
-    pending = nil
-    receipt = nil
+    pendings = [:]
+    receipts = [:]
     sending = false
     uploading = false
     clearUploads()
+    attachNotice = []
     appUnavailable = false
     sessionExpired = false
     resetUpgrade()
