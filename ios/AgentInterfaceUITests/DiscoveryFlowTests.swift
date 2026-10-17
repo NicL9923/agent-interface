@@ -6,7 +6,7 @@ final class DiscoveryFlowTests:XCTestCase {
     XCTAssertTrue(app.buttons["Add to draft"].exists)
     let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="Native shared draft review";attachment.lifetime = .keepAlways;add(attachment)
     app.buttons["Add to draft"].tap()
-    let composer=app.textFields["messageComposer"];XCTAssertTrue(composer.waitForExistence(timeout:5),app.debugDescription)
+    let composer=app.textViews["messageComposer"];XCTAssertTrue(composer.waitForExistence(timeout:5),app.debugDescription)
     XCTAssertTrue((composer.value as? String)?.contains("https://example.invalid/shared-page") == true,app.debugDescription)
   }
   func testSearchSavedItemsAutomationAndEditableStarter() {

@@ -64,7 +64,7 @@ final class ExperienceFlowTests: XCTestCase {
     app.collectionViews["routineEditorForm"].swipeUp()
     capture(app, name: "Native routine timezone preview")
   }
-  func testTodayOpensCanonicalAssistantAndVoiceReviewSheet() {
+  func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
     if !app.buttons["openToday"].isHittable {
@@ -78,10 +78,16 @@ final class ExperienceFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Your assistants, at a glance"].exists)
     capture(app, name: "Native Today overview")
     app.buttons["today.event.fixture-completed"].tap()
-    XCTAssertTrue(app.buttons["Record voice message"].waitForExistence(timeout: 5)); app.buttons["Record voice message"].tap()
-    XCTAssertTrue(app.navigationBars["Voice message"].waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["Add text to draft"].exists)
-    capture(app, name: "Native explicit voice recording")
+    XCTAssertTrue(app.buttons["Record voice"].waitForExistence(timeout: 5)); app.buttons["Record voice"].tap()
+    let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+    XCTAssertTrue(stop.waitForExistence(timeout: 5)); XCTAssertTrue(app.buttons["Cancel voice"].exists)
+    capture(app, name: "Native voice recording")
+    stop.tap()
+    // As on the web, stopping transcribes at once and the text joins the draft, with no review step.
+    XCTAssertTrue(app.staticTexts["Added to your draft. Review it before sending."].waitForExistence(timeout: 5))
+    let composer = app.textViews["messageComposer"]
+    XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
+    XCTAssertTrue(app.buttons["Record voice"].exists)
   }
   func testUncertainRoutineTrialChecksReceiptBeforeFreshRun() {
     let app = launch()
@@ -99,7 +105,7 @@ final class ExperienceFlowTests: XCTestCase {
     capture(app, name: "Native routine trial recovery")
   }
 
-  func testDeviceReadAloudOffersExplicitStop() {
+  func testListenToReplyPlaysServerAudioWithAnExplicitStop() {
     let app = launch()
     XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 10))
     app.buttons["Listen to reply"].tap()

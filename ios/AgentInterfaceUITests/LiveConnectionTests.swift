@@ -31,7 +31,7 @@ import XCTest
 
       XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 25), "Sign-in opens home")
       app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bot.")).firstMatch.tap()
-      let composer = app.textFields["messageComposer"]
+      let composer = app.textViews["messageComposer"]
       XCTAssertTrue(
         composer.waitForExistence(timeout: 25),
         "The PKCE handoff must open a canonical conversation.")

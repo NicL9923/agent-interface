@@ -16,7 +16,7 @@ final class ScreenshotTourTests: XCTestCase {
 
   func testScreenshotTour() throws {
     var app = launch()
-    XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
 
     goToAssistantList(app)
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))

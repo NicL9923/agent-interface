@@ -92,7 +92,7 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tap()
     XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["composerModel"].label, "Model: fixture-fast")
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     composer.tap(); composer.typeText("Check the fence")
     XCTAssertTrue(app.buttons["sendMessage"].isEnabled)
     XCTAssertGreaterThan(composer.frame.width, 240, "Advanced tools must not squeeze the input")
@@ -194,7 +194,7 @@ final class ParityFlowTests: XCTestCase {
     try capture("today")
     home(app)
     app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
     try capture("conversation-light")
     app.buttons["conversationFiles"].tap()
     XCTAssertTrue(app.staticTexts["No artifacts yet"].waitForExistence(timeout: 5))

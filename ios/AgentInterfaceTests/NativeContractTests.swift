@@ -88,6 +88,9 @@ private final class NativeMockServer: @unchecked Sendable {
     /// Answers every draft save with a server error, without acting on it.
     func failDraftSaves(_ fail: Bool = true) { lock.withLock { draftSavesFail = fail } }
     private var draftSavesFail = false
+    private var submissionAnswer: String?
+    /// Answers submission checks with this status, as the app server does once it knows.
+    func answerSubmissions(_ status: String?) { lock.withLock { submissionAnswer = status } }
     func failHeld(_ path: String) {
         lock.withLock { () -> NativeMockProtocol? in heldPaths.remove(path); return held.removeValue(forKey: path) }?
             .respond(status: 500, data: Self.json(["error": "Synthetic save failure"]))
@@ -311,6 +314,13 @@ private final class NativeMockServer: @unchecked Sendable {
             status = lock.withLock { uploadStatus }
             data = status == 200 ? Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) : Self.json(["error": "Synthetic upload failure"])
         }
+        else if path.hasPrefix("/api/submissions/"), let answer = lock.withLock({ submissionAnswer }) {
+            data = Self.json(["requestId": request.url!.lastPathComponent, "status": answer])
+        }
+        else if path.hasSuffix("/voice/speak") {
+            data = Self.json(["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-17T12:05:00Z"])
+        }
+        else if path.hasPrefix("/api/voice/audio/") { data = Self.silence }
         else if path == "/api/native/push/config" { data = Self.json(["available": lock.withLock { pushAvailable }]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
         else if path == "/api/auth/logout" {
@@ -340,6 +350,15 @@ private final class NativeMockServer: @unchecked Sendable {
         }
         if !park { answer() }
     }
+    /// A second of 8 kHz, 8-bit mono silence as WAV.
+    static let silence: Data = {
+        var data = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        append(UInt32(36 + 8_000)); data.append(Data("WAVEfmt ".utf8))
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(8_000)); append(UInt16(1)); append(UInt16(8))
+        data.append(Data("data".utf8)); append(UInt32(8_000)); data.append(Data(repeating: 128, count: 8_000))
+        return data
+    }()
     static func errorBody(_ message: String, code: String?) -> Data {
         json(code.map { ["error": message, "code": $0] } ?? ["error": message])
     }
@@ -463,7 +482,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft.attachments = (0..<9).map { FileRef(id: "existing-\($0)", name: "Existing.txt", mime: "text/plain") }
         await value.attach(urls: [file, file])
         XCTAssertEqual(value.draft.attachments.count, 10)
-        XCTAssertEqual(value.error, "A message can carry up to 10 attachments, so 1 wasn't added.")
+        XCTAssertEqual(value.attachNotice, ["A message can carry up to 10 attachments, so 1 of these wasn't added."])
         XCTAssertTrue(value.attachmentUploads.isEmpty)
     }
 
@@ -614,11 +633,12 @@ private final class NativeMockServer: @unchecked Sendable {
     }
 
     func testDefinitiveAdmissionRejectionAndUncertainServerFailureKeepDifferentRetryState() async throws {
-        for status in [409, 503] {
+        // As on the web, every answer below 500 is a refusal, including a 408.
+        for status in [409, 408, 503] {
             let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
             server.sendStatus = status; await value.send()
             XCTAssertEqual(value.draft.text, "Send this")
-            if status == 409 { XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "rejected") }
+            if status < 500 { XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "rejected") }
             else { XCTAssertNotNil(value.pending); XCTAssertEqual(value.receipt?.status, "uncertain") }
         }
     }
@@ -898,7 +918,7 @@ private final class NativeMockServer: @unchecked Sendable {
             if let edit { value.draft.text = edit }
             value.discardUnconfirmedSubmission()
             XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
-            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
+            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
             XCTAssertEqual(value.draft.text, edit == "Send this and more" ? "Send this and more" : "Send this")
             try await Task.sleep(for: .milliseconds(800))
             let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }
@@ -916,8 +936,8 @@ private final class NativeMockServer: @unchecked Sendable {
         server.versionDrafts("other")
         value.pending = PendingSubmission(requestId: "lost", botId: "other", text: "Lost message", attachments: [], reviewedInterruption: false)
         server.setOffline(true)
-        value.discardUnconfirmedSubmission()
-        XCTAssertNil(value.pending); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
+        value.discardUnconfirmedSubmission(botId: "other")
+        XCTAssertNil(value.pendings["other"]); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
         let saved = UserDefaults.standard.data(forKey: value.key("draft", "other")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(saved?.text, "Lost message"); XCTAssertEqual(saved?.dirty, true)
         server.setOffline(false)
@@ -1208,12 +1228,149 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.attach(urls: [file])
         XCTAssertEqual(value.attachmentUploads.count, 1); XCTAssertNil(value.attachmentUploads.first?.error)
         XCTAssertEqual(server.requestCount("/api/bots/bot/uploads"), 0)
-        value.bootstrap?.connection.connected = true
-        await value.drainUploads()
+        // The next poll finds the connection back and starts the queued file without being asked.
+        let polling = await value.pollOnce(); XCTAssertTrue(polling)
+        for _ in 0..<200 where !value.attachmentUploads.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(value.attachmentUploads.isEmpty); XCTAssertEqual(value.draft.attachments.count, 1)
         XCTAssertEqual(server.requestCount("/api/bots/bot/messages"), 0)
     }
 
+    func testAttachNamesEveryRefusedFileInOneNoticeAndSendsAnyTextFormatAsPlainText() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("native-kinds-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["server.log", "script.py", "data.json", "big.txt"]
+        for name in names { try Data("text".utf8).write(to: directory.appendingPathComponent(name)) }
+        let big = try FileHandle(forWritingTo: directory.appendingPathComponent("big.txt"))
+        try big.truncate(atOffset: UInt64(UploadRules.maxBytes + 1)); try big.close()
+        let path = "/api/bots/bot/uploads"; server.hold(path)
+        let attaching = Task { await value.attach(urls: names.map { directory.appendingPathComponent($0) }) }
+        try await server.waitForHeld(path)
+        XCTAssertEqual(value.attachNotice, [
+            "data.json can't be attached. Use PNG, JPEG, WebP or GIF images, PDFs, or plain text.",
+            "big.txt is 20 MB. Each attachment can be up to 20 MB.",
+        ])
+        XCTAssertEqual(value.attachmentUploads.map(\.name), ["server.log", "script.py"])
+        XCTAssertEqual(value.attachmentUploads.map(\.mime), ["text/plain", "text/plain"])
+        // One file at a time, in order: the first is on its way, the second waits.
+        XCTAssertEqual(value.attachmentUploads.map(\.caption), ["Uploading 0%", "Waiting…"])
+        XCTAssertFalse(value.canSend, "A message never goes out while its files are still uploading")
+        server.release(path); await attaching.value
+        XCTAssertTrue(value.attachmentUploads.isEmpty)
+        XCTAssertEqual(value.draft.attachments.count, 2)
+        XCTAssertEqual(value.draft.attachments.first?.size, 4, "The tray shows the size of what was uploaded")
+    }
+    func testUploadProgressReadsLikeTheWebUntilTheServerFinishes() {
+        var upload = AttachmentUpload(botId: "bot", url: URL(fileURLWithPath: "/tmp/a.png"), name: "a.png", mime: "image/png")
+        XCTAssertEqual(upload.caption, "Waiting…")
+        upload.record(sent: 0.5)
+        XCTAssertEqual(upload.caption, "Waiting…", "Progress for a file not yet started is ignored")
+        upload.status = .uploading
+        upload.record(sent: 0.426); XCTAssertEqual(upload.caption, "Uploading 43%")
+        upload.record(sent: 1); XCTAssertEqual(upload.caption, "Finishing…")
+        upload.status = .failed; upload.record(sent: 0.2)
+        XCTAssertEqual(upload.caption, "Didn't upload")
+    }
+    func testAttachingIsRefusedWithTheReasonWhenUploadsAreUnavailableOrTheDraftIsFull() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-refused-\(UUID().uuidString).txt")
+        try Data("Refused".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertNil(value.attachUnavailable("bot"))
+        value.draftReady = false
+        XCTAssertEqual(value.attachUnavailable("bot"), "Your draft is still loading.")
+        value.draftReady = true
+        value.draft.attachments = (0..<10).map { FileRef(id: "file-\($0)", name: "File.txt", mime: "text/plain") }
+        await value.attach(urls: [file])
+        XCTAssertEqual(value.attachNotice, ["A message can carry up to 10 attachments."])
+        value.bootstrap?.capabilities["uploads"] = Capability(supported: false, reason: "This Hermes cannot store files.")
+        XCTAssertEqual(value.attachUnavailable("bot"), "This Hermes cannot store files.")
+        XCTAssertEqual(server.requestCount("/api/bots/bot/uploads"), 0)
+    }
+    func testPastedAndPhotographedImagesGetReadableNames() {
+        var parts = DateComponents(); parts.year = 2026; parts.month = 10; parts.day = 17; parts.hour = 9; parts.minute = 3; parts.second = 7
+        let date = Calendar.current.date(from: parts)!
+        XCTAssertEqual(UploadRules.imageName("Pasted image", at: date, index: 0, ext: "png"), "Pasted image 09.03.07.png")
+        XCTAssertEqual(UploadRules.imageName("Photo", at: date, index: 2, ext: "jpg"), "Photo 09.03.07 (3).jpg")
+    }
+    func testEachAssistantKeepsItsOwnUnconfirmedSendAndEveryOneIsReconciled() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.sendStatus = 503; await value.send()
+        XCTAssertNotNil(value.pending)
+        // Another assistant is not held up by this one's unconfirmed message, as on the web.
+        value.selectedBotId = "other"
+        value.draft = Draft(text: "For the other assistant", attachments: [], dirty: true); value.draftReady = true
+        XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
+        await value.send()
+        XCTAssertEqual(Set(value.pendings.keys), ["bot", "other"])
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "other")!))
+        server.answerSubmissions("accepted")
+        await value.reconcilePending()
+        XCTAssertTrue(value.pendings.isEmpty)
+        XCTAssertEqual(server.requests.filter { $0.url?.path.hasPrefix("/api/submissions/") == true }.count, 2)
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        let closed = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(closed?.text, "", "The accepted message clears the closed assistant's draft")
+    }
+    func testASingleUnconfirmedSendSavedByAnOlderVersionMovesToItsAssistant() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let legacy = PendingSubmission(requestId: "legacy", botId: "bot", text: "Old send", attachments: [], reviewedInterruption: false)
+        UserDefaults.standard.set(try JSONEncoder().encode(legacy), forKey: value.key("pending")!)
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.pending?.requestId, "legacy"); XCTAssertFalse(value.canSend)
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        value.discardUnconfirmedSubmission()
+        XCTAssertNil(value.pending); XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        XCTAssertTrue(value.draft.text.contains("Old send"))
+    }
+    func testTheDraftLoadNoticeClearsOnceALaterReadBringsTheDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.draftReady = false
+        value.error = "Your saved draft could not be loaded. Retrying. Can't reach the app server."
+        await value.refreshConversation()
+        XCTAssertNil(value.error); XCTAssertTrue(value.draftReady)
+        value.error = "Something else went wrong"
+        await value.refreshConversation()
+        XCTAssertEqual(value.error, "Something else went wrong", "Only the draft notice is the draft's to clear")
+    }
+    func testMessageLengthIsCountedInUTF16LikeTheServer() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // Each emoji is one Character but two UTF-16 units, as JavaScript counts it.
+        value.draft.text = String(repeating: "😀", count: 25_000)
+        XCTAssertTrue(value.canSend)
+        value.draft.text += "a"
+        XCTAssertFalse(value.canSend)
+    }
+    func testATranscriptJoinsTheDraftOnItsOwnLine() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        XCTAssertTrue(value.appendTranscript("Check the gate", botId: "bot"))
+        XCTAssertEqual(value.draft.text, "Send this\nCheck the gate")
+        value.draft.text = "  \n"
+        value.appendTranscript("Only this", botId: "bot")
+        XCTAssertEqual(value.draft.text, "Only this")
+        XCTAssertFalse(value.appendTranscript("Wrong assistant", botId: "other"))
+        XCTAssertEqual(value.draft.text, "Only this")
+    }
+    func testListenToReplyUsesTheServersVoiceAndRefusesLongReplies() async throws {
+        let server = NativeMockServer(); defer { NativeMockProtocol.remove(host: server.origin.host!) }
+        let voice = VoiceController(); voice.api = client(server); voice.botId = "bot"
+        defer { voice.cancel() }
+        let long = Message(id: "long", role: "assistant", text: String(repeating: "a", count: VoiceController.maxSpokenText + 1))
+        voice.speak(long)
+        XCTAssertEqual(voice.error, "This reply is too long to read aloud. Ask for a shorter summary.")
+        XCTAssertEqual(voice.state, .idle); XCTAssertTrue(server.requests.isEmpty)
+        voice.speak(Message(id: "reply-1", role: "assistant", text: "The gate is closed."))
+        XCTAssertEqual(voice.state, .preparing); XCTAssertEqual(voice.error, "")
+        for _ in 0..<300 where voice.state == .preparing { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(voice.state, .speaking, voice.error)
+        let speak = try XCTUnwrap(server.requests.first { $0.url?.path == "/api/bots/bot/voice/speak" })
+        XCTAssertEqual(speak.httpMethod, "POST")
+        XCTAssertEqual(NativeMockServer.body(speak).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }, ["messageId": "reply-1"])
+        XCTAssertTrue(server.requests.contains { $0.url?.path.hasPrefix("/api/voice/audio/") == true && $0.value(forHTTPHeaderField: "Authorization") != nil })
+        voice.cancel()
+        XCTAssertEqual(voice.state, .idle)
+    }
     func testDelayedPreferencesCannotReplaceNewIdentityPreferencesAndFailedLogoutRetainsToken() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var preferences = Preferences(); preferences.theme = "dark"

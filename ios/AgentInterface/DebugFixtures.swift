@@ -11,6 +11,7 @@
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
+      VoiceController.fixtureRecording = true
       let config = URLSessionConfiguration.ephemeral
       config.protocolClasses = [FixtureProtocol.self]
       let session = URLSession(configuration: config)
@@ -161,7 +162,16 @@
       } else {
         body = [:]
       }
-      if path == "/api/search" {
+      if path.hasPrefix("/api/voice/audio/") {
+        // Ten seconds of quiet, so a test can stop the reply while it plays.
+        respond(raw: Self.silence(seconds: 10), type: "audio/wav")
+        return
+      }
+      if path.hasSuffix("/voice/transcribe") {
+        object = ["text": "Fixture transcript: check the north gate."]
+      } else if path.hasSuffix("/voice/speak") {
+        object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
+      } else if path == "/api/search" {
         object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list."]],"unavailableBots":[]]
       } else if path.contains("/history/") {
         object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":[["id":"history-reply","role":"assistant","text":"Fixture: five easy dinners."]]]
@@ -492,5 +502,27 @@
       client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+    private func respond(raw data: Data, type: String) {
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": type])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: data)
+      client?.urlProtocolDidFinishLoading(self)
+    }
+    /// An 8 kHz, 8-bit mono WAV of silence.
+    static func silence(seconds: Int) -> Data {
+      let samples = 8_000 * seconds
+      var data = Data("RIFF".utf8)
+      func append(_ value: UInt32) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+      func append(_ value: UInt16) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+      append(UInt32(36 + samples))
+      data.append(Data("WAVEfmt ".utf8))
+      append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(8_000))
+      append(UInt16(1)); append(UInt16(8))
+      data.append(Data("data".utf8))
+      append(UInt32(samples))
+      data.append(Data(repeating: 128, count: samples))
+      return data
+    }
   }
 #endif

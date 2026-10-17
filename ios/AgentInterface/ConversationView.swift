@@ -1,20 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import PhotosUI
 
 struct ConversationView: View {
   var bot: Bot
   var edit: () -> Void
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
-  @State private var importFiles = false
-  @State private var importPhotos = false
-  @State private var photos: [PhotosPickerItem] = []
-  @State private var voiceOpen = false
-  @State private var discardConfirm = false
   @State private var checkingConnection = false
   @State private var earlierFailed = false
-  @State private var actionBusy = false
   @State private var visibleMessage: String?
   @State private var openedBot: String?
   @State private var readSaveTask: Task<Void, Never>?
@@ -30,9 +23,8 @@ struct ConversationView: View {
   @State private var earlierEdgeVisible = false
   @State private var unseen = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var modelOpen = false
   @State private var fileSheetOpen = false
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
   var body: some View {
     VStack(spacing: 0) {
       if !store.connected && !store.sessionExpired && store.bootstrap != nil { connectionCard }
@@ -81,43 +73,7 @@ struct ConversationView: View {
       }
     }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
-    .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).appStore(store) }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store) }
-    .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).appStore(store) }
-    .photosPicker(isPresented: $importPhotos, selection: $photos, maxSelectionCount: 10, matching: .images)
-    .onChange(of: photos) { _, selection in
-      guard !selection.isEmpty else { return }
-      let scope = store.scope; let botId = bot.id
-      Task {
-        for item in selection {
-          do {
-            guard let data = try await item.loadTransferable(type: Data.self), scope == store.scope, store.selectedBotId == botId else { continue }
-            let image = try ShareImage.prepare(data)
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("Photo-\(UUID().uuidString).\(image.ext)")
-            try image.data.write(to: url, options: .atomic)
-            await store.attach(urls: [url]); try? FileManager.default.removeItem(at: url)
-          } catch { if scope == store.scope { store.report(error) } }
-        }
-        photos = []
-      }
-    }
-    .fileImporter(
-      isPresented: $importFiles, allowedContentTypes: [.png, .jpeg, .webP, .gif, .pdf, .plainText, .commaSeparatedText, UTType(filenameExtension: "md") ?? .plainText],
-      allowsMultipleSelection: true
-    ) { result in
-      switch result {
-      case .success(let urls): Task { await store.attach(urls: urls) }
-      case .failure(let error): store.report(error)
-      }
-    }
-    .confirmationDialog(
-      "The message may still arrive. Its text goes back into the draft, so sending it again could deliver it twice.",
-      isPresented: $discardConfirm, titleVisibility: .visible
-    ) {
-      Button("Discard and keep my text in the draft", role: .destructive) {
-        store.discardUnconfirmedSubmission()
-      }
-    }
   }
   private var transcript: some View {
     ScrollViewReader { proxy in
@@ -308,162 +264,9 @@ struct ConversationView: View {
       .accessibilityElement(children: .contain).accessibilityIdentifier("connectionCard")
   }
   private var composer: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      composerNotices
-      composerCard
-    }.padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
-      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
-  }
-  /// The web composer's notices, above the message box.
-  @ViewBuilder private var composerNotices: some View {
-    if store.activity == .interrupted {
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: $store.interruptionReviewed)
-        .toggleStyle(CheckboxStyle()).font(.footnote)
-    }
-    // A normal send only spins the send button. This appears once the request ended without a receipt.
-    if let pending = store.pending, !store.sending {
-      VStack(alignment: .leading, spacing: 8) {
-        if pending.botId == bot.id {
-          Text("Checking whether your last message arrived…").font(.footnote)
-          Button("Retry this saved message") { Task { await store.send(reviewedUncertain: true) } }
-            .font(.footnote).disabled(store.sending || !store.supports("idempotency") || !store.connected)
-        } else {
-          // This app holds one unconfirmed send at a time, so another assistant's blocks this one.
-          Text("Another assistant's message is awaiting an admission check.").font(.footnote)
-          Button("Open assistant") { Task { await store.select(pending.botId) } }.font(.footnote)
-        }
-        // A send that never resolves would otherwise block every assistant on this device.
-        Button("Discard and keep my text in the draft", role: .destructive) {
-          discardConfirm = true
-        }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
-      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .contain)
-    }
-    if let receipt = store.receipt, receipt.status == "rejected" {
-      Text(receipt.message?.isEmpty == false ? receipt.message! : "Hermes did not accept this message. Your draft is saved.")
-        .font(.footnote).foregroundStyle(Palette.attention)
-    }
-    if store.receipt?.status == "interrupted" {
-      Text("This submission was interrupted. Review its last actions before trying again.")
-        .font(.footnote).foregroundStyle(Palette.attention)
-    }
-  }
-  private var composerCard: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      ForEach(store.attachmentUploads.filter { $0.botId == bot.id }) { upload in
-        HStack(spacing: 8) {
-          if upload.uploading { ProgressView() } else { Image(systemName: upload.error == nil ? "clock" : "exclamationmark.circle").foregroundStyle(upload.error == nil ? Palette.muted : Palette.danger) }
-          VStack(alignment: .leading, spacing: 3) {
-            Text(upload.name).lineLimit(1)
-            Text(upload.error ?? "Waiting to upload…").font(.caption).foregroundStyle(.secondary).lineLimit(2)
-          }
-          Spacer(minLength: 0)
-          if !upload.uploading { Button("Retry") { Task { await store.retryUpload(upload.id) } }.accessibilityLabel("Retry \(upload.name)").disabled(!store.connected || store.uploading) }
-          Button { store.removeUpload(upload.id) } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("Remove \(upload.name)")
-        }.font(.subheadline).padding(8).background(Palette.user(scheme), in: RoundedRectangle(cornerRadius: 10))
-      }
-      if !store.draft.attachments.isEmpty {
-        ScrollView(.horizontal) {
-          HStack {
-            ForEach(store.draft.attachments) { file in
-              HStack {
-                Button { store.open(file) } label: {
-                  if file.mime.hasPrefix("image/") {
-                    AuthenticatedImage(path: "/api/files/\(APIClient.component(file.id))").scaledToFill().frame(width: 40, height: 40).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
-                  } else { Image(systemName: "doc").frame(width: 32, height: 40) }
-                }.accessibilityLabel("Preview \(file.name)")
-                Text(file.name).lineLimit(1)
-                Button {
-                  var next = store.draft
-                  next.attachments.removeAll { $0.id == file.id }
-                  store.updateDraft(next)
-                } label: {
-                  Image(systemName: "xmark.circle.fill")
-                }.accessibilityLabel("Remove \(file.name)")
-              }.font(.caption).padding(8).background(Palette.user(scheme), in: Capsule())
-            }
-          }
-        }
-      }
-      TextField(
-          store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…",
-          text: Binding(
-            get: { store.draft.text },
-            set: {
-              var value = store.draft
-              value.text = $0
-              store.updateDraft(value)
-            }), axis: .vertical
-        ).lineLimit(2...6).focused($composerFocused).padding(12).background(
-          Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16)
-        ).disabled(!store.draftReady).accessibilityIdentifier("messageComposer")
-      HStack(alignment: .center, spacing: 8) {
-        Menu {
-          Button("Photo Library", systemImage: "photo.on.rectangle") { importPhotos = true }
-          Button("Choose Files", systemImage: "folder") { importFiles = true }
-        } label: {
-          Image(systemName: "paperclip").font(.body).frame(width: 44, height: 44)
-        }.accessibilityLabel("Attach images, PDFs, or text").accessibilityIdentifier("composerAttach")
-          .disabled(attachUnavailable)
-        if advanced { modelButton }
-        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 44, height: 44) }
-          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending || store.pending != nil)
-        // The web offers the latest reply aloud only while the assistant is idle.
-        if !store.active, let reply = latestReply {
-          SpokenReplyButton(text: ReplyCards.spokenText(reply.text)).id(reply.id)
-        }
-        Spacer(minLength: 0)
-        Button {
-          if stopVisible {
-            run { try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]()) }
-          } else {
-            Task { await store.send(); composerFocused = false; latestTrigger += 1 }
-          }
-        } label: {
-          let enabled = stopVisible ? !stopDisabled : store.canSend
-          Group {
-            if store.sending || (stopVisible && actionBusy) { ProgressView().tint(Palette.muted) }
-            else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.headline) }
-          }.frame(width: 44, height: 44)
-            .foregroundStyle(enabled ? Palette.raised(scheme) : Palette.muted)
-            .background(enabled ? Palette.accent : Palette.line, in: Circle())
-            .contentShape(Circle())
-        }.buttonStyle(.plain).disabled(stopVisible ? stopDisabled : !store.canSend)
-          .accessibilityLabel(stopVisible ? "Stop response" : store.active ? "Send guidance" : "Send message")
-          .accessibilityIdentifier("sendMessage")
-      }
-      if store.uploading {
-        ProgressView("Uploading…").font(.caption)
-      } else if store.draft.text.count > 50000 {
-        Text("Messages can contain up to 50,000 characters.").font(.caption).foregroundStyle(.red)
-      }
-      if !store.supports("chat") {
-        Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
-      }
-    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 20))
-      .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
-  }
-  // An in-flight send keeps its spinning send button even if the draft is cleared meanwhile.
-  private var stopVisible: Bool { store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.draft.attachments.isEmpty }
-  private var stopDisabled: Bool { actionBusy || !store.connected || !store.supports("stop") }
-  private var attachUnavailable: Bool {
-    !store.supports("uploads") || !store.draftReady
-      || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10
-  }
-  /// The newest reply in the conversation, the one the web's Listen to reply reads.
-  private var latestReply: Message? {
-    store.conversation?.messages.last { $0.role == "assistant" && !$0.isInternalActivity && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty) }
-      .flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }
   }
   private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
-  /// Icon only, like the web at phone width; the label still names the model.
-  private var modelButton: some View {
-    Button { modelOpen = true } label: {
-      RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
-    }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || store.sending)
-  }
   private func loadEarlier(_ proxy: ScrollViewProxy) {
     let first = store.conversation?.messages.first?.id
     // The scroll position holds the turn in view while history is added above it. Before the
@@ -478,17 +281,6 @@ struct ConversationView: View {
   }
   private func approvalCard(_ approval: Approval) -> some View {
     ApprovalDecisionView(approval: approval, botId: bot.id)
-  }
-  private func run(_ action: @escaping () async throws -> Void) {
-    guard !actionBusy else { return }
-    actionBusy = true
-    Task {
-      defer { actionBusy = false }
-      do {
-        try await action()
-        await store.refreshConversation()
-      } catch { store.report(error) }
-    }
   }
 }
 struct MessageView: View {

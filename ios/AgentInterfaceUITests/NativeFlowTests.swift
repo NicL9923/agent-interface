@@ -58,7 +58,7 @@ final class NativeFlowTests: XCTestCase {
   }
   func testPhoneListConversationSendAndConfiguration() {
     let app = app()
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     composer.tap()
     composer.typeText("Remember the fence inspection")
@@ -180,7 +180,7 @@ final class NativeFlowTests: XCTestCase {
   }
   func testComposerAttachMenuAndAdvancedModelSwitch() {
     var app = app()
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
     app.buttons["composerAttach"].tap()
@@ -196,6 +196,20 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertTrue(fast.waitForExistence(timeout: 5), app.debugDescription); fast.tap()
     expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["composerModel"])
     waitForExpectations(timeout: 10)
+  }
+  func testHardwareReturnSendsAndShiftReturnStartsALine() {
+    let app = app()
+    let composer = app.textViews["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 10))
+    composer.tap()
+    composer.typeText("Check the gate")
+    composer.typeKey(XCUIKeyboardKey.return, modifierFlags: .shift)
+    composer.typeText("and the trough")
+    XCTAssertEqual(composer.value as? String, "Check the gate\nand the trough")
+    composer.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+    expectation(for: NSPredicate(format: "value == ''"), evaluatedWith: composer)
+    waitForExpectations(timeout: 10)
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "and the trough")).firstMatch.waitForExistence(timeout: 10))
   }
   func testNativeLiveActivityShowsActualExposedDetails() {
     let app = app(liveActivity: true)
