@@ -38,14 +38,16 @@ enum ReplyCards {
       }.joined(separator: "\n")
     }.joined(separator: "\n")
   }
-  static func parse(_ text: String) -> [ReplyContentPart] {
+  /// Splits a reply into prose, cards and, when `inlineUi` allows it, inline UI. Without it a
+  /// wildbots-html fence stays a code block, as the web shows it outside assistant replies.
+  static func parse(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
     guard text.utf16.count <= 200_000 else { return [.init(id: 0, markdown: text)] }
     var parts: [ReplyContentPart] = []
     var cursor = text.startIndex
     for block in fencedBlocks(text) {
       let whole = block.whole, payload = block.payload
       if block.language == "wildbots-html" {
-        guard let doc = InlineDocument.parse(String(text[payload])) else { continue }
+        guard inlineUi, let doc = InlineDocument.parse(String(text[payload])) else { continue }
         if cursor < whole.lowerBound { parts.append(.init(id: parts.count, markdown: String(text[cursor..<whole.lowerBound]))) }
         parts.append(.init(id: parts.count, inline: doc)); cursor = whole.upperBound
         continue
@@ -129,16 +131,21 @@ enum ReplyCards {
   static func safeLink(_ value: String) -> Bool { guard let url = URL(string: value), let host = url.host, !host.isEmpty else { return false }; return ["http", "https"].contains(url.scheme?.lowercased() ?? "") }
 }
 
+/// A message's text as the web's conversation shows it: replies, meaning the assistant's and
+/// scheduled deliveries, are Markdown with reply cards, and only the assistant's may carry inline
+/// UI. Everything else, such as a person's message, is plain text.
 struct ReplyContentView: View {
   var message: Message
   var body: some View {
-    if message.role == "assistant" && !message.isInternalActivity {
-      ForEach(ReplyCards.parse(message.text)) { part in
+    if message.isReply {
+      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant")) { part in
         if let markdown = part.markdown { MarkdownView(text: markdown) }
         if let inline = part.inline { InlineUiView(document: inline) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
       }
-    } else { MarkdownView(text: message.text) }
+    } else {
+      Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+    }
   }
 }
 

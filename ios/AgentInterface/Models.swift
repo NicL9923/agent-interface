@@ -260,7 +260,11 @@ struct Message: Codable, Identifiable, Equatable {
     else { return nil }
     return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]))
   }
-  var isAgentExchange: Bool { agentEnvelope != nil || toolCall?.name == "message_agent" || toolName == "message_agent" }
+  /// As the web's `isAgentExchange`: any message whose origin is another assistant, including an
+  /// incoming "Message from" envelope and an outgoing `message_agent` call.
+  var isAgentExchange: Bool { presentationOrigin?.kind == "agent" }
+  /// A reply renders as Markdown: the assistant's, and a scheduled delivery.
+  var isReply: Bool { role == "assistant" || presentationOrigin?.kind == "scheduled" }
   var isToolActivity: Bool { role == "tool" || (toolCall != nil && text.isEmpty) }
   var displayToolName: String { toolCall?.name ?? toolName ?? "Tool" }
   var toolResult: String {
@@ -427,6 +431,7 @@ struct DraftConflict: Decodable {
 struct EarlierFiles: Decodable {
   struct Entry: Decodable {
     var id: String
+    var role: String?
     var files: [FileRef]?
   }
   var messages: [Entry]

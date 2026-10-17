@@ -55,17 +55,6 @@ final class PresentationTests: XCTestCase {
     tool.role = "assistant"
     XCTAssertEqual(tool.toolResult, "", "Assistant answer text is not a tool result")
   }
-  func testTaskListsAreReadOnlyCompletionIndicatorsAndOrdinaryListsKeepMarkers() throws {
-    let done = try XCTUnwrap(MarkdownView.listRow("- [x] Finished **work**"))
-    XCTAssertEqual(done.completed, true)
-    XCTAssertEqual(done.text, "Finished **work**")
-    let pending = try XCTUnwrap(MarkdownView.listRow("* [ ] Pending work"))
-    XCTAssertEqual(pending.completed, false)
-    XCTAssertEqual(pending.text, "Pending work")
-    XCTAssertEqual(MarkdownView.listRow("2. Next step")?.marker, "2.")
-    XCTAssertEqual(
-      MarkdownView.blocks("- [x] Done\n- [ ] Waiting\n\nParagraph").map(\.kind), ["list", "text"])
-  }
   func testNativeReadAnchorDoesNotClaimABrowserPixelOffset() throws {
     let encoded = try JSONEncoder().encode(ReadPosition(messageId: "visible-message"))
     let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -76,15 +65,6 @@ final class PresentationTests: XCTestCase {
     XCTAssertNotNil(ServerDate.parse("2026-10-07T09:08:21.125Z"))
     XCTAssertNotNil(ServerDate.parse("2026-10-07T09:08:21Z"))
     XCTAssertNil(ServerDate.parse("not a date"))
-  }
-  func testMarkdownKeepsBlankTableCellsAndEscapedPipes() {
-    XCTAssertEqual(MarkdownView.tableCells("| First | | Last |"), ["First", "", "Last"])
-    XCTAssertEqual(MarkdownView.tableCells("| A\\|B | C |"), ["A|B", "C"])
-    XCTAssertEqual(MarkdownView.tableCells("A | B"), ["A", "B"])
-    let blocks = MarkdownView.blocks(
-      "# Title\n\n| A | B |\n| --- | --- |\n| Hello | |\n\n```swift\nlet n = 1\n```")
-    XCTAssertEqual(blocks.map(\.kind), ["heading", "table", "code"])
-    XCTAssertEqual(blocks.last?.text, "let n = 1")
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
     for shape in AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted() {

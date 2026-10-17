@@ -35,6 +35,7 @@ struct ConversationTurnView: View, Equatable {
   var turn: ConversationTurn
   var advanced: Bool
   @Environment(\.transcriptConnected) private var connected
+  @Environment(\.unobservedStore) private var store
   static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced }
   var body: some View {
     let visible = turn.visibleMessages
@@ -43,42 +44,70 @@ struct ConversationTurnView: View, Equatable {
         if advanced && !turn.reasoning.isEmpty && message.role != "user" && visible.prefix(index).allSatisfy({ $0.role == "user" }) {
           reasoning
         }
-        MessageView(message: message, advanced: advanced,
-          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant", groupedReasoning: true, groupedActivity: true).id(message.id)
+        MessageView(message: message,
+          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant").id(message.id)
       }
       if advanced && !turn.reasoning.isEmpty && visible.allSatisfy({ $0.role == "user" }) { reasoning }
-      ForEach(turn.activityGroups) { group in
-        DisclosureGroup {
-          ForEach(group.messages) { message in
-            if let call = message.toolCall {
-              if message.isAgentExchange { MessageView(message: message, advanced: advanced, groupedReasoning: true) }
-              else if advanced { ToolActivityView(message: message) }
-              else { ActionReceiptView(call: call) }
-            } else {
-              DisclosureGroup((message.presentationOrigin?.title ?? message.activityGroup) + (message.createdAt.map { When.format($0, inline: true) }.flatMap { $0.isEmpty ? nil : " · \($0)" } ?? "")) {
-                Text(message.text.isEmpty ? "No result was exposed by Hermes." : message.text).font(.footnote).textSelection(.enabled)
-              }
-            }
-            if !message.isAgentExchange { ForEach(message.files ?? []) { FileAttachmentView(file: $0) } }
-          }
-        } label: {
-          HStack(spacing: 8) {
-            Text(group.id)
-            Text("\(group.messages.count)").font(.caption).foregroundStyle(.secondary)
-            if group.messages.contains(where: { $0.toolCall?.status == "running" }) {
-              Text(connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(.secondary)
-            }
-          }
-        }.font(.subheadline).accessibilityIdentifier(group.id)
+      ForEach(turn.activityGroups) { activityGroup($0) }
+    }
+  }
+  private var recipient: String { store?.bot?.name ?? "Assistant" }
+  private func activityGroup(_ group: CoordinationGroup) -> some View {
+    DisclosureGroup {
+      ForEach(group.messages) { message in
+        activityRow(message)
+        ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
+      }
+    } label: {
+      HStack(spacing: 8) {
+        Text(group.id)
+        Text("\(group.messages.count)").font(.caption).foregroundStyle(.secondary)
+        if group.messages.contains(where: { $0.toolCall?.status == "running" }) {
+          Text(connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(.secondary)
+        }
+      }
+    }.font(.subheadline).accessibilityIdentifier(group.id)
+  }
+  /// As the web's ToolCalls: an agent exchange first, then a tool call, then other activity.
+  @ViewBuilder private func activityRow(_ message: Message) -> some View {
+    if message.isAgentExchange {
+      AgentExchangeView(message: message, recipient: recipient)
+    } else if let call = message.toolCall {
+      if advanced { ToolActivityView(message: message) } else { ActionReceiptView(call: call) }
+    } else {
+      DisclosureGroup(activityTitle(message)) {
+        Text(message.text.isEmpty ? "No result was exposed by Hermes." : message.text)
+          .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
   }
+  private func activityTitle(_ message: Message) -> String {
+    let title = message.presentationOrigin?.title ?? message.toolName ?? message.activityGroup
+    let time = message.createdAt.map { When.format($0, inline: true) } ?? ""
+    return time.isEmpty ? title : "\(title) · \(time)"
+  }
   private var reasoning: some View {
-    DisclosureGroup("Reasoning") {
-      ForEach(Array(turn.reasoning.enumerated()), id: \.offset) { _, part in
-        MarkdownView(text: part).font(.footnote).foregroundStyle(.secondary)
+    ReasoningDisclosure(parts: turn.reasoning)
+  }
+}
+/// A turn's reasoning parts in one disclosure, as plain paragraphs, counted when there are several.
+struct ReasoningDisclosure: View {
+  var parts: [String]
+  var body: some View {
+    DisclosureGroup {
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+          Text(part).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }.padding(.top, 4)
+    } label: {
+      HStack(spacing: 8) {
+        Text("Reasoning")
+        if parts.count > 1 { Text("\(parts.count)").font(.caption).foregroundStyle(.secondary) }
       }
-    }
+    }.accessibilityIdentifier("Reasoning")
   }
 }
 
@@ -93,7 +122,7 @@ struct ApprovalDecisionView: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Your decision needed").font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       Text(approval.title).font(.headline)
-      MarkdownView(text: approval.detail)
+      Text(approval.detail).textSelection(.enabled)
       if let expiry = approval.expiresAt, !When.format(expiry).isEmpty { Text("Expires \(When.format(expiry, inline: true))").font(.caption).foregroundStyle(.secondary) }
       HStack {
         Button(decision == "approved" ? settled ? "Approved" : "Approving…" : "Approve") { decide("approved") }.buttonStyle(.borderedProminent)
