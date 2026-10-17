@@ -7,6 +7,7 @@ struct ConversationView: View {
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
   @State private var checkingConnection = false
+  @ObservedObject private var reachability = NetworkReachability.shared
   @State private var earlierFailed = false
   @State private var visibleMessage: String?
   @State private var openedBot: String?
@@ -29,7 +30,7 @@ struct ConversationView: View {
   @State private var composerFocused = false
   var body: some View {
     VStack(spacing: 0) {
-      if !store.connected && !store.sessionExpired && store.bootstrap != nil { connectionCard }
+      if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
       if let error = store.error {
         ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(
           .bottom, 8)
@@ -251,14 +252,14 @@ struct ConversationView: View {
   /// The compact connection card the web shows above the transcript while Hermes is unreachable.
   private var connectionCard: some View {
     let connection = store.bootstrap?.connection
-    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable)
+    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable, offline: reachability.offline)
     return VStack(alignment: .leading, spacing: 6) {
       Text(copy.title).font(.subheadline.bold())
       Text(copy.detail).font(.caption).foregroundStyle(.secondary)
       Button(checkingConnection ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now") {
         checkingConnection = true
         Task { await store.reconnect(); checkingConnection = false }
-      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection).padding(.vertical, 2)
+      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection || reachability.offline).padding(.vertical, 2)
       DisclosureGroup(copy.setup ? "Set up this installation" : "Connection details") {
         VStack(alignment: .leading, spacing: 8) {
           if let address = connection?.address { Text("Hermes address: \(address)").textSelection(.enabled) }
@@ -519,7 +520,8 @@ struct ConnectionCopy: Equatable {
   var title: String
   var detail: String
   var setup = false
-  static func compact(code: String?, appUnavailable: Bool) -> ConnectionCopy {
+  static func compact(code: String?, appUnavailable: Bool, offline: Bool = false) -> ConnectionCopy {
+    if offline { return ConnectionCopy(title: "You're offline", detail: "Your draft is kept on this device. We'll reconnect when you're back online.") }
     if appUnavailable { return ConnectionCopy(title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically.") }
     switch code ?? "unreachable" {
     case "not_configured": return ConnectionCopy(title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true)

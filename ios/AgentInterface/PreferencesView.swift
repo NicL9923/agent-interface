@@ -69,6 +69,7 @@ struct PreferencesView: View {
           defaultPicker
         }.disabled(store.sessionExpired)
         Section {
+          DeviceNotificationSettings()
           Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
             var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
           })) {
@@ -86,8 +87,6 @@ struct PreferencesView: View {
           if preferences.notifications?.quietStart != nil {
             Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
           }
-          Text(store.notificationStatus).font(.footnote).foregroundStyle(Palette.muted)
-          if let url = URL(string: UIApplication.openSettingsURLString) { Link("Manage device permissions in iOS Settings", destination: url) }
         }.disabled(store.sessionExpired)
         if !(store.bootstrap?.bots.isEmpty ?? true) {
           Section {

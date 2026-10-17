@@ -1,5 +1,6 @@
 #if DEBUG
   import Foundation
+  import UserNotifications
 
   /// UI test transport only. Shipping Release builds contain no fixture transport.
   /// Simulator results validate native interaction, not Hermes or APNs execution.
@@ -51,6 +52,12 @@
           ["id": "mixed", "role": "assistant", "text": "Fixture single visible reply", "reasoning": "Fixture grouped reasoning", "toolCall": ["id": "mixed-call", "name": "fixture_search", "status": "completed", "result": "Fixture tool result"]],
           ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
         ]
+      }
+      if environment["AGENT_INTERFACE_UI_PUSH"] == "1" {
+        // iOS permission starts undecided; Enable grants it, as tapping Allow would.
+        var status = UNAuthorizationStatus.notDetermined
+        NotificationController.shared.useFixtureSystem(permissions: NotificationPermissions(
+          status: { status }, request: { status = .authorized; return true }))
       }
       await store.refreshBootstrap()
       if environment["AGENT_INTERFACE_UI_HOME"] != "1" { await store.select(store.selectedBotId) }
@@ -216,6 +223,12 @@
         // A distributed build newer than any local build, so the update banner shows.
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
           object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_OUTAGE"] == "1" {
+          status = 503; object = ["error": "Fixture: the app server is unreachable"]
+        } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DISCONNECTED"] == "1" {
+          // A fresh installation whose Hermes connection was never set up.
+          object = (object as! [String: Any]).merging(["bots": [], "connection": ["connected": false, "code": "not_configured", "detail": "Fixture: Hermes is not configured."]]) { $1 }
         }
       } else if path.hasSuffix("/conversation") {
         object = [
@@ -488,7 +501,7 @@
             : ["available": false, "state": ["title": "", "activeCount": 0, "attentionCount": 0, "updatedAt": now, "rows": []] as [String: Any]]
         }
       } else if path == "/api/native/push/config" {
-        object = ["available": false, "environment": "sandbox"]
+        object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
       } else if path == "/api/bots", method == "POST" {
         var bot = body
         bot["id"] = "created"

@@ -63,7 +63,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var preferencesDraft: Preferences?
   private var preferencesFailureMessage: String?
   private var queuedPreferences: Preferences?
-  @Published var notificationStatus = "Notification permission is managed by iOS"
+  /// This device's notification switch and onboarding card for the signed-in account.
+  @Published var deviceNotifications = DeviceNotificationState()
   @Published var openedFile: PreviewFile?
   @Published var upgradeStatus: UpgradeStatus?
   @Published var upgradeBusy = false

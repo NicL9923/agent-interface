@@ -95,12 +95,12 @@ final class ExperienceFlowTests: XCTestCase {
     app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
     let message = { (text: String) in app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
     for _ in 0..<5 { if app.buttons["Try once"].isHittable { break }; app.collectionViews.firstMatch.swipeUp() }
-    app.buttons["Try once"].tap(); app.buttons["Run once now"].tap()
+    app.buttons["Try once"].tap()
     XCTAssertTrue(app.buttons["Check run status"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Try once"].exists)
     app.buttons["Check run status"].tap()
     XCTAssertTrue(message("Trial run completed. Fixture first run completed").waitForExistence(timeout: 5))
-    app.buttons["Try once"].tap(); app.buttons["Run once now"].tap()
+    app.buttons["Try once"].tap()
     XCTAssertTrue(message("Fixture second run uses a fresh request ID").waitForExistence(timeout: 5))
     capture(app, name: "Native routine trial recovery")
   }
@@ -135,10 +135,9 @@ final class ExperienceFlowTests: XCTestCase {
     XCTAssertEqual(app.switches["Kitchen companion"].value as? String, "1")
     XCTAssertTrue(app.buttons["Create group"].isEnabled)
     app.buttons["Create group"].tap()
-    let room = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Gate planning")).firstMatch
-    XCTAssertTrue(room.waitForExistence(timeout: 5), app.debugDescription); room.tap()
+    // The new room opens by itself, as on the web.
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
-    XCTAssertTrue(composer.waitForExistence(timeout: 5)); composer.tap(); composer.typeText("Check the gate together")
+    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.tap(); composer.typeText("Check the gate together")
     app.buttons["Send to group"].tap()
     XCTAssertTrue(app.staticTexts["Check the gate together"].waitForExistence(timeout: 5))
     capture(app, name: "Native group discussion")

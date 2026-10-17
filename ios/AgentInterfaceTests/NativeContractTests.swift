@@ -425,44 +425,65 @@ private final class NativeMockServer: @unchecked Sendable {
         NativeMockProtocol.remove(host: server.origin.host!)
     }
 
-    func testNotificationPermissionAutomaticallyAsksOnceAndRegistersWithoutLegacyOptIn() async throws {
+    /// A controller whose iOS permission and APNs are scripted, so no OS alert appears.
+    @MainActor private final class NotificationHarness {
+        var status: UNAuthorizationStatus
+        var requests = 0, registrations = 0, unregistrations = 0
+        var grant = true
+        let controller: NotificationController
+        init(_ status: UNAuthorizationStatus = .notDetermined, store: AppStore) {
+            self.status = status
+            var box: NotificationHarness?
+            controller = NotificationController(permissions: NotificationPermissions(status: { box?.status ?? .notDetermined }, request: {
+                box?.requests += 1
+                let granted = box?.grant ?? false
+                box?.status = granted ? .authorized : .denied
+                return granted
+            }), register: { box?.registrations += 1 }, unregister: { box?.unregistrations += 1 })
+            box = self
+            controller.store = store
+        }
+        func devicePuts(_ server: NativeMockServer) -> Int { server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/native/push/device" }.count }
+        func deviceDeletes(_ server: NativeMockServer) -> Int { server.requests.filter { $0.httpMethod == "DELETE" && $0.url?.path == "/api/native/push/device" }.count }
+    }
+    func testNotificationPermissionIsAskedOnlyAfterEnableThenRegisters() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        var status: UNAuthorizationStatus = .notDetermined
-        var requests = 0, registrations = 0
-        let controller = NotificationController(permissions: NotificationPermissions(status: { status }, request: {
-            requests += 1; status = .authorized; return true
-        }), register: { registrations += 1 }, unregister: {})
-        controller.store = value
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
         await controller.synchronize()
-        XCTAssertEqual(requests, 1); XCTAssertEqual(registrations, 1)
+        XCTAssertEqual(notifications.requests, 0, "Signing in must not ask iOS for permission")
+        XCTAssertEqual(value.deviceNotifications, .ready(prompt: true))
+        await controller.enable()
+        XCTAssertEqual(notifications.requests, 1); XCTAssertEqual(notifications.registrations, 1)
+        XCTAssertEqual(value.deviceNotifications, .registering)
         controller.token = String(repeating: "ab", count: 32)
         await controller.synchronize()
-        XCTAssertEqual(requests, 1)
-        XCTAssertEqual(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/native/push/device" }.count, 1)
-        status = .denied
+        XCTAssertEqual(notifications.requests, 1); XCTAssertEqual(notifications.devicePuts(server), 1)
+        XCTAssertEqual(value.deviceNotifications, .enabledState)
+        notifications.status = .denied
         await controller.synchronize()
-        XCTAssertEqual(requests, 1)
-        XCTAssertEqual(server.requests.last?.httpMethod, "DELETE")
-        XCTAssertEqual(server.requests.last?.url?.path, "/api/native/push/device")
-        XCTAssertNil(controller.token)
-        status = .authorized
+        XCTAssertEqual(server.requests.last?.httpMethod, "DELETE"); XCTAssertNil(controller.token)
+        XCTAssertTrue(value.deviceNotifications.blockedInSettings); XCTAssertFalse(value.deviceNotifications.enabled)
+        notifications.status = .authorized
         await controller.synchronize()
-        XCTAssertEqual(registrations, 2, "Re-enabling in iOS Settings registers with APNs again")
-        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(notifications.registrations, 2, "Re-enabling in iOS Settings registers with APNs again")
+        XCTAssertEqual(notifications.requests, 1)
     }
-    func testDeniedPermissionDoesNotReaskAndUnavailableServerDoesNotPrompt() async throws {
+    func testDeclinedPermissionBlocksAndDeniedOrUnavailableNeverPrompts() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        var status: UNAuthorizationStatus = .notDetermined
-        var requested = 0
-        let controller = NotificationController(permissions: NotificationPermissions(status: { status }, request: { requested += 1; return false }), register: { XCTFail("Must not register") }, unregister: {})
-        controller.store = value
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
         server.configurePush(false)
         await controller.synchronize()
-        XCTAssertEqual(requested, 0)
-        status = .denied
+        XCTAssertEqual(value.deviceNotifications, .unconfigured)
+        await controller.enable()
+        XCTAssertEqual(notifications.requests, 0, "A server without push never triggers the iOS prompt")
         server.configurePush(true)
-        await controller.synchronize(); await controller.synchronize()
-        XCTAssertEqual(requested, 0)
+        notifications.grant = false
+        await controller.synchronize()
+        await controller.enable()
+        XCTAssertEqual(notifications.requests, 1); XCTAssertEqual(notifications.registrations, 0)
+        XCTAssertTrue(value.deviceNotifications.blockedInSettings)
+        await controller.synchronize(); await controller.enable()
+        XCTAssertEqual(notifications.requests, 1, "A denial is final until iOS Settings changes it")
     }
     func testNotificationPermissionAnswerCannotRegisterAnotherAccount() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
@@ -471,7 +492,72 @@ private final class NativeMockServer: @unchecked Sendable {
         }), register: { XCTFail("Old permission answer must not register another account") }, unregister: {})
         controller.store = value
         await controller.synchronize()
+        await controller.enable()
         XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/native/push/device" })
+    }
+    func testNotNowIsRememberedPerAccountAndNeverReasks() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
+        await controller.synchronize()
+        XCTAssertTrue(value.deviceNotifications.prompt)
+        controller.dismissPrompt()
+        XCTAssertFalse(value.deviceNotifications.prompt)
+        await controller.synchronize()
+        XCTAssertFalse(value.deviceNotifications.prompt, "Not now holds across launches")
+        XCTAssertTrue(value.deviceNotifications.canEnable, "Settings can still turn notifications on")
+        XCTAssertEqual(notifications.requests, 0)
+        server.user = "two"; await value.refreshBootstrap()
+        await controller.synchronize()
+        XCTAssertTrue(value.deviceNotifications.prompt, "Another account has its own answer")
+    }
+    func testSettingsSwitchUnregistersThisDeviceAndStaysOffAcrossSyncs() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
+        controller.token = String(repeating: "cd", count: 32)
+        await controller.synchronize()
+        await controller.enable()
+        XCTAssertEqual(notifications.devicePuts(server), 1); XCTAssertTrue(value.deviceNotifications.enabled)
+        await controller.disable()
+        XCTAssertEqual(notifications.deviceDeletes(server), 1); XCTAssertEqual(notifications.unregistrations, 1)
+        XCTAssertNil(controller.token); XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
+        await controller.synchronize()
+        XCTAssertEqual(notifications.devicePuts(server), 1, "A person who turned it off is not registered again by a sync")
+        XCTAssertEqual(notifications.registrations, 0)
+        XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
+        await controller.enable()
+        XCTAssertEqual(notifications.registrations, 1, "The switch registers again without asking iOS twice")
+        XCTAssertEqual(notifications.requests, 1)
+    }
+    func testPreviouslyAllowedDeviceKeepsNotificationsUntilTurnedOff() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ef", count: 32)
+        await controller.synchronize()
+        XCTAssertEqual(notifications.devicePuts(server), 1); XCTAssertEqual(value.deviceNotifications, .enabledState)
+        XCTAssertEqual(notifications.requests, 0)
+    }
+    func testFailedTurnOffKeepsSwitchOnAndRetryRecovers() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize()
+        server.setOffline(true)
+        await controller.disable()
+        XCTAssertTrue(value.deviceNotifications.enabled, "The server may still deliver here")
+        XCTAssertNotNil(value.deviceNotifications.error); XCTAssertFalse(value.deviceNotifications.busy)
+        server.setOffline(false)
+        await controller.retry()
+        XCTAssertNil(value.deviceNotifications.error); XCTAssertEqual(value.deviceNotifications, .enabledState)
+    }
+    func testColdLaunchWithSavedSignInStaysConnectingThroughAnOutageAndRecovers() async throws {
+        let server = NativeMockServer(), value = launchedStore(server, token: "saved-session"); defer { clean(server, value) }
+        server.failBootstrap(status: 503)
+        await value.restore()
+        XCTAssertTrue(value.connectingToHousehold, "An outage keeps the connecting screen, not the sign-in controls")
+        XCTAssertTrue(value.appUnavailable)
+        server.failBootstrap(status: 200)
+        await value.restore()
+        XCTAssertFalse(value.connectingToHousehold); XCTAssertNotNil(value.bootstrap)
     }
     func testFailedAttachmentBlocksSendUntilRetryOrRemovalAndNeverSendsAutomatically() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }

@@ -226,4 +226,56 @@ final class ParityFlowTests: XCTestCase {
     try capture("landscape")
     XCUIDevice.shared.orientation = .portrait
   }
+
+  /// A launch with extra fixture switches, always on the home list.
+  private func launch(_ switches: [String]) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    for name in switches { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = "1" }
+    app.launch()
+    return app
+  }
+  func testSavedSignInShowsOutageStateInsteadOfSignInControls() {
+    let app = launch(["OUTAGE"])
+    XCTAssertTrue(app.staticTexts["Can't reach the app right now. We'll keep trying."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.buttons["Try again"].exists)
+    XCTAssertTrue(app.buttons["Change server"].waitForExistence(timeout: 5), "A wrong address must not strand anyone: " + app.debugDescription)
+    XCTAssertFalse(app.buttons["householdSignIn"].exists)
+  }
+  func testHomeWithoutHermesShowsSetupPanelAndExplainsBlockedCreate() {
+    let app = launch(["DISCONNECTED"])
+    XCTAssertTrue(app.staticTexts["Connect your household to Hermes"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Pick up with your assistants"].exists)
+    XCTAssertTrue(app.buttons["Check connection"].exists)
+    app.buttons["New assistant"].tap()
+    XCTAssertTrue(app.staticTexts["Assistant setup is unavailable while Hermes is disconnected."].waitForExistence(timeout: 5))
+  }
+  func testNotificationPromptAsksIosOnlyAfterEnableAndSettingsSwitchFollows() {
+    let app = launch(["PUSH"])
+    XCTAssertTrue(app.staticTexts["Enable notifications on this device?"].waitForExistence(timeout: 10), app.debugDescription)
+    app.buttons["enableNotifications"].tap()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Enable notifications on this device?"]); waitForExpectations(timeout: 5)
+    app.buttons["openSettings"].tap()
+    let toggle = app.switches["deviceNotifications"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
+    // A labelled row switch holds the real control; tapping the row's centre can miss it.
+    (toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle).tap()
+    expectation(for: NSPredicate(format: "value == %@", "0"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
+    // The explanatory text sits below the fold in a lazy list, so the switch's own label is the check.
+    expectation(for: NSPredicate(format: "label CONTAINS %@", "Disabled"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
+  }
+  func testNotNowHidesNotificationPromptAndSettingsCanStillEnable() {
+    let app = launch(["PUSH"])
+    XCTAssertTrue(app.buttons["notNowNotifications"].waitForExistence(timeout: 10))
+    app.buttons["notNowNotifications"].tap()
+    XCTAssertFalse(app.staticTexts["Enable notifications on this device?"].exists)
+    app.buttons["openSettings"].tap()
+    let toggle = app.switches["deviceNotifications"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    XCTAssertEqual(toggle.value as? String, "0"); XCTAssertTrue(toggle.isEnabled)
+  }
 }
