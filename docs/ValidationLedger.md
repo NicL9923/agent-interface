@@ -16,8 +16,8 @@ keep native list-to-detail navigation. Version 1.0 build 3 is set across all
 three bundles.
 
 Final source fingerprint, excluding this ledger:
-`sha256:4da5b32772e01af29145b4537a51dadd6f4983c1863245922c23c7b8e240a3dd`.
-Native application source: `sha256:3b1f13a73420d26c7bbff5c216ea41762379559698942a3b9cba5a4e49996f6b`.
+`sha256:51baa1bdf7ca0da5d1e09ebd540a9f11c1c6f84fbcfb2f95e18965e21ed55e26`.
+Native application source: `sha256:a01c6713239fb7ae0ed8c985f69b969ad1e2033782725f90e0c1cd7a625ec98c`.
 Native tests: `sha256:57c5cf8bf7d363111526add80933a28a8a4c2629570bd558b508c89e6a79bee9`.
 
 Xcode 27.1 on iOS 27.0 simulators with ad hoc signing. The full native suite on
@@ -29,7 +29,11 @@ the composer flow passed on iPhone, and the tablet layout plus five parity flows
 passed on iPad `0EC750D2-1DB5-4FD6-945F-3869E8D4ADB0`. The screenshot tour, broken
 since PR #141, passes again. At the final fingerprint, the 168-test unit suite
 passed again (`.private/ios-test-20261017T045606Z-89208.xcresult`); the final
-change touched only scheduled-time labels and the build number. All 751 web
+change touched only scheduled-time labels and the build number. CI's Xcode 26.6
+could not type-check the grown assistant settings body, so it was split into
+members; afterwards the assistant catalog, all experience and vault flows passed
+locally (`.private/ios-test-20261017T050208Z-12608.xcresult`) and CI's native
+unit job passed. All 751 web
 tests passed on Node 24.21 and Node 26.10, and the production build produced
 web build `5ce8edf382a7555b`.
 
