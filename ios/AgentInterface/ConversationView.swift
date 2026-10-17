@@ -11,8 +11,9 @@ struct ConversationView: View {
   @State private var importPhotos = false
   @State private var photos: [PhotosPickerItem] = []
   @State private var voiceOpen = false
-  @State private var retryConfirm = false
   @State private var discardConfirm = false
+  @State private var checkingConnection = false
+  @State private var earlierFailed = false
   @State private var actionBusy = false
   @State private var visibleMessage: String?
   @State private var restoredBot: String?
@@ -22,12 +23,12 @@ struct ConversationView: View {
   @State private var nearBottom = true
   @State private var earlierEdgeVisible = false
   @State private var unseen = 0
-  @State private var starters: [Starter] = []
   @State private var modelOpen = false
   @State private var fileSheetOpen = false
   @FocusState private var composerFocused: Bool
   var body: some View {
     VStack(spacing: 0) {
+      if !store.connected && !store.sessionExpired && store.bootstrap != nil { connectionCard }
       if let error = store.error {
         ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(
           .bottom, 8)
@@ -53,25 +54,26 @@ struct ConversationView: View {
           }
         }.accessibilityElement(children: .combine)
       }
+      // The web header's order: files, settings, pin.
       ToolbarItemGroup(placement: .topBarTrailing) {
+        let files = store.conversationFileCount
+        Button { fileSheetOpen = true } label: {
+          Image(systemName: "doc").overlay(alignment: .topTrailing) {
+            if files > 0 {
+              Text("\(files)").font(.system(size: 9, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
+                .padding(.horizontal, 3).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 5)).offset(x: 9, y: -7)
+            }
+          }
+        }.accessibilityLabel("Artifacts (\(files))").accessibilityIdentifier("conversationFiles")
+        Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel(
+          "Configure \(bot.name)")
         Button { Task { await store.togglePin(bot.id) } } label: {
           Image(systemName: store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "pin.fill" : "pin")
         }.accessibilityLabel(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant")
           .disabled(!store.connected || store.sessionExpired)
-        Button { fileSheetOpen = true } label: { Image(systemName: "doc.on.doc") }
-          .accessibilityLabel("Artifacts (\(store.conversationFiles.count))").accessibilityIdentifier("conversationFiles")
-        if !store.connected {
-          Button {
-            Task { await store.reconnect() }
-          } label: {
-            Image(systemName: "arrow.clockwise")
-          }.accessibilityLabel("Reconnect").disabled(store.sessionExpired)
-        }
-        Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel(
-          "Configure \(bot.name)")
       }
     }
-    .task(id: bot.id + (store.scope ?? "")) { await loadStarters() }
+    .onChange(of: bot.id) { _, _ in earlierFailed = false }
     .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).environmentObject(store) }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().environmentObject(store) }
     .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).environmentObject(store) }
@@ -102,14 +104,6 @@ struct ConversationView: View {
       }
     }
     .confirmationDialog(
-      "The original message may still arrive. Retry the same message using its saved request ID?",
-      isPresented: $retryConfirm, titleVisibility: .visible
-    ) {
-      Button("Review complete, retry same request") {
-        Task { await store.send(reviewedUncertain: true) }
-      }
-    }
-    .confirmationDialog(
       "The message may still arrive. Its text goes back into the draft, so sending it again could deliver it twice.",
       isPresented: $discardConfirm, titleVisibility: .visible
     ) {
@@ -123,55 +117,47 @@ struct ConversationView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 18) {
           if (store.conversation?.earlier ?? 0) > 0 {
-            Button {
-              // Prepending would otherwise move the view; keep the oldest message in place.
-              let anchor = store.conversation?.messages.first?.id
-              Task {
-                await store.loadEarlier()
-                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
-              }
-            } label: {
-              if store.loadingEarlier {
-                ProgressView()
-              } else {
-                Text("Show earlier messages")
+            Button { loadEarlier(proxy) } label: {
+              HStack(spacing: 7) {
+                if store.loadingEarlier { ProgressView() }
+                Text(store.loadingEarlier ? "Loading earlier messages…" : earlierFailed ? "Try loading earlier messages again" : "Show earlier messages")
               }
             }.buttonStyle(.bordered).disabled(store.loadingEarlier || !store.connected).frame(maxWidth: .infinity)
               .onGeometryChange(for: Bool.self) { geometry in geometry.frame(in: .named("transcript")).maxY >= -600 } action: { earlierEdgeVisible = $0 }
               .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(nearBottom)") {
-                guard earlierEdgeVisible, !nearBottom, restoredBot == bot.id, store.connected, !store.loadingEarlier else { return }
-                let anchor = store.conversation?.messages.first?.id
-                await store.loadEarlier()
-                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                // A failed page waits for the button, as on the web, instead of retrying on every scroll.
+                guard earlierEdgeVisible, !nearBottom, !earlierFailed, restoredBot == bot.id, store.connected, !store.loadingEarlier else { return }
+                loadEarlier(proxy)
               }
           }
           if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.conversation?.messages.isEmpty == false {
             Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
           }
           if store.conversation == nil {
-            ProgressView("Loading conversation…").frame(maxWidth: .infinity).padding(40)
-          } else if store.conversation?.messages.isEmpty == true {
+            ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40)
+          } else if store.conversation?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
             VStack(spacing: 14) {
-              AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 100, name: bot.name, forceReducedMotion: true)
+              AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
               Text("Let's discuss your role.").font(.title2.bold())
-              Text(bot.description?.isEmpty == false ? bot.description! : "Give this assistant a role, then start with what you need.").foregroundStyle(.secondary)
+              Text(bot.description?.isEmpty == false ? bot.description! : "Tell \(bot.name) what you need help with.").foregroundStyle(.secondary)
               Button("Discuss \(bot.name)'s role") {
                 var draft = store.draft
-                let role = bot.description?.isEmpty == false ? ": \(bot.description!)" : ". Ask me what I need help with and how I like to work"
-                draft.text = "Let's talk about your role as \(bot.name)\(role)."
+                draft.text = RoleDiscussion.draft(appendingTo: draft.text, description: bot.description)
                 store.updateDraft(draft); composerFocused = true
               }.buttonStyle(.bordered).disabled(!store.draftReady)
+              if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
             }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
           ForEach(store.conversation?.presentationTurns ?? []) { turn in
             ConversationTurnView(turn: turn, advanced: advanced)
           }
           if ![.idle, .done].contains(store.activity) { liveActivity }
-          ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
-            approval in approvalCard(approval)
-          }
+          // Questions and secure requests come before approvals, as on the web.
           ForEach(store.conversation?.attention ?? []) { request in
             AttentionView(request: request, botId: bot.id)
+          }
+          ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
+            approval in approvalCard(approval)
           }
           Color.clear.frame(height: 1).id("latest").onGeometryChange(for: CGFloat.self) {
             $0.frame(in: .named("transcript")).maxY
@@ -255,72 +241,87 @@ struct ConversationView: View {
       }
     }
   }
-  private var activitySentence: String {
-    switch store.activity {
-    case .blocked: "\(bot.name) needs your help"
-    case .failed: "\(bot.name)'s last task failed"
-    case .interrupted: "\(bot.name) was interrupted"
-    case .disconnected: "Connection lost. Your draft is kept."
-    case .unknown: "\(bot.name)'s status is unknown"
-    default: "\(bot.name) is \(store.activity.label.lowercased())"
-    }
-  }
+  /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
   private var liveActivity: some View {
     HStack(alignment: .center, spacing: 12) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 44, name: bot.name)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(activitySentence).font(.subheadline.bold())
-        if let detail = store.conversation?.activity.detail, !detail.isEmpty {
-          Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-        }
-        if store.bootstrap?.preferences.presentation == "advanced",
-          let call = store.conversation?.activityMessages.last(where: { $0.toolCall?.status == "running" })?.toolCall
-        {
-          Label(call.name, systemImage: "wrench.and.screwdriver").font(.caption)
-        }
-      }
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 52, name: bot.name,
+        prop: store.connected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
+      ShimmerText(
+        text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),
+        moving: [.thinking, .working, .waiting].contains(store.activity))
       Spacer(minLength: 0)
     }.padding(.vertical, 8).accessibilityIdentifier("liveActivity")
   }
-  private var composer: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      if store.activity == .interrupted {
-        Text("This task was interrupted. Review its last actions before sending another message.")
-          .font(.footnote).foregroundStyle(.orange)
-        Toggle("I reviewed this interrupted task", isOn: $store.interruptionReviewed).font(
-          .footnote)
-      }
-      if let pending = store.pending {
+  /// The compact connection card the web shows above the transcript while Hermes is unreachable.
+  private var connectionCard: some View {
+    let connection = store.bootstrap?.connection
+    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable)
+    return VStack(alignment: .leading, spacing: 6) {
+      Text(copy.title).font(.subheadline.bold())
+      Text(copy.detail).font(.caption).foregroundStyle(.secondary)
+      Button(checkingConnection ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now") {
+        checkingConnection = true
+        Task { await store.reconnect(); checkingConnection = false }
+      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection).padding(.vertical, 2)
+      DisclosureGroup(copy.setup ? "Set up this installation" : "Connection details") {
         VStack(alignment: .leading, spacing: 8) {
-          Text(
-            pending.botId == bot.id
-              ? "Checking admission. Your original message and request ID are saved."
-              : "Another assistant's message is awaiting an admission check."
-          ).font(.footnote)
-          Text(store.receipt?.message ?? "Your message will not be automatically resent.").font(
-            .caption
-          ).foregroundStyle(.secondary)
-          HStack {
-            Button("Check again") { Task { await store.reconcilePending() } }
-            if pending.botId == bot.id && store.supports("idempotency") {
-              Button("Review and retry") { retryConfirm = true }.disabled(
-                !store.connected || store.sending)
-            }
-            if pending.botId != bot.id {
-              Button("Open assistant") { Task { await store.select(pending.botId) } }
-            }
-          }.font(.caption)
-          Button("Discard and keep my text in the draft", role: .destructive) {
-            discardConfirm = true
-          }.font(.caption).disabled(store.sending).accessibilityIdentifier("discardUnconfirmedSend")
-        }.padding(10).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-      } else if let receipt = store.receipt,
-        receipt.status == "rejected" || receipt.status == "interrupted"
-      {
-        Text(receipt.message ?? "The message was \(receipt.status). Your draft is saved.").font(
-          .footnote
-        ).foregroundStyle(.orange)
-      }
+          if let address = connection?.address { Text("Hermes address: \(address)").textSelection(.enabled) }
+          if let detail = connection?.detail, !detail.isEmpty { Text(detail) }
+          if let last = connection?.lastConnectedAt, !When.format(last).isEmpty { Text("Last connected \(When.format(last, inline: true)).") }
+          if copy.setup {
+            Text("On the computer running WildBots, open its project folder and run `npm run setup`. Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")
+          }
+          Text("For a read-only connection check on that computer, run `npm run doctor`.")
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
+      }.font(.caption).foregroundStyle(.secondary)
+    }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.raised(scheme)).overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("connectionCard")
+  }
+  private var composer: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      composerNotices
+      composerCard
+    }.padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
+      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+  }
+  /// The web composer's notices, above the message box.
+  @ViewBuilder private var composerNotices: some View {
+    if store.activity == .interrupted {
+      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: $store.interruptionReviewed)
+        .toggleStyle(CheckboxStyle()).font(.footnote)
+    }
+    // A normal send only spins the send button. This appears once the request ended without a receipt.
+    if let pending = store.pending, !store.sending {
+      VStack(alignment: .leading, spacing: 8) {
+        if pending.botId == bot.id {
+          Text("Checking whether your last message arrived…").font(.footnote)
+          Button("Retry this saved message") { Task { await store.send(reviewedUncertain: true) } }
+            .font(.footnote).disabled(store.sending || !store.supports("idempotency") || !store.connected)
+        } else {
+          // This app holds one unconfirmed send at a time, so another assistant's blocks this one.
+          Text("Another assistant's message is awaiting an admission check.").font(.footnote)
+          Button("Open assistant") { Task { await store.select(pending.botId) } }.font(.footnote)
+        }
+        // A send that never resolves would otherwise block every assistant on this device.
+        Button("Discard and keep my text in the draft", role: .destructive) {
+          discardConfirm = true
+        }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
+      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+    }
+    if let receipt = store.receipt, receipt.status == "rejected" {
+      Text(receipt.message?.isEmpty == false ? receipt.message! : "Hermes did not accept this message. Your draft is saved.")
+        .font(.footnote).foregroundStyle(Palette.attention)
+    }
+    if store.receipt?.status == "interrupted" {
+      Text("This submission was interrupted. Review its last actions before trying again.")
+        .font(.footnote).foregroundStyle(Palette.attention)
+    }
+  }
+  private var composerCard: some View {
+    VStack(alignment: .leading, spacing: 10) {
       ForEach(store.attachmentUploads.filter { $0.botId == bot.id }) { upload in
         HStack(spacing: 8) {
           if upload.uploading { ProgressView() } else { Image(systemName: upload.error == nil ? "clock" : "exclamationmark.circle").foregroundStyle(upload.error == nil ? Palette.muted : Palette.danger) }
@@ -357,7 +358,7 @@ struct ConversationView: View {
         }
       }
       TextField(
-          store.active ? "Guide the current task…" : "Message \(bot.name)…",
+          store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…",
           text: Binding(
             get: { store.draft.text },
             set: {
@@ -368,26 +369,21 @@ struct ConversationView: View {
         ).lineLimit(2...6).focused($composerFocused).padding(12).background(
           Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16)
         ).disabled(!store.draftReady).accessibilityIdentifier("messageComposer")
-      HStack(alignment: .bottom, spacing: 10) {
+      HStack(alignment: .center, spacing: 8) {
         Menu {
-          Button("Choose photos", systemImage: "photo.on.rectangle") { importPhotos = true }
-            .disabled(!store.supports("uploads") || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10)
-          Button("Attach image, PDF, or text file", systemImage: "paperclip") { importFiles = true }
-            .disabled(
-              !store.supports("uploads")
-                || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10)
-          if !starters.isEmpty {
-            Section("Starters") {
-              ForEach(starters) { item in Button(item.title) { addStarter(item) } }
-            }
-          }
+          Button("Photo Library", systemImage: "photo.on.rectangle") { importPhotos = true }
+          Button("Choose Files", systemImage: "folder") { importFiles = true }
         } label: {
-          Image(systemName: "plus").font(.title3).frame(width: 40, height: 44)
-        }.accessibilityLabel("Add to message").accessibilityIdentifier("composerAdd")
-          .disabled(!store.draftReady)
+          Image(systemName: "paperclip").font(.body).frame(width: 44, height: 44)
+        }.accessibilityLabel("Attach images, PDFs, or text").accessibilityIdentifier("composerAttach")
+          .disabled(attachUnavailable)
         if advanced { modelButton }
-        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 36, height: 44) }
-          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending)
+        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 44, height: 44) }
+          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending || store.pending != nil)
+        // The web offers the latest reply aloud only while the assistant is idle.
+        if !store.active, let reply = latestReply {
+          SpokenReplyButton(text: ReplyCards.spokenText(reply.text)).id(reply.id)
+        }
         Spacer(minLength: 0)
         Button {
           if stopVisible {
@@ -396,61 +392,58 @@ struct ConversationView: View {
             Task { await store.send(); composerFocused = false; latestTrigger += 1 }
           }
         } label: {
-          Image(
-            systemName: stopVisible ? "stop.fill" : store.sending
-              ? "hourglass" : store.active ? "arrow.turn.up.right" : "arrow.up"
-          ).font(.headline).frame(width: 44, height: 44)
-            .foregroundStyle(store.canSend || stopVisible ? Palette.raised(scheme) : Palette.muted)
-            .background(store.canSend || stopVisible ? Palette.accent : Palette.line, in: Circle())
+          let enabled = stopVisible ? !stopDisabled : store.canSend
+          Group {
+            if store.sending || (stopVisible && actionBusy) { ProgressView().tint(Palette.muted) }
+            else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.headline) }
+          }.frame(width: 44, height: 44)
+            .foregroundStyle(enabled ? Palette.raised(scheme) : Palette.muted)
+            .background(enabled ? Palette.accent : Palette.line, in: Circle())
             .contentShape(Circle())
-        }.buttonStyle(.plain).disabled(stopVisible ? actionBusy || !store.connected : !store.canSend)
-          .accessibilityLabel(stopVisible ? "Stop task" : store.active ? "Send guidance" : "Send message")
+        }.buttonStyle(.plain).disabled(stopVisible ? stopDisabled : !store.canSend)
+          .accessibilityLabel(stopVisible ? "Stop response" : store.active ? "Send guidance" : "Send message")
           .accessibilityIdentifier("sendMessage")
       }
       if store.uploading {
         ProgressView("Uploading…").font(.caption)
       } else if store.draft.text.count > 50000 {
         Text("Messages can contain up to 50,000 characters.").font(.caption).foregroundStyle(.red)
-      } else if store.active {
-        Text("Messages guide this task at Hermes's next supported boundary.").font(.caption)
-          .foregroundStyle(.secondary)
-      } else if !store.connected {
-        Text(
-          store.sessionExpired
-            ? "Sign in again to send. Your draft is kept."
-            : "Your draft is saved on this device. Reconnect to send."
-        ).font(.caption).foregroundStyle(.secondary)
       }
       if !store.supports("chat") {
         Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
       }
     }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 20))
       .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
-      .padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
-      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
   }
-  private var stopVisible: Bool { store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.draft.attachments.isEmpty && store.supports("stop") }
+  // An in-flight send keeps its spinning send button even if the draft is cleared meanwhile.
+  private var stopVisible: Bool { store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.draft.attachments.isEmpty }
+  private var stopDisabled: Bool { actionBusy || !store.connected || !store.supports("stop") }
+  private var attachUnavailable: Bool {
+    !store.supports("uploads") || !store.draftReady
+      || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10
+  }
+  /// The newest reply in the conversation, the one the web's Listen to reply reads.
+  private var latestReply: Message? {
+    store.conversation?.messages.last { $0.role == "assistant" && !$0.isInternalActivity && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty) }
+      .flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+  }
   private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
+  /// Icon only, like the web at phone width; the label still names the model.
   private var modelButton: some View {
     Button { modelOpen = true } label: {
-      HStack(spacing: 6) {
-        Image(systemName: "cpu")
-        Text(bot.model).font(.caption).lineLimit(1).truncationMode(.middle)
-      }.frame(maxWidth: 180, minHeight: 44, alignment: .leading)
+      RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
     }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected)
+      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || store.sending)
   }
-  private func addStarter(_ item: Starter) {
-    var next = store.draft
-    next.text += (next.text.isEmpty ? "" : "\n\n") + item.prompt
-    store.updateDraft(next)
-    composerFocused = true
-  }
-  private func loadStarters() async {
-    starters = []
-    let scope = store.scope
-    let rows: [Starter] = (try? await store.api?.get("/bots/\(APIClient.component(bot.id))/starters")) ?? []
-    if scope == store.scope && !Task.isCancelled { starters = rows }
+  private func loadEarlier(_ proxy: ScrollViewProxy) {
+    // Prepending would otherwise move the view; keep the oldest message in place.
+    let anchor = store.conversation?.messages.first?.id
+    Task {
+      await store.loadEarlier()
+      // The store reports a failed page as an error and leaves the window as it was.
+      earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == anchor
+      if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+    }
   }
   private func approvalCard(_ approval: Approval) -> some View {
     ApprovalDecisionView(approval: approval, botId: bot.id)
@@ -477,32 +470,20 @@ struct MessageView: View {
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      if !continued { HStack {
-        Text(
-          message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
-            ?? (message.isInternalActivity ? message.presentationOrigin?.title ?? message.activityGroup : message.role == "assistant"
-              ? ""
-              : message.role == "tool" ? message.toolName ?? "Tool" : message.role.capitalized)
-        ).font(.caption.bold())
-        Spacer()
-        if let date = message.createdAt, let value = ServerDate.parse(date) {
-          Text(value, style: .time).font(.caption2).foregroundStyle(.secondary)
-        }
-      } }
-      if let envelope = message.agentEnvelope {
-        Label("\(envelope.name) → \(store.bot?.name ?? "Assistant")", systemImage: "arrow.left.arrow.right").font(.caption.bold()).foregroundStyle(Palette.accent)
-        Text("Agent message").font(.caption).foregroundStyle(.secondary)
-        Text(envelope.body).textSelection(.enabled)
-      } else if message.isAgentExchange {
-        Label("Agent handoff", systemImage: "arrow.left.arrow.right").font(.caption.bold()).foregroundStyle(Palette.accent)
-        ToolActivityView(message: message)
+      if !continued && !message.isAgentExchange && (!label.isEmpty || message.createdAt != nil) {
+        HStack(spacing: 12) {
+          if !label.isEmpty { Text(label).font(.caption.weight(.semibold)) }
+          if let date = message.createdAt { WhenText(value: date).font(.caption2) }
+        }.foregroundStyle(.secondary)
+      }
+      if message.isAgentExchange {
+        AgentExchangeView(message: message, recipient: store.bot?.name ?? "Assistant")
       } else if message.isToolActivity {
         if !groupedActivity {
           if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
         }
       } else {
         ReplyContentView(message: message)
-        if message.role == "assistant" && !message.isInternalActivity && !message.text.isEmpty { SpokenReplyButton(text: ReplyCards.spokenText(message.text)) }
         if !groupedActivity && advanced && message.toolCall != nil { ToolActivityView(message: message) }
         if !groupedActivity && !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
       }
@@ -512,11 +493,43 @@ struct MessageView: View {
         }
       }
       ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
-    }.padding(message.role == "user" || message.isAgentExchange ? 14 : 0).background(
-      message.isAgentExchange ? Palette.raised(scheme) : message.role == "user" ? Palette.user(scheme) : Color.clear,
+    }.padding(message.role == "user" && !message.isAgentExchange ? 14 : 0).background(
+      message.role == "user" && !message.isAgentExchange ? Palette.user(scheme) : Color.clear,
       in: RoundedRectangle(cornerRadius: 14)
     ).padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
       .accessibilityElement(children: .contain)
+  }
+  private var label: String {
+    message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
+      ?? (message.isInternalActivity ? message.presentationOrigin?.title ?? message.activityGroup : message.role == "assistant"
+        ? "" : message.role == "tool" ? message.toolName ?? "Tool" : message.role.capitalized)
+  }
+}
+/// A message between assistants, as the web's AgentExchange shows it.
+struct AgentExchangeView: View {
+  var message: Message
+  var recipient: String
+  var body: some View {
+    let handoff = AgentHandoff(message: message)
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Text("↔").accessibilityHidden(true)
+        Text(handoff.incoming.map { "\($0.name) → \(recipient)" } ?? "\(recipient) → \(handoff.target)").bold()
+        Text("Agent message").foregroundStyle(.secondary)
+      }.font(.caption)
+      if let incoming = handoff.incoming {
+        Text(incoming.body).textSelection(.enabled)
+      } else {
+        DisclosureGroup(handoff.summary) {
+          VStack(alignment: .leading, spacing: 8) {
+            if !handoff.body.isEmpty { Text(handoff.body).textSelection(.enabled) }
+            Text(handoff.response).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+          }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
+        }.font(.subheadline)
+      }
+    }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.accentSoft, in: UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 12))
+      .overlay(alignment: .leading) { Rectangle().fill(Palette.accent).frame(width: 3) }
   }
 }
 struct ToolActivityView: View {
@@ -527,8 +540,8 @@ struct ToolActivityView: View {
       VStack(alignment: .leading, spacing: 8) {
         if let call = message.toolCall {
           LabeledContent("Call", value: call.id).font(.caption).textSelection(.enabled)
-          if let date = call.startedAt.flatMap(ServerDate.parse) { LabeledContent("Started", value: date.formatted()).font(.caption) }
-          if let date = call.completedAt.flatMap(ServerDate.parse) { LabeledContent("Finished", value: date.formatted()).font(.caption) }
+          if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
+          if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
         }
         if let arguments = message.toolCall?.arguments, !arguments.isEmpty {
           Text("Arguments").font(.caption.bold())
@@ -555,33 +568,30 @@ struct AttentionView: View {
   var request: Attention
   var botId: String
   @EnvironmentObject private var store: AppStore
+  @Environment(\.colorScheme) private var scheme
   @State private var answers: [String: String] = [:]
   @State private var busy = false
+  private var secure: Bool { request.kind == "secure" && request.secure?.supported == true }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Label(request.title, systemImage: "questionmark.bubble").font(.headline)
+      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : "Continue in Hermes")
+        .font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
+      Text(request.title).font(.headline)
       MarkdownView(text: request.detail)
       if request.kind == "clarify" {
         ForEach(request.questions ?? []) { question in
-          Text(question.prompt).font(.subheadline.bold())
-          if let options = question.options, !options.isEmpty {
-            ForEach(options, id: \.self) { option in
-              Button {
-                answers[question.id] = option
-              } label: {
-                HStack {
-                  Image(
-                    systemName: answers[question.id] == option ? "checkmark.circle.fill" : "circle")
-                  Text(option)
-                }
-              }.buttonStyle(.plain)
+          VStack(alignment: .leading, spacing: 6) {
+            Text(question.prompt).font(.subheadline)
+            let answer = Binding(get: { answers[question.id] ?? "" }, set: { answers[question.id] = $0 })
+            if let options = question.options, !options.isEmpty {
+              Picker(question.prompt, selection: answer) {
+                Text("Choose an answer").tag("")
+                ForEach(options, id: \.self) { Text($0).tag($0) }
+              }.pickerStyle(.menu).labelsHidden()
+            } else {
+              TextField(question.prompt, text: answer, axis: .vertical).textFieldStyle(.roundedBorder).labelsHidden()
             }
           }
-          TextField(
-            "Your answer",
-            text: Binding(get: { answers[question.id] ?? "" }, set: { answers[question.id] = $0 }),
-            axis: .vertical
-          ).textFieldStyle(.roundedBorder)
         }
         Button("Send answers") {
           busy = true
@@ -599,13 +609,149 @@ struct AttentionView: View {
             || (request.questions ?? []).contains {
               (answers[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             })
-      } else if request.kind == "secure", let secure = request.secure, secure.supported {
+      } else if secure, let value = request.secure {
         SecureAttentionView(request: request, botId: botId)
-          .id(request.id + secure.binding)
+          .id(request.id + value.binding)
       } else {
-        Text("Complete this request in the official Hermes interface.").font(.footnote)
+        Text("Open the official Hermes interface to handle this request. Return here when it is complete.").font(.footnote)
           .foregroundStyle(.secondary)
       }
-    }.padding(16).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+    }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
+      .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14).fill(Palette.attention).frame(width: 4) }
+  }
+}
+
+/// The working line's sentence, ported from the web conversation: one sentence that names the
+/// current step while working and a plain verb for every other state.
+enum ActivitySentence {
+  static let actions: [ActivityState: String] = [
+    .idle: "ready", .thinking: "thinking", .working: "working", .waiting: "waiting for approval",
+    .blocked: "waiting for your input", .done: "done", .failed: "having trouble", .interrupted: "stopped", .disconnected: "reconnecting",
+  ]
+  static func text(name: String, state: ActivityState, detail: String?, connectionLost: Bool) -> String {
+    let step = (detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"[.…]+$"#, with: "", options: .regularExpression)
+    if !connectionLost && state == .working && !step.isEmpty { return "\(name) is \(step.prefix(1).lowercased() + step.dropFirst())..." }
+    // A state from a newer server has no web verb yet.
+    guard let action = actions[connectionLost ? .disconnected : state] else { return "\(name)'s status is unknown" }
+    return "\(name) is \(action)..."
+  }
+}
+
+/// What the "Discuss role" button adds to the draft. It appends, so typed text is kept, as on the web.
+enum RoleDiscussion {
+  static func draft(appendingTo text: String, description: String?) -> String {
+    let role = description.flatMap { $0.isEmpty ? nil : ": \($0)" } ?? ". Ask me what I need help with and how I like to work"
+    let line = "Let's discuss your role\(role)."
+    return text.isEmpty ? line : "\(text)\n\n\(line)"
+  }
+}
+
+/// A message between assistants. Incoming ones carry an envelope; outgoing ones are a
+/// `message_agent` call whose arguments name the target, as the web's AgentExchange reads them.
+struct AgentHandoff {
+  var incoming: (name: String, body: String)?
+  var target = "another assistant"
+  var body = ""
+  var summary: String
+  var response: String
+  init(message: Message) {
+    if let envelope = message.agentEnvelope { incoming = envelope }
+    else if message.role == "user", let name = message.presentationOrigin?.name { incoming = (name, message.text) }
+    if incoming == nil {
+      if let name = message.presentationOrigin?.name { target = name }
+      if let data = message.toolCall?.arguments?.data(using: .utf8),
+        let arguments = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      {
+        if let value = arguments["target"] as? String { target = value }
+        if let value = arguments["message"] as? String { body = value }
+      }
+    }
+    summary = message.toolCall?.status == "running" ? "Sending message…" : message.toolCall?.status == "failed" ? "Delivery failed" : "View handoff and response"
+    response = [message.toolCall?.error, message.toolCall?.result, message.text].compactMap { $0 }.first { !$0.isEmpty }
+      ?? "Waiting for Hermes to report delivery."
+  }
+}
+
+/// The compact connection card's copy, from the web's ConnectionPanel.
+struct ConnectionCopy: Equatable {
+  var title: String
+  var detail: String
+  var setup = false
+  static func compact(code: String?, appUnavailable: Bool) -> ConnectionCopy {
+    if appUnavailable { return ConnectionCopy(title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically.") }
+    switch code ?? "unreachable" {
+    case "not_configured": return ConnectionCopy(title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true)
+    case "invalid_config": return ConnectionCopy(title: "The connection needs a small correction", detail: "The saved Hermes address or token is incomplete. Run setup on the computer hosting this app to correct it.", setup: true)
+    case "unauthorized": return ConnectionCopy(title: "Hermes didn't accept the connection", detail: "The saved connection token needs to be updated. Your conversations are still with Hermes.", setup: true)
+    case "addon_missing": return ConnectionCopy(title: "Hermes is reachable. One step remains.", detail: "This installation needs the compatible connection add-on before it can safely send messages or recover work.", setup: true)
+    case "incompatible": return ConnectionCopy(title: "Hermes and this app need matching versions", detail: "Run the connection check on the app's computer for the required version and update instructions.", setup: true)
+    case "connecting": return ConnectionCopy(title: "Connecting to Hermes", detail: "Checking the connection and restoring your assistants.")
+    case "reconnecting": return ConnectionCopy(title: "Reconnecting to Hermes", detail: "Your draft is kept. Existing work stays with Hermes, and messages won't be resent automatically.")
+    case "closed": return ConnectionCopy(title: "The connection is restarting", detail: "Your draft is kept. We'll reconnect automatically.")
+    default: return ConnectionCopy(title: "Hermes is temporarily unavailable", detail: "Your draft is kept. We'll reconnect automatically when Hermes is reachable again.")
+    }
+  }
+}
+
+/// The web's shimmering activity line: a highlight sweeps across while the assistant is busy.
+struct ShimmerText: View {
+  var text: String
+  var moving: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  var body: some View {
+    let label = Text(text).font(.footnote)
+    if moving && !reduceMotion {
+      label.foregroundStyle(.secondary).overlay {
+        TimelineView(.animation) { context in
+          let progress = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
+          label.foregroundStyle(.primary).mask {
+            GeometryReader { proxy in
+              LinearGradient(colors: [.clear, .black, .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: proxy.size.width * 0.5).offset(x: proxy.size.width * (1.5 * progress - 0.5))
+            }
+          }
+        }.accessibilityHidden(true)
+      }
+    } else {
+      label.foregroundStyle(moving ? .secondary : .primary)
+    }
+  }
+}
+
+/// A server timestamp in the web's wording, refreshed each minute so "Just now" ages.
+struct WhenText: View {
+  var value: String
+  var inline = false
+  var body: some View {
+    TimelineView(.everyMinute) { context in Text(When.format(value, now: context.date, inline: inline)) }
+  }
+}
+
+/// The web's robot icon (src/components/Icon.tsx), which SF Symbols has no match for.
+struct RobotGlyph: View {
+  var body: some View {
+    Canvas { context, size in
+      let scale = min(size.width, size.height) / 24
+      var path = Path()
+      path.addRoundedRect(in: CGRect(x: 4, y: 6, width: 16, height: 14), cornerSize: CGSize(width: 3, height: 3))
+      for (from, to) in [((12.0, 3.0), (12.0, 6.0)), ((1, 11), (1, 15)), ((23, 11), (23, 15)), ((9, 16), (15, 16)), ((8, 11), (8.01, 11)), ((16, 11), (16.01, 11))] {
+        path.move(to: CGPoint(x: from.0, y: from.1)); path.addLine(to: CGPoint(x: to.0, y: to.1))
+      }
+      context.stroke(path.applying(CGAffineTransform(scaleX: scale, y: scale)), with: .foreground,
+        style: StrokeStyle(lineWidth: 1.8 * scale, lineCap: .round, lineJoin: .round))
+    }.accessibilityHidden(true)
+  }
+}
+
+/// A checkbox like the web's, for a confirmation that reads as a sentence.
+struct CheckboxStyle: ToggleStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    Button { configuration.isOn.toggle() } label: {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square").foregroundStyle(configuration.isOn ? Palette.accent : Palette.muted)
+        configuration.label.multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }.buttonStyle(.plain).accessibilityAddTraits(.isToggle).accessibilityValue(configuration.isOn ? "1" : "0")
   }
 }

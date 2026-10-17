@@ -62,12 +62,20 @@ import SwiftUI
   nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) { Task { @MainActor in self.speaking = false } }
 }
 
+/// The composer's Listen to reply control, read by the device voice. While speaking it turns
+/// into the web's Stop speaking button.
 struct SpokenReplyButton: View {
   var text: String
   @StateObject private var speech = SpokenReply()
   var body: some View {
-    Button(speech.speaking ? "Stop speaking" : "Read aloud", systemImage: speech.speaking ? "stop.circle" : "speaker.wave.2") { speech.toggle(text) }
-      .font(.caption).onDisappear { speech.stop() }
+    Group {
+      if speech.speaking {
+        Button("Stop speaking") { speech.stop() }.font(.caption).frame(minHeight: 44)
+      } else {
+        Button { speech.toggle(text) } label: { Image(systemName: "speaker.wave.2").frame(width: 44, height: 44) }
+          .accessibilityLabel("Listen to reply")
+      }
+    }.onDisappear { speech.stop() }
   }
 }
 

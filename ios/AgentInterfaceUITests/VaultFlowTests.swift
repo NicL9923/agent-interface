@@ -24,7 +24,7 @@ final class VaultFlowTests: XCTestCase {
   func testProfileLoginAddRemoveAndAvailableExternalSourceUnlock() {
     let app = launch()
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
-    app.buttons["settingsMore"].tap(); app.buttons["Passwords & logins"].tap()
+    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
     XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Fixture school portal"].exists)
     XCTAssertFalse(app.buttons["Unlock 1Password"].exists)
@@ -47,7 +47,7 @@ final class VaultFlowTests: XCTestCase {
   func testCancelledAddRequiresReviewOfPotentiallySavedLogin() {
     let app = launch(cancelledAdd: true)
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
-    app.buttons["settingsMore"].tap(); app.buttons["Passwords & logins"].tap()
+    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
     XCTAssertTrue(app.buttons["vault.add"].waitForExistence(timeout: 5)); app.buttons["vault.add"].tap()
     field("vault.loginLabel", app: app, value: "Fixture library")
     field("vault.loginOrigin", app: app, value: "https://library.example.test")

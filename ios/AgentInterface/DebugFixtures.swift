@@ -280,7 +280,8 @@
           status = 400; object = ["error": "Acknowledge the exact returned snapshot frontier and time"]
         } else { Self.todayFrontier = expectedFrontier; Self.todaySince = body["seenAt"] as? String ?? Self.todaySince }
       } else if path.hasSuffix("/memory") || path.hasSuffix("/memory/memory") {
-        if method == "PATCH" { Self.memoryEntries = body["entries"] as? [[String: Any]] ?? [] }
+        if method == "PATCH" { Self.memoryEntries = (body["entries"] as? [[String: Any]] ?? []).enumerated().map { index, entry in var entry = entry; if entry["id"] == nil { entry["id"] = "m-new-\(index)" }; return entry } }
+        if method == "DELETE" { Self.memoryEntries.removeAll { $0["id"] as? String == body["entryId"] as? String } }
         object = ["botId": "ranch", "profile": "default", "scope": "profile", "owner": "Hermes", "documents": [["target": "memory", "label": "Memory", "revision": "fixture-revision", "enabled": true, "entries": Self.memoryEntries, "charLimit": 2200, "charCount": 42]], "notice": "Explicit simulator fixture. New sessions see edits."]
       } else if path.contains("/cards/") && path.hasSuffix("/state") {
         if method == "PUT" { Self.cardState = body }

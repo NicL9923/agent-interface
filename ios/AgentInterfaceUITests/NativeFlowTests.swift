@@ -178,19 +178,21 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertFalse(app.buttons["installHermesUpdate"].exists)
     screenshot(app, "Fixture native Hermes verified")
   }
-  func testComposerAddMenuOffersStartersAndAdvancedModelSwitch() {
+  func testComposerAttachMenuAndAdvancedModelSwitch() {
     var app = app()
     let composer = app.textFields["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
-    app.buttons["composerAdd"].tap()
-    let starter = app.buttons["Plan dinners"]
-    XCTAssertTrue(starter.waitForExistence(timeout: 5), app.debugDescription); starter.tap()
-    XCTAssertTrue((composer.value as? String)?.contains("five easy dinners") == true, app.debugDescription)
+    XCTAssertFalse(app.buttons["Plan dinners"].exists, "Starters stay out of the composer, as on the web")
+    app.buttons["composerAttach"].tap()
+    XCTAssertTrue(app.buttons["Photo Library"].waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(app.buttons["Choose Files"].exists)
     app.terminate()
     app = self.app(liveActivity: true)
     let model = app.buttons["composerModel"]
-    XCTAssertTrue(model.waitForExistence(timeout: 10)); model.tap()
+    XCTAssertTrue(model.waitForExistence(timeout: 10))
+    XCTAssertLessThanOrEqual(model.frame.width, 50, "The composer shows only the model icon, as the web does at phone width")
+    model.tap()
     let fast = app.buttons["Fixture fast model"]
     XCTAssertTrue(fast.waitForExistence(timeout: 5), app.debugDescription); fast.tap()
     expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["composerModel"])
@@ -198,7 +200,9 @@ final class NativeFlowTests: XCTestCase {
   }
   func testNativeLiveActivityShowsActualExposedDetails() {
     let app = app(liveActivity: true)
-    XCTAssertTrue(app.staticTexts["Ranch hand is working"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))
+    XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
+    XCTAssertFalse(app.buttons["Listen to reply"].exists, "Replies are offered aloud only while idle")
     app.buttons["Reasoning"].tap()
     XCTAssertTrue(app.staticTexts["Fixture exposed reasoning: current weather needs a fresh forecast."].exists)
     app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tap()

@@ -21,14 +21,14 @@ struct RoutineResultsView: View {
   var body: some View {
     List {
       Section {
-        Text("Recent scheduled runs and trials saved by Hermes.").foregroundStyle(.secondary)
+        Text("Recent runs saved by Hermes, including scheduled runs and trials.").foregroundStyle(.secondary)
         Button("Refresh results") { Task { await load() } }.disabled(busy)
         if busy { ProgressView("Loading routine history…") }
         if let error { ErrorBanner(message: error) }
         if !busy && rows.isEmpty && error == nil { Text("No saved runs yet. Run the routine or return after its next scheduled run.") }
         if !rows.isEmpty {
           Picker("Run", selection: $selected) {
-            ForEach(rows) { row in Text(row.startedAt.flatMap(ServerDate.parse)?.formatted(date: .abbreviated, time: .shortened) ?? row.title).tag(row.id) }
+            ForEach(rows) { row in Text(row.startedAt.map { When.format($0) }.flatMap { $0.isEmpty ? nil : $0 } ?? row.title).tag(row.id) }
           }
         }
       }
@@ -103,25 +103,19 @@ struct GroupChatsView: View {
       if let reason = catalog?.reason { Section { Text(reason).font(.footnote).foregroundStyle(.secondary) } }
       if let error { Section { ErrorBanner(message: error); Button("Retry") { Task { await load() } } } }
       if catalog == nil && error == nil { Section { ProgressView("Checking Hermes group chats…") } }
-      if let catalog, catalog.supported && catalog.rooms.isEmpty {
-        Section { Text("No group chats yet. Tap + to let two to six assistants discuss a task together.").foregroundStyle(.secondary) }
-      }
-      if let rooms = catalog?.rooms, !rooms.isEmpty {
+      if let catalog, catalog.supported {
         Section {
-          ForEach(rooms) { room in
-            NavigationLink { GroupConversationView(room: room, canSend: catalog?.canSend == true) } label: {
+          if catalog.rooms.isEmpty { Text("No group chats yet. Create one to let your assistants discuss a task together.").foregroundStyle(.secondary) }
+          ForEach(catalog.rooms) { room in
+            NavigationLink { GroupConversationView(room: room, canSend: catalog.canSend) } label: {
               VStack(alignment: .leading, spacing: 3) { Text(room.name); Text("\(room.members.count) assistants").font(.caption).foregroundStyle(.secondary) }
             }
           }
-        } footer: { Text("Two to six assistants in one conversation.") }
-      }
-    }.householdListBackground().navigationTitle("Group chats").refreshable { await load() }
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button { creating = true } label: { Image(systemName: "plus") }
-            .accessibilityLabel("New group").disabled(catalog?.canSend != true || !store.connected)
+          Button { creating = true } label: { Label("New group", systemImage: "plus") }
+            .disabled(!catalog.canSend || !store.connected)
         }
       }
+    }.householdListBackground().viewHeader("Group chats", "Two to six assistants in one conversation").refreshable { await load() }
       .onAppear { Task { await load() } }
       .onChange(of: store.scope) { _, _ in catalog = nil; Task { await load() } }
       .sheet(isPresented: $creating, onDismiss: { Task { await load() } }) { NavigationStack { GroupCreateView() }.environmentObject(store) }
@@ -182,6 +176,7 @@ struct GroupConversationView: View {
   @State private var state: GroupState?
   @State private var events: [GroupEvent] = []
   @State private var cursor = 0
+  @State private var more = false
   @State private var draft = ""
   @State private var threadId = ""
   @State private var pending: GroupSend?
@@ -209,15 +204,19 @@ struct GroupConversationView: View {
       ForEach(events.filter { ["message.user", "message.member"].contains($0.kind) }) { event in
         VStack(alignment: .leading, spacing: 6) {
           HStack(alignment: .firstTextBaseline) {
-            Text(event.kind == "message.user" ? "Household member" : room.members.first { $0.member_id == event.payload.member_id }?.display_name ?? event.payload.member_id ?? "Assistant").font(.caption.bold())
+            Text(author(event)).font(.caption.bold())
             Spacer()
-            Text(Date(timeIntervalSince1970: event.created_at).formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
+            Text(When.format(Date(timeIntervalSince1970: event.created_at))).font(.caption2).foregroundStyle(.secondary)
           }
           MarkdownView(text: event.payload.text ?? "")
           if let thread = event.payload.thread_id {
             Button("Reply in thread") { threadId = thread }.font(.caption).buttonStyle(.borderless).disabled(pending != nil || !canSend)
           }
         }
+      }
+      if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
+      if state != nil && !missing && events.allSatisfy({ !["message.user", "message.member"].contains($0.kind) }) {
+        Text("Start a discussion. Use @handle to address an assistant.").font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
       }
       if state?.driver_status?.working == true || !(state?.driver_status?.pending_actions.isEmpty ?? true) {
         Section {
@@ -234,7 +233,7 @@ struct GroupConversationView: View {
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
-      state = nil; events = []; cursor = 0
+      state = nil; events = []; cursor = 0; more = false
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       while !Task.isCancelled && !missing { await load(); do { try await Task.sleep(for: .seconds(3)) } catch { return } }
@@ -251,7 +250,7 @@ struct GroupConversationView: View {
         Button("Retry same saved message") { Task { await send() } }.buttonStyle(.borderedProminent).disabled(busy || !canSend || !store.connected)
       } else {
         HStack(alignment: .bottom, spacing: 10) {
-          TextField("Message the group… use @handle for one assistant", text: $draft, axis: .vertical).lineLimit(1...6)
+          TextField("Message the group… use @handle to address one assistant", text: $draft, axis: .vertical).lineLimit(1...6)
             .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
             .accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
           let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -265,13 +264,18 @@ struct GroupConversationView: View {
       Text(status).font(.caption).foregroundStyle(.secondary)
     }.padding(12).background(.regularMaterial)
   }
+  private func author(_ event: GroupEvent) -> String {
+    if event.kind == "message.user" { return "Household member" }
+    let member = room.members.first { $0.member_id == event.payload.member_id }
+    return member?.display_name ?? member?.profile ?? event.payload.member_id ?? "Assistant"
+  }
   private func load() async {
     guard let api = store.api else { return }; let scope = store.scope
     do {
       let value: GroupState = try await api.get(path)
       let page: GroupPage = try await api.get("\(path)/log?since=\(cursor)")
       guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
-      state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor
+      state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor; more = page.has_more
     } catch {
       guard !Task.isCancelled, store.scope == scope else { return }
       if (error as? APIError)?.status == 404 { missing = true; state = nil; events = []; self.error = nil }

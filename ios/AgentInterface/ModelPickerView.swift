@@ -130,6 +130,50 @@ struct ModelCatalogSections: View {
   }
 }
 
+/// The assistant settings model row, like the web selector's collapsed summary:
+/// the model and provider with a chevron that opens the full catalog.
+struct ModelSelectionRow: View {
+  var botId: String?
+  var selection: ModelChoice
+  var disabled = false
+  var choose: (ModelChoice) -> Void
+  @EnvironmentObject private var store: AppStore
+  @State private var providerName: String?
+  var body: some View {
+    NavigationLink {
+      ModelCatalogPage(botId: botId, selection: selection, disabled: disabled, choose: choose)
+    } label: {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(selection.model.isEmpty ? "Choose a model" : selection.model).font(.headline)
+        Text(providerName ?? (selection.provider.isEmpty ? "Connected providers" : selection.provider))
+          .font(.caption).foregroundStyle(.secondary)
+      }.frame(minHeight: 44, alignment: .leading)
+    }.accessibilityIdentifier("assistantModel")
+      .task(id: "\(botId ?? "default"):\(store.scope ?? ""):\(selection.provider)") {
+        guard let api = store.api, !selection.provider.isEmpty else { providerName = nil; return }
+        let catalog: ModelCatalog? = try? await api.get("/models" + (botId.map { "?botId=\(APIClient.component($0))" } ?? ""))
+        providerName = catalog?.providers.first { $0.matches(selection.provider) }?.name
+      }
+  }
+}
+
+/// The full searchable catalog, pushed from the settings row. Choosing a model returns to the form.
+struct ModelCatalogPage: View {
+  var botId: String?
+  var selection: ModelChoice
+  var disabled = false
+  var choose: (ModelChoice) -> Void
+  @Environment(\.dismiss) private var dismiss
+  var body: some View {
+    Form {
+      ModelCatalogSections(botId: botId, selection: selection, disabled: disabled) { choice in
+        choose(choice)
+        dismiss()
+      }
+    }.householdListBackground().navigationTitle("Model").navigationBarTitleDisplayMode(.inline)
+  }
+}
+
 struct ComposerModelSheet: View {
   var botId: String
   @EnvironmentObject private var store: AppStore

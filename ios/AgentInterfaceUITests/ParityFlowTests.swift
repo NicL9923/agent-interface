@@ -111,8 +111,12 @@ final class ParityFlowTests: XCTestCase {
     app.buttons["Configure Ranch hand"].tap()
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Name"].value as? String, "Ranch hand")
+    XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
+    scroll(app, to: app.buttons["assistantModel"])
+    XCTAssertEqual(app.buttons["assistantModel"].label, "configured-model, OpenRouter")
+    app.buttons["assistantModel"].tap()
     let search = app.textFields["modelSearch"]
-    scroll(app, to: search)
+    XCTAssertTrue(search.waitForExistence(timeout: 5))
     search.tap(); search.typeText("Fixture fast")
     XCTAssertTrue(app.buttons["Fixture fast model"].waitForExistence(timeout: 5))
     try capture("assistant-model-catalog")

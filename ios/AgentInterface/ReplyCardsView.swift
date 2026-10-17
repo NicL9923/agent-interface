@@ -21,7 +21,7 @@ struct ReplyCard: Decodable, Identifiable {
   var description: String?
 }
 struct ReplyCardDocument: Decodable { var version: Int; var cards: [ReplyCard] }
-struct ReplyCardState: Codable { var checkedIds: [String] = []; var notes: [String: String] = [:] }
+struct ReplyCardState: Codable, Equatable { var checkedIds: [String] = []; var notes: [String: String] = [:] }
 struct ReplyContentPart: Identifiable {
   var id: Int
   var markdown: String?
@@ -147,61 +147,89 @@ struct InteractiveReplyCard: View {
   var messageId: String
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
-  @State private var state = ReplyCardState()
-  @State private var loaded = false
-  @State private var busy = false
+  @State private var saved = ReplyCardState()
+  @State private var draft = ReplyCardState()
+  @State private var status = Status.loading
   @State private var error: String?
+  @State private var editing: String?
   @State private var eventOpen = false
+  enum Status { case loading, ready, saving, failed }
+  private var busy: Bool { status == .loading || status == .saving || !store.connected }
+  private var typeLabel: String { card.type == "event" ? "Calendar proposal" : card.type == "itinerary" ? "Itinerary" : "Checklist" }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Label(card.title, systemImage: card.type == "checklist" ? "checklist" : card.type == "event" ? "calendar" : "map").font(.headline)
+      HStack {
+        Text(typeLabel).font(.caption2.weight(.semibold)).textCase(.uppercase).foregroundStyle(.secondary)
+        Spacer()
+        if card.type == "checklist" { Text("\(saved.checkedIds.count) / \(card.items?.count ?? 0)").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+      }
+      Text(card.title).font(.headline)
       if card.type == "event" {
-        if let start = card.start.flatMap(ServerDate.parse) { Text(start.formatted(date: .abbreviated, time: .shortened)) }
-        if let end = card.end.flatMap(ServerDate.parse) { Text("Until \(end.formatted(date: .abbreviated, time: .shortened))").font(.caption) }
+        if let start = card.start.flatMap(ServerDate.parse) {
+          Text(When.format(start, relative: false) + (card.end.flatMap(ServerDate.parse).map { " to " + When.format($0, relative: false, from: start) } ?? ""))
+        }
         if let location = card.location { Label(location, systemImage: "mappin") }
         if let description = card.description { Text(description).font(.footnote) }
-        Button("Review calendar event", systemImage: "calendar.badge.plus") { eventOpen = true }
+        Button("Review calendar event", systemImage: "calendar.badge.plus") { eventOpen = true }.buttonStyle(.bordered)
         Text("Review and choose Save in Apple's event editor to add it to your calendar.").font(.caption).foregroundStyle(.secondary)
       } else {
         ForEach(card.items ?? []) { item in
           if card.type == "checklist" {
             Button {
-              var next = state
+              var next = draft
               if next.checkedIds.contains(item.id) { next.checkedIds.removeAll { $0 == item.id } } else { next.checkedIds.append(item.id) }
               save(next)
             } label: {
-              Label(item.text ?? "", systemImage: state.checkedIds.contains(item.id) ? "checkmark.circle.fill" : "circle").frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-            }.buttonStyle(.plain).accessibilityIdentifier("checklist.\(card.id).\(item.id)").accessibilityValue(state.checkedIds.contains(item.id) ? "Checked" : "Unchecked").disabled(!loaded || busy || !store.connected)
-          } else {
-            VStack(alignment: .leading, spacing: 5) {
-              Text(item.title ?? "").font(.subheadline.bold())
-              if let time = item.time { Text(time).font(.caption).foregroundStyle(.secondary) }
-              if let detail = item.detail { Text(detail).font(.footnote) }
-              if let url = item.url.flatMap(URL.init(string:)) { Link("Open details", destination: url).font(.caption) }
-              TextField("Your notes", text: Binding(get: { state.notes[item.id] ?? "" }, set: { state.notes[item.id] = $0 }), axis: .vertical).textFieldStyle(.roundedBorder).disabled(!loaded || busy)
-            }
-          }
+              Label(item.text ?? "", systemImage: draft.checkedIds.contains(item.id) ? "checkmark.circle.fill" : "circle").frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+            }.buttonStyle(.plain).accessibilityIdentifier("checklist.\(card.id).\(item.id)").accessibilityValue(draft.checkedIds.contains(item.id) ? "Checked" : "Unchecked").disabled(busy || status == .failed)
+          } else { itineraryItem(item) }
         }
-        if card.type == "itinerary" { Button("Save itinerary notes") { save(state) }.disabled(!loaded || busy || !store.connected) }
-        if !loaded && error == nil { ProgressView("Loading saved choices…") }
-        if !loaded && error != nil { Button("Retry saved choices") { Task { await load() } } }
+        Text("Checks and notes are saved for your account. The assistant's proposal stays in the conversation.").font(.caption).foregroundStyle(.secondary)
+        if status == .loading && error == nil { ProgressView("Loading saved choices…") }
       }
-      if let error { ErrorBanner(message: error) }
+      if let error {
+        ErrorBanner(message: error)
+        if status == .failed && saved != draft { Button("Retry saving") { save(draft) }.buttonStyle(.bordered).disabled(!store.connected) }
+        else { Button("Reload saved state") { Task { await load() } }.buttonStyle(.bordered).disabled(!store.connected) }
+      }
     }.padding(14).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
       .task(id: "\(store.scope ?? ""):\(messageId):\(card.id)") { await load() }
       .sheet(isPresented: $eventOpen) { CalendarProposalEditor(card: card) }
   }
+  private func itineraryItem(_ item: ReplyCardItem) -> some View {
+    let note = draft.notes[item.id] ?? ""
+    return VStack(alignment: .leading, spacing: 5) {
+      if let time = item.time { Text(time).font(.caption.weight(.semibold)).textCase(.uppercase).foregroundStyle(.secondary) }
+      Text(item.title ?? "").font(.subheadline.bold())
+      if let detail = item.detail { Text(detail).font(.footnote) }
+      if !note.isEmpty && editing != item.id { Text("Your note: \(note)").font(.footnote) }
+      if let url = item.url.flatMap(URL.init(string:)) { Link("Open details", destination: url).font(.caption) }
+      if editing == item.id {
+        TextField("Your itinerary note", text: Binding(get: { draft.notes[item.id] ?? "" }, set: { draft.notes[item.id] = String($0.prefix(2000)) }), axis: .vertical)
+          .lineLimit(3...8).textFieldStyle(.roundedBorder)
+        HStack {
+          Button("Save note") { save(draft) }.disabled(busy)
+          Button("Cancel") { draft = saved; editing = nil }.disabled(busy)
+        }.buttonStyle(.bordered)
+      } else {
+        Button(note.isEmpty ? "Add note" : "Edit note") { editing = item.id }.buttonStyle(.bordered).disabled(busy || status == .failed)
+      }
+    }
+  }
   private var path: String { "/bots/\(APIClient.component(store.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
   private func load() async {
     guard card.type != "event", let api = store.api else { return }
-    let scope = store.scope; loaded = false; error = nil; state = ReplyCardState()
-    do { let value: ReplyCardState = try await api.get(path); guard store.scope == scope, store.api === api else { return }; state = value; loaded = true }
-    catch { if store.scope == scope { self.error = error.localizedDescription } }
+    let scope = store.scope; status = .loading; error = nil
+    do { let value: ReplyCardState = try await api.get(path); guard store.scope == scope, store.api === api else { return }; saved = value; draft = value; status = .ready }
+    catch { if store.scope == scope { self.error = error.localizedDescription; status = .failed } }
   }
   private func save(_ value: ReplyCardState) {
     guard let api = store.api, !busy else { return }
-    let scope = store.scope; let route = path; busy = true; error = nil
-    Task { defer { busy = false }; do { let saved: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store.scope == scope, store.api === api else { return }; state = saved } catch { if store.scope == scope { self.error = error.localizedDescription } } }
+    let scope = store.scope; let route = path; draft = value; status = .saving; error = nil
+    Task {
+      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store.scope == scope, store.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
+      catch { if store.scope == scope { self.error = error.localizedDescription; status = .failed } }
+    }
   }
 }
 

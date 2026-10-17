@@ -37,6 +37,29 @@ enum Palette {
   }
 }
 
+/// A small tool the avatar holds while Hermes runs a recognizable kind of tool. It mirrors
+/// `avatarProp` in src/components/avatar-motion.ts, including the order of the checks.
+enum AvatarProp: String, CaseIterable, Equatable {
+  case search, computer, read, write
+
+  /// Name fragments per prop, checked in case order. Each list is the web's regex alternation.
+  static let tools: [(AvatarProp, [String])] = [
+    (.search, ["search", "find", "grep", "lookup", "fetch", "extract", "browse", "browser", "navigate", "crawl", "scrape", "vision"]),
+    (.computer, ["terminal", "shell", "bash", "exec", "process", "code", "computer", "ssh", "command"]),
+    (.read, ["read", "view", "skill", "open", "load", "list"]),
+    (.write, ["write", "patch", "edit", "create", "save", "update", "note", "todo", "memory", "remind", "draft", "generate"]),
+  ]
+  /// Picks a prop from a Hermes tool name; unknown tools keep the plain working motion.
+  static func from(tool: String?) -> AvatarProp? {
+    guard let name = tool?.lowercased(), !name.isEmpty else { return nil }
+    return tools.first { _, fragments in fragments.contains { name.contains($0) } }?.0
+  }
+  /// The prop for the most recent running tool call, as the web conversation chooses it.
+  static func from(toolCalls: [ToolCall]?) -> AvatarProp? {
+    from(tool: toolCalls?.last { $0.status == "running" }?.name)
+  }
+}
+
 /// Pure motion model for the avatar rig. It mirrors src/components/avatar-motion.ts number
 /// for number. Time is seconds since the avatar entered its current state.
 enum AvatarMotion {
@@ -124,7 +147,62 @@ enum AvatarMotion {
   /// A short damped "boop" that acknowledges every state change.
   static func arrival(_ t: Double) -> Double { 1 + 0.07 * exp(-t * 7) * sin(t * 24) }
 
-  static func pose(_ state: ActivityState, _ t: Double, reduce: Bool) -> Pose {
+  /// Where the held prop sits in avatar units, and its tilt in degrees.
+  struct PropPlacement: Equatable {
+    var x: Double
+    var y: Double
+    var rotate: Double
+  }
+  static func propMotion(_ prop: AvatarProp, _ t: Double) -> PropPlacement {
+    switch prop {
+    case .search:
+      PropPlacement(x: 72 + sin(t * 1.6) * 9, y: 70 + sin(t * 3.2) * 2.5, rotate: -8 + sin(t * 1.6) * 6)
+    case .computer: PropPlacement(x: 50, y: 88 - abs(sin(t * 9)) * 0.5, rotate: 0)
+    case .read: PropPlacement(x: 50, y: 86 + sin(t * 1.4) * 1, rotate: sin(t * 0.7) * 2)
+    case .write:
+      PropPlacement(x: 74 + sin(t * 7) * 2.5, y: 78 + cos(t * 7) * 1.2 + sin(t * 0.9) * 2, rotate: 0)
+    }
+  }
+  /// The held prop's springy entrance scale, 0 at its first frame and settling at 1.
+  static func popIn(_ t: Double) -> Double {
+    let x = clamp(t)
+    return 1 + 2.2 * pow(x - 1, 3) + 1.2 * pow(x - 1, 2)
+  }
+
+  /// Replaces the working scan and spin with a calm pose that watches the prop.
+  static func propPose(_ start: Pose, _ prop: AvatarProp, _ t: Double) -> Pose {
+    var pose = start
+    let motion = propMotion(prop, t)
+    // Reading eyes sweep across a line, then hop back to start the next one.
+    func line(_ rate: Double) -> Double {
+      let u = (t * rate).truncatingRemainder(dividingBy: 1)
+      return u < 0.85 ? -0.6 + 1.2 * (u / 0.85) : 0.6 - 1.2 * smoothstep((u - 0.85) / 0.15)
+    }
+    let b = sin(t * 1.9)
+    pose.scaleY *= 1 + 0.014 * b
+    pose.scaleX *= 1 - 0.008 * b
+    pose.lift = -0.8 * b
+    switch prop {
+    case .search:
+      pose.gazeX = (motion.x - 72) / 12
+      pose.gazeY = 0.4
+      pose.roll = (motion.x - 72) * 0.25
+    case .write:
+      pose.gazeX = 0.55 + sin(t * 7) * 0.12
+      pose.gazeY = 0.7
+      pose.roll = 3
+    case .computer, .read:
+      pose.gazeX = line(prop == .computer ? 0.7 : 0.4)
+      pose.gazeY = 0.85
+      pose.lift += prop == .computer ? -abs(sin(t * 9)) * 0.5 : 0
+    }
+    pose.yaw = pose.gazeX * 0.12
+    return pose
+  }
+
+  static func pose(_ state: ActivityState, _ t: Double, reduce: Bool, prop: AvatarProp? = nil)
+    -> Pose
+  {
     if reduce || frozenStates.contains(state) { return restingPose }
     let pop = arrival(t)
     var pose = Pose(scaleX: pop, scaleY: pop, blink: blinkAt(t))
@@ -147,6 +225,7 @@ enum AvatarMotion {
       pose.gazeX = sin(t * 1.3) * 0.5
       pose.gazeY = -0.8
     case .working:
+      if let prop { return propPose(pose, prop, t) }
       let u = t.truncatingRemainder(dividingBy: workCycle)
       let scanEnd = workCycle - workSpin
       if u < scanEnd {
@@ -373,27 +452,38 @@ enum AvatarMotion {
     var morph: Morph
     var trailLevel: Double
     var sweep: Double
+    /// The prop held in this frame. Only a working avatar holds one.
+    var prop: AvatarProp? = nil
+    /// Seconds since the prop last changed, which drives its pop-in. Still avatars report 1.
+    var propAge = 1.0
   }
-  static func frame(_ snapshot: Snapshot, at date: Date, still: Bool) -> Frame {
+  /// `prop` is the tool the caller wants held and `propSince` when it last changed.
+  static func frame(
+    _ snapshot: Snapshot, at date: Date, still: Bool, prop: AvatarProp? = nil,
+    propSince: Date = .distantPast
+  ) -> Frame {
     let state = snapshot.state
+    let held = state == .working ? prop : nil
     if still {
       return Frame(
         t: 0, pose: restingPose, expression: expression(for: state, at: .infinity),
-        morph: morphTarget(state), trailLevel: 0, sweep: 0)
+        morph: morphTarget(state), trailLevel: 0, sweep: 0, prop: held)
     }
     let t = max(0, date.timeIntervalSince(snapshot.since))
-    let pose = self.pose(state, t, reduce: false)
+    let pose = self.pose(state, t, reduce: false, prop: held)
     let carry = snapshot.carry * (1 - smoothstep(t / 0.6))
     return Frame(
       t: t, pose: pose, expression: expression(from: snapshot.expression, toward: state, after: t),
       morph: morph(from: snapshot.morph, toward: state, after: t),
       trailLevel: max(pose.trails, carry),
-      sweep: pose.trails >= carry ? pose.sweep : snapshot.carrySweep + t * 7)
+      sweep: pose.trails >= carry ? pose.sweep : snapshot.carrySweep + t * 7,
+      prop: held, propAge: max(0, date.timeIntervalSince(propSince)))
   }
-  static func next(_ snapshot: Snapshot, to state: ActivityState, at date: Date, still: Bool)
-    -> Snapshot
-  {
-    let current = frame(snapshot, at: date, still: still)
+  static func next(
+    _ snapshot: Snapshot, to state: ActivityState, at date: Date, still: Bool,
+    prop: AvatarProp? = nil
+  ) -> Snapshot {
+    let current = frame(snapshot, at: date, still: still, prop: prop)
     return Snapshot(
       state: state, since: date, expression: current.expression, morph: current.morph,
       carry: current.trailLevel, carrySweep: current.sweep)
@@ -703,6 +793,87 @@ private enum AvatarArt {
   }
 }
 
+/// The held props from `PropArt` in src/components/Avatar.tsx. Their colors are fixed, as on
+/// the web, so a prop reads the same on any body color and in light or dark appearance.
+private enum AvatarPropArt {
+  static let handle = SVGPath.parse("M8 8 L19 19")
+  static let lensGlint = SVGPath.parse("M-6 -3 Q-5 -6 -2 -7")
+  static let screen = Path(
+    roundedRect: CGRect(x: -21, y: -23, width: 42, height: 27), cornerRadius: 4, style: .circular)
+  static let keyboard = SVGPath.parse("M-27 4 H27 L24 10 H-24Z")
+  static let pageLeft = SVGPath.parse("M0 -10 Q-12 -15 -24 -11 V7 Q-12 3 0 8Z")
+  static let pageRight = SVGPath.parse("M0 -10 Q12 -15 24 -11 V7 Q12 3 0 8Z")
+  static let textLines = SVGPath.parse(
+    "M-19 -6 Q-11 -9 -4 -6 M-19 -1 Q-11 -4 -4 -1 M4 -6 Q11 -9 19 -6 M4 -1 Q11 -4 19 -1")
+  static let spine = SVGPath.parse("M-25 8 Q-12 4 0 9 Q12 4 25 8")
+  static let paper = Path(
+    roundedRect: CGRect(x: -15, y: 2, width: 26, height: 20), cornerRadius: 2.5, style: .circular)
+  static let pencil = Path(
+    roundedRect: CGRect(x: -3.2, y: -22, width: 6.4, height: 22), cornerRadius: 1.2,
+    style: .circular)
+  static let eraser = SVGPath.parse("M-3.2 -22 H3.2 V-25.5 Q3.2 -27 0 -27 Q-3.2 -27 -3.2 -25.5Z")
+  static let tip = SVGPath.parse("M-3.2 0 L0 6 L3.2 0Z")
+  static let ink = Color(hex: "#2b201b")
+
+  static func style(_ width: Double) -> StrokeStyle {
+    StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)
+  }
+  /// Fills a shape and traces it with the web's dark outline.
+  static func outlined(_ context: GraphicsContext, _ path: Path, _ fill: String) {
+    context.fill(path, with: .color(Color(hex: fill)))
+    context.stroke(path, with: .color(ink), style: style(2.2))
+  }
+
+  /// Draws a prop in avatar units, positioned by `propMotion` and scaled by `grow`.
+  static func draw(_ root: GraphicsContext, prop: AvatarProp, t: Double, grow: Double) {
+    let place = AvatarMotion.propMotion(prop, t)
+    let scale = grow * (prop == .search ? 1.3 : 1)
+    guard scale > 0.001 else { return }
+    var context = root
+    context.translateBy(x: place.x, y: place.y)
+    context.rotate(by: .degrees(place.rotate))
+    context.scaleBy(x: scale, y: scale)
+    switch prop {
+    case .search:
+      context.stroke(handle, with: .color(ink), style: style(6.5))
+      context.stroke(handle, with: .color(Color(hex: "#b07a4a")), style: style(3.6))
+      let lens = AvatarArt.circle(0, 0, 11)
+      context.fill(lens, with: .color(Color(hex: "#d9f2ff").opacity(0.55)))
+      context.stroke(lens, with: .color(ink), style: style(3.4))
+      context.stroke(lensGlint, with: .color(.white.opacity(0.9)), style: style(2))
+    case .computer:
+      outlined(context, screen, "#cfd5dc")
+      context.fill(AvatarArt.circle(0, -10, 3), with: .color(Color(hex: "#9aa4ae")))
+      outlined(context, keyboard, "#aab3bc")
+      context.fill(
+        AvatarArt.circle(16, 7, 1.1), with: .color(Color(hex: "#7bd88f").opacity(0.5 + 0.5 * sin(t * 5))))
+    case .read:
+      outlined(context, pageLeft, "#fff8ec")
+      outlined(context, pageRight, "#fff8ec")
+      context.stroke(textLines, with: .color(Color(hex: "#b9ab96")), style: style(1.4))
+      context.stroke(spine, with: .color(Color(hex: "#c0503a")), style: style(3))
+    case .write:
+      var note = context
+      note.translateBy(x: 0, y: 12)
+      note.rotate(by: .degrees(-8))
+      note.translateBy(x: 0, y: -12)
+      outlined(note, paper, "#fff8ec")
+      // The first line writes itself out, then starts over.
+      var lines = Path()
+      lines.move(to: CGPoint(x: -10, y: 9))
+      lines.addLine(to: CGPoint(x: -10 + 16 * (t * 0.5).truncatingRemainder(dividingBy: 1), y: 9))
+      lines.move(to: CGPoint(x: -10, y: 15))
+      lines.addLine(to: CGPoint(x: 2, y: 15))
+      note.stroke(lines, with: .color(Color(hex: "#9db7d6")), style: style(1.6))
+      var pen = context
+      pen.rotate(by: .degrees(38))
+      outlined(pen, pencil, "#ffc94a")
+      outlined(pen, eraser, "#f28fa0")
+      outlined(pen, tip, "#f2d1a8")
+    }
+  }
+}
+
 /// Draws one frame of a drawn (geometric or mascot) avatar in the web's 116-unit viewBox.
 struct AvatarArtwork {
   var avatar: AvatarConfig
@@ -929,6 +1100,18 @@ struct AvatarArtwork {
         trails(front: true)
       }
     }
+    // A held prop pops in when Hermes starts a new kind of tool. It sits outside the body's
+    // transform, so the avatar sways and looks at it while the prop keeps its own motion.
+    if let prop = frame.prop {
+      var held = root
+      held.opacity = AvatarMotion.smoothstep(frame.propAge / 0.2)
+      if held.opacity > 0.001 {
+        held.drawLayer { context in
+          AvatarPropArt.draw(
+            context, prop: prop, t: frame.t, grow: AvatarMotion.popIn(frame.propAge / 0.4))
+        }
+      }
+    }
     if bang > 0.01 {
       var symbol = root
       symbol.opacity = AvatarMotion.smoothstep(bang)
@@ -963,6 +1146,9 @@ struct AvatarView: View {
   var size: CGFloat
   var name: String
   var forceReducedMotion: Bool
+  /// A tool to hold while working, such as a magnifying glass during a search. Portraits and
+  /// other states ignore it, as on the web.
+  var prop: AvatarProp?
   @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.colorScheme) private var scheme
@@ -974,21 +1160,24 @@ struct AvatarView: View {
   @State private var visible = true
   @State private var settling = true
   @State private var changes = 0
+  @State private var propSince = Date()
 
   init(
     avatar: AvatarConfig = AvatarConfig(), state: ActivityState = .idle, size: CGFloat = 48,
-    name: String = "Assistant", forceReducedMotion: Bool = false
+    name: String = "Assistant", forceReducedMotion: Bool = false, prop: AvatarProp? = nil
   ) {
     self.avatar = avatar
     self.state = state
     self.size = size
     self.name = name
     self.forceReducedMotion = forceReducedMotion
+    self.prop = prop
     _snapshot = State(initialValue: .entering(state, at: Date()))
   }
 
   private var reduceMotion: Bool { systemReduceMotion || forceReducedMotion }
   private var portrait: Bool { avatar.mode == "portrait" }
+  private var heldProp: AvatarProp? { portrait ? nil : prop }
   private var geometry: String { avatar.geometry }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
@@ -1020,9 +1209,10 @@ struct AvatarView: View {
     .onDisappear { visible = false }
     .onChange(of: state) { old, new in
       let now = Date()
-      snapshot = AvatarMotion.next(snapshot, to: new, at: now, still: still(old))
+      snapshot = AvatarMotion.next(snapshot, to: new, at: now, still: still(old), prop: heldProp)
       changes += 1
     }
+    .onChange(of: prop) { propSince = Date() }
     .onChange(of: geometry) { old, _ in
       let now = Date()
       morphFrom = reduceMotion ? nil : bodyPoints(at: now, previous: old)
@@ -1052,7 +1242,8 @@ struct AvatarView: View {
       let date = paused ? Date() : timeline.date
       let artwork = AvatarArtwork(
         avatar: avatar, state: state,
-        frame: AvatarMotion.frame(snapshot, at: date, still: still(state)),
+        frame: AvatarMotion.frame(
+          snapshot, at: date, still: still(state), prop: heldProp, propSince: propSince),
         still: still(state), body: bodyPath(at: date), bodyColor: bodyColor(at: date))
       // Motion can reach past the 116-unit box (trails, hops), as the web SVG overflows.
       let pad = size * 0.2

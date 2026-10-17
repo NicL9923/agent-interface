@@ -1,8 +1,7 @@
 # Passwords and logins
 
-Open assistant settings > Logins on the web, or Passwords & logins in the native
-app. Choose the Hermes profile, inspect saved login metadata, add a login, or
-confirm removal of a local entry. External entries belong to their password
+Open assistant settings > Logins on the web or in the native app. Choose the
+Hermes profile, inspect saved login metadata, add a login, or confirm removal of a local entry. External entries belong to their password
 manager. Manage their contents there.
 
 Ownership follows Hermes profiles and the household's existing access. Usernames,

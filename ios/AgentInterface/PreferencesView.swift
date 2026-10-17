@@ -7,6 +7,7 @@ struct PreferencesView: View {
   @Environment(\.colorScheme) private var scheme
   @State private var preferences = Preferences()
   @State private var sectionName = ""
+  @StateObject private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
   private var saveFailed: Bool { store.preferencesSaveFailed }
   @State private var discardConfirm = false
@@ -31,7 +32,8 @@ struct PreferencesView: View {
             HermesUpgradeView()
           } label: {
             settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
-              detail: store.connected ? "Connected" + (store.bootstrap?.connection.version.map { " · \($0)" } ?? "") : "Reconnecting")
+              detail: store.connected ? "Connected" + (store.bootstrap?.connection.version.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
+              status: store.connected ? Palette.accent : Palette.attention)
           }.accessibilityIdentifier("Hermes updates")
           if let url = try? store.api?.url("/?computer=1") {
             Link(destination: url) {
@@ -101,14 +103,16 @@ struct PreferencesView: View {
             Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
           }.disabled(store.sessionExpired)
         }
-        ForEach(preferences.sections) { section in sectionEditor(section) }
-        Section("Home sections") {
-          TextField("New section, like Around the house", text: $sectionName).accessibilityLabel("New section name")
-          Button("Add section") {
-            preferences.sections.append(BotSection(id: UUID().uuidString, name: sectionName.trimmingCharacters(in: .whitespacesAndNewlines), botIds: []))
-            sectionName = ""
-          }.disabled(sectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || preferences.sections.count >= 30)
-        }.disabled(store.sessionExpired)
+        ForEach(Array(preferences.sections.enumerated()), id: \.element.id) { index, section in sectionEditor(section, first: index == 0) }
+        Section {
+          HStack {
+            TextField("New section, like Around the house", text: $sectionName).accessibilityLabel("New section name")
+            Button("Add") {
+              preferences.sections.append(BotSection(id: UUID().uuidString, name: sectionName.trimmingCharacters(in: .whitespacesAndNewlines), botIds: []))
+              sectionName = ""
+            }.buttonStyle(.borderless).disabled(sectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || preferences.sections.count >= 30)
+          }
+        } header: { if preferences.sections.isEmpty { Text("Home sections") } }.disabled(store.sessionExpired)
         Section {
           if store.sessionExpired { Button("Sign in again") { Task { await store.signIn() } } }
           Button("Sign out", role: .destructive) { signOutConfirm = true }
@@ -157,9 +161,12 @@ struct PreferencesView: View {
   private var notificationPreferences: NotificationPreferences {
     preferences.notifications ?? NotificationPreferences(timezone: TimeZone.current.identifier, batchMinutes: 0)
   }
-  private func settingsRow(_ title: String, icon: String, detail: String) -> some View {
+  private func settingsRow(_ title: String, icon: String, detail: String, status: Color? = nil) -> some View {
     HStack(spacing: 12) {
       Image(systemName: icon).foregroundStyle(Palette.accent).frame(width: 24)
+        .overlay(alignment: .topTrailing) {
+          if let status { Circle().fill(status).frame(width: 8, height: 8).offset(x: 3, y: -3).accessibilityHidden(true) }
+        }
       VStack(alignment: .leading, spacing: 4) {
         Text(title).foregroundStyle(Color.primary)
         Text(detail).font(.caption).foregroundStyle(Palette.muted)
@@ -220,26 +227,23 @@ struct PreferencesView: View {
       ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) }
     }
   }
-  private func sectionEditor(_ section: BotSection) -> some View {
+  private func sectionEditor(_ section: BotSection, first: Bool) -> some View {
     Section {
-      TextField(
-        "Section name",
-        text: Binding(
-          get: { preferences.sections.first { $0.id == section.id }?.name ?? "" },
-          set: { name in
-            if let index = preferences.sections.firstIndex(where: { $0.id == section.id }) {
-              preferences.sections[index].name = name
-            }
-          }))
+      HStack {
+        Text(section.name.isEmpty ? "Untitled section" : section.name).fontWeight(.medium)
+        Spacer(minLength: 8)
+        Button { preferences.sections.removeAll { $0.id == section.id } } label: { Image(systemName: "xmark") }
+          .buttonStyle(.borderless).accessibilityLabel("Remove section \(section.name)")
+      }
       ForEach(store.bootstrap?.bots ?? []) { bot in
-        Toggle(bot.name, isOn: sectionMembership(section.id, bot.id))
+        Toggle(isOn: sectionMembership(section.id, bot.id)) {
+          HStack(spacing: 10) {
+            AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: bot.name, forceReducedMotion: true)
+            Text(bot.name)
+          }
+        }
       }
-      Button("Delete section", role: .destructive) {
-        preferences.sections.removeAll { $0.id == section.id }
-      }
-    } header: {
-      Text(section.name.isEmpty ? "Untitled section" : section.name)
-    }
+    } header: { if first { Text("Home sections") } }.disabled(store.sessionExpired)
   }
   private func sectionMembership(_ sectionId: String, _ botId: String) -> Binding<Bool> {
     Binding(
