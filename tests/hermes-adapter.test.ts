@@ -76,6 +76,8 @@ beforeEach(()=>{
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
 });
 afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals();});
+// Hermes reports a change on the session's socket before a later read can differ; shared reads rely on it.
+const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_id:'live-one',type:'status.update',payload:{}}});
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
@@ -218,9 +220,11 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(between.messages.map(message => message.id)).not.toContain('live-one-inflight');
     // Streamed reasoning separates summary parts differently from the stored row.
     snapshot.inflight = {...snapshot.inflight,assistant:'Checking the NAS first.\n\n    tailscale up',reasoning:'Plan A.\n\nPlan B.Verify the status.'};
+    hermesChanged();
     const streaming = await runtime.conversation('shared');
     expect(streaming.messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'    tailscale up',reasoning:'Verify the status.'});
     snapshot.inflight = {user:'Join the NAS',assistant:'A rewritten answer',streaming:true};
+    hermesChanged();
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'A rewritten answer'});
   });
   it('matches emoji and ignores earlier turns of a queued follow-up run', async () => {
@@ -258,12 +262,15 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
     // Text the stopped turn never saved still appears, without its saved opening.
     snapshot.inflight = {user:'Plan the week',assistant:'Here is the plan for Tuesday. Then Wednesday',streaming:false};
+    hermesChanged();
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'Then Wednesday'});
     // Saved display text drops the file references the snapshot's prompt still carries.
     snapshot.inflight = {user:'Plan the week\n@file:"/staging/menu.pdf"',assistant:'Here is the plan for Tuesday.',streaming:false};
+    hermesChanged();
     expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
     // A snapshot for a prompt history has not saved yet keeps its whole text.
     snapshot.inflight = {user:'And next week?',assistant:'Here is the plan for Tuesday. Next week too.',streaming:false};
+    hermesChanged();
     expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Here is the plan for Tuesday. Next week too.'});
   });
   it('settles missed streamed completion without adding stale reasoning to canonical history', async () => {
@@ -299,6 +306,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     snapshot.info.running = true;
     await runtime.conversation('shared');
     sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'bridge-live',name:'tool_call',args:bridged}}});
+    hermesChanged();
     const live = await runtime.conversation('shared');
     expect(live.activity.detail).toBe('Using browser_vault, mcp_calendar_list_events');
     expect(live.toolCalls).toMatchObject([{id:'bridge-live',name:'browser_vault, mcp_calendar_list_events'}]);
@@ -306,6 +314,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const forms = {batch:bridged, text:{calls:JSON.stringify(bridged.calls)}, single:{calls:{name:'image_generate',arguments:'{"prompt":"barn"}'}},
       legacy:{name:'session_search',arguments:{query:'gate'}}, broken:'not json'};
     snapshot.app_tool_calls = Object.entries(forms).map(([id, value]) => ({id, name:'tool_call', arguments:typeof value === 'string' ? value : JSON.stringify(value), status:'running'}));
+    hermesChanged();
     const cold = (await runtime.conversation('shared')).toolCalls!;
     expect(cold.map(call => call.name)).toEqual(['browser_vault, mcp_calendar_list_events','browser_vault, mcp_calendar_list_events','image_generate','session_search','tool_call']);
     // A single call is shown as itself, so its own arguments are what renderers read.
@@ -316,6 +325,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     snapshot.messages = [{role:'tool',row_id:9,name:'tool_call',tool_call_id:'bridge-saved',args:{calls:[{name:'message_agent',arguments:{target:'planner',message:'Check the weather.'}}]},content:'{"ok":true}'},
       {role:'tool',row_id:10,name:'tool_call',tool_call_id:'bridge-receipt',args:bridged,
         app_tool_call:{id:'run:bridge-receipt',name:'tool_call',arguments:JSON.stringify(bridged),status:'completed'}}];
+    hermesChanged();
     const saved = await runtime.conversation('shared');
     expect(saved.messages.map(message => [message.toolName, message.toolCall?.name])).toEqual([
       ['message_agent','message_agent'],['browser_vault, mcp_calendar_list_events','browser_vault, mcp_calendar_list_events']]);
@@ -502,9 +512,11 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await runtime.conversation('shared');
     const request={id:'srq-one',method,params:{session_id:'live-one',description:'Native request'}};
     sockets[0].receive(request);snapshot.open_requests=[request];snapshot.info.running=true;
+    hermesChanged();
     const waiting=await runtime.conversation('shared');
     expect(method==='approval'?waiting.approvals:waiting.attention).toHaveLength(1);
     delete snapshot.open_requests;snapshot.info.running=false;
+    hermesChanged();
     const settled=await runtime.conversation('shared');
     expect(settled.approvals).toEqual([]);expect(settled.attention).toEqual([]);expect(settled.activity.state).toBe('idle');
   });
@@ -520,8 +532,10 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await runtime.conversation('shared');
     sockets[0].receive({method:'event',params:{session_id:'live-one',type:'message.complete',payload:{status:'complete'}}});
     snapshot.app_run_id='task-one';
+    hermesChanged();
     expect((await runtime.conversation('shared')).activity).toEqual({state:'thinking',runId:'task-one'});
     delete snapshot.app_run_id;snapshot.app_task_state='done';
+    hermesChanged();
     expect((await runtime.conversation('shared')).activity.state).toBe('done');
   });
 
@@ -776,6 +790,7 @@ describe('Hermes transport liveness and diagnostics', () => {
     sockets[1].receive({id, result: {toolsets: [{name: 'terminal', enabled: true}]}});
     expect(await tools).toHaveLength(1);
     snapshot.info.running = true;
+    sockets[1].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
     expect((await runtime.conversation('shared')).activity.state).toBe('thinking');
     expect(sockets).toHaveLength(2);
   });
@@ -846,10 +861,10 @@ describe('Hermes transport liveness and diagnostics', () => {
     sockets[0].receive({id: request.id, result: {requestId: 'request-one', status: 'accepted', runId: 'run-one'}});
     expect(await submitted).toMatchObject({status: 'accepted'});
     await vi.advanceTimersByTimeAsync(15_000);
+    // The background heartbeat finds a silent socket dead, so no request has to wait on it.
     deferredMethods.add('agent-interface.capabilities');
-    const stale = runtime.status();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(await stale).toMatchObject({connected: false, code: 'unreachable'});
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
     expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
   });
 });
@@ -946,4 +961,99 @@ it('allowlists history fields before redacting a private bot handoff and its inh
     expect(JSON.stringify(publicRows)).not.toContain(privateId);
     expect(publicRows[0].origin).toEqual({kind:'agent',visibility:'activity'});
   } finally {store.close();}
+});
+
+describe('Hermes conversation and roster read costs', () => {
+  const opens = () => calls.filter(call => call.method === 'agent-interface.open');
+  it('reads write-check state without history and asks Hermes to cut a window', async () => {
+    await runtime.submit(input());
+    await runtime.conversation('shared', {history: false});
+    expect(opens().map(call => call.params)).toEqual([{profile: 'shared', omit_messages: true}, {profile: 'shared', omit_messages: true}]);
+    await runtime.conversation('shared', {window: {start: 'abc', turns: 20}});
+    await runtime.conversation('shared');
+    expect(opens().slice(2).map(call => call.params)).toEqual([{profile: 'shared', window: {start: 'abc', turns: 20}}, {profile: 'shared'}]);
+  });
+
+  it('splits a cut window from its earlier context and keeps positional IDs', async () => {
+    snapshot.app_window = {earlier: 40, context: 2};
+    snapshot.messages = [
+      {role: 'user', text: 'Make a chart', app_index: 6},
+      {role: 'assistant', text: 'Chart', app_index: 7, app_artifacts: [{path: '/out/chart.png', name: 'chart.png'}]},
+      {role: 'user', text: 'Latest prompt', app_index: 40},
+      {role: 'assistant', text: 'Latest reply', app_index: 41},
+    ];
+    const result = await runtime.conversation('shared', {window: {turns: 20}});
+    expect(result.messages.map(message => message.id)).toEqual(['live-one-40', 'live-one-41']);
+    expect(result.window!.earlier).toBe(40);
+    expect(result.window!.context.map(message => message.id)).toEqual(['live-one-6', 'live-one-7']);
+    expect(result.files.map(file => file.name)).toEqual(['chart.png']);
+    delete snapshot.app_window;
+    hermesChanged();
+    expect((await runtime.conversation('shared', {window: {turns: 20}})).window).toBeUndefined();
+  });
+
+  it('shares one read among viewers until Hermes or this app changes the conversation', async () => {
+    vi.useFakeTimers();
+    // A new connection is itself a change, so start from a connected server.
+    await runtime.status();
+    snapshot.messages = [{row_id: 1, role: 'user', text: 'Hi'}, {row_id: 2, role: 'assistant', text: 'Hello'}];
+    const [first, second] = await Promise.all([runtime.conversation('shared', {window: {turns: 20}}), runtime.conversation('shared', {window: {turns: 20}})]);
+    expect(first).not.toBe(second);
+    expect(first.messages).toBe(second.messages);
+    // A reader's next poll names its window's first message: the same read.
+    await runtime.conversation('shared', {window: {start: '1'}});
+    expect(opens()).toHaveLength(1);
+    hermesChanged();
+    await runtime.conversation('shared', {window: {turns: 20}});
+    expect(opens()).toHaveLength(2);
+    await runtime.stop('shared');
+    await runtime.conversation('shared', {window: {turns: 20}});
+    expect(opens().filter(call => !call.params.omit_messages)).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await runtime.conversation('shared', {window: {turns: 20}});
+    expect(opens().filter(call => !call.params.omit_messages)).toHaveLength(4);
+    await Promise.all([runtime.conversation('shared', {history: false}), runtime.conversation('shared', {history: false})]);
+    expect(opens().filter(call => call.params.omit_messages)).toHaveLength(3);
+  });
+
+  it('reuses profile descriptions across roster polls until a minute passes or this app edits them', async () => {
+    vi.useFakeTimers();
+    const describes = () => calls.filter(call => call.method === 'profiles.describe').length;
+    await runtime.listBots(); await runtime.listBots();
+    expect(describes()).toBe(1);
+    await runtime.skills('shared');
+    expect(describes()).toBe(2);
+    await runtime.listBots();
+    expect(describes()).toBe(2);
+    await runtime.setSkills('shared', []);
+    await runtime.listBots();
+    expect(describes()).toBe(4);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await runtime.listBots();
+    expect(describes()).toBe(5);
+  });
+
+  it('checks a quiet socket in the background and reconnects open chats without a request', async () => {
+    vi.useFakeTimers();
+    const changes = vi.fn();
+    await runtime.status();
+    runtime.watch!('shared', changes);
+    const checks = () => calls.filter(call => call.method === 'agent-interface.capabilities').length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(checks()).toBe(2);
+    sockets[0].close();
+    expect(changes).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets).toHaveLength(2);
+    expect(changes).toHaveBeenCalledTimes(2);
+    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
+  });
+
+  it('sends the contract check behind the client announcement in one round trip', async () => {
+    deferredMethods.add('client.capabilities');
+    const status = runtime.status();
+    await vi.waitFor(() => expect(calls.map(call => call.method)).toEqual(['client.capabilities', 'agent-interface.capabilities']));
+    sockets[0].receive({jsonrpc: '2.0', id: calls[0].params && (calls[0] as Record<string, any>).id, result: {}});
+    expect(await status).toMatchObject({connected: true, code: 'ready'});
+  });
 });

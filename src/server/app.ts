@@ -386,12 +386,21 @@ export async function createApp(
     return runtime.generatePortrait(params(req).id, prompt.prompt);
   });
   app.get("/api/bots/:id/conversation", async (req) => {
-    const result = await runtime.conversation(params(req).id);
+    // Without a window, as for the native app, the whole history is returned.
+    const window = z.object({
+      start: z.string().min(1).max(512).optional(),
+      turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
+    }).parse(req.query);
+    const windowed = window.start !== undefined || window.turns !== undefined;
+    const { window: cut, ...result } = await runtime.conversation(params(req).id, windowed ? { window } : undefined);
     // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
-    const originalFileIds = new Set(result.messages.flatMap(message => message.files ?? []).map(file => file.id));
-    result.messages = result.messages.map((message) => {
+    // A runtime that already cut the window adds only the earlier messages still needed for files.
+    const context = cut?.context ?? [];
+    const read = [...context, ...result.messages];
+    const originalFileIds = new Set(read.flatMap(message => message.files ?? []).map(file => file.id));
+    const shown = read.map((message) => {
       const attribution =
         store.submissionForMessage(params(req).id, message.id) ??
         store.submission(message.id);
@@ -403,19 +412,17 @@ export async function createApp(
         : message;
     }).map(redact.message);
     result.attention = nameRequesters(result.attention, userId => store.getUser(userId)?.name);
-    const visibleFileIds = new Set(result.messages.flatMap(message => message.files ?? []).map(file => file.id));
+    const visibleFileIds = new Set(shown.flatMap(message => message.files ?? []).map(file => file.id));
     result.files = result.files?.filter(file => !originalFileIds.has(file.id) || visibleFileIds.has(file.id));
-    // Without a window, as for the native app, the whole history is returned.
-    const window = z.object({
-      start: z.string().min(1).max(512).optional(),
-      turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
-    }).parse(req.query);
     let earlier: number | undefined, earlierFiles: number | undefined;
-    if (window.start !== undefined || window.turns !== undefined) {
-      const all = result.messages;
-      ({ messages: result.messages, earlier } = historyWindow(all, window));
+    result.messages = shown.slice(context.length);
+    if (cut) {
+      earlier = cut.earlier;
       // Signed file references scale with the window too. The rest load on demand.
-      ({ files: result.files, earlierFiles } = windowFiles(all, earlier, result.files));
+      ({ files: result.files, earlierFiles } = windowFiles(shown, context.length, result.files));
+    } else if (windowed) {
+      ({ messages: result.messages, earlier } = historyWindow(shown, window));
+      ({ files: result.files, earlierFiles } = windowFiles(shown, earlier, result.files));
     }
     return {
       ...result,
@@ -530,7 +537,7 @@ export async function createApp(
       await requireCapability("idempotency");
     }
     await requireCapability("chat");
-    const conversation = await runtime.conversation(input.botId);
+    const conversation = await runtime.conversation(input.botId, { history: false });
     if (conversation.activity.state === "interrupted" && !reviewedInterruption)
       throw failure(
         409,
@@ -598,7 +605,7 @@ export async function createApp(
       .object({ answers: z.record(z.string().max(200), z.string().max(10000)) })
       .parse(req.body);
     const p = params(req);
-    const conversation = await runtime.conversation(p.id);
+    const conversation = await runtime.conversation(p.id, { history: false });
     const attention = conversation.attention?.find(
       (x) => x.id === p.approvalId,
     );
@@ -623,7 +630,7 @@ export async function createApp(
       .object({ decision: z.enum(["approved", "denied"]) })
       .parse(req.body);
     const p = params(req);
-    const conversation = await runtime.conversation(p.id);
+    const conversation = await runtime.conversation(p.id, { history: false });
     const approval = conversation.approvals.find((a) => a.id === p.approvalId);
     if (
       !approval ||

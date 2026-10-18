@@ -142,7 +142,7 @@ export class LiveActivities {
     const shown = new Map(previous?.rows.map(row => [row.botId, row]));
     const conversation = (botId: string) => {
       // An unreadable conversation falls back to the roster state instead of dropping the person's whole aggregate.
-      if (!conversations.has(botId)) conversations.set(botId, Promise.resolve().then(() => this.runtime.conversation(botId)).catch(() => undefined));
+      if (!conversations.has(botId)) conversations.set(botId, Promise.resolve().then(() => this.runtime.conversation(botId, { history: false })).catch(() => undefined));
       return conversations.get(botId)!;
     };
     const rows: LiveRow[] = [];

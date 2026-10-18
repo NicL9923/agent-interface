@@ -7,7 +7,8 @@ import { createApp } from "../src/server/app.js";
 import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
-import type { Avatar, Capabilities, Runtime, Submission } from "../src/shared/types.js";
+import type { Avatar, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
+import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
@@ -333,6 +334,49 @@ describe("authentication and household state", () => {
     expect((await read("/api/bots/shared/files?before=gone")).messages).toHaveLength(31);
     expect((await read("/api/bots/shared/conversation?start=p0")).earlierFiles).toBe(0);
     await app.close();
+  });
+  it("answers a window Hermes already cut exactly as it answers its own cut", async () => {
+    const fake = runtimeDouble();
+    const conversation = await fake.runtime.conversation("shared");
+    const file = (n: number) => ({ id: `f${n}`, name: `file-${n}.txt`, mime: "text/plain", url: `/api/files/f${n}` });
+    const messages: Message[] = Array.from({ length: 30 }, (_, turn) => [
+      { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}`, ...(turn === 2 ? { files: [file(2)] } : {}) },
+      { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}`, ...(turn % 3 === 0 ? { files: turn === 27 ? [file(turn), file(0)] : [file(turn)] } : {}) },
+    ]).flat();
+    // The add-on's cut, as src/hermes/extension.py history_window makes it.
+    const cut = (window: NonNullable<ConversationOptions["window"]>) => {
+      const { earlier } = historyWindow(messages, window);
+      if (!earlier || messages[earlier].role !== "user") return undefined;
+      const kept = new Set<number>(); let prompt: number | undefined;
+      messages.slice(0, earlier).forEach((message, index) => {
+        if (message.role === "user") prompt = index;
+        if (message.files?.length) { kept.add(index); if (message.role === "assistant" && prompt !== undefined) kept.add(prompt); }
+      });
+      return { earlier, context: [...kept].sort((a, b) => a - b).map(index => messages[index]) };
+    };
+    const full = { ...conversation, messages, files: messages.flatMap(message => message.files ?? []) };
+    const answers = async (runtime: Runtime) => {
+      const { app } = await createApp(config(), runtime, { background: false });
+      const one = await login(app);
+      const bodies = [];
+      for (const query of ["?turns=20", "?start=p10&turns=20", "?start=p15", "?start=a12", "?turns=40", "?start=gone"])
+        bodies.push((await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json());
+      await app.close();
+      return bodies;
+    };
+    fake.runtime.conversation = async () => full;
+    const ownCut = await answers(fake.runtime);
+    let windows = 0;
+    fake.runtime.conversation = async (_botId, options) => {
+      const window = options?.window && cut(options.window);
+      if (!window) return full;
+      windows++;
+      const shown = messages.slice(window.earlier);
+      return { ...conversation, messages: shown, window, files: [...window.context, ...shown].flatMap(message => message.files ?? []) };
+    };
+    expect(await answers(fake.runtime)).toEqual(ownCut);
+    expect(windows).toBe(3);
+    expect(ownCut[0].earlierFiles).toBeGreaterThan(0);
   });
   it("keeps personal drafts and read positions separate while bots stay shared", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {

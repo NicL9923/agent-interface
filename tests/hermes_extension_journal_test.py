@@ -35,11 +35,14 @@ class FakeHermes:
         server._sessions = {}
         server._ok = lambda rid, value: {"jsonrpc": "2.0", "id": rid, "result": value}
         server._err = lambda rid, code, message: {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+        self.native_calls = []
         def handle(request):
+            self.native_calls.append((request["method"], dict(request.get("params") or {})))
             if request["method"] == "profiles.list":
                 return server._ok(request["id"], {"profiles": [{"name": "default", "canonical_session": {"resolved_id": "stored"}}]})
             server._sessions.setdefault("sid", {"session_key": "stored"})
-            return server._ok(request["id"], {"session_id": "sid", "messages": copy.deepcopy(self.messages)})
+            omitted = (request.get("params") or {}).get("omit_messages") is True
+            return server._ok(request["id"], {"session_id": "sid", "messages": [] if omitted else copy.deepcopy(self.messages)})
         server.handle_request = handle
         server.dispatch = lambda request, *args, **kwargs: handle(request)
         server.register_method = self.methods.__setitem__
@@ -102,8 +105,69 @@ class FakeHermes:
         for item in reversed(self.patches):
             item.stop()
 
-    def open(self):
-        return self.methods["agent-interface.open"]("poll", {"profile": "default"})["result"]
+    def open(self, **params):
+        return self.methods["agent-interface.open"]("poll", {"profile": "default", **params})["result"]
+
+
+def turns(count, files=()):
+    """count user/assistant turns; assistants in ``files`` carry an artifact, row IDs from 1."""
+    rows = []
+    for turn in range(count):
+        rows.append({"row_id": len(rows) + 1, "role": "user", "text": f"prompt {turn}"})
+        rows.append({"row_id": len(rows) + 1, "role": "assistant", "text": f"reply {turn}",
+                     **({"app_artifacts": [{"path": f"/out/{turn}.png"}]} if turn in files else {})})
+    return rows
+
+
+class HistoryWindowTests(unittest.TestCase):
+    """extension.history_window must cut exactly where src/shared/history.ts historyWindow does."""
+    def cut(self, rows, start=None, turns=0):
+        kept, window = extension.history_window(rows, "sid", start, turns)
+        return [row.get("app_index") for row in kept], window
+
+    def test_latest_page_keeps_twenty_turns_and_only_needed_earlier_rows(self):
+        rows = turns(25, files={1, 3, 7})
+        indexes, window = self.cut(rows)
+        self.assertEqual(window, {"earlier": 10, "context": 4})
+        self.assertEqual(indexes, [2, 3, 6, 7] + list(range(10, 50)))
+
+    def test_a_start_keeps_the_reader_window_and_extends_by_whole_turns(self):
+        rows = turns(25)
+        self.assertEqual(self.cut(rows, start="31")[1], {"earlier": 30, "context": 0})
+        self.assertEqual(self.cut(rows, start="31", turns=2)[1], {"earlier": 26, "context": 0})
+        self.assertEqual(self.cut(rows, start="missing")[1]["earlier"], 10)
+
+    def test_nothing_is_cut_at_the_start_or_mid_turn(self):
+        rows = turns(25)
+        self.assertEqual(self.cut(rows, start="1"), ([None] * 50, None))
+        self.assertIsNone(self.cut(rows, start="32")[1])
+        self.assertIsNone(self.cut(turns(5))[1])
+
+    def test_hidden_rows_and_positional_ids_follow_the_app(self):
+        rows = turns(25)
+        rows.insert(4, {"role": "assistant", "display_kind": "hidden", "text": "scaffold"})
+        for row in rows[30:]:
+            row.pop("row_id", None)
+        rows[29]["app_request_id"] = "app-request"
+        indexes, window = self.cut(rows, start="sid-30")
+        self.assertEqual((indexes[0], window), (30, {"earlier": 30, "context": 0}))
+        self.assertEqual(self.cut(rows, start="app-request")[1], {"earlier": 28, "context": 0})
+        self.assertNotIn("scaffold", [row["text"] for row in extension.history_window(rows, "sid", None, 0)[0]])
+
+
+class OpenTests(unittest.TestCase):
+    def test_light_open_skips_native_history_and_a_window_cuts_it(self):
+        with FakeHermes(turns(25, files={3})) as hermes:
+            first = hermes.open(omit_messages=True)
+            self.assertEqual(len(first["messages"]), 50)
+            light = hermes.open(omit_messages=True, window={"turns": 20})
+            self.assertEqual((light["messages"], "app_window" in light), ([], False))
+            self.assertEqual(hermes.native_calls[-1], ("session.activate", {"session_id": "sid", "profile": "default", "omit_messages": True}))
+            cut = hermes.open(window={"turns": 20})
+            self.assertEqual(cut["app_window"], {"earlier": 10, "context": 2})
+            self.assertEqual([row["app_index"] for row in cut["messages"][:3]], [6, 7, 10])
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            self.assertNotIn("app_window", hermes.open())
 
 
 class InlineGuidanceTests(unittest.TestCase):

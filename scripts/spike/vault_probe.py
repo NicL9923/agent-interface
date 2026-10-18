@@ -99,6 +99,8 @@ def exercise(client, headers, journal):
                     assert load_env()[params['env_var']] == env_canary
                     assert env_canary not in redact_sensitive_text('echo ' + env_canary, force=True)
                     from tools.registry import registry
+                    # Built-in tools register when model_tools is imported, which a new session may still be doing.
+                    import model_tools  # noqa: F401
                     import shlex
                     output_file=profile_home / 'synthetic-output.txt'
                     output_file.write_text(env_canary)
