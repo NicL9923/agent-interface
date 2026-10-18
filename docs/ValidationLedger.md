@@ -1,5 +1,47 @@
 # Validation ledger
 
+## October 18 credential qualification interruption review
+
+The full host qualification of merged source `172dcddf` passed native replay,
+executor restart, routine delivery and integration probes, then stopped in the
+explicit credential fixture. That fixture deliberately interrupted a task and
+started its timeout scenario without reviewing the interruption. The canonical
+admission guard correctly refused it with 4094. No qualification receipt issued,
+and the computer probes and private OAuth/Google regressions were not reached.
+
+The fixture now asserts that the unreviewed follow-up returns 4094 and creates
+no journal receipt. Only the next timeout scenario passes
+`reviewed_interruption: true`. Production admission code is unchanged. OpenAI
+GPT-6.1 Sol implemented this follow-up on `172dcddf`.
+
+A real native Mac rehearsal reproduced the original failure at
+`vault_probe.py:322`. After the fixture change, the complete `service_probe.py`
+passed all 29 checks, including real Chromium secure fill and the new
+`explicit_login_interruption_requires_review_before_next_admission` check.
+The first corrected run passed the explicit flow but stopped because its test
+environment lacked a browser executable. Setting `AGENT_BROWSER_EXECUTABLE_PATH`
+to the existing Chromium headless shell allowed the complete run to finish.
+No assertion was skipped.
+
+The rehearsal used the existing constrained interpreter under
+`/Volumes/DevSSD/scratch/credential-input/venv`, native `acc3cada0da86`, and the
+approved repair. Its scrubbed environment pinned that revision and repair hash,
+set provisional headless qualification, disabled lazy installs and bytecode,
+and put HOME, TMPDIR and evidence under the disposable DevSSD directory
+`credential-probe-rehearsal-oe6zzx1z`. Only synthetic credentials and loopback
+fixture providers/pages were used. The receipt and before/after logs remain
+there. Production was untouched.
+
+Validated fixture SHA256:
+`b6829c7b1359645af347d40b2852855c10742554747ac36ca585d46efefaf181`.
+`npm test` passed all 804 tests on Node 26.10.0, as did the production
+Node 24.21.0 invocation of Vitest. `npm run build` passed with unchanged web
+build `0184994d2cdd199f`. Full Ruff and `git diff --check` passed. The full
+Python suite passed 21 files, skipped the terminal file for missing tmux,
+and had no failures in 97.0s on Python 3.14.7. Independent Claude Opus 5.5
+review found no correctness issues and recommended merge. No iOS inputs changed.
+A new full host qualification remains required after this follow-up merges.
+
 ## October 18 Patch owned-local-browser authorization
 
 Based on `4c2aeed`, implemented with OpenAI GPT-6.1 Sol. Round 2 addresses the

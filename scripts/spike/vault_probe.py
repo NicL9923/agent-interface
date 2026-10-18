@@ -236,13 +236,16 @@ def explicit_task(client, headers, journal, home, profile, call):
                     pass
             self.thread = threading.Thread(target=reader, daemon=True); self.thread.start()
             self.rpc('client.capabilities', server_requests=True)
-        def rpc(self, method, **params):
+        def rpc(self, method, *, error_code=None, **params):
             self.count += 1; identity = self.count
             self.socket.send_json(dict(jsonrpc='2.0', id=identity, method=method, params=params))
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 frame = self.incoming.get(timeout=max(.01, deadline - time.monotonic()))
                 if frame.get('id') == identity:
+                    if error_code is not None:
+                        assert frame.get('error', {}).get('code') == error_code, 'Explicit credential fixture expected RPC refusal: ' + method
+                        return frame['error']
                     assert 'error' not in frame, 'Explicit credential fixture RPC refused: ' + method
                     return frame.get('result', {})
             raise AssertionError('Explicit credential fixture RPC timed out')
@@ -267,9 +270,9 @@ def explicit_task(client, headers, journal, home, profile, call):
                 return state
             time.sleep(.05)
         raise AssertionError('The explicit-origin task did not settle')
-    def start(sender='synthetic-person'):
+    def start(sender='synthetic-person', *, reviewed_interruption=False):
         socket.rpc('agent-interface.submit', profile=profile, session_id=socket.rpc('agent-interface.open', profile=profile)['session_id'],
-                   request_id='vault-explicit-' + uuid.uuid4().hex, sender_id=sender, text='PROBE_VAULT_EXPLICIT Public synthetic KVM login', attachments=[])
+                   request_id='vault-explicit-' + uuid.uuid4().hex, sender_id=sender, text='PROBE_VAULT_EXPLICIT Public synthetic KVM login', attachments=[], reviewed_interruption=reviewed_interruption)
         return pending_request()
     def tool_result():
         rows = [json.loads(line) for line in provider_log.read_text().splitlines()]
@@ -317,10 +320,15 @@ def explicit_task(client, headers, journal, home, profile, call):
         state, pending = start()
         socket.rpc('session.interrupt', session_id=state['session_id'], profile=profile); settled()
         assert answer(state, pending, **login).json()['status'] == 'expired', 'A late answer after interruption settled'
+        unreviewed = 'vault-explicit-unreviewed-' + uuid.uuid4().hex
+        socket.rpc('agent-interface.submit', profile=profile, session_id=state['session_id'], request_id=unreviewed,
+                   sender_id='synthetic-person', text='Unreviewed synthetic follow-up', attachments=[], error_code=4094)
+        assert journal.receipt(unreviewed) is None, 'An unreviewed follow-up reached admission'
         original = server_requests.send
         with patch.object(server_requests, 'send', lambda method, sid, params, timeout=None, **kw: original(method, sid, params, timeout=1.0 if method == 'vault.save_login' else timeout, **kw)):
-            state, pending = start()
+            state, pending = start(reviewed_interruption=True)
             settled()
+        checks['explicit_login_interruption_requires_review_before_next_admission'] = True
         assert tool_result()['error_type'] == 'not_saved' and answer(state, pending, **login).json()['status'] == 'expired', 'A late answer after timeout settled'
         with patch.object(VaultStore, 'add_item', side_effect=OSError('synthetic storage failure ' + canary)):
             state, pending = start()
