@@ -293,12 +293,6 @@ function LoadedBotSettings({
         setConfirmDiscard(true);
       }}
     >
-      {loading ? <>
-        <h2 id="assistant-settings-title">Assistant settings</h2>
-        <p role={loading.error ? "alert" : "status"}>{loading.error || "Loading assistant settings…"}</p>
-        {loading.error && <Button onClick={loading.retry}>Retry settings</Button>}
-        <Button onClick={onClose}>Close</Button>
-      </> : <>
       <header>
         <div>
           <p className="eyebrow">Assistant settings</p>
@@ -312,6 +306,13 @@ function LoadedBotSettings({
           <Icon name="close" />
         </Button>
       </header>
+      {loading ? <>
+        <p role={loading.error ? "alert" : "status"}>{loading.error || "Loading assistant settings…"}</p>
+        {loading.error && <Button onClick={() => {
+          dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
+          loading.retry();
+        }}>Retry settings</Button>}
+      </> : <>
       <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
         {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
           <Button
