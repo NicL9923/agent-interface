@@ -1,5 +1,20 @@
 # Validation ledger
 
+## October 18 app release f86b377
+
+PR #143 merged at `f86b3778beb71b87cb94a0ebcc2f035d203bcd9b`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `5ce8edf382a7555b`, from the archive with SHA256
+`58e202174d895257f359c3839a5045948ae90292a9dc1f8fff94c933553ce9be`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-f86b3778-20261018T080641Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
 ## October 17 native mobile and web parity, second follow-up
 
 Based on `17e7c9f`. Claude Opus 5.5 orchestrated; Claude Opus 5.5 and Sonnet 5.5
