@@ -515,3 +515,34 @@ it("loads roster detail before showing a writable settings form", async () => {
   await act(async()=>finish({...bot,instructions:"Saved instructions",enabledMcpServers:["calendar"]}));
   expect(container.querySelector("textarea")!.value).toBe("Saved instructions");
 });
+
+
+describe("lean roster settings", () => {
+  it("keeps one dialog, retries detail, and PATCHes only loaded configuration without reloading on roster refresh", async () => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    const { instructions, ...lean } = bot;
+    let finish!: (value: Bot) => void;
+    vi.mocked(api).mockRejectedValueOnce(new Error("Detail unavailable"));
+    await act(async () => root.render(createElement(BotSettings, { bot: lean, bootstrap, onClose, onSaved })));
+    const dialog = container.querySelector("dialog")!;
+    expect(container.textContent).toContain("Detail unavailable");
+    expect(container.querySelector("form")).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    vi.mocked(api).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    await click("Retry settings");
+    expect(container.querySelector("dialog")).toBe(dialog);
+    expect(container.querySelector("form")).toBeNull();
+    await act(async () => finish({ ...lean, instructions: "Keep this saved SOUL", enabledMcpServers: ["calendar"] }));
+    expect(container.querySelector("dialog")).toBe(dialog);
+    expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this saved SOUL");
+    vi.mocked(api).mockClear();
+    await act(async () => root.render(createElement(BotSettings, { bot: { ...lean, activity: "working" }, bootstrap, onClose, onSaved })));
+    expect(api).not.toHaveBeenCalled();
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(write).toHaveBeenCalledWith("/bots/shared", expect.objectContaining({ instructions: "Keep this saved SOUL", enabledMcpServers: ["calendar"] }), "PATCH");
+    const payload = vi.mocked(write).mock.calls.at(-1)![1];
+    expect(payload).not.toHaveProperty("enabledTools");
+    expect(payload).not.toHaveProperty("enabledSkills");
+  });
+});

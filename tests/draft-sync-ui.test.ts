@@ -36,7 +36,7 @@ beforeEach(()=>{
     bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'},{id:'other',name:'Other',shared:true,model:'test',activity:'idle'}],
     capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
   vi.mocked(api).mockImplementation(async <T>(path:string)=>{
-    if(path==='/bootstrap')return boot as T;
+    if(path==='/bootstrap?roster=lean')return boot as T;
     const bot=/^\/bots\/(\w+)\/(draft|conversation)/.exec(path);
     if(bot?.[2]==='conversation')return {botId:bot[1],messages:[],approvals:[],files:[],activity:{state:'idle'}} as T;
     if(bot?.[2]==='draft')return (drafts.get(bot[1])??null) as T;

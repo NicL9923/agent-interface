@@ -24,7 +24,7 @@ beforeEach(()=>{
   conversation={botId:'shared',messages:[{id:'answer-one',role:'assistant',text:'Existing canonical answer'}],approvals:[],files:[],activity:{state:'idle'}};
   authConfig={localDevAuth:false};pendingBootstrap=undefined;hermesDown=false;
   vi.mocked(api).mockImplementation(async <T>(path:string)=>{
-    if(path==='/bootstrap')return await (pendingBootstrap??Promise.resolve(boot)) as T;
+    if(path==='/bootstrap?roster=lean')return await (pendingBootstrap??Promise.resolve(boot)) as T;
     if(path==='/auth/config')return authConfig as T;
     if(path.startsWith('/bots/shared/conversation?')){if(hermesDown)throw new Error('Hermes unavailable');return conversation as T;}
     if(path==='/bots/shared/draft')return {text:boot.user.id==='one'?'My unsent draft':'Second member draft',attachments:[]} as T;
@@ -64,7 +64,7 @@ describe('setup and recovery interface',()=>{
     const turn=(n:number)=>[{id:`p${n}`,role:'user' as const,text:`Prompt ${n}`},{id:`a${n}`,role:'assistant' as const,text:`Reply ${n}`}];
     const paths:string[]=[];
     vi.mocked(api).mockImplementation(async <T>(path:string)=>{
-      if(path==='/bootstrap')return boot as T;
+      if(path==='/bootstrap?roster=lean')return boot as T;
       if(!path.startsWith('/bots/shared/conversation?'))return null as T;
       paths.push(path);
       return (path.includes('turns=20')&&path.includes('start=')||path.includes('start=p0')
@@ -99,7 +99,7 @@ describe('setup and recovery interface',()=>{
     vi.mocked(cachedResponse).mockReturnValue({...conversation,messages:[...turn(0),...turn(1)],earlier:0});
     let respond!:()=>void;const paths:string[]=[];
     vi.mocked(api).mockImplementation(async <T>(path:string)=>{
-      if(path==='/bootstrap')return boot as T;
+      if(path==='/bootstrap?roster=lean')return boot as T;
       if(!path.startsWith('/bots/shared/conversation?'))return null as T;
       paths.push(path);
       if(path.includes('start=p0'))return {...conversation,messages:[...turn(0),...turn(1),...turn(2)],earlier:0} as T;
@@ -232,10 +232,10 @@ describe('setup and recovery interface',()=>{
   });
 
   it('coalesces a focus, visibility and online storm into one outstanding bootstrap read',async()=>{
-    await renderApp();const initial=vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap').length;
+    await renderApp();const initial=vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean').length;
     let finish!:(value:Bootstrap)=>void;pendingBootstrap=new Promise(resolve=>{finish=resolve;});
     await act(async()=>{for(let i=0;i<8;i++){window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('online'));document.dispatchEvent(new Event('visibilitychange'));}});
-    expect(vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap')).toHaveLength(initial+1);
+    expect(vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean')).toHaveLength(initial+1);
     await act(async()=>{finish(boot);});
     expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
   });

@@ -194,6 +194,7 @@ final class NativeFlowTests: XCTestCase {
     app = self.app(liveActivity: true)
     let model = app.buttons["composerModel"]
     XCTAssertTrue(model.waitForExistence(timeout: 10))
+    XCTAssertTrue(model.isEnabled, "Lean roster bots have no instructions; capability enables the model picker")
     XCTAssertLessThanOrEqual(model.frame.width, 50, "The composer shows only the model icon, as the web does at phone width")
     model.tap()
     let fast = app.buttons["Fixture fast model"]

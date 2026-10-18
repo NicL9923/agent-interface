@@ -108,7 +108,7 @@ struct ComposerView: View {
     Button { modelOpen = true } label: {
       RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
     }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || store.sending)
+      .disabled(!store.supports("botConfiguration") || !store.connected || store.sending)
   }
   private var sendButton: some View {
     let enabled = stopVisible ? !stopDisabled : store.canSend

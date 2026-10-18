@@ -11,6 +11,7 @@ import { z } from "zod";
 import { botIdFor } from "../shared/types.js";
 import type {
   Avatar,
+  Bot,
   BotInput,
   Bootstrap,
   CapabilityKey,
@@ -257,11 +258,27 @@ export async function createApp(
     })().finally(() => { snapshot = undefined; });
     return snapshot;
   };
+  const leanRoster = (bots: Bot[]) => bots.map(
+    ({ instructions, enabledMcpServers, enabledTools, enabledSkills, ...bot }) => bot,
+  );
+  const rosterFor = async (req: FastifyRequest, bots: Bot[], nativeAvatar: boolean) => {
+    const rows = bots.map(bot => decorateBot(bot, nativeAvatar))
+      .filter(bot => visible(bot, signedIn(req).id));
+    if ((req.query as { roster?: string }).roster === "lean") {
+      return leanRoster(rows);
+    }
+    // Build 5 and cached bundles initialize writable settings from these rows.
+    // Missing configuration is unsafe for those clients, so full remains the default.
+    return Promise.all(rows.map(async bot => runtime.botDetail
+      ? decorateBot(await runtime.botDetail(bot.id), nativeAvatar) : bot));
+  };
   app.get("/api/bootstrap", async (req) => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: preferencesFor(signedIn(req).id),
-    ...await runtimeSnapshot().then(value => ({ ...value, bots: value.bots.filter(bot => visible(bot, signedIn(req).id)) })),
+    ...await runtimeSnapshot().then(async value => ({ ...value,
+      bots: await rosterFor(req, value.bots, value.capabilities.avatarMetadata.supported),
+    })),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
     nativeApp: config.nativeApp,
@@ -304,7 +321,7 @@ export async function createApp(
   });
   app.get("/api/bots", async (req) => {
     const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
-    return bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)).filter(bot => visible(bot, signedIn(req).id));
+    return rosterFor(req, bots, capabilities.avatarMetadata.supported);
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
@@ -336,10 +353,11 @@ export async function createApp(
     return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.get("/api/bots/:id", async req => {
-    const botId=params(req).id;
-    const value=runtime.botDetail ? await runtime.botDetail(botId) : (await runtime.listBots()).find(bot=>bot.id===botId);
-    if(!value)throw failure(404,"Bot not found");
-    return decorateBot(value,(await runtime.capabilities()).avatarMetadata.supported);
+    const botId = params(req).id;
+    const value = runtime.botDetail ? await runtime.botDetail(botId)
+      : (await runtime.listBots()).find(bot => bot.id === botId);
+    if (!value) throw failure(404, "Bot not found");
+    return decorateBot(value, (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
@@ -454,31 +472,93 @@ export async function createApp(
   // The app's own conversation writes notify at once, before Hermes reports their effect.
   const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId"]
     .map(path => `POST /api/bots/:id/${path}`));
-  const rosterListeners = new Set<() => void>();
+  // Gateway frames are hints, not roster changes. Compare each viewer's visible
+  // projection after one shared, cheap evaluation, at most once per second.
+  const rosterListeners = new Set<(bots: Bot[], nativeAvatar: boolean) => void>();
+  let rosterPending: ReturnType<typeof setTimeout> | undefined;
+  let rosterEvaluating = false, rosterAgain = false, rosterLast = 0;
+  let unwatchRoster: (() => void) | undefined;
+  const rosterProjection = (bots: Bot[], userId: string, nativeAvatar: boolean) => JSON.stringify(
+    leanRoster(bots.map(bot => decorateBot(bot, nativeAvatar)).filter(bot => visible(bot, userId)))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+  const evaluateRoster = () => {
+    if (!rosterListeners.size) return;
+    if (rosterEvaluating) { rosterAgain = true; return; }
+    rosterPending ??= setTimeout(() => {
+      rosterPending = undefined;
+      rosterEvaluating = true;
+      rosterLast = Date.now();
+      void Promise.all([runtime.listBots(), runtime.capabilities()]).then(([bots, capabilities]) => {
+        roster.note(bots);
+        for (const changed of rosterListeners) changed(bots, capabilities.avatarMetadata.supported);
+      }).catch(() => { /* The fallback bootstrap retries unavailable runtime reads. */ })
+        .finally(() => {
+          rosterEvaluating = false;
+          if (rosterAgain) { rosterAgain = false; evaluateRoster(); }
+        });
+    }, Math.max(0, rosterLast + 1000 - Date.now()));
+  };
   app.addHook("onResponse", async (req, reply) => {
-    const path=routePattern(req);
-    if(req.method!=="GET"&&reply.statusCode<400&&path.startsWith('/api/bots')&&!/\/(draft|read-position|uploads)$/.test(path))
-      for(const changed of rosterListeners)changed();
-    if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
+    const path = routePattern(req);
+    if (req.method !== "GET" && reply.statusCode < 400 && path.startsWith("/api/bots")
+      && !/\/(draft|read-position|uploads)$/.test(path)) evaluateRoster();
+    if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${path}`))
       for (const changed of watchers.get(params(req).id) ?? []) changed();
   });
-  app.addHook("preClose", async () => { for (const end of streams) end(); });
-  app.get("/api/events", {exposeHeadRoute:false}, async (req,reply) => {
+  app.addHook("preClose", async () => {
+    clearTimeout(rosterPending);
+    for (const end of streams) end();
+  });
+  app.get("/api/events", { exposeHeadRoute: false }, async (req, reply) => {
+    const initial = await runtimeSnapshot();
+    let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
     reply.hijack();
-    const response=reply.raw;
-    response.writeHead(200,{...reply.getHeaders() as Record<string,string>,"Content-Type":"text/event-stream; charset=utf-8","Content-Encoding":"identity","X-Accel-Buffering":"no","Connection":"close"});
-    let ended=false,last=0,pending:ReturnType<typeof setTimeout>|undefined;
-    const send=(text:string)=>{if(!stillSignedIn(store,config,req))end();else if(!ended)response.write(text);};
-    const changed=()=>{pending??=setTimeout(()=>{pending=undefined;last=Date.now();send("event: roster\ndata: roster\n\n");},Math.max(0,last+1000-Date.now()));};
-    const unwatch=runtime.watchRoster?.(changed);
+    const response = reply.raw;
+    response.writeHead(200, {
+      ...reply.getHeaders() as Record<string, string>,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Content-Encoding": "identity",
+      "X-Accel-Buffering": "no",
+      "Connection": "close",
+    });
+    let ended = false;
+    const send = (text: string) => {
+      if (!stillSignedIn(store, config, req)) end();
+      else if (!ended) response.write(text);
+    };
+    const changed = (bots: Bot[], nativeAvatar: boolean) => {
+      if (!stillSignedIn(store, config, req)) { end(); return; }
+      const next = rosterProjection(bots, signedIn(req).id, nativeAvatar);
+      if (next === projection) return;
+      projection = next;
+      send("event: roster\ndata: roster\n\n");
+    };
     rosterListeners.add(changed);
-    const heartbeat=setInterval(()=>send("event: ping\ndata: ping\n\n"),25_000);
-    function end(){if(ended)return;ended=true;unwatch?.();rosterListeners.delete(changed);clearTimeout(pending);clearInterval(heartbeat);streams.delete(end);response.end();}
-    streams.add(end);response.on("close",end);response.write("retry: 3000\n\n");changed();
+    unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
+    function end() {
+      if (ended) return;
+      ended = true;
+      rosterListeners.delete(changed);
+      if (!rosterListeners.size) {
+        unwatchRoster?.();
+        unwatchRoster = undefined;
+        clearTimeout(rosterPending);
+        rosterPending = undefined;
+      }
+      clearInterval(heartbeat);
+      streams.delete(end);
+      response.end();
+    }
+    streams.add(end);
+    response.on("close", end);
+    // Clients refetch on open; an initial notice would duplicate that read.
+    response.write("retry: 3000\n\n");
   });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     const botId = id.parse(params(req).id);
-    const optedIn = (req.query as {inflight?: string}).inflight === "1";
+    const optedIn = (req.query as { inflight?: string }).inflight === "1";
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
     let hidden = JSON.stringify(store.privateBots());
     reply.hijack();
@@ -521,7 +601,7 @@ export async function createApp(
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          send(`event: inflight\ndata: ${JSON.stringify({...value,message:redact.message(value.message),toolCalls:value.toolCalls.map(redact.call)})}\n\n`);
+          send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
@@ -545,7 +625,6 @@ export async function createApp(
     streams.add(end);
     response.on("close", end);
     response.write("retry: 3000\n\n");
-    if (optedIn) changed();
   });
   const submit = async (req: FastifyRequest, explicitSteering = false) => {
     const body = z
@@ -568,15 +647,17 @@ export async function createApp(
       senderId: signedIn(req).id,
     };
     const previous = store.submission(input.requestId);
-    const interruptionRejected=previous?.receipt.status==='rejected'&&previous.receipt.message==='Review the interrupted task before starting another message.';
-    const retryInterruption=interruptionRejected&&reviewedInterruption;
+    const interruptionRejected = previous?.receipt.status === "rejected"
+      && previous.receipt.message === "Review the interrupted task before starting another message.";
+    const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw failure(
           409,
           "This submission ID was already used for different content",
         );
-      if(interruptionRejected&&!reviewedInterruption)throw failure(409,'Review the interrupted task before starting another message.');
+      if (interruptionRejected && !reviewedInterruption)
+        throw failure(409, "Review the interrupted task before starting another message.");
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
       await requireCapability("idempotency");
@@ -611,12 +692,13 @@ export async function createApp(
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption }));
       store.receipt(receipt);
-      if(receipt.runId)store.participate(receipt.runId,input.senderId);
+      if (receipt.runId) store.participate(receipt.runId, input.senderId);
       return receipt;
     } catch (error) {
-      if((error as {code?:string}).code==='interruption_pending'){
-        store.receipt({requestId:input.requestId,status:'rejected',message:'Review the interrupted task before starting another message.'});
-        throw failure(409,'Review the interrupted task before starting another message.');
+      if ((error as { code?: string }).code === "interruption_pending") {
+        store.receipt({ requestId: input.requestId, status: "rejected",
+          message: "Review the interrupted task before starting another message." });
+        throw failure(409, "Review the interrupted task before starting another message.");
       }
       return store.submission(input.requestId)!.receipt;
     }

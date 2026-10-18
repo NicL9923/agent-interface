@@ -79,9 +79,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
-  /// The open conversation's change stream, as the web subscribes to it, and when it last spoke.
+  /// Latest live reply patch, retained across overlapping conversation reads.
   private var latestInflight: Inflight?
+  /// Household roster stream, independent of the selected conversation.
   private var rosterTask: Task<Void, Never>?
+  /// The open conversation's change stream and when it last spoke.
   private var eventTask: Task<Void, Never>?
   private var eventBotId: String?
   private var streamHeardAt: ContinuousClock.Instant?
@@ -366,7 +368,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { return true }
     return now() - refreshed >= Self.streamFallbackInterval
   }
-  /// Follows the selected assistant's change stream, reconnecting with a growing delay.
+  /// Refreshes the household roster when its visible assistants change.
   private func watchRoster() {
     guard rosterTask == nil, let api else { return }
     rosterTask = Task { [weak self] in
@@ -388,6 +390,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
   }
+  /// Follows the selected assistant's change stream, reconnecting with a growing delay.
   private func watchConversation() {
     guard eventBotId != selectedBotId || eventTask == nil else { return }
     eventTask?.cancel()
@@ -467,7 +470,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrapRefreshedAt = now()
     let currentGeneration = generation
     do {
-      var value: Bootstrap = try await api.get("/bootstrap")
+      var value: Bootstrap = try await api.get("/bootstrap?roster=lean")
       guard generation == currentGeneration else { return }
       if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
         value.bots = previous.bots

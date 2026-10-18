@@ -472,7 +472,10 @@ struct Inflight: Codable {
   var activity: Activity
   var toolCalls: [ToolCall]
   func applying(to conversation: Conversation) -> Conversation {
-    guard conversation.botId == botId else { return conversation }
+    guard conversation.botId == botId,
+      [.thinking, .working, .waiting, .blocked].contains(conversation.activity.state),
+      conversation.activity.runId == activity.runId
+    else { return conversation }
     var value = conversation
     value.messages.removeAll { $0.id.hasSuffix("-inflight") }
     if !message.text.isEmpty || !(message.reasoning ?? "").isEmpty { value.messages.append(message) }

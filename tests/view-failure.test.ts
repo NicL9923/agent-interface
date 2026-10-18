@@ -39,7 +39,7 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   localStorage.clear();
   history.replaceState(null, "", "/");
-  vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap" ? bootstrap : null) as T);
+  vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean" ? bootstrap : null) as T);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -54,7 +54,7 @@ const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 
 describe("screens that fail to load", () => {
   it("keeps the composer usable if the advanced model picker cannot load", async () => {
-    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: { ...bootstrap.preferences, presentation: "advanced" } } : null) as T);
     await act(async () => root.render(createElement(App)));
     await loaded();

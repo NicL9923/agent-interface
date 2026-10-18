@@ -68,7 +68,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const cachedStart = cached?.botId === botId ? cached.messages[0]?.id : undefined;
     let latestInflight: Inflight | undefined;
     const patch = (value: SavedConversation, live?: Inflight): SavedConversation => {
-      if (!live || live.botId !== value.botId) return value;
+      if (!live || live.botId !== value.botId
+        || !["thinking", "working", "waiting", "blocked"].includes(value.activity.state)
+        || value.activity.runId !== live.activity.runId) return value;
       const messages = value.messages.filter(message => !message.id.endsWith("-inflight"));
       if (live.message.text || live.message.reasoning) messages.push(live.message);
       return {...value, messages, activity: live.activity, toolCalls: live.toolCalls};

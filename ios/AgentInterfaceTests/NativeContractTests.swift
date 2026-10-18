@@ -72,6 +72,7 @@ private final class NativeMockServer: @unchecked Sendable {
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
     var requests: [URLRequest] { lock.withLock { recorded } }
+    func startRun(_ runId: String) { lock.withLock { run = runId; state = "thinking" } }
     func interrupt(runId: String) { lock.withLock { run = runId; state = "interrupted" } }
     func failUploads(_ fail: Bool) { lock.withLock { uploadStatus = fail ? 503 : 200 } }
     func configurePush(_ available: Bool) { lock.withLock { pushAvailable = available } }
@@ -1013,9 +1014,11 @@ private final class NativeMockServer: @unchecked Sendable {
 
     func testInflightPatchesTheTranscriptWithoutFetchingAndRosterRefreshesBootstrap() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.startRun("live-run")
         server.serveEventStreams()
         _ = await value.pollOnce()
         try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.requests.first { $0.url?.path == "/api/bootstrap" }?.url?.query, "roster=lean")
         let reads = server.conversationQueries.count
         server.notifyInflight()
         try await Task.sleep(for: .milliseconds(200))

@@ -46,7 +46,9 @@ function LoadedBotSettings({
   onSaved,
   onDeleted,
   onOpenRoutine,
+  loading,
 }: {
+  loading?: { error: string; retry(): void };
   bot: Bot | "new";
   bootstrap: Bootstrap;
   onClose: () => void;
@@ -69,10 +71,29 @@ function LoadedBotSettings({
       model: existing?.model || bootstrap.bots[0]?.model || "",
       provider: existing?.provider || bootstrap.bots[0]?.provider || "",
       shared: existing?.shared ?? true,
-      enabledMcpServers: existing?.enabledMcpServers || [],
+      enabledMcpServers: existing ? existing.enabledMcpServers : [],
     },
     avatar: existing?.avatar || defaultAvatar,
   }));
+  // The dialog stays mounted while detail loads; only authoritative detail seeds the form.
+  const wasLoading = useRef(!!loading);
+  useEffect(() => {
+    if (loading) { wasLoading.current = true; return; }
+    if (!wasLoading.current || !existing) return;
+    wasLoading.current = false;
+    const form: BotInput = {
+      name: existing.name,
+      description: existing.description ?? "",
+      instructions: existing.instructions!,
+      model: existing.model,
+      provider: existing.provider,
+      shared: existing.shared,
+      enabledMcpServers: existing.enabledMcpServers,
+    };
+    setBaseline({ form, avatar: existing.avatar || defaultAvatar });
+    setForm(form);
+    setAvatar(existing.avatar || defaultAvatar);
+  }, [loading, existing]);
   const [form, setForm] = useState<BotInput>(baseline.form);
   const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
   const [tools, setTools] = useState<Tool[]>([]);
@@ -183,6 +204,7 @@ function LoadedBotSettings({
     }
   };
   const saveBot = (confirmed = false, personal = personalConfirmed) => {
+    if (loading) return;
     const submitted = form;
     if (existing && !submitted.shared && !(existing.shared === false && existing.ownerId) && !personal) {
       setConfirmPersonal(true);
@@ -271,6 +293,12 @@ function LoadedBotSettings({
         setConfirmDiscard(true);
       }}
     >
+      {loading ? <>
+        <h2 id="assistant-settings-title">Assistant settings</h2>
+        <p role={loading.error ? "alert" : "status"}>{loading.error || "Loading assistant settings…"}</p>
+        {loading.error && <Button onClick={loading.retry}>Retry settings</Button>}
+        <Button onClick={onClose}>Close</Button>
+      </> : <>
       <header>
         <div>
           <p className="eyebrow">Assistant settings</p>
@@ -680,6 +708,7 @@ function LoadedBotSettings({
           </>
         )}
       </div>
+      </>}
     </Dialog>
   );
 }
@@ -952,18 +981,27 @@ function SaveProgress({ state, label }: { state?: "saving" | "saved"; label: str
     : state === "saved" ? <><Icon name="check" size={16} />Saved</> : <>{label}</>;
 }
 
-/** Roster rows intentionally omit configuration. Never initialize a writable form from one. */
+/** Lean roster rows cannot initialize a writable form. */
 export function BotSettings(props: Parameters<typeof LoadedBotSettings>[0]) {
-  const [detail,setDetail]=useState<Bot>();
-  const [error,setError]=useState("");
-  const bot=props.bot;
-  useEffect(()=>{
-    if(bot==="new"||typeof bot.instructions==="string")return;
-    const controller=new AbortController();
-    void api<Bot>(`/bots/${encodeURIComponent(bot.id)}`,{signal:controller.signal}).then(value=>{if(!controller.signal.aborted)setDetail(value);}).catch(error=>{if(!controller.signal.aborted)setError(error.message);});
-    return ()=>controller.abort();
-  },[bot]);
-  if(bot==="new"||typeof bot.instructions==="string")return <LoadedBotSettings {...props}/>;
-  if(detail?.id===bot.id)return <LoadedBotSettings {...props} bot={detail}/>;
-  return <Dialog open onClose={props.onClose}><p role={error?"alert":"status"}>{error||"Loading assistant settings…"}</p><Button onClick={props.onClose}>Close</Button></Dialog>;
+  const [detail, setDetail] = useState<Bot>();
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const botId = props.bot === "new" ? undefined : props.bot.id;
+  const hasConfiguration = props.bot === "new" || typeof props.bot.instructions === "string";
+  useEffect(() => {
+    if (!botId || hasConfiguration) return;
+    const controller = new AbortController();
+    setError("");
+    void api<Bot>(`/bots/${encodeURIComponent(botId)}`, { signal: controller.signal })
+      .then(value => {
+        if (typeof value.instructions !== "string") throw new Error("Assistant settings are incomplete. Try again.");
+        if (!controller.signal.aborted) setDetail(value);
+      })
+      .catch(error => { if (!controller.signal.aborted) setError(error.message); });
+    return () => controller.abort();
+  }, [botId, hasConfiguration, retry]);
+  const ready = hasConfiguration || detail?.id === botId;
+  return <LoadedBotSettings {...props} key={botId ?? "new"}
+    bot={detail?.id === botId ? detail! : props.bot}
+    loading={ready ? undefined : { error, retry: () => setRetry(value => value + 1) }} />;
 }

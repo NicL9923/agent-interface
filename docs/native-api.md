@@ -80,24 +80,31 @@ synthetic assistant row whose ID ends in `-inflight`, including optional
 `reasoning` and `origin`. Replace that row, or remove it if both text and
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
 The same persisted-segment and origin rules as conversation reads apply,
-and private agent handoffs are redacted.
-Structural events still send `data: change`, meaning refetch, including on
-stream open. Refetch on reconnect. Streams without the parameter retain their
+and private agent handoffs are redacted. Apply a patch only while the fetched
+conversation is active and its `activity.runId` matches the patch. A settled
+conversation or a newer run supersedes a retained live tail.
+Structural events still send `data: change`, meaning refetch. Clients fetch on
+stream open and reconnect; the server sends no initial notice. Streams without the parameter retain their
 one-change-per-second streaming cadence.
 
-`GET /api/bootstrap` and `GET /api/bots` return roster fields only: `id`,
+`GET /api/bootstrap?roster=lean` and `GET /api/bots?roster=lean` opt in to
+roster fields only: `id`,
 `name`, `description`, `model`, `provider`, `shared`, `ownerId`, `avatar`,
 `sessionId`, `activity` and `lastMessage`. Optional configuration fields
 `instructions`, `enabledTools`, `enabledSkills` and `enabledMcpServers` load
 from `GET /api/bots/:id`. Fetch detail before initializing a settings form or
 resending configuration during a model change. Model fallback from profile
-configuration is also available in detail. These fields were already optional
-in native build 5.
+configuration is also available in detail. Without `roster=lean`, both list
+routes retain full configuration for native build 5 and cached web bundles.
+Build 5 can decode missing fields, but its settings form treats them as empty
+and can erase saved configuration. It must receive the full default roster.
 
 `GET /api/events` is an authenticated household SSE stream. `event: roster`
 with `data: roster` means refresh bootstrap. It carries no assistant IDs or
-previews. It sends an initial roster notice, coalesces changes to at most one
-per second, sends a ping every 25 seconds and ends on sign-out. Refresh on
+previews. The server evaluates the cheap roster at most once per second and
+notifies each viewer only when their visible roster changes. Private activity
+does not notify other household members. Clients fetch on open; there is no
+initial roster notice. The stream pings every 25 seconds and ends on sign-out. Refresh on
 reconnect and foreground as well. A 45-second bootstrap poll covers missed
 notices and changes made outside this app.
 

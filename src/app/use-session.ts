@@ -40,7 +40,7 @@ export function useSession(events: SessionEvents) {
     const epoch = identityEpoch.current;
     const request = (async () => {
       try {
-        const next = await api<Bootstrap>("/bootstrap");
+        const next = await api<Bootstrap>("/bootstrap?roster=lean");
         if (epoch !== identityEpoch.current) return null;
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           nextIdentity();
@@ -123,14 +123,27 @@ export function useSession(events: SessionEvents) {
     };
   }, [refresh]);
   useEffect(() => {
-    if(!boot?.user.id || auth)return;
-    const stream=changeStream("/events",()=>void refresh());
-    const wake=()=>{if(document.visibilityState!=="hidden"&&navigator.onLine!==false)stream.open();else stream.close();};
+    if (!boot?.user.id || auth) return;
+    const stream = changeStream("/events", () => void refresh());
+    const wake = () => {
+      if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
+      else stream.close();
+    };
     wake();
-    const retry=setInterval(wake,45_000);
-    window.addEventListener("online",wake);window.addEventListener("focus",wake);window.addEventListener("agent-interface:reconnect",wake);document.addEventListener("visibilitychange",wake);
-    return ()=>{clearInterval(retry);stream.close();window.removeEventListener("online",wake);window.removeEventListener("focus",wake);window.removeEventListener("agent-interface:reconnect",wake);document.removeEventListener("visibilitychange",wake);};
-  },[boot?.user.id,auth,refresh]);
+    const retry = setInterval(wake, 45_000);
+    window.addEventListener("online", wake);
+    window.addEventListener("focus", wake);
+    window.addEventListener("agent-interface:reconnect", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      clearInterval(retry);
+      stream.close();
+      window.removeEventListener("online", wake);
+      window.removeEventListener("focus", wake);
+      window.removeEventListener("agent-interface:reconnect", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [boot?.user.id, auth, refresh]);
   const savePreferences = async (value: Preferences) => {
     const epoch = identityEpoch.current;
     try {
