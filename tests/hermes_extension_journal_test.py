@@ -4,6 +4,7 @@ The real gateway contract lives in scripts/spike/extension_probe.py. These
 tests pin the journal reads every conversation poll makes.
 """
 import copy
+import contextlib
 import importlib.util
 import json
 import re
@@ -14,7 +15,7 @@ import time
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("extension_journal_test", ROOT / "src/hermes/extension.py")
@@ -455,6 +456,33 @@ class BotDeliveryInstallTests(unittest.TestCase):
                 self.assertTrue(allowed())
                 lease.write_text('{"operationId": "installer"}'); lease.chmod(0o600)
                 self.assertFalse(allowed())
+
+
+class DiscoveryTests(unittest.TestCase):
+    def test_unchanged_jobs_skip_ledgers_with_safety_net_and_forced_scans(self):
+        jobs=[{"id":"job", "last_run_at":"one", "next_run_at":"two"}]
+        ledger=Mock(return_value=[{"id":"execution", "status":"completed", "session_id":"sid"}])
+        modules={"hermes_cli.web_routers.cron":types.SimpleNamespace(_owner_home_scope=lambda _:contextlib.nullcontext(),_list_cron_jobs_sync=lambda _:jobs),
+                 "cron.executions":types.SimpleNamespace(list_executions=ledger)}
+        with FakeHermes([]) as hermes, patch.dict(sys.modules,modules), patch.object(extension.time,"monotonic",return_value=100) as clock:
+            discover=hermes.methods["agent-interface.discover"]
+            first=discover("tick",{"cursor":"0"})["result"]
+            self.assertEqual(len(first["events"]),1)
+            ledger.assert_called_once_with(job_id="job",limit=100)
+            clock.return_value=105
+            self.assertEqual(discover("tick",{"cursor":first["cursor"]})["result"]["events"],[])
+            self.assertEqual(ledger.call_count,1)
+            jobs[0]["last_run_at"]="moved"
+            discover("tick",{})
+            self.assertEqual(ledger.call_count,2)
+            clock.return_value=164
+            discover("tick",{})
+            self.assertEqual(ledger.call_count,2)
+            clock.return_value=165
+            discover("tick",{})
+            self.assertEqual(ledger.call_count,3)
+            discover("tick",{"full":True})
+            self.assertEqual(ledger.call_count,4)
 
 
 if __name__ == "__main__":

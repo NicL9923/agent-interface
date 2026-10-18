@@ -862,6 +862,9 @@ def install(path=None):
         with journal.lock:
             return server._ok(rid, {"receipt": journal.receipt(params.get("request_id", ""))})
 
+    discovery_lock = threading.RLock()
+    routine_scans = {}
+
     def discover(rid, params):
         try:
             cursor = int(params.get("cursor") or 0)
@@ -871,21 +874,37 @@ def install(path=None):
         # Discover its actual terminal attempts, with explicit routine identities.
         from hermes_cli.web_routers.cron import _owner_home_scope, _list_cron_jobs_sync
         from cron.executions import list_executions
-        for profile in native("profiles.list", {"include_sessions": False})["profiles"]:
-            name = profile["name"]
-            # The dashboard reader avoids tool-facing machine-wide liveness probes.
-            jobs = _list_cron_jobs_sync(name)
-            with _owner_home_scope(name):
-                for job in jobs:
-                    job_id = job.get("id") or job["job_id"]
-                    for execution in list_executions(job_id=job_id, limit=100):
-                        status = execution.get("status")
-                        if status not in ("completed", "failed", "unknown"):
+        # Upstream supports only before_claimed_at (backwards pagination), not a
+        # since filter. Job timestamps gate indexed ledger reads; a minute safety
+        # scan catches completions that did not update job metadata or manual trials.
+        with discovery_lock:
+            now = time.monotonic()
+            present = set()
+            for profile in native("profiles.list", {"include_sessions": False})["profiles"]:
+                name = profile["name"]
+                jobs = _list_cron_jobs_sync(name)
+                with _owner_home_scope(name):
+                    for job in jobs:
+                        job_id = job.get("id") or job["job_id"]
+                        key = (name, job_id)
+                        present.add(key)
+                        signature = (job.get("last_run_at"), job.get("next_run_at"), job.get("last_status"))
+                        previous = routine_scans.get(key)
+                        if params.get("full") is not True and previous and previous[0] == signature and now - previous[1] < 60:
                             continue
-                        execution_id = str(execution.get("execution_id") or execution.get("id") or execution.get("claimed_at"))
-                        run_id = f"routine:{name}:{job_id}:{execution_id}"
-                        kind = "completed" if status == "completed" else "failed" if status == "failed" else "interrupted"
-                        journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, event_key=f"{run_id}:{status}", routine_id=job_id)
+                        for execution in list_executions(job_id=job_id, limit=100):
+                            status = execution.get("status")
+                            if status not in ("completed", "failed", "unknown"):
+                                continue
+                            execution_id = str(execution.get("execution_id") or execution.get("id") or execution.get("claimed_at"))
+                            run_id = f"routine:{name}:{job_id}:{execution_id}"
+                            kind = "completed" if status == "completed" else "failed" if status == "failed" else "interrupted"
+                            journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, event_key=f"{run_id}:{status}", routine_id=job_id)
+                        # Record only after the scan succeeds, so failed reads retry next tick.
+                        routine_scans[key] = (signature, now)
+            for key in list(routine_scans):
+                if key not in present:
+                    del routine_scans[key]
         with journal.lock:
             rows = journal.db.execute("SELECT id,profile,session_id,run_id,kind,title,body,occurred,routine_id FROM events WHERE id>? ORDER BY id LIMIT 250", (cursor,)).fetchall()
         ready = []
@@ -898,7 +917,7 @@ def install(path=None):
         return server._ok(rid, {"cursor": str(ready[-1][0] if ready else cursor), "events": events})
 
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in {"open": open_bot, "submit": submit, "receipt": receipt, "discover": discover}.items():
         server.register_method("agent-interface." + name, handler)
 

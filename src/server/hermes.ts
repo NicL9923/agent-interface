@@ -49,6 +49,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   // An add-on that binds logins requested by address to their member. Earlier ones refuse the extra field.
   let explicitCredentials = false;
   let canonicalSubmit = false;
+  let incrementalDiscovery = false;
+  let discoveryFull = false;
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -156,6 +158,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     capabilityCache = undefined;
     extension = false;
     canonicalSubmit = false;
+    incrementalDiscovery = false;
     // A disconnected stream cannot identify which turn is now active. Fresh
     // native snapshots restore current activity, reasoning and tools.
     transient.clear();
@@ -194,6 +197,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     extension = true;
     explicitCredentials = capabilities.explicit_credentials === true;
     canonicalSubmit = capabilities.canonical_submit === true;
+    incrementalDiscovery = capabilities.incremental_discovery === true;
     requiredSkills = new Set(Array.isArray(capabilities.essential_skills) ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string') : []);
   }
   async function connect(): Promise<void> {
@@ -646,6 +650,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     }
   }
 
+  async function scanRoutines():Promise<void>{
+    discoveryFull=true;
+    try{await connect();if(incrementalDiscovery){await rpc('agent-interface.discover',{cursor:'0',full:true});discoveryFull=false;}}
+    catch{/* A saved routine stays saved. The next discovery tick retries its scan. */}
+  }
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
     const body = {
@@ -667,6 +676,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       job = await (await http(`/api/cron/jobs/${encodeURIComponent(jobId)}/${input.enabled ? 'resume' : 'pause'}${profile}`, { method: 'POST' })).json() as Wire;
     }
     if (isEnabled(job) !== input.enabled) throw new Error('Hermes did not apply the routine state. Reload before retrying.');
+    await scanRoutines();
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
   function inflightMessage(value:Wire,rows:Message[]):Message{
@@ -959,6 +969,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     async experienceRequest(input) {
       const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
+      if(input.operation==='run')await scanRoutines();
       if (input.operation === 'history') {
         const seed = value.app_prior_prompt;
         const seedOrigin = seed ? wireOrigin({ id: 'prior', role: 'user', text: seed.text ?? '' }, seed) : undefined;
@@ -1035,10 +1046,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const response = await (await http(`/api/cron/jobs/${encodeURIComponent(id)}/${enabled?'resume':'pause'}?profile=${encodeURIComponent(botId)}`,{method:'POST'})).json() as Wire;
       const job=response.job ?? response;
       if(job.error || (job.enabled !== false && job.state !== 'paused') !== enabled) throw new Error('Hermes did not confirm the routine state. Reload before retrying.');
+      await scanRoutines();
     },
     saveRoutine: routineMutation,
-    async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});},
-    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const result=await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;
+    async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});await scanRoutines();},
+    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const full=incrementalDiscovery&&discoveryFull;const result=await rpc('agent-interface.discover',{cursor,...(full?{full:true}:{})}) as RuntimeDiscovery;if(full)discoveryFull=false;
       // Routine deliveries settle outside the open session's frames; the journal names their bot.
       for(const event of result.events??[])if(typeof event.botId==='string')changed(event.botId);
       return result;},
