@@ -1354,6 +1354,10 @@ private final class NativeMockServer: @unchecked Sendable {
 
     func testPollingWaitsForTheBackoffOfAFailingSave() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // The backoff is measured on the store's clock, held still here so a slow test host
+        // cannot let the polls below cross it before the assertion.
+        var time = ContinuousClock.now
+        value.now = { time }
         server.versionDrafts(); server.failDraftSaves()
         value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
         value.updateDraft(Draft(text: "A", attachments: []))
@@ -1361,6 +1365,7 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(server.draftSaves().count, 1)
         for _ in 0..<3 { await value.refreshConversation(); try await Task.sleep(for: .milliseconds(80)) }
         XCTAssertEqual(server.draftSaves().count, 1, "Polls do not retry before the backoff")
+        time += .seconds(1)
         try await Task.sleep(for: .milliseconds(1000))
         XCTAssertEqual(server.draftSaves().count, 2, "The backoff retries once")
     }

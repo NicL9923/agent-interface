@@ -809,7 +809,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let count = (draftSaveFailures[localKey] ?? 0) + 1
       draftSaveFailures[localKey] = count
       let delay = Duration.seconds(min(30, pow(2, Double(count - 1))))
-      draftRetryAt[localKey] = .now + delay
+      draftRetryAt[localKey] = now() + delay
       Task {
         try? await Task.sleep(for: delay)
         guard currentGeneration == self.generation else { return }
@@ -844,7 +844,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func ensureDraftSaved(_ botId: String, retries: Int = 3) {
     guard settled(botId), let localKey = key("draft", botId) else { return }
     // A failing save retries on its backoff, however often the conversation polls.
-    if let retryAt = draftRetryAt[localKey], ContinuousClock.now < retryAt { return }
+    if let retryAt = draftRetryAt[localKey], now() < retryAt { return }
     if selectedBotId == botId && draftReady {
       if draft.dirty == true, scheduledDraftSave == nil { startDraftSave(botId: botId) }
     } else if let cached: Draft = read(localKey), cached.dirty == true, retries > 0 {

@@ -93,6 +93,8 @@ events, canonical send admission in one RPC, and incremental routine discovery.
 Legacy conversation streams keep their existing change cadence. The native API
 contract documents the new events and detail-only configuration fields.
 
+Round 3 also made the native draft-save backoff deterministic under test: CI's macOS runner let three conversation polls cross the one-second backoff and saw a second save. The backoff now reads the store's injectable clock, which the test holds still and then advances; the 95 native contract tests passed on an iPhone 17 simulator afterward.
+
 History cache misses still bind the full history because binding determines
 request IDs and earlier file context. The cache bypasses active, queued and
 unbound sessions and checks native row identities, DB/WAL/config file stamps,
