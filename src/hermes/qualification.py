@@ -25,6 +25,7 @@ INTEGRATION_FILES = (
     "scripts/spike/service_probe.py",
     "scripts/spike/experience_probe.py", "scripts/spike/integrations_probe.py",
     "scripts/spike/computer_probe.py",
+    "scripts/spike/computer_local_network_probe.py",
     "scripts/spike/computer_acceptance.py",
     "scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py", "scripts/hermes-qualified-python.py",
     "package-lock.json",

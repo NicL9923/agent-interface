@@ -321,6 +321,114 @@ class ComputerTests(ComputerFixture):
                     computer.configured()
 
 
+class LocalBrowserTests(ComputerFixture):
+    def setUp(self):
+        super().setUp()
+        self.websocket = "ws://127.0.0.1:9222/devtools/browser/12345678-abcd-1234-abcd-123456789abc"
+        self.endpoint = patch.object(self.instance, "_browser_endpoint", return_value=self.websocket)
+        self.discovery = self.endpoint.start(); self.addCleanup(self.endpoint.stop)
+        self.parent = os.getpid()
+        self.child = self.parent + 1
+        self.processes = {
+            self.parent: types.SimpleNamespace(pid=self.parent, create_time=lambda: 100.0,
+                uids=lambda: types.SimpleNamespace(real=os.getuid()), status=lambda: "running"),
+            self.child: types.SimpleNamespace(pid=self.child, create_time=lambda: 101.0, ppid=lambda: self.parent,
+                uids=lambda: types.SimpleNamespace(real=os.getuid()), status=lambda: "running",
+                cmdline=lambda: ["chrome", "--remote-debugging-port=9222"],
+                net_connections=lambda **kwargs: [types.SimpleNamespace(status="LISTEN",
+                    laddr=types.SimpleNamespace(ip="127.0.0.1", port=9222))]),
+        }
+        self.psutil = types.SimpleNamespace(Process=lambda pid: self.processes[pid], Error=RuntimeError,
+            STATUS_ZOMBIE="zombie", CONN_LISTEN="LISTEN")
+        self.modules = patch.dict(sys.modules, {"psutil": self.psutil})
+        self.modules.start(); self.addCleanup(self.modules.stop)
+
+    def register(self):
+        self.instance.register_browser(types.SimpleNamespace(pid=self.child, poll=lambda: None))
+
+    def test_registered_live_browser_requires_matching_websocket_generation(self):
+        self.assertFalse(self.instance.verified_local_browser())
+        self.register()
+        self.assertTrue(self.instance.verified_local_browser())
+        self.discovery.return_value = self.websocket + "changed"
+        self.assertFalse(self.instance.verified_local_browser())
+
+    def test_stale_processes_wrong_parent_owner_and_port_fail_closed(self):
+        self.register()
+        child = self.processes[self.child]
+        for key, value in (("create_time", lambda: 102.0), ("ppid", lambda: 1),
+                           ("uids", lambda: types.SimpleNamespace(real=os.getuid() + 1)),
+                           ("status", lambda: "zombie"), ("cmdline", lambda: ["chrome", "--remote-debugging-port=9999"]),
+                           ("net_connections", lambda **kwargs: [])):
+            with self.subTest(key=key), patch.object(child, key, value):
+                self.assertFalse(self.instance.verified_local_browser())
+        del self.processes[self.parent]
+        self.assertFalse(self.instance.verified_local_browser())
+
+    def test_registration_must_be_private_regular_and_well_formed(self):
+        self.register()
+        record = self.instance.state / "computer-browser.json"
+        record.chmod(0o644)
+        self.assertFalse(self.instance.verified_local_browser())
+        record.chmod(0o600)
+        valid = record.read_text()
+        for invalid in ("{", "null", '[]', '{"endpoint":"http://other:9222"}'):
+            record.write_text(invalid)
+            self.assertFalse(self.instance.verified_local_browser())
+        record.unlink()
+        target = self.instance.state / "other.json"
+        target.write_text(valid)
+        record.symlink_to(target)
+        self.assertFalse(self.instance.verified_local_browser())
+
+    def test_supervisor_cannot_register_an_unowned_or_exited_child(self):
+        for exited in (True, False):
+            with self.subTest(exited=exited), patch.object(self.processes[self.child], "ppid", return_value=1):
+                with self.assertRaises(computer.ComputerError):
+                    self.instance.register_browser(types.SimpleNamespace(pid=self.child, poll=lambda _exited=exited: 0 if _exited else None))
+
+    def test_profile_consent_and_effective_terminal_policy_are_both_required(self):
+        self.register()
+        cfg = {"browser": {"agent_interface": {"allow_local_network": True}}}
+        scope = {"TERMINAL_ENV": "local"}
+        class Refusal(ValueError): pass
+        modules = {
+            "hermes_cli.config": types.SimpleNamespace(read_raw_config=lambda: cfg),
+            "hermes_constants": types.SimpleNamespace(get_hermes_home_override=lambda: self.home),
+            "tools.terminal_scope": types.SimpleNamespace(get_terminal_scope=lambda: scope,
+                terminal_env=lambda name, default: scope.get(name, default), TerminalPolicyUnavailable=Refusal),
+            "tools.terminal_tool": types.SimpleNamespace(_ensure_terminal_env_bridged=lambda: None),
+        }
+        with patch.dict(sys.modules, modules):
+            self.assertTrue(self.instance.profile_local_browser())
+            for backend in ("ssh", "docker", "modal", "singularity", "", "unknown"):
+                scope["TERMINAL_ENV"] = backend
+                self.assertFalse(self.instance.profile_local_browser(), backend)
+            scope["TERMINAL_ENV"] = "local"
+            for consent in (False, None, "true", 1):
+                cfg["browser"]["agent_interface"]["allow_local_network"] = consent
+                self.assertFalse(self.instance.profile_local_browser(), str(consent))
+            cfg["browser"]["agent_interface"].pop("allow_local_network")
+            self.assertFalse(self.instance.profile_local_browser(), "Consent defaults off")
+            cfg["browser"]["agent_interface"]["allow_local_network"] = True
+            scope = None
+            self.assertFalse(self.instance.profile_local_browser(), "Routed policy must never fall back to ambient local")
+            scope = {"TERMINAL_ENV": "local"}
+            for invalid in (None, [], "true"):
+                cfg["browser"] = invalid
+                self.assertFalse(self.instance.profile_local_browser())
+
+    def test_discovery_rejects_external_or_unidentified_websockets(self):
+        self.endpoint.stop()
+        for value in ("ws://remote.example:9222/devtools/browser/12345678901234567890",
+                      "ws://127.0.0.1:9999/devtools/browser/12345678901234567890",
+                      "ws://127.0.0.1:9222/devtools/browser/short", "", None):
+            opener = types.SimpleNamespace(open=lambda *a, _value=value, **k: io.BytesIO(
+                json.dumps({"webSocketDebuggerUrl": _value}).encode()))
+            with self.subTest(value=value), patch("urllib.request.build_opener", return_value=opener):
+                self.assertFalse(computer.Computer._browser_ready(self.instance))
+
+
 class SupervisorRestartTests(ComputerFixture):
     def setUp(self):
         super().setUp()
