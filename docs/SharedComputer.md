@@ -120,19 +120,21 @@ that Unix account's full authority are not isolated from one another.
 
 This is native local-network behavior for the authorized profile, including
 private/LAN/Headnet addresses. It is not a KVM hostname allowlist. Hermes still
-performs its metadata-address and website-policy checks. Existing native website
-policy caching is unchanged. Human takeover, operation locks, recovery fences,
+keeps the metadata floor in navigation, redirect checks and `browser_exec`.
+The add-on dispatch wrapper also blocks metadata URL literals in
+`browser_console(expression=...)`, CDP `Page.navigate` and CDP `Runtime.evaluate`,
+using native Hermes's URL-literal scanner and always-blocked matcher. These are
+literal checks, not an egress firewall. Native local classification skips the
+current-page metadata check before content tools, and computed or obfuscated
+JavaScript URLs can escape the literal scan. Do not claim metadata isolation for
+those paths. Native website-policy checks and their caching are unchanged. Human
+takeover, operation locks, recovery fences,
 and TLS validation also remain in force. The wrapper uses the revision-qualified
 `browser_tool_cloud._is_local_backend` seam because this native revision has no
 owned-browser provenance hook. Qualification must cover changes to this seam.
 
-The KVM at `https://comet-pro-kvm.mesh.wildflowersranch.com` currently has a
-self-signed certificate for `localhost`, without SANs, valid in 1970-1979, as
-recorded in the October 18 diagnosis. Admission can reach a certificate error;
-it does not establish trusted KVM access. Do not bypass it or submit credentials.
-[GL.iNet's certificate guide](https://docs.gl-inet.com/kvm/en/faq/privacy_error_from_your_browser/)
-documents a trusted certificate covering the actual hostname, uploaded through
-Security > TLS Certificate > Custom Certificate on firmware 1.8.0 or later.
+A device certificate the browser does not trust yields a certificate error.
+Fix the certificate on the device before trusted access or credential entry.
 Certificate administration remains separate from this integration change.
 
 ### Qualification, activation and rollback
@@ -142,6 +144,13 @@ Run `python3 scripts/run-python-tests.py` and `ruff check .`. The existing
 `scripts/spike/computer_local_network_probe.py` additionally launches disposable
 Chrome and exercises real native preflight, profile consent, provenance,
 terminal policy, metadata/website checks, human control, and invalid TLS.
+The qualification runner always runs the coordination probe. When Chrome is
+available through `HERMES_COMPUTER_PROBE_BROWSER`,
+`AGENT_BROWSER_EXECUTABLE_PATH` or PATH discovery, it also runs the local-network
+probe in its own marked home and collects
+`hermes-computer-local-network-probe.json` in the evidence directory. Otherwise
+that receipt records `status: "skipped"` and the missing executable reason.
+A skipped browser probe does not establish browser policy or TLS acceptance.
 Use an isolated Python environment with the exact native revision and approved
 repair. Set `HOME` and `HERMES_HOME` to the same disposable directory containing
 `.agent-interface-isolated` with `agent-interface-disposable-spike`, point
@@ -200,7 +209,54 @@ After activation, run `release-app.py verify NAME`; verify sign-in, original
 Google/Discord connections, clear maintenance, computer readiness, and the new
 supervisor registration. Check Patch's admission and an unauthorized profile's
 denial in fresh turns, metadata/website refusals, and human takeover/handback.
-Expect a certificate error for the KVM until its certificate is repaired.
+
+On the Linux host, as the service account, verify cross-process provenance using
+the live gateway's executable and environment. This read-only checker must print
+`verified_local_browser=True` while the supervisor and gateway user units are
+running separately. It checks the existing registration and browser, without
+launching a browser, changing configuration or restarting a service:
+
+```sh
+python3 - <<'PY_GATEWAY_CHECK'
+import os
+from pathlib import Path
+import subprocess
+
+pid = int(subprocess.check_output([
+    "systemctl", "--user", "show", "hermes-gateway.service", "--property=MainPID", "--value"
+], text=True).strip())
+assert pid > 0, "Gateway is not running"
+proc = Path(f"/proc/{pid}")
+assert proc.stat().st_uid == os.getuid(), "Run as the gateway service account"
+env = dict(item.split("=", 1) for item in (proc / "environ").read_text().split("\0") if "=" in item)
+env["PYTHONDONTWRITEBYTECODE"] = "1"
+source = Path.home() / ".hermes/hermes-agent"
+code = """
+import importlib.util, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import hermes_bootstrap
+path = (Path(sys.argv[1]) / 'agent_interface_gateway.py').resolve().with_name('computer.py')
+spec = importlib.util.spec_from_file_location('gateway_computer_check', path)
+addon = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(addon)
+setting = addon.configured()
+assert setting is not None, 'Gateway has no configured shared computer'
+computer = addon.Computer(*setting, None, None)
+assert computer.state.is_dir(), 'Supervisor state is missing'
+verified = computer.verified_local_browser()
+print(f'verified_local_browser={verified}')
+assert verified, 'Gateway-side provenance check failed'
+"""
+python = str((proc / "exe").resolve())
+subprocess.run([python, "-I", "-c", code, str(source)], env=env, cwd=source, check=True)
+PY_GATEWAY_CHECK
+```
+
+This runs an independent checker in the gateway's runtime context. Confirm
+Patch's admission in a fresh gateway turn as well; the command does not execute
+inside the already-running gateway. Expect a certificate error for a device
+until its untrusted certificate is repaired.
 
 To revoke access, set only Patch's `browser.agent_interface.allow_local_network`
 to false or remove it. New decisions refuse without a restart; an already
