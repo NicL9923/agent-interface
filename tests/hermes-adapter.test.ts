@@ -21,6 +21,7 @@ let sockets:WireSocket[];
 let runtime:Runtime;
 let addonReady:boolean;
 let explicitCredentials:boolean;
+let canonicalSubmission:boolean;
 let metadataConflict:boolean;
 let connectionFails:boolean;
 let imageReady:boolean;
@@ -54,10 +55,10 @@ class WireSocket extends EventTarget {
       return;
     }
     let result:unknown={};
-    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(explicitCredentials?{explicit_credentials:true}:{})};
+    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{})};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
-    if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one'};
+    if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',running:false,interruption_pending:false}:{})};
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
     if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
@@ -71,7 +72,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -82,6 +83,22 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('admits through one canonical submit RPC and maps interruption rejection', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    expect((await runtime.submit({...input(),text:'Hello'})).status).toBe('accepted');
+    expect(calls.map(call=>call.method)).toEqual(['agent-interface.submit']);
+    expect(calls[0].params).not.toHaveProperty('session_id');
+    rpcErrors.set('agent-interface.submit',{code:4094,message:'Review interruption'});
+    await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
+  });
+  it('lets native answers prove staleness without a second open', async () => {
+    rpcErrors.delete('request.answer'); await runtime.status(); calls=[];
+    beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
+    await expect(runtime.approve('shared','stale','approved','person')).rejects.toThrow('expired');
+    await expect(runtime.answerRequest('shared','stale',{})).rejects.toThrow('expired');
+    expect(calls.map(call=>call.method)).toEqual(['request.answer','request.answer']);
+  });
   it('lists bots without loading profile descriptions and loads detail lazily', async () => {
     await runtime.listBots(); await runtime.listBots();
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(0);

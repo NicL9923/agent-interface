@@ -48,6 +48,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let requiredSkills = new Set<string>();
   // An add-on that binds logins requested by address to their member. Earlier ones refuse the extra field.
   let explicitCredentials = false;
+  let canonicalSubmit = false;
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -154,6 +155,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     descriptions.clear();
     capabilityCache = undefined;
     extension = false;
+    canonicalSubmit = false;
     // A disconnected stream cannot identify which turn is now active. Fresh
     // native snapshots restore current activity, reasoning and tools.
     transient.clear();
@@ -191,6 +193,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
     extension = true;
     explicitCredentials = capabilities.explicit_credentials === true;
+    canonicalSubmit = capabilities.canonical_submit === true;
     requiredSkills = new Set(Array.isArray(capabilities.essential_skills) ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string') : []);
   }
   async function connect(): Promise<void> {
@@ -623,11 +626,26 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       return { requestId: input.requestId, status: 'rejected', message:
         `${error instanceof Error ? error.message : 'Invalid attachment.'} Remove it and attach the file again. Your draft is saved.` };
     }
-    await connect();if(!extension)throw new Error('Durable Hermes admission add-on is required before sending.');const state=await open(input.botId);
-    if((steer||state.info?.running)&&attachments.some(x=>x.mime.startsWith('image/')))return {requestId:input.requestId,status:'rejected',message:'Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.'};
+    await connect();if(!extension)throw new Error('Durable Hermes admission add-on is required before sending.');
+    const fast=canonicalSubmit,state=fast?undefined:await open(input.botId);
+    if((steer||state?.info?.running)&&attachments.some(x=>x.mime.startsWith('image/')))return {requestId:input.requestId,status:'rejected',message:'Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.'};
     const references=attachments.filter(x=>!x.mime.startsWith('image/')).map(x=>`@file:${JSON.stringify(x.path)}`).join('\n');
-    try{return receipt(await rpc('agent-interface.submit',{profile:input.botId,session_id:state.session_id,request_id:input.requestId,sender_id:input.senderId,text:input.text+(references?'\n'+references:''),attachments,steer,reviewed_interruption:input.reviewedInterruption===true}));}catch(error){return {requestId:input.requestId,status:'uncertain',message:error instanceof Error?error.message:'Hermes response lost. Review before retrying.'};}
+    try{
+      const value=await rpc('agent-interface.submit',{profile:input.botId,...(state?{session_id:state.session_id}:{}),request_id:input.requestId,sender_id:input.senderId,text:input.text+(references?'\n'+references:''),attachments,steer,reviewed_interruption:input.reviewedInterruption===true});
+      // A misadvertised older add-on must not be retried after possible admission.
+      // Fall back to its old read checks for future sends, and recover participation now.
+      if(fast&&(typeof value.running!=='boolean'||typeof value.interruption_pending!=='boolean')){
+        canonicalSubmit=false;
+        const prior=await open(input.botId).catch(()=>undefined);
+        return {...receipt(value),runId:value.runId??prior?.app_run_id};
+      }
+      return receipt(value);
+    }catch(error){
+      if(error instanceof TransportError&&error.rpcCode===4094)throw Object.assign(new Error('Review the interrupted task before starting another message.'),{statusCode:409,code:'interruption_pending'});
+      return {requestId:input.requestId,status:'uncertain',message:error instanceof Error?error.message:'Hermes response lost. Review before retrying.'};
+    }
   }
+
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
     const body = {
@@ -833,6 +851,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       capabilityRequest = request;
       try { return await request; } finally { if (capabilityRequest === request) capabilityRequest = undefined; }
     },
+    async canonicalSubmit(){await connect();return canonicalSubmit;},
     async listBots() {
       if (rosterRequest) return rosterRequest;
       const request = (async () => {
@@ -901,8 +920,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     submit(input){return submit(input).finally(()=>touched(input.botId));},steer(input){return submit(input,true).finally(()=>touched(input.botId));},
     async lookupSubmission(requestId){await connect();if(!extension)return null;const result=await rpc('agent-interface.receipt',{request_id:requestId});return result.receipt?receipt(result.receipt):null;},
-    async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
-    async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired')throw new Error('That question expired before it was answered.');},
+    // Routes verify profile and request kind with one light read. Native answers prove
+    // final staleness, so do not repeat that read here.
+    async approve(botId,approvalId,decision,_senderId){const result=await rpc('request.answer',{id:approvalId,profile:botId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
+    async answerRequest(botId,requestId,answers){const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){

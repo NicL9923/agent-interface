@@ -156,6 +156,21 @@ class HistoryWindowTests(unittest.TestCase):
 
 
 class OpenTests(unittest.TestCase):
+    def test_submit_resolves_canonical_and_preserves_interruption_guard(self):
+        with FakeHermes([]) as hermes:
+            hermes.open()
+            hermes.native_calls.clear()
+            submit=hermes.methods["agent-interface.submit"]
+            params={"profile":"default","request_id":"one","sender_id":"member","text":"Hello"}
+            result=submit("send",params)["result"]
+            self.assertEqual(result["status"],"accepted")
+            self.assertEqual((result["app_run_id"],result["running"],result["interruption_pending"]),("one",False,False))
+            self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','old',1)")
+            refused=submit("send",{**params,"request_id":"two"})
+            self.assertEqual(refused["error"]["code"],4094)
+
     def test_decorated_cache_skips_projection_and_binding_and_invalidates(self):
         with FakeHermes(turns(25, files={3})) as hermes:
             expected = hermes.open(window={"turns": 20})

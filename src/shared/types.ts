@@ -351,6 +351,7 @@ export interface Runtime {
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;
+  canonicalSubmit?(): Promise<boolean>;
   listBots(): Promise<Bot[]>;
   botDetail?(botId: string): Promise<Bot>;
   watchRoster?(changed: () => void): () => void;

@@ -564,13 +564,16 @@ export async function createApp(
       senderId: signedIn(req).id,
     };
     const previous = store.submission(input.requestId);
+    const interruptionRejected=previous?.receipt.status==='rejected'&&previous.receipt.message==='Review the interrupted task before starting another message.';
+    const retryInterruption=interruptionRejected&&reviewedInterruption;
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw failure(
           409,
           "This submission ID was already used for different content",
         );
-      if (!reviewedUncertain || previous.receipt.status !== "uncertain")
+      if(interruptionRejected&&!reviewedInterruption)throw failure(409,'Review the interrupted task before starting another message.');
+      if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
       await requireCapability("idempotency");
       const known = await runtime.lookupSubmission(input.requestId);
@@ -582,8 +585,9 @@ export async function createApp(
       await requireCapability("idempotency");
     }
     await requireCapability("chat");
-    const conversation = await runtime.conversation(input.botId, { history: false });
-    if (conversation.activity.state === "interrupted" && !reviewedInterruption)
+    const fast = await runtime.canonicalSubmit?.() === true;
+    const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
+    if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
       throw failure(
         409,
         "Review the interrupted task before starting another message.",
@@ -591,20 +595,25 @@ export async function createApp(
     const steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
-        conversation.activity.state,
+        conversation?.activity.state ?? "idle",
       );
-    if (steering) await requireCapability("steering");
+    if (steering || fast) await requireCapability("steering");
     const intent = store.intent(input);
-    if (!intent.created && !reviewedUncertain) return intent.receipt;
-    if (conversation.activity.runId)
+    if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
+    if (conversation?.activity.runId)
       store.participate(conversation.activity.runId, input.senderId);
     try {
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption }));
       store.receipt(receipt);
+      if(receipt.runId)store.participate(receipt.runId,input.senderId);
       return receipt;
-    } catch {
+    } catch (error) {
+      if((error as {code?:string}).code==='interruption_pending'){
+        store.receipt({requestId:input.requestId,status:'rejected',message:'Review the interrupted task before starting another message.'});
+        throw failure(409,'Review the interrupted task before starting another message.');
+      }
       return store.submission(input.requestId)!.receipt;
     }
   };

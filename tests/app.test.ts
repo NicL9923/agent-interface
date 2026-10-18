@@ -418,6 +418,25 @@ describe("authentication and household state", () => {
   });
 });
 describe("safe admission, steering, and approvals", () => {
+  it("skips conversation reads with canonical admission and keeps interruption review retryable", async () => {
+    const fake=runtimeDouble();
+    fake.runtime.canonicalSubmit=async()=>true;
+    fake.runtime.conversation=vi.fn().mockRejectedValue(new Error("Unexpected read"));
+    fake.runtime.submit=vi.fn(async input=>{
+      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
+      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
+    });
+    const {app,store}=await createApp(config(),fake.runtime,{background:false});
+    const headers=await login(app),payload={requestId:randomUUID(),text:"Continue"};
+    const first=await app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
+    expect(first.statusCode).toBe(409);
+    expect(first.json().error).toBe("Review the interrupted task before starting another message.");
+    const sent=await app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload:{...payload,reviewedInterruption:true}});
+    expect(sent.json().status).toBe("accepted");
+    expect(fake.runtime.conversation).not.toHaveBeenCalled();
+    expect(store.recipients({id:"event",botId:"shared",runId:"run",kind:"completed",title:"Done",occurredAt:""})).toEqual(["local-one"]);
+    await app.close();
+  });
   it("forwards a request once, rejects reused IDs with changed content, and persists uncertain intent across app restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-interface-"));
     const path = join(dir, "app.sqlite");
