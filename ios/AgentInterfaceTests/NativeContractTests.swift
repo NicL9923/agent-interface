@@ -1365,9 +1365,12 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(server.draftSaves().count, 1)
         for _ in 0..<3 { await value.refreshConversation(); try await Task.sleep(for: .milliseconds(80)) }
         XCTAssertEqual(server.draftSaves().count, 1, "Polls do not retry before the backoff")
+        // The retry task's own sleep may already have fired against the held clock, so a poll
+        // after the backoff proves the boundary; the timer path is covered by the test above.
         time += .seconds(1)
-        try await Task.sleep(for: .milliseconds(1000))
-        XCTAssertEqual(server.draftSaves().count, 2, "The backoff retries once")
+        await value.refreshConversation()
+        for _ in 0..<50 where server.draftSaves().count < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(server.draftSaves().count, 2, "A poll after the backoff retries once")
     }
 
     func testANewEditAfterAdoptingTheServerDraftNeverReusesAnInFlightSequence() async throws {
