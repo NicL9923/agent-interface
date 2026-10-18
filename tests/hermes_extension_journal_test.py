@@ -4,6 +4,7 @@ The real gateway contract lives in scripts/spike/extension_probe.py. These
 tests pin the journal reads every conversation poll makes.
 """
 import copy
+import contextlib
 import importlib.util
 import json
 import re
@@ -14,7 +15,7 @@ import time
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("extension_journal_test", ROOT / "src/hermes/extension.py")
@@ -156,6 +157,102 @@ class HistoryWindowTests(unittest.TestCase):
 
 
 class OpenTests(unittest.TestCase):
+    def test_submit_resolves_canonical_and_preserves_interruption_guard(self):
+        with FakeHermes([]) as hermes:
+            hermes.open()
+            hermes.native_calls.clear()
+            submit=hermes.methods["agent-interface.submit"]
+            params={"profile":"default","request_id":"one","sender_id":"member","text":"Hello"}
+            result=submit("send",params)["result"]
+            self.assertEqual(result["status"],"accepted")
+            self.assertEqual((result["app_run_id"],result["running"],result["interruption_pending"]),("one",False,False))
+            self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','old',1)")
+            refused=submit("send",{**params,"request_id":"two"})
+            self.assertEqual(refused["error"]["code"],4094)
+
+    def test_submit_requires_review_after_stopped_terminal_or_inflight(self):
+        for mode in ("terminal", "inflight", "cold"):
+            with self.subTest(mode=mode), FakeHermes([]) as hermes:
+                hermes.open()
+                session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+                if mode == "inflight":
+                    session["inflight_turn"] = {"user": "Stopped", "interrupted": True}
+                elif mode == "cold":
+                    with hermes.journal.db:
+                        hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES('old','d','default','old-sid','stored','member','e','old','Ask','[]',0,'accepted',1,1)")
+                    hermes.journal.event("default", "old-sid", "interrupted", "Stopped", "old")
+                else:
+                    hermes.journal.event("default", "sid", "interrupted", "Stopped")
+                submit = hermes.methods["agent-interface.submit"]
+                params = {"profile": "default", "request_id": "new", "sender_id": "member", "text": "Hello"}
+                self.assertEqual(submit("send", params)["error"]["code"], 4094)
+                self.assertNotIn("prompt.submit", [method for method, _ in hermes.native_calls])
+                self.assertEqual(submit("send", {**params, "reviewed_interruption": True})["result"]["status"], "accepted")
+                # Once reviewed admission has started a new run, an idempotent retry
+                # sees that current run rather than reapplying its predecessor's stop.
+                self.assertEqual(submit("send", params)["result"]["status"], "accepted")
+
+    def test_history_cache_prunes_noncanonical_sessions_and_caps_entries(self):
+        with FakeHermes(turns(1)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            method = hermes.methods["agent-interface.open"]
+            cells = dict(zip(method.__code__.co_freevars, (cell.cell_contents for cell in method.__closure__)))
+            cache, canonical = cells["decorated"], cells["canonical"]
+            cache["obsolete"] = cache["sid"]
+            hermes.open()
+            self.assertNotIn("obsolete", cache)
+            # Simulate many profiles with retained histories. Each read enforces the cap.
+            for index in range(40):
+                sid = f"profile-{index}"
+                canonical[sid] = sid
+                hermes.modules["tui_gateway.server"]._sessions[sid] = dict(session)
+                cache[sid] = cache["sid"]
+            cache.pop("sid")
+            hermes.open()
+            self.assertLessEqual(len(cache), 32)
+
+    def test_decorated_cache_skips_projection_and_binding_and_invalidates(self):
+        with FakeHermes(turns(25, files={3})) as hermes:
+            expected = hermes.open(window={"turns": 20})
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(),profile_home=hermes.directory.name)
+            self.assertEqual(hermes.open(window={"turns": 20})["messages"], expected["messages"])
+            seen = []
+            hermes.journal.db.set_trace_callback(seen.append)
+            hit = hermes.open(window={"turns": 20})
+            hermes.journal.db.set_trace_callback(None)
+            self.assertEqual(hit["messages"], expected["messages"])
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            self.assertFalse(any("FROM tools" in sql or "row_id IN" in sql for sql in seen))
+            hermes.journal.event("default", "sid", "completed", "Result")
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            for filename in ("state.db", "state.db-wal", "config.yaml"):
+                hermes.open()
+                Path(hermes.directory.name,filename).write_text("changed")
+                hermes.open()
+                self.assertNotIn("omit_messages",hermes.native_calls[-1][1])
+            session["running"]=True
+            hermes.open(); hermes.open()
+            self.assertNotIn("omit_messages",hermes.native_calls[-1][1])
+            session["running"]=False
+            session["history"] = hermes.messages = turns(3)
+            self.assertEqual(len(hermes.open()["messages"]), 6)
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            session["history"][0]["_row_id"]=12345
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            session["history"][-1] = {"role":"assistant", "text":"Replacement"}
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
     def test_light_open_skips_native_history_and_a_window_cuts_it(self):
         with FakeHermes(turns(25, files={3})) as hermes:
             first = hermes.open(omit_messages=True)
@@ -415,6 +512,44 @@ class BotDeliveryInstallTests(unittest.TestCase):
                 self.assertTrue(allowed())
                 lease.write_text('{"operationId": "installer"}'); lease.chmod(0o600)
                 self.assertFalse(allowed())
+
+
+class DiscoveryTests(unittest.TestCase):
+    def test_ledger_only_writes_trigger_scan_with_safety_net_and_forced_scans(self):
+        jobs = [{"id": "job", "last_run_at": "one", "next_run_at": "two"}]
+        ledger = Mock(return_value=[{"id": "execution", "status": "completed", "session_id": "sid"}])
+        with FakeHermes([]) as hermes:
+            db = Path(hermes.directory.name) / "executions.db"
+            db.write_text("first")
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = ledger, db
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: jobs),
+                       "cron": cron, "cron.executions": executions}
+            with patch.dict(sys.modules, modules), patch.object(extension.time, "monotonic", return_value=100) as clock:
+                discover = hermes.methods["agent-interface.discover"]
+                first = discover("tick", {"cursor": "0"})["result"]
+                self.assertEqual(len(first["events"]), 1)
+                ledger.assert_called_once_with(job_id="job", limit=100)
+                clock.return_value = 105
+                self.assertEqual(discover("tick", {"cursor": first["cursor"]})["result"]["events"], [])
+                self.assertEqual(ledger.call_count, 1)
+                # Job metadata has not moved, but both DB and WAL writes must be seen.
+                db.write_text("a terminal execution write")
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 2)
+                db.with_name("executions.db-wal").write_text("another terminal execution")
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 3)
+                clock.return_value = 164
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 3)
+                clock.return_value = 165
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 4)
+                discover("tick", {"full": True})
+                self.assertEqual(ledger.call_count, 5)
 
 
 if __name__ == "__main__":

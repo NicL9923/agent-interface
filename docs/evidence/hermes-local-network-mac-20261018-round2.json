@@ -1,0 +1,36 @@
+{
+  "status": "passed",
+  "checks": {
+    "live_owned_browser_registration": true,
+    "separate_process_verifies_supervisor_registration": true,
+    "navigation_and_browser_exec_metadata_floor_preserved": true,
+    "dispatch_console_and_cdp_metadata_literals_blocked": true,
+    "native_local_current_page_guard_gap_confirmed": true,
+    "arbitrary_remote_and_loopback_cdp_untrusted": true,
+    "unrelated_profiles_and_disabled_consent_blocked": true,
+    "remote_container_missing_and_refused_terminal_policy_blocked": true,
+    "native_website_policy_preserved": true,
+    "browser_generation_mismatch_blocked": true,
+    "authorized_profile_still_obeys_human_and_operation_fences": true,
+    "real_native_browser_exec_uses_owned_browser": true,
+    "real_native_browser_exec_rejects_invalid_tls": true,
+    "shutdown_revokes_provenance": true
+  },
+  "decisions": {
+    "authorized_without_registration": "Blocked: URL targets a private or internal address",
+    "arbitrary_loopback_browser": "Blocked: URL targets a private or internal address",
+    "authorized_owned_local_browser": "admitted by real native URL and browser_exec preflight",
+    "other": "Blocked: URL targets a private or internal address",
+    "patch-disabled": "Blocked: URL targets a private or internal address",
+    "other-again": "Blocked: URL targets a private or internal address",
+    "patch_consent_revoked": "Blocked: URL targets a private or internal address",
+    "ssh_terminal": "Blocked: URL targets a private or internal address",
+    "docker_terminal": "Blocked: URL targets a private or internal address",
+    "modal_terminal": "Blocked: URL targets a private or internal address",
+    "singularity_terminal": "Blocked: URL targets a private or internal address",
+    "invalid_tls": "net::ERR_CERT_AUTHORITY_INVALID"
+  },
+  "desktopHardware": "native desktop start fixture; actual disposable Chrome and native policy/dispatch",
+  "revision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "trackedPatchSha256": "30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1"
+}

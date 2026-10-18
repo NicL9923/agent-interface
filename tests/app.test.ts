@@ -7,7 +7,7 @@ import { createApp } from "../src/server/app.js";
 import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
-import type { Avatar, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
+import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
 const origin = "http://127.0.0.1:3000";
@@ -138,6 +138,101 @@ async function login(
 }
 const config = () =>
   loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+describe("default roster detail fallback", () => {
+  const configuration = {
+    instructions: "Keep these saved instructions",
+    enabledTools: ["terminal"],
+    enabledSkills: ["research"],
+    enabledMcpServers: ["calendar"],
+  };
+  const row = (id: string): Bot => ({
+    id, name: id, model: "test", shared: true, activity: "idle",
+    // Hermes's lean rows include undefined configuration keys before serialization.
+    instructions: undefined, enabledTools: undefined,
+    enabledSkills: undefined, enabledMcpServers: undefined,
+  });
+  for (const url of ["/api/bootstrap", "/api/bots"]) {
+    const botsFrom = (response: { json<T>(): T }): Bot[] =>
+      url === "/api/bootstrap" ? response.json<{ bots: Bot[] }>().bots : response.json<Bot[]>();
+
+    it(`${url} preserves last-good configuration during outages and leaves lean reads alone`, async () => {
+      const fake = runtimeDouble();
+      let bots = [row("shared"), row("second")];
+      fake.runtime.listBots = async () => bots;
+      const detail = vi.fn(async (id: string) => ({ ...row(id), ...configuration }));
+      fake.runtime.botDetail = detail;
+      const { app } = await createApp(config(), fake.runtime, { background: false });
+      try {
+        const headers = await login(app);
+        const initial = await app.inject({ url, headers });
+        expect(initial.statusCode).toBe(200);
+        for (const bot of botsFrom(initial)) expect(bot).toMatchObject(configuration);
+
+        bots = [...bots, row("never-detailed")].map(bot => ({
+          ...bot, activity: "disconnected", lastMessage: { text: "Current preview" },
+        }));
+        detail.mockImplementation(async () => { throw new Error("Hermes is disconnected"); });
+        // Repeat to prove a failed read never replaces the cached configuration.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const response = await app.inject({ url, headers });
+          expect(response.statusCode).toBe(200);
+          const result = botsFrom(response);
+          expect(result).toHaveLength(3);
+          for (const bot of result) expect(bot).toMatchObject({
+            activity: "disconnected", lastMessage: { text: "Current preview" },
+          });
+          for (const bot of result.slice(0, 2)) expect(bot).toMatchObject(configuration);
+          expect(result[2]).toEqual(JSON.parse(JSON.stringify(bots[2])));
+        }
+        detail.mockClear();
+        const lean = await app.inject({ url: `${url}?roster=lean`, headers });
+        expect(lean.statusCode).toBe(200);
+        expect(botsFrom(lean)).toEqual(JSON.parse(JSON.stringify(bots)));
+        expect(detail).not.toHaveBeenCalled();
+      } finally { await app.close(); }
+    });
+
+    it(`${url} isolates profile failures and drops a bot deleted between reads`, async () => {
+      const fake = runtimeDouble();
+      const bots = [row("shared"), row("broken"), row("deleted")];
+      fake.runtime.listBots = async () => bots;
+      fake.runtime.botDetail = async id => ({ ...row(id), ...configuration });
+      const { app } = await createApp(config(), fake.runtime, { background: false });
+      try {
+        const headers = await login(app);
+        expect((await app.inject({ url, headers })).statusCode).toBe(200);
+        fake.runtime.botDetail = async id => {
+          if (id === "broken") throw new Error("profiles.describe failed");
+          if (id === "deleted") throw new Error("Unknown Hermes bot.");
+          return { ...row(id), ...configuration, instructions: "Fresh instructions" };
+        };
+        const response = await app.inject({ url, headers });
+        expect(response.statusCode).toBe(200);
+        expect(botsFrom(response)).toEqual([
+          { ...row("shared"), ...configuration, instructions: "Fresh instructions" },
+          { ...row("broken"), ...configuration },
+        ]);
+      } finally { await app.close(); }
+    });
+
+    it(`${url} retains configuration previously loaded through bot detail`, async () => {
+      const fake = runtimeDouble();
+      let bot = row("shared");
+      fake.runtime.listBots = async () => [bot];
+      fake.runtime.botDetail = async () => ({ ...bot, ...configuration });
+      const { app } = await createApp(config(), fake.runtime, { background: false });
+      try {
+        const headers = await login(app);
+        expect((await app.inject({ url: "/api/bots/shared", headers })).statusCode).toBe(200);
+        bot = { ...bot, activity: "disconnected" };
+        fake.runtime.botDetail = async () => { throw new Error("Hermes is disconnected"); };
+        const response = await app.inject({ url, headers });
+        expect(response.statusCode).toBe(200);
+        expect(botsFrom(response)).toEqual([{ ...bot, ...configuration }]);
+      } finally { await app.close(); }
+    });
+  }
+});
 describe("authentication and household state", () => {
   it("saves seasonal avatars through native metadata and round-trips them through household presentation", async () => {
     const fake = runtimeDouble();
@@ -418,6 +513,25 @@ describe("authentication and household state", () => {
   });
 });
 describe("safe admission, steering, and approvals", () => {
+  it.each(["a Hermes restart", "a stopped task terminal event"])("keeps interruption review retryable after %s with canonical admission", async () => {
+    const fake=runtimeDouble();
+    fake.runtime.canonicalSubmit=async()=>true;
+    fake.runtime.conversation=vi.fn().mockRejectedValue(new Error("Unexpected read"));
+    fake.runtime.submit=vi.fn(async input=>{
+      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
+      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
+    });
+    const {app,store}=await createApp(config(),fake.runtime,{background:false});
+    const headers=await login(app),payload={requestId:randomUUID(),text:"Continue"};
+    const first=await app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
+    expect(first.statusCode).toBe(409);
+    expect(first.json().error).toBe("Review the interrupted task before starting another message.");
+    const sent=await app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload:{...payload,reviewedInterruption:true}});
+    expect(sent.json().status).toBe("accepted");
+    expect(fake.runtime.conversation).not.toHaveBeenCalled();
+    expect(store.recipients({id:"event",botId:"shared",runId:"run",kind:"completed",title:"Done",occurredAt:""})).toEqual(["local-one"]);
+    await app.close();
+  });
   it("forwards a request once, rejects reused IDs with changed content, and persists uncertain intent across app restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-interface-"));
     const path = join(dir, "app.sqlite");

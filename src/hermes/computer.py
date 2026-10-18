@@ -13,7 +13,9 @@ import os
 from pathlib import Path
 import secrets
 import re
+import stat
 import subprocess
+import sys
 import time
 import threading
 from urllib.parse import urlsplit
@@ -178,6 +180,7 @@ class Computer:
         self.lease = lease
         self.state = self.home / "bot-desktop"
         self._operation = threading.local()
+        self._local_policy = None
 
     def _private_dir(self):
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -274,17 +277,107 @@ class Computer:
         (self.state / "computer-recovery.json").unlink(missing_ok=True)
         return True
 
+    def _browser_endpoint(self):
+        """Discover only this fixed origin, without proxies or redirects."""
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args):
+                return None
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        with opener.open(self.endpoint + "/json/version", timeout=1) as response:
+            payload = json.load(response)
+        value = payload.get("webSocketDebuggerUrl", "") if isinstance(payload, dict) else ""
+        if not isinstance(value, str):
+            raise ComputerError("The household browser discovery identity is invalid.")
+        parsed, fixed = urlsplit(value), urlsplit(self.endpoint)
+        if (parsed.scheme != "ws" or parsed.hostname != fixed.hostname or parsed.port != fixed.port
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or not re.fullmatch(r"/devtools/browser/[a-zA-Z0-9-]{20,}", parsed.path)):
+            raise ComputerError("The household browser discovery identity is invalid.")
+        return value
+
     def _browser_ready(self):
         try:
-            # No environment proxy or redirects for the fixed private endpoint.
-            class NoRedirect(urllib.request.HTTPRedirectHandler):
-                def redirect_request(self, *args):
-                    return None
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-            with opener.open(self.endpoint + "/json/version", timeout=1) as response:
-                value = json.load(response)
-            return isinstance(value.get("webSocketDebuggerUrl"), str)
-        except (OSError, ValueError):
+            return bool(self._browser_endpoint())
+        except (OSError, ValueError, ComputerError):
+            return False
+
+    @staticmethod
+    def _process_identity(pid):
+        import psutil
+        process = psutil.Process(pid)
+        if process.uids().real != os.getuid() or process.status() == psutil.STATUS_ZOMBIE:
+            raise ComputerError("The household browser process is not owned by this runtime.")
+        # Linux epoch create_time depends on each process's cached boot time.
+        # Raw kernel start ticks are stable across the supervisor and gateway.
+        started = (int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+                   if sys.platform == "linux" else process.create_time())
+        return {"pid": process.pid, "started": started}
+
+    def register_browser(self, child):
+        """Supervisor-only publication after launching its own browser child.
+
+        The unpredictable Chrome browser websocket identity binds discovery to
+        this generation, rather than trusting any server on a loopback port.
+        Process birth times prevent stale registrations from trusting reused PIDs.
+        """
+        import psutil
+        if child.poll() is not None or psutil.Process(child.pid).ppid() != os.getpid():
+            raise ComputerError("The household browser must be a live supervisor child.")
+        self._write("computer-browser.json", {"endpoint": self.endpoint, "websocket": self._browser_endpoint(),
+            "supervisor": self._process_identity(os.getpid()), "browser": self._process_identity(child.pid)})
+
+    def verified_local_browser(self):
+        import psutil
+        try:
+            self._private_dir()
+            fd = os.open(self.state / "computer-browser.json", os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as handle:
+                info = os.fstat(handle.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or info.st_size > 4096):
+                    return False
+                record = json.load(handle)
+            if not isinstance(record, dict) or record.get("endpoint") != self.endpoint:
+                return False
+            for name in ("supervisor", "browser"):
+                if self._process_identity(record[name]["pid"]) != record[name]:
+                    return False
+            browser = psutil.Process(record["browser"]["pid"])
+            if (browser.ppid() != record["supervisor"]["pid"]
+                    or f"--remote-debugging-port={urlsplit(self.endpoint).port}" not in browser.cmdline()):
+                return False
+            fixed = urlsplit(self.endpoint)
+            # argv alone cannot prove bind succeeded: another listener could
+            # have won the port between the supervisor's probe and Chrome start.
+            # Require a literal origin so discovery and listener cannot choose
+            # different addresses from a hostname such as localhost.
+            if not any(connection.status == psutil.CONN_LISTEN and connection.laddr
+                       and connection.laddr.ip == fixed.hostname and connection.laddr.port == fixed.port
+                       for connection in browser.net_connections(kind="tcp")):
+                return False
+            return hmac.compare_digest(self._browser_endpoint(), record["websocket"])
+        except (OSError, ValueError, IndexError, KeyError, TypeError, ComputerError, psutil.Error):
+            return False
+
+    def profile_local_browser(self):
+        """Extra local classification, never a private-URL permission override."""
+        policy = self._local_policy
+        if policy is None:
+            return False
+        try:
+            browser = policy.config.read_raw_config().get("browser", {})
+            config = browser.get("agent_interface", {})
+            if config.get("allow_local_network") is not True:
+                return False
+            # Routed profiles must have their own complete policy. Falling back
+            # to the launch profile's environment would widen their authority.
+            if policy.scope.get_terminal_scope() is None and policy.constants.get_hermes_home_override() is not None:
+                return False
+            policy.terminal._ensure_terminal_env_bridged()
+            if policy.scope.terminal_env("TERMINAL_ENV", "local") != "local":
+                return False
+            return self.verified_local_browser()
+        except (OSError, ValueError, AttributeError, policy.scope.TerminalPolicyUnavailable):
             return False
 
     def status(self, params=None):
@@ -427,16 +520,30 @@ def install_tools():
         return existing
     from tools.bot_desktop import runtime, lease, placement
     from tools import browser_tool as bt, browser_tool_cdp as cdp, browser_tool_session as session
-    from tools import browser_tool_lifecycle as lifecycle, browser_use_cli
+    from tools import browser_tool_lifecycle as lifecycle, browser_use_cli, browser_tool_cloud as cloud
     from tools import browser_extension_router as router
+    try:
+        from hermes_cli import config
+        import hermes_constants
+        from tools import terminal_scope, terminal_tool, url_safety, browser_tool_eval_policy
+    except ImportError as exc:
+        raise ComputerError("Shared computer native tool seams require qualification.") from exc
     required = ((registry, "dispatch"), (runtime, "start"), (runtime, "desktop_env"), (runtime, "stop_if_idle"),
                 (lease, "get"), (lease, "acquire"), (lease, "release"), (lease, "assert_agent_may_act"),
                 (cdp, "_get_cdp_override_raw"), (session, "_run_browser_command"),
                 (lifecycle, "_cleanup_single_browser_session"), (router, "routed_browser_handler"),
-                (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"))
-    if any(not callable(getattr(module, name, None)) for module, name in required):
+                (config, "read_raw_config"), (hermes_constants, "get_hermes_home_override"),
+                (terminal_scope, "get_terminal_scope"), (terminal_scope, "terminal_env"),
+                (terminal_scope, "TerminalPolicyUnavailable"), (terminal_tool, "_ensure_terminal_env_bridged"),
+                (url_safety, "is_always_blocked_url"),
+                (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"), (cloud, "_is_local_backend"))
+    if (any(not callable(getattr(module, name, None)) for module, name in required)
+            or not callable(getattr(getattr(browser_tool_eval_policy, "_JS_URL_LITERAL_RE", None), "findall", None))):
         raise ComputerError("Shared computer native tool seams require qualification.")
     computer = Computer(home, endpoint, runtime, lease)
+    from types import SimpleNamespace
+    computer._local_policy = SimpleNamespace(config=config, constants=hermes_constants,
+        scope=terminal_scope, terminal=terminal_tool)
     computer._private_dir()
     # Module-specific resource mapping. Conversational get_hermes_home remains unchanged.
     runtime.get_hermes_home = lambda: home
@@ -452,6 +559,16 @@ def install_tools():
             return _native(*args, **kwargs)
         setattr(lease, name, mapped)
     cdp._get_cdp_override_raw = lambda: endpoint
+    # Revision-qualified private seam: retain native navigation/site checks and
+    # every other backend's classification. Only our registered browser can
+    # acquire the active profile's explicit local-network authorization.
+    native_local_backend = cloud._is_local_backend
+    @functools.wraps(native_local_backend)
+    def local_backend():
+        if cdp._get_cdp_override_raw() != endpoint:
+            return native_local_backend()
+        return computer.profile_local_browser()
+    cloud._is_local_backend = local_backend
     bt._is_camofox_mode = lambda: False
     # Preserve Hermes's default browser_exec interface. Its named sessions get
     # distinct tabs in the SAME externally owned browser and cookie jar.
@@ -550,6 +667,21 @@ def install_tools():
             args["session"] = "household-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
         try:
             with computer.bot_operation(profile):
+                # Native eval guards skip all checks for local backends. Keep
+                # the metadata floor for explicit literals using native parsing.
+                expression, target = "", ""
+                if name == "browser_console":
+                    expression = args.get("expression", "")
+                elif name == "browser_cdp":
+                    params = args.get("params") or {}
+                    if args.get("method") == "Page.navigate":
+                        target = str(params.get("url") or "").strip()
+                    elif args.get("method") == "Runtime.evaluate":
+                        expression = params.get("expression", "")
+                literals = browser_tool_eval_policy._JS_URL_LITERAL_RE.findall(expression) if isinstance(expression, str) else []
+                urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in literals]
+                if any(url_safety.is_always_blocked_url(url) for url in urls):
+                    return json.dumps({"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
                 return native_dispatch(name, args, **kwargs)
         except (ComputerError, lease.HumanHasControl) as exc:
             return json.dumps({"success": False, "error": str(exc)})

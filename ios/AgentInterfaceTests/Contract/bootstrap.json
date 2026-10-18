@@ -1,5 +1,5 @@
 {
-  "request": "GET /api/bootstrap",
+  "request": "GET /api/bootstrap?roster=lean",
   "response": {
     "user": {
       "id": "local-one",
@@ -60,12 +60,8 @@
         "id": "household",
         "name": "Household",
         "description": "Plans meals and errands",
-        "instructions": "Be concise.",
         "model": "claude-sonnet",
         "provider": "anthropic",
-        "enabledMcpServers": [
-          "calendar"
-        ],
         "shared": true,
         "avatar": {
           "mode": "geometric",
@@ -77,13 +73,6 @@
           "eyeHeight": 0.9,
           "eyeSpacing": 1.2
         },
-        "enabledTools": [
-          "terminal",
-          "web"
-        ],
-        "enabledSkills": [
-          "meal-planning"
-        ],
         "sessionId": "session-household",
         "activity": "working"
       },

@@ -1,20 +1,25 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { hash } from "../src/server/auth.js";
-import type { Runtime } from "../src/shared/types.js";
+import type { Bot, Runtime } from "../src/shared/types.js";
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): Promise<unknown> }[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
 
 // An app contract double whose watched conversations change when a test says so.
 function runtimeDouble() {
-  const watchers = new Map<string, Set<() => void>>();
+  const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  const rosterWatchers = new Set<() => void>();
+  const bots: Bot[] = [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }];
   const fixed: Partial<Runtime> = {
+    watchRoster(changed) { rosterWatchers.add(changed); return () => { rosterWatchers.delete(changed); }; },
+    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledMcpServers:["calendar"],enabledTools:["terminal"],enabledSkills:["research"]}),
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
-    listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
+    listBots: vi.fn(async () => bots),
+    inflight: botId => ({botId,message:{id:"sid-inflight",role:"assistant",text:"Live reply"},activity:{state:"thinking"},toolCalls:[]}),
     conversation: async botId => ({ botId, messages: [], activity: { state: "idle" }, approvals: [], files: [] }),
     submit: async input => ({ requestId: input.requestId, status: "accepted", runId: "run" }),
     lookupSubmission: async () => null,
@@ -27,7 +32,7 @@ function runtimeDouble() {
       return () => set.delete(changed);
     },
   };
-  return { runtime: fixed as Runtime, change: (botId: string) => { for (const changed of watchers.get(botId) ?? []) changed(); }, watchers };
+  return { bots, rosterChanged: () => { for (const changed of rosterWatchers) changed(); }, runtime: fixed as Runtime, change: (botId: string, kind?: "inflight") => { for (const changed of watchers.get(botId) ?? []) changed(kind); }, watchers };
 }
 async function setup() {
   const fake = runtimeDouble();
@@ -68,6 +73,42 @@ async function stream(url: string, cookie: string, headers: Record<string, strin
 }
 
 describe("conversation change stream", () => {
+  it("rebuilds inflight redaction when another assistant becomes private", async () => {
+    const s=await setup();
+    const events=await stream(`${s.base}/api/bots/shared/events?inflight=1`,s.cookie);
+    await events.until(()=>events.text.includes("retry"));
+    s.runtime.inflight=botId=>({botId,message:{id:"sid-inflight",role:"assistant",text:"Private reply",reasoning:"Private thought",origin:{kind:"agent",visibility:"activity",handle:"hidden"}},activity:{state:"working"},toolCalls:[{id:"call",name:"message_agent",arguments:JSON.stringify({target:"hidden",text:"private input"}),result:"private output",status:"running"}]});
+    s.store.savePresentation("hidden",{shared:false,ownerId:"local-two"});
+    s.change("shared","inflight");
+    await events.until(()=>events.text.includes("event: inflight"));
+    expect(events.text).not.toContain("Private reply");
+    expect(events.text).not.toContain("Private thought");
+    expect(events.text).not.toContain("private input");
+    expect(events.text).not.toContain("private output");
+    expect(events.text).toContain("another member's assistant");
+    await events.close();
+  });
+  it("returns configuration through the lazy detail route", async () => {
+    const s=await setup();
+    const response=await fetch(`${s.base}/api/bots/shared`,{headers:{cookie:s.cookie}});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({instructions:"Saved soul",enabledMcpServers:["calendar"],enabledTools:["terminal"],enabledSkills:["research"]});
+  });
+  it("sends opted-in deltas without conversation notices and keeps legacy delta notices", async () => {
+    const s = await setup();
+    const current = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
+    const legacy = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
+    await current.until(() => current.text.includes("retry"));
+    for (let i=0;i<20;i++) s.change("shared", "inflight");
+    await current.until(() => current.text.includes("event: inflight"));
+    await legacy.until(() => legacy.notices() === 1);
+    expect(current.text).toContain('"text":"Live reply"');
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(current.notices()).toBe(0);
+    s.change("shared");
+    await current.until(() => current.notices() === 1);
+    await current.close(); await legacy.close();
+  });
   it("refuses a request without a session, as the conversation read does", async () => {
     const s = await setup();
     for (const path of ["events", "conversation"]) {
@@ -143,6 +184,81 @@ describe("conversation change stream", () => {
     const events = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
     await events.until(() => events.text.includes("retry"));
     await apps.pop()!.close();
+    await events.until(() => events.done);
+  });
+});
+
+
+describe("roster compatibility and household events", () => {
+  it("keeps full configuration by default and omits it only for opted-in rosters", async () => {
+    const s = await setup();
+    for (const route of ["bootstrap", "bots"]) {
+      const read = async (suffix: string) => {
+        const response = await fetch(`${s.base}/api/${route}${suffix}`, { headers: { cookie: s.cookie } });
+        expect(response.status).toBe(200);
+        const value = await response.json();
+        return route === "bootstrap" ? value.bots[0] : value[0];
+      };
+      const full = await read("");
+      expect(full).toMatchObject({ instructions: "Saved soul", enabledMcpServers: ["calendar"],
+        enabledTools: ["terminal"], enabledSkills: ["research"] });
+      const lean = await read("?roster=lean");
+      for (const key of ["instructions", "enabledMcpServers", "enabledTools", "enabledSkills"]) expect(lean).not.toHaveProperty(key);
+    }
+  });
+
+  it("rejects anonymous household subscriptions", async () => {
+    const s = await setup();
+    const response = await fetch(`${s.base}/api/events`);
+    expect(response.status).toBe(401);
+    expect((await response.json()).code).toBe("session_expired");
+  });
+
+  it("ignores unchanged frames, coalesces evaluations, and notifies only the private bot's owner", async () => {
+    const s = await setup();
+    s.bots.push({ ...s.bots[0], id: "private", name: "Secret assistant" });
+    s.store.savePresentation("private", { shared: false, ownerId: "local-one" });
+    const login = await fetch(`${s.base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "two" }) });
+    const twoCookie = login.headers.getSetCookie()[0].split(";")[0];
+    const owner = await stream(`${s.base}/api/events`, s.cookie);
+    const other = await stream(`${s.base}/api/events`, twoCookie);
+    const notices = (value: typeof owner) => value.text.split("event: roster").length - 1;
+    expect(notices(owner)).toBe(0);
+    vi.mocked(s.runtime.listBots).mockClear();
+    for (let i = 0; i < 40; i++) s.rosterChanged();
+    await new Promise(resolve => setTimeout(resolve, 1150));
+    expect(notices(owner)).toBe(0);
+    expect(notices(other)).toBe(0);
+    expect(s.runtime.listBots).toHaveBeenCalledOnce();
+    s.bots[1].activity = "working";
+    for (let i = 0; i < 40; i++) s.rosterChanged();
+    await owner.until(() => notices(owner) === 1);
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(notices(owner)).toBe(1);
+    expect(notices(other)).toBe(0);
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
+    expect(owner.text).toBe("retry: 3000\n\nevent: roster\ndata: roster\n\n");
+    expect(owner.text).not.toMatch(/private|Secret|working/);
+    await owner.close(); await other.close();
+  });
+
+  it("notifies on an app write only when the visible roster changes and ends on sign-out", async () => {
+    const s = await setup();
+    const events = await stream(`${s.base}/api/events`, s.cookie);
+    s.runtime.submit = async input => {
+      s.bots[0].activity = "thinking";
+      return { requestId: input.requestId, status: "accepted", runId: "run" };
+    };
+    const headers = { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" };
+    const send = () => fetch(`${s.base}/api/bots/shared/messages`, { method: "POST", headers,
+      body: JSON.stringify({ requestId: randomUUID(), text: "Hello" }) });
+    expect((await send()).status).toBe(200);
+    await events.until(() => events.text.includes("event: roster"));
+    expect((await send()).status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(events.text.split("event: roster")).toHaveLength(2);
+    expect((await fetch(`${s.base}/api/auth/logout`, { method: "POST", headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken } })).status).toBe(200);
+    s.rosterChanged();
     await events.until(() => events.done);
   });
 });

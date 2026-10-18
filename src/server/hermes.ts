@@ -1,6 +1,6 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
 import ClientWebSocket from 'ws';
 import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
@@ -48,6 +48,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let requiredSkills = new Set<string>();
   // An add-on that binds logins requested by address to their member. Earlier ones refuse the extra field.
   let explicitCredentials = false;
+  let canonicalSubmit = false;
+  let incrementalDiscovery = false;
+  let discoveryFull = false;
+  let discoveryGeneration = 0;
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -59,7 +63,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   // Assistants with an open in flight, counted, for frames that arrive before its session is known.
   const opening = new Map<string, number>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
-  const watchers = new Map<string, Set<() => void>>();
+  const rosterWatchers = new Set<() => void>();
+  const rosterChanged = () => { rosterRequest=undefined; for(const listener of rosterWatchers) { try { listener(); } catch { /* Isolate listeners. */ } } };
+  const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  const structuralGenerations = new Map<string, number>();
+  const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
+  const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]}>();
   let capabilityCache: Capabilities | undefined;
   // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
   const SHARED_READ_MS = 3_000;
@@ -75,9 +84,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   // This app's own writes change a conversation before Hermes reports it.
   const touched = (botId: string) => { changeGenerations.set(botId, (changeGenerations.get(botId) ?? 0) + 1); };
-  // Profile descriptions read files on the Hermes host. Every client's roster poll shares one until this
-  // app changes the profile or ten seconds pass, near a client's own poll, so a native dashboard edit is
-  // not resent stale by a later save.
+  // Lazy detail reads share expensive profile files for ten seconds. This app's
+  // profile edits invalidate them, and settings catalog reads ask for fresh detail.
   const DESCRIPTION_MS = 10_000;
   const descriptions = new Map<string, {at: number; edit: number; fresh: boolean; pending: boolean; value: Promise<Wire>}>();
   const descriptionEdits = new Map<string, number>();
@@ -89,13 +97,14 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
   const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
-  function changed(botId?: string): void {
+  function changed(botId?: string, kind?: "inflight"): void {
+    if(!kind){rosterChanged();if(botId)structuralGenerations.set(botId,(structuralGenerations.get(botId)??0)+1);}
     if (botId === undefined) changeEpoch++;
     else touched(botId);
     for (const [watched, listeners] of watchers) {
       if (botId !== undefined && watched !== botId) continue;
       for (const listener of listeners) {
-        try { listener(); } catch { /* A watcher never stops frame processing. */ }
+        try { listener(kind); } catch { /* A watcher never stops frame processing. */ }
       }
     }
   }
@@ -150,9 +159,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     descriptions.clear();
     capabilityCache = undefined;
     extension = false;
+    canonicalSubmit = false;
+    incrementalDiscovery = false;
     // A disconnected stream cannot identify which turn is now active. Fresh
     // native snapshots restore current activity, reasoning and tools.
     transient.clear();
+    snapshots.clear();
     // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
     // but failed attempts during an outage, which never carried frames, stay quiet.
     if (current.verified) changed();
@@ -186,6 +198,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
     extension = true;
     explicitCredentials = capabilities.explicit_credentials === true;
+    canonicalSubmit = capabilities.canonical_submit === true;
+    incrementalDiscovery = capabilities.incremental_discovery === true;
     requiredSkills = new Set(Array.isArray(capabilities.essential_skills) ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string') : []);
   }
   async function connect(): Promise<void> {
@@ -307,7 +321,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const current = connection;
       if (current?.verified && current.ws.readyState === WebSocket.OPEN) {
         if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) void rpc('agent-interface.capabilities').catch(() => {});
-      } else if (watchers.size && retryAt <= Date.now()) void connect().catch(() => {});
+      } else if ((watchers.size||rosterWatchers.size) && retryAt <= Date.now()) void connect().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeat.unref?.();
   }
@@ -338,8 +352,12 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       const params = frame.params ?? {};
       const sid = params.session_id;
+      // Native display-lineage changes include other clients and sessions this socket
+      // has never opened. Refresh the cheap roster without refetching every open chat.
+      if(!sid&&frame.method==='event'&&params.type==='sessions.changed')rosterChanged();
       if (!sid) continue;
       const state = transient.get(sid) ?? {text: '', reasoning: '', state: 'idle' as ActivityState, requests: [], tools: []};
+      const previousActivity=state.state;
       transient.set(sid, state);
       if (frame.method === 'event') {
         const payload = params.payload ?? {};
@@ -372,9 +390,15 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       // Opening a conversation attaches this socket to its session, so its frames arrive here.
       const botId = owners.get(sid);
-      if (botId !== undefined) changed(botId);
+      const delta=frame.method === "event" && ["message.delta", "reasoning.delta", "thinking.delta", "tool.generating", "status.update", "tool.start"].includes(params.type);
+      if (botId !== undefined) {
+        if(delta&&state.state!==previousActivity)rosterChanged();
+        if(!delta)snapshots.delete(botId);
+        if(delta&&params.type==='tool.start')structuralGenerations.set(botId,(structuralGenerations.get(botId)??0)+1);
+        changed(botId,delta?"inflight":undefined);
+      }
       // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
-      else for (const pending of opening.keys()) changed(pending);
+      else for (const pending of opening.keys()) changed(pending,delta&&params.type!=='tool.start'?"inflight":undefined);
     }
   }
   /**
@@ -552,7 +576,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   // Most callers need only the session, its run state and open requests, so they skip the history read.
   async function open(botId:string,read:{history?:boolean;window?:ConversationOptions['window']}={history:false}):Promise<Wire>{
     await connect();
-    if(extension){opening.set(botId,(opening.get(botId)??0)+1);let value:Wire;try{value=await rpc('agent-interface.open',{profile:botId,...(read.history===false?{omit_messages:true}:read.window?{window:read.window}:{})});}finally{const count=(opening.get(botId)??1)-1;if(count)opening.set(botId,count);else opening.delete(botId);}live.set(botId,value.session_id);owners.set(value.session_id,botId);const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
+    if(extension){opening.set(botId,(opening.get(botId)??0)+1);let value:Wire;try{value=await rpc('agent-interface.open',{profile:botId,...(read.history===false?{omit_messages:true}:read.window?{window:read.window}:{})});}finally{const count=(opening.get(botId)??1)-1;if(count)opening.set(botId,count);else opening.delete(botId);}live.set(botId,value.session_id);owners.set(value.session_id,botId);if(!transient.has(value.session_id))transient.set(value.session_id,{text:value.inflight?.assistant??'',reasoning:value.inflight?.reasoning??'',state:value.info?.running?'thinking':'idle',requests:[],tools:[]});const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
     throw new Error('The verified durable Hermes add-on is required before opening a conversation.');
   }
   // fresh reads Hermes again, as settings and this app's own edits need. Fresh reads share only
@@ -566,7 +590,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     entry.value.then(()=>{entry.pending=false;},()=>{entry.pending=false;if(descriptions.get(name)===entry)descriptions.delete(name);});
     return entry.value;
   }
-  function edited(name:string):void{descriptions.delete(name);descriptionEdits.set(name,(descriptionEdits.get(name)??0)+1);}
+  function edited(name:string):void{rosterRequest=undefined;descriptions.delete(name);descriptionEdits.set(name,(descriptionEdits.get(name)??0)+1);}
   function preview(session?:Wire):Bot['lastMessage']{
     const text=typeof session?.preview==='string'?session.preview.replace(/\s+/g,' ').trim().slice(0,160):'';
     if(!text || messageOrigin({id:"preview",role:"user",text})?.visibility === "activity")return undefined;
@@ -575,7 +599,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   }
   function bot(row:Wire,detail?:Wire):Bot{
     const meta=row.ui_meta?.agent_interface??{};
-    return {id:row.name,name:meta.name||row.display_name||row.ui_meta?.['hermes-bots']?.title||row.name,description:row.description,instructions:detail?.soul,model:row.model??detail?.model?.default??'Inherited',provider:row.provider??detail?.model?.provider,shared:meta.shared??true,avatar:meta.avatar,enabledTools:detail?.toolsets?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledSkills:detail?.skills?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledMcpServers:detail?.mcp_servers?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),sessionId:row.canonical_session?.resolved_id,activity:transient.get(live.get(row.name)??'')?.state??'idle',lastMessage:preview(row.canonical_session)};
+    return {id:row.name,name:meta.name||row.display_name||row.ui_meta?.['hermes-bots']?.title||row.name,description:row.description,instructions:detail?detail.soul??'':undefined,model:row.model??detail?.model?.default??'Inherited',provider:row.provider??detail?.model?.provider,shared:meta.shared??true,avatar:meta.avatar,enabledTools:detail?.toolsets?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledSkills:detail?.skills?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledMcpServers:detail?.mcp_servers?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),sessionId:row.canonical_session?.resolved_id,activity:transient.get(live.get(row.name)??'')?.state??'idle',lastMessage:preview(row.canonical_session)};
   }
   function signFile(value:RegisteredFile):FileRef{
     if(!options.token)throw unavailable();const body=Buffer.from(JSON.stringify(value)).toString('base64url');const signature=createHmac('sha256',options.token).update(body).digest('base64url');
@@ -612,10 +636,30 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       return { requestId: input.requestId, status: 'rejected', message:
         `${error instanceof Error ? error.message : 'Invalid attachment.'} Remove it and attach the file again. Your draft is saved.` };
     }
-    await connect();if(!extension)throw new Error('Durable Hermes admission add-on is required before sending.');const state=await open(input.botId);
-    if((steer||state.info?.running)&&attachments.some(x=>x.mime.startsWith('image/')))return {requestId:input.requestId,status:'rejected',message:'Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.'};
+    await connect();if(!extension)throw new Error('Durable Hermes admission add-on is required before sending.');
+    const fast=canonicalSubmit,state=fast?undefined:await open(input.botId);
+    if((steer||state?.info?.running)&&attachments.some(x=>x.mime.startsWith('image/')))return {requestId:input.requestId,status:'rejected',message:'Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.'};
     const references=attachments.filter(x=>!x.mime.startsWith('image/')).map(x=>`@file:${JSON.stringify(x.path)}`).join('\n');
-    try{return receipt(await rpc('agent-interface.submit',{profile:input.botId,session_id:state.session_id,request_id:input.requestId,sender_id:input.senderId,text:input.text+(references?'\n'+references:''),attachments,steer,reviewed_interruption:input.reviewedInterruption===true}));}catch(error){return {requestId:input.requestId,status:'uncertain',message:error instanceof Error?error.message:'Hermes response lost. Review before retrying.'};}
+    try{
+      const value=await rpc('agent-interface.submit',{profile:input.botId,...(state?{session_id:state.session_id}:{}),request_id:input.requestId,sender_id:input.senderId,text:input.text+(references?'\n'+references:''),attachments,steer,reviewed_interruption:input.reviewedInterruption===true});
+      // A misadvertised older add-on must not be retried after possible admission.
+      // Fall back to its old read checks for future sends, and recover participation now.
+      if(fast&&(typeof value.running!=='boolean'||typeof value.interruption_pending!=='boolean')){
+        canonicalSubmit=false;
+        const prior=await open(input.botId).catch(()=>undefined);
+        return {...receipt(value),runId:value.runId??prior?.app_run_id};
+      }
+      return receipt(value);
+    }catch(error){
+      if(error instanceof TransportError&&error.rpcCode===4094)throw Object.assign(new Error('Review the interrupted task before starting another message.'),{statusCode:409,code:'interruption_pending'});
+      return {requestId:input.requestId,status:'uncertain',message:error instanceof Error?error.message:'Hermes response lost. Review before retrying.'};
+    }
+  }
+
+  async function checkRequest(botId:string,id:string,method:string):Promise<void>{
+    const state=transient.get(live.get(botId)??'');
+    const requests=state?.requests??(await open(botId)).open_requests??[];
+    if(!requests.some((request:Wire)=>String(request.id)===id&&request.method===method))throw new Error(method==='approval'?'That approval is stale or already resolved.':'That question is stale or already resolved.');
   }
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
@@ -638,9 +682,37 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       job = await (await http(`/api/cron/jobs/${encodeURIComponent(jobId)}/${input.enabled ? 'resume' : 'pause'}${profile}`, { method: 'POST' })).json() as Wire;
     }
     if (isEnabled(job) !== input.enabled) throw new Error('Hermes did not apply the routine state. Reload before retrying.');
+    discoveryFull=true;discoveryGeneration++;
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
-  async function readConversation(botId:string,options:ConversationOptions):Promise<Conversation>{await connect();const value=await open(botId,options.history===false?{history:false}:{window:options.window});const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
+  function inflightMessage(value:Wire,rows:Message[]):Message{
+      const sid=value.session_id;
+      const state=transient.get(sid);const inflight=value.inflight??{};
+      const active=!!value.info?.running||!!value.app_run_id;
+      // Live text and reasoning accumulate across the whole turn, while each segment
+      // before a tool call is already a history row. Show only the unpersisted tail.
+      // The run ID proves rows belong to this task, and queued follow-ups share it, so
+      // only rows after the latest prompt count. Without a run ID, nothing is removed.
+      const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
+      const lastPrompt=rows.findLastIndex(row=>row.role==='user');
+      const lastTurn=rows.slice(lastPrompt+1).filter(row=>row.role==='assistant');
+      // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
+      // the saved turn too, unless the snapshot names a newer prompt than the last saved one.
+      // The snapshot's prompt keeps file references that the saved display text drops.
+      const prompt=typeof inflight.user==='string'?inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/,'').trim():'';
+      const savedPrompt=!prompt||prompt===rows[lastPrompt]?.text.trim();
+      const persisted=run?lastTurn.filter(row=>row.runId===run):!active&&savedPrompt?lastTurn:[];
+      const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
+      const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
+      let message:Message={id:`${sid}-inflight`,role:"assistant",text:""};
+      if(text||reasoning) {
+        const origin = !savedPrompt ? wireOrigin({id:'inflight-prompt',role:'user',text:prompt},inflight) ?? {kind:'human' as const,visibility:'conversation' as const} : undefined;
+        message={id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})};
+      }
+      // Inherit the saved prompt origin exactly as a conversation read does.
+      return message.text||message.reasoning?withMessageOrigins([...rows,message]).at(-1)!:message;
+  }
+  async function readConversation(botId:string,options:ConversationOptions):Promise<Conversation>{await connect();const generation=structuralGenerationOf(botId);const value=await open(botId,options.history===false?{history:false}:{window:options.window});const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
       const rows:Message[]=history.filter((x:Wire)=>x.display_kind!=='hidden').map((row:Wire,listed:number)=>{
         // A windowed read keeps each row's position among all visible rows, so positional IDs never change.
         const index=typeof row.app_index==='number'?row.app_index:listed;
@@ -660,30 +732,14 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         const origin = wireOrigin(message, row);
         return origin ? { ...message, origin } : message;
       });
-      const state=transient.get(sid);const inflight=value.inflight??{};
-      const active=!!value.info?.running||!!value.app_run_id;
-      // Live text and reasoning accumulate across the whole turn, while each segment
-      // before a tool call is already a history row. Show only the unpersisted tail.
-      // The run ID proves rows belong to this task, and queued follow-ups share it, so
-      // only rows after the latest prompt count. Without a run ID, nothing is removed.
-      const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
-      const lastPrompt=rows.findLastIndex(row=>row.role==='user');
-      const lastTurn=rows.slice(lastPrompt+1).filter(row=>row.role==='assistant');
-      // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
-      // the saved turn too, unless the snapshot names a newer prompt than the last saved one.
-      // The snapshot's prompt keeps file references that the saved display text drops.
-      const prompt=typeof inflight.user==='string'?inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/,'').trim():'';
-      const savedPrompt=!prompt||prompt===rows[lastPrompt]?.text.trim();
-      const persisted=run?lastTurn.filter(row=>row.runId===run):!active&&savedPrompt?lastTurn:[];
-      const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
-      const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
+      const state=transient.get(sid),inflight=value.inflight??{},active=!!value.info?.running||!!value.app_run_id;
+      // Seed a socket attached mid-turn, without replacing text that already advanced during the read.
+      if(active&&state&&typeof inflight.assistant==='string'&&(!state.text||inflight.assistant.startsWith(state.text)||inflight.assistant.endsWith(state.text)))state.text=inflight.assistant;
+      if(active&&state&&typeof inflight.reasoning==='string'&&(!state.reasoning||inflight.reasoning.startsWith(state.reasoning)||inflight.reasoning.endsWith(state.reasoning)))state.reasoning=inflight.reasoning;
+      const tail=inflightMessage(value,rows);
+      if(tail.text||tail.reasoning)rows.push(tail);
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
-      // Hermes settles a task after its last frame, with no frame of its own. Prompt one more read.
       if(active&&state&&['done','failed','interrupted'].includes(state.state))settleSoon(botId);
-      if(text||reasoning) {
-        const origin = !savedPrompt ? wireOrigin({id:'inflight-prompt',role:'user',text:prompt},inflight) ?? {kind:'human' as const,visibility:'conversation' as const} : undefined;
-        rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})});
-      }
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];
       const approvals=requests.filter((x:Wire)=>x.method==='approval').map((x:Wire)=>({id:String(x.id),title:'Action approval',detail:x.params?.description??x.params?.command??'Hermes requests approval.',status:'pending' as const}));
       const attention=requests.filter((x:Wire)=>x.method!=='approval').map((x:Wire)=>{
@@ -703,8 +759,12 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
       });
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];
+      if(active&&state&&generation===structuralGenerationOf(botId))state.tools=toolCalls;
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
+      // Live patches need only the last prompt and its persisted assistant segments,
+      // never a second retained copy of an older client's full transcript.
+      if(options.history!==false&&generation===structuralGenerationOf(botId))snapshots.set(botId,{value:{session_id:sid,info:{running:value.info?.running},app_run_id:value.app_run_id,inflight:{user:inflight.user,display_kind:inflight.display_kind,display_metadata:inflight.display_metadata}},rows:rows.slice(Math.max(0,rows.findLastIndex(row=>row.role==='user'))).filter(row=>row.id!==`${sid}-inflight`&&(row.role==='user'||row.role==='assistant')),activity:{state:attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined}});
       // Hermes returns a window's earlier rows first: those the app needs for files and origins.
       const cut=value.app_window&&Number.isInteger(value.app_window.earlier)&&Number.isInteger(value.app_window.context)?value.app_window as {earlier:number;context:number}:undefined;
       const shown=withMessageOrigins(rows);
@@ -809,21 +869,26 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       capabilityRequest = request;
       try { return await request; } finally { if (capabilityRequest === request) capabilityRequest = undefined; }
     },
+    async canonicalSubmit(){await connect();return canonicalSubmit;},
     async listBots() {
+      try{await connect();}catch{return botCache.map(row=>({...row,activity:'disconnected' as const}));}
       if (rosterRequest) return rosterRequest;
-      const request = (async () => {
+      let request!: Promise<Bot[]>;
+      request = (async () => {
         try {
-          const roster = await rpc('profiles.list', {include_sessions: true});
+          const roster = await rpc('profiles.list', {include_sessions: true}, false);
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
-          const bots = await Promise.all(roster.profiles.map(async (row: Wire) => bot(row, await describe(row.name))));
-          botCache = bots;
+          const bots = roster.profiles.map((row: Wire) => bot(row));
+          if(rosterRequest===request)botCache = bots;
           return bots;
         } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
       })();
       rosterRequest = request;
       try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }
     },
+    watchRoster(listener){rosterWatchers.add(listener);return ()=>{rosterWatchers.delete(listener);};},
+    async botDetail(botId){const roster=await rpc('profiles.list',{include_sessions:true});const row=roster.profiles.find((row:Wire)=>row.name===botId);if(!row)throw new Error('Unknown Hermes bot.');return bot(row,await describe(botId));},
     async saveBot(input:BotInput,id?:string){await connect();const name=id??botIdFor(input.name);if(!name)throw new Error('Bot name needs letters or numbers.');
       let created=false;try{if(!id){await rpc('profiles.create',{name,description:input.description,soul:input.instructions,mirror_credentials:true,no_alias:true});created=true;}
       const rosterBefore=await rpc('profiles.list',{include_sessions:false});const previous=rosterBefore.profiles.find((x:Wire)=>x.name===name);
@@ -875,8 +940,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     submit(input){return submit(input).finally(()=>touched(input.botId));},steer(input){return submit(input,true).finally(()=>touched(input.botId));},
     async lookupSubmission(requestId){await connect();if(!extension)return null;const result=await rpc('agent-interface.receipt',{request_id:requestId});return result.receipt?receipt(result.receipt):null;},
-    async approve(botId,approvalId,decision,_senderId){const state=await open(botId);const requests=state.open_requests??[];if(!requests.some((x:Wire)=>String(x.id)===approvalId&&x.method==='approval'))throw new Error('That approval is stale or already resolved.');const result=await rpc('request.answer',{id:approvalId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
-    async answerRequest(botId,requestId,answers){const state=await open(botId);if(!(state.open_requests??[]).some((x:Wire)=>String(x.id)===requestId&&x.method==='clarify'))throw new Error('That question is stale or already resolved.');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired')throw new Error('That question expired before it was answered.');},
+    // Routes verify profile and request kind with one light read. Native answers prove
+    // final staleness, so do not repeat that read here.
+    async approve(botId,approvalId,decision,_senderId){await checkRequest(botId,approvalId,'approval');const result=await rpc('request.answer',{id:approvalId,profile:botId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired')throw new Error('That approval expired before it was answered.');},
+    async answerRequest(botId,requestId,answers){await checkRequest(botId,requestId,'clarify');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){
@@ -912,6 +979,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     async experienceRequest(input) {
       const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
+      if(input.operation==='run'){discoveryFull=true;discoveryGeneration++;}
       if (input.operation === 'history') {
         const seed = value.app_prior_prompt;
         const seedOrigin = seed ? wireOrigin({ id: 'prior', role: 'user', text: seed.text ?? '' }, seed) : undefined;
@@ -988,13 +1056,20 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const response = await (await http(`/api/cron/jobs/${encodeURIComponent(id)}/${enabled?'resume':'pause'}?profile=${encodeURIComponent(botId)}`,{method:'POST'})).json() as Wire;
       const job=response.job ?? response;
       if(job.error || (job.enabled !== false && job.state !== 'paused') !== enabled) throw new Error('Hermes did not confirm the routine state. Reload before retrying.');
+      discoveryFull=true;discoveryGeneration++;
     },
     saveRoutine: routineMutation,
-    async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});},
-    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const result=await rpc('agent-interface.discover',{cursor}) as RuntimeDiscovery;
+    async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});discoveryFull=true;discoveryGeneration++;},
+    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const full=incrementalDiscovery&&discoveryFull,generation=discoveryGeneration;const result=await rpc('agent-interface.discover',{cursor,...(full?{full:true}:{})}) as RuntimeDiscovery;if(full&&generation===discoveryGeneration)discoveryFull=false;
       // Routine deliveries settle outside the open session's frames; the journal names their bot.
       for(const event of result.events??[])if(typeof event.botId==='string')changed(event.botId);
       return result;},
+    inflight(botId):Inflight|undefined {
+      const saved=snapshots.get(botId),sid=live.get(botId),state=sid?transient.get(sid):undefined;
+      if(!saved||!sid||!state||saved.value.session_id!==sid)return undefined;
+      const message=inflightMessage({...saved.value,inflight:{...saved.value.inflight,assistant:state.text,reasoning:state.reasoning}},saved.rows);
+      return {botId,message,activity:{...saved.activity,state:["waiting","blocked","interrupted"].includes(saved.activity.state)?saved.activity.state:state.tools.some(tool=>tool.status==='running')?'working':["idle","disconnected"].includes(state.state)?saved.activity.state:state.state,detail:state.detail??saved.activity.detail},toolCalls:state.tools};
+    },
     watch(botId, listener) {
       const listeners = watchers.get(botId) ?? new Set();
       watchers.set(botId, listeners);

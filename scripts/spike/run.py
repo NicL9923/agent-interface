@@ -16,6 +16,7 @@ import hashlib
 import importlib.util
 import re
 import signal
+import shutil
 import urllib.request
 from pathlib import Path
 from guard import verify_target
@@ -81,6 +82,30 @@ def stop_home_gateway(home):
         time.sleep(0.1)
     os.kill(pid, signal.SIGKILL)
     return pid
+
+
+def run_computer_probes(python, env):
+    """Keep native coordination coverage mandatory; record optional Chrome coverage."""
+    subprocess.run([str(python), str(REPO / "scripts/spike/computer_probe.py")], cwd=REPO, env=env, check=True)
+    browser = (env.get("HERMES_COMPUTER_PROBE_BROWSER") or env.get("AGENT_BROWSER_EXECUTABLE_PATH")
+               or next((path for name in ("google-chrome", "chromium", "chromium-browser")
+                        if (path := shutil.which(name, path=env.get("PATH")))), None))
+    evidence = Path(env["HERMES_SPIKE_EVIDENCE_DIR"]) / "hermes-computer-local-network-probe.json"
+    if not browser or not os.access(browser, os.X_OK):
+        evidence.write_text(json.dumps({"status": "skipped", "checks": {},
+            "reason": "No executable Chrome available; set HERMES_COMPUTER_PROBE_BROWSER",
+            "revision": env["HERMES_SPIKE_REVISION"]}, indent=2) + "\n")
+        return
+    # The browser probe writes synthetic profile configs. Never share the home
+    # used by the running fixture gateways and other qualification probes.
+    home = Path(env["HERMES_HOME"]) / "local-network-probe"
+    home.mkdir(mode=0o700)
+    (home / ".agent-interface-isolated").write_text("agent-interface-disposable-spike")
+    probe_env = {**env, "HOME": str(home), "HERMES_HOME": str(home),
+                 "HERMES_COMPUTER_PROBE_BROWSER": browser}
+    subprocess.run([str(python), str(REPO / "scripts/spike/computer_local_network_probe.py")],
+        cwd=REPO, env=probe_env, check=True)
+    evidence.write_bytes((home / "computer-local-network-probe.json").read_bytes())
 
 
 def main():
@@ -153,7 +178,7 @@ approvals:
     (home / "config.yaml").write_text(config)
     (home / ".env").write_text("OPENAI_API_KEY=isolated-fixture\n")
     (home / ".env").chmod(0o600)
-    base_environment = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "AGENT_BROWSER_EXECUTABLE_PATH") if key in os.environ}
+    base_environment = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "AGENT_BROWSER_EXECUTABLE_PATH", "HERMES_COMPUTER_PROBE_BROWSER") if key in os.environ}
     env = {**base_environment, "HERMES_HOME": str(home), "HERMES_SPIKE_PROVIDER_PORT": str(provider_port), "HERMES_SPIKE_PROVIDER_LOG": str(root / "provider-executions.jsonl"), "HERMES_SPIKE_URL": f"http://127.0.0.1:{gateway_port}", "HERMES_SPIKE_TOKEN": token, "HERMES_DASHBOARD_SESSION_TOKEN": token, "HERMES_SERVE_HEADLESS": "1", "HERMES_SKIP_UPDATE_CHECK": "1"}
     evidence_root = root / "evidence"
     evidence_root.mkdir(exist_ok=True)
@@ -228,7 +253,7 @@ approvals:
             subprocess.run([str(python), str(REPO / "scripts/spike/experience_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/integrations_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/service_probe.py")], cwd=REPO, env=env, check=True)
-            subprocess.run([str(python), str(REPO / "scripts/spike/computer_probe.py")], cwd=REPO, env=env, check=True)
+            run_computer_probes(python, env)
             subprocess.run([str(python), str(REPO / "scripts/spike/maintenance_guard_probe.py"), "--source", str(source)], cwd=REPO, env=env, check=True)
         control = root / "app-control"
         control.mkdir(exist_ok=True)

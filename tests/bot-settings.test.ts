@@ -19,7 +19,7 @@ vi.mock("../src/client-api", async (original) => ({
   write: vi.fn().mockResolvedValue({}),
 }));
 
-const bot: Bot = { id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" };
+const bot: Bot = { instructions: "", id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" };
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
   household: [],
@@ -505,4 +505,50 @@ it("offers only the owner as a recipient of a private assistant's routines", asy
   };
   expect(await recipients({ ...bot, id: "mine", shared: false, ownerId: "one" })).toEqual(["One"]);
   expect(await recipients(bot)).toEqual(["One", "Two"]);
+});
+
+it("loads roster detail before showing a writable settings form", async () => {
+  let finish!: (value: Bot) => void;
+  vi.mocked(api).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  await act(async()=>root.render(createElement(BotSettings,{bot:{...bot,instructions:undefined},bootstrap,onClose,onSaved})));
+  expect(container.querySelector("form")).toBeNull();
+  await act(async()=>finish({...bot,instructions:"Saved instructions",enabledMcpServers:["calendar"]}));
+  expect(container.querySelector("textarea")!.value).toBe("Saved instructions");
+});
+
+
+describe("lean roster settings", () => {
+  it("keeps one dialog, retries detail, and PATCHes only loaded configuration without reloading on roster refresh", async () => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    const { instructions, ...lean } = bot;
+    let finish!: (value: Bot) => void;
+    vi.mocked(api).mockRejectedValueOnce(new Error("Detail unavailable"));
+    await act(async () => root.render(createElement(BotSettings, { bot: lean, bootstrap, onClose, onSaved })));
+    const dialog = container.querySelector("dialog")!;
+    const heading = dialog.querySelector("#assistant-settings-title")!;
+    const close = dialog.querySelector('[aria-label="Close assistant settings"]')!;
+    expect(container.textContent).toContain("Detail unavailable");
+    expect(container.querySelector("form")).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    vi.mocked(api).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    await click("Retry settings");
+    expect(document.activeElement).toBe(heading);
+    expect(container.querySelector("dialog")).toBe(dialog);
+    expect(container.querySelector("form")).toBeNull();
+    await act(async () => finish({ ...lean, instructions: "Keep this saved SOUL", enabledMcpServers: ["calendar"] }));
+    expect(container.querySelector("dialog")).toBe(dialog);
+    expect(dialog.querySelector("#assistant-settings-title")).toBe(heading);
+    expect(dialog.querySelector('[aria-label="Close assistant settings"]')).toBe(close);
+    expect(document.activeElement).toBe(heading);
+    expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this saved SOUL");
+    vi.mocked(api).mockClear();
+    await act(async () => root.render(createElement(BotSettings, { bot: { ...lean, activity: "working" }, bootstrap, onClose, onSaved })));
+    expect(api).not.toHaveBeenCalled();
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(write).toHaveBeenCalledWith("/bots/shared", expect.objectContaining({ instructions: "Keep this saved SOUL", enabledMcpServers: ["calendar"] }), "PATCH");
+    const payload = vi.mocked(write).mock.calls.at(-1)![1];
+    expect(payload).not.toHaveProperty("enabledTools");
+    expect(payload).not.toHaveProperty("enabledSkills");
+  });
 });

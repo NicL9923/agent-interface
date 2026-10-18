@@ -19,9 +19,9 @@ export class FakeEventSource extends EventTarget {
     FakeEventSource.streams.clear();
     FakeEventSource.created = [];
   }
-  /** Sends a change notice on every open stream. */
+  /** Sends a change notice on every open conversation stream. */
   static notifyAll() {
-    for (const stream of FakeEventSource.streams) stream.emit("message", "change");
+    for (const stream of FakeEventSource.streams) if (stream.url !== "/api/events") stream.emit("message", "change");
   }
   connect() {
     this.readyState = FakeEventSource.OPEN;

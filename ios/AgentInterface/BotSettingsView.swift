@@ -12,6 +12,7 @@ struct BotSettingsView: View {
   @State private var savedCapabilities: [String: Set<String>] = [:]
   @State private var discardConfirm = false
   @State private var initialized = false
+  @State private var detailLoaded = false
   @State private var avatar = AvatarConfig()
   @State private var lastDrawn = AvatarConfig()
   @State private var lastPortrait: AvatarConfig?
@@ -85,7 +86,7 @@ struct BotSettingsView: View {
       case "Skills": capabilities("skills")
       default: routineList
       }
-    }.householdListBackground().disabled(busy) }
+    }.householdListBackground().disabled(busy || (bot != nil && !detailLoaded)) }
   }
   var body: some View {
     NavigationStack { routinePresentations(editor) }
@@ -99,6 +100,10 @@ struct BotSettingsView: View {
   private var editor: some View {
     VStack(spacing: 0) {
       tabBar
+      if bot != nil && !detailLoaded {
+        if let error { ErrorBanner(message: error); Button("Retry settings") { Task { await loadTab() } } }
+        else { ProgressView("Loading assistant settings…") }
+      }
       tabContent
     }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -639,6 +644,14 @@ struct BotSettingsView: View {
     }
     defer { if loadId == currentId { catalogLoading.remove(kind) } }
     do {
+      if !detailLoaded {
+        let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
+        guard !Task.isCancelled, loadId == currentId else { return }
+        form = BotInput(bot: detail, fallback: store.bootstrap?.bots.first)
+        savedForm = form
+        mcpText = form.enabledMcpServers.joined(separator: ", ")
+        detailLoaded = true
+      }
       if ["tools", "skills"].contains(kind), store.supports(kind) {
         let values: [CapabilityItem] = try await api.get(
           "/bots/\(APIClient.component(bot.id))/\(kind)")

@@ -34,6 +34,7 @@ function runtimeDouble(calls: string[]) {
   const fixed: Record<string, unknown> = {
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }),
+    botDetail: async (id: string) => ({ id, name: names[id], model: "test", shared: id === "family", activity: id === secret ? "working" : "idle", lastMessage: { text: `Latest from ${names[id]}` }, instructions: "Saved instructions", enabledMcpServers: [], enabledTools: [], enabledSkills: [] }),
     listBots: async () => Object.entries(names).map(([id, name]) => ({ id, name, model: "test", shared: id === "family", activity: id === secret ? "working" : "idle", lastMessage: { text: `Latest from ${name}` } })),
     routines: async () => [
       { id: "r-secret", botId: secret, name: "Private books", prompt: "Reconcile", schedule: "0 8 * * *", enabled: true, nextRunAt: "2030-01-01T08:00:00.000Z" },

@@ -3,6 +3,17 @@ import XCTest
 
 /// Conversation copy that must read the same as the web client (src/app/Conversation.tsx and friends).
 @MainActor final class ConversationParityTests: XCTestCase {
+  func testInflightNeverOverwritesASettledOrDifferentRunFetch() throws {
+    let data = Data(#"{"botId":"bot","messages":[{"id":"saved","role":"assistant","text":"Saved reply"}],"activity":{"state":"thinking","runId":"run"},"approvals":[],"files":[]}"#.utf8)
+    var conversation = try JSONDecoder().decode(Conversation.self, from: data)
+    let patch = Inflight(botId: "bot", message: Message(id: "sid-inflight", role: "assistant", text: "Old tail"), activity: Activity(state: .thinking, runId: "run"), toolCalls: [])
+    XCTAssertEqual(patch.applying(to: conversation).messages.last?.text, "Old tail")
+    conversation.activity.state = .done
+    XCTAssertEqual(patch.applying(to: conversation), conversation)
+    conversation.activity = Activity(state: .thinking, runId: "next-run")
+    XCTAssertEqual(patch.applying(to: conversation), conversation)
+  }
+
   private func sentence(_ state: ActivityState, _ detail: String? = nil, lost: Bool = false) -> String {
     ActivitySentence.text(name: "Ranch hand", state: state, detail: detail, connectionLost: lost)
   }

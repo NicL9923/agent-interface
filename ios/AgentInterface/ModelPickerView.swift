@@ -191,7 +191,7 @@ struct ComposerModelSheet: View {
   @State private var error: String?
   @State private var confirmation: ModelChoice?
   private var bot: Bot? { store.bootstrap?.bots.first { $0.id == botId } }
-  private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports("botConfiguration") || bot?.instructions == nil }
+  private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports("botConfiguration") }
   var body: some View {
     NavigationStack {
       Form {
@@ -252,12 +252,14 @@ struct ComposerModelSheet: View {
   private func save(_ choice: ModelChoice, confirmed: Bool = false) {
     guard let api = store.api, let bot, !busy, !blocked else { return }
     let scope = store.scope
-    var input = BotInput(bot: bot)
-    input.model = choice.model; input.provider = choice.provider; input.confirmModel = confirmed
     busy = true; error = nil
     Task {
       defer { busy = false }
       do {
+        let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
+        guard scope == store.scope else { return }
+        var input = BotInput(bot: detail)
+        input.model = choice.model; input.provider = choice.provider; input.confirmModel = confirmed
         let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", input, method: "PATCH")
         guard scope == store.scope else { return }
         await store.refreshBootstrap()

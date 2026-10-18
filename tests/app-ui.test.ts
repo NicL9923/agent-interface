@@ -65,7 +65,7 @@ beforeEach(() => {
     activity: { state: "interrupted", runId: "old-run" },
   };
   vi.mocked(api).mockImplementation(async <T>(path: string) => {
-    const result = path === "/bootstrap" ? bootstrap
+    const result = path === "/bootstrap?roster=lean" ? bootstrap
       : path === "/bots/shared/draft" ? savedDraft
       : path.startsWith("/bots/shared/conversation?") ? conversation
       : null;
@@ -106,6 +106,42 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("reopens a refused household stream at the fallback interval", async () => {
+    await render();
+    const stream=[...FakeEventSource.streams].find(stream=>stream.url==="/api/events")!;
+    await act(async()=>stream.fail());
+    await advance(45_000);
+    expect(FakeEventSource.created.filter(url=>url==="/api/events")).toHaveLength(2);
+  });
+  it("refreshes bootstrap on a household roster notice", async () => {
+    await render();
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==="/bootstrap?roster=lean").length;
+    const before=reads();
+    await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==="/api/events")stream.emit("roster","roster");});
+    expect(reads()).toBe(before+1);
+  });
+  it("patches an inflight reply without fetching the transcript", async () => {
+    conversation = {...conversation, activity:{state:"thinking",runId:"run"},messages:[{id:"u",role:"user",text:"Hello"}]};
+    await render();
+    const reads = vi.mocked(api).mock.calls.length;
+    await act(async () => {
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
+    });
+    expect(container.textContent).toContain("Growing reply");
+    expect(vi.mocked(api).mock.calls).toHaveLength(reads);
+  });
+  it.each(["done", "new-run"])("does not reapply an old live tail over a %s fetch", async mode => {
+    conversation = { ...conversation, activity: { state: "thinking", runId: "run" }, messages: [] };
+    await render();
+    await act(async () => {
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
+    });
+    expect(container.textContent).toContain("Old tail");
+    conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };
+    await advance(30_000);
+    expect(container.textContent).not.toContain("Old tail");
+    expect(container.textContent).toContain("Persisted reply");
+  });
   it("preserves a pending secure form across polling while keeping credentials out of the chat draft", async () => {
     const secure = { method: "vault.save_login" as const, epoch: "current", sessionId: "session", origin: "https://example.invalid", site: "Example" };
     conversation = { ...conversation, attention: [{ id: "login-request", kind: "secure", title: "Save login", detail: "Native request", secure }] };
@@ -185,8 +221,8 @@ describe("conversation state", () => {
     await advance(2000);
     const settled = renders.avatar;
     expect(settled).toBeGreaterThan(0);
-    await advance(16_000);
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap").length).toBeGreaterThanOrEqual(3);
+    await advance(90_000);
+    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap?roster=lean").length).toBeGreaterThanOrEqual(3);
     expect(renders.avatar).toBe(settled);
   });
 
@@ -214,7 +250,7 @@ describe("conversation state", () => {
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
       if (path.startsWith("/bots/shared/conversation?")) throw new Error("Disconnected");
-      return (path === "/bootstrap" ? bootstrap : savedDraft) as T;
+      return (path === "/bootstrap?roster=lean" ? bootstrap : savedDraft) as T;
     });
     await changed();
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
@@ -432,7 +468,7 @@ describe("conversation state", () => {
     const other = { ...bootstrap.bots[0], id: "other", name: "Other", lastMessage: { text: "Pot roast tonight.", at: new Date().toISOString() } };
     const home = { ...bootstrap, bots: [...bootstrap.bots, other], preferences: { ...bootstrap.preferences, favorites: ["shared"] } };
     const original = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bootstrap" ? home as T : original(path) as Promise<T>);
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bootstrap?roster=lean" ? home as T : original(path) as Promise<T>);
     vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => (path === "/preferences" ? value : {}) as T);
     try {
       await render();
@@ -517,7 +553,7 @@ describe("conversation state", () => {
     let hidden = false, reads = 0;
     const original = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
-      if (path === "/bootstrap") return { ...bootstrap, bots: hidden ? bootstrap.bots : [books, ...bootstrap.bots] } as T;
+      if (path === "/bootstrap?roster=lean") return { ...bootstrap, bots: hidden ? bootstrap.bots : [books, ...bootstrap.bots] } as T;
       if (path.startsWith("/bots/books/conversation?")) {
         reads++;
         if (hidden) throw new ApiError("Assistant not found", 404, "assistant_not_found");
@@ -558,7 +594,7 @@ describe("conversation state", () => {
       { id: "call", role: "assistant", text: "", reasoning: "Check the status.", toolCall: { id: "ssh", name: "terminal", status: "completed" } },
       { id: "answer", role: "assistant", text: "Tailscale is up." },
     ] };
-    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: { ...defaultPreferences, startPage: "assistant", presentation: "advanced" } }
       : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
     await render();
@@ -707,10 +743,10 @@ describe("conversation state", () => {
     await render();
     expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(0);
     expect(container.querySelector(".transcript")!.textContent).not.toContain("Checking the working directory.");
-    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: {...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
       : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
-    await advance(8000);
+    await act(async()=>{ for(const stream of FakeEventSource.streams)if(stream.url==="/api/events")stream.emit("roster","roster"); });
     expect(container.querySelectorAll('[data-tool-call-id="call-1"]')).toHaveLength(1);
     expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(2);
     const completed = container.querySelector<HTMLDetailsElement>('[data-tool-call-id="call-1"]')!;
@@ -726,14 +762,14 @@ describe("conversation state", () => {
   it("labels a running tool as last observed while disconnected", async () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" },
       toolCalls: [{ id: "live-call", name: "terminal", status: "running", arguments: "pwd" }] };
-    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
+    vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
       : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
     await render();
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Running");
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
       if (path.startsWith("/bots/shared/conversation?")) throw new Error("Disconnected");
-      return (path === "/bootstrap" ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } } : savedDraft) as T;
+      return (path === "/bootstrap?roster=lean" ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } } : savedDraft) as T;
     });
     await changed();
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Last seen running");
@@ -744,7 +780,7 @@ describe("conversation state", () => {
     const draftResponse = new Promise<typeof savedDraft>((resolve) => { resolveDraft = resolve; });
     vi.mocked(api).mockImplementation(async <T>(path: string) => {
       if (path.startsWith("/bots/shared/conversation?")) throw new Error("Hermes is unavailable");
-      return (path === "/bootstrap" ? bootstrap : await draftResponse) as T;
+      return (path === "/bootstrap?roster=lean" ? bootstrap : await draftResponse) as T;
     });
     await render();
     const textarea = container.querySelector("textarea")!;

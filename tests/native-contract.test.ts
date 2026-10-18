@@ -269,7 +269,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     const upload = multipart("file", "pantry.txt", "text/plain", "Rice, beans, basil");
     await record("bot-upload", "POST", "/api/bots/household/uploads", upload.payload, upload.headers);
     await record("connection-retry", "POST", "/api/connection/retry", {});
-    await record("bootstrap", "GET", "/api/bootstrap");
+    await record("bootstrap", "GET", "/api/bootstrap?roster=lean");
     await record("models", "GET", "/api/models?botId=household");
     await record("bot-tools", "GET", "/api/bots/household/tools");
     await record("bot-skills", "GET", "/api/bots/household/skills");

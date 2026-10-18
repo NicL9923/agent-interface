@@ -242,6 +242,12 @@ export interface Conversation {
     context: Message[];
   };
 }
+export interface Inflight {
+  botId: string;
+  message: Message;
+  activity: Activity;
+  toolCalls: ToolCall[];
+}
 export interface ConversationOptions {
   /** The app's history window, cut by the runtime when it can. */
   window?: { start?: string; turns?: number };
@@ -345,15 +351,19 @@ export interface Runtime {
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;
+  canonicalSubmit?(): Promise<boolean>;
   listBots(): Promise<Bot[]>;
+  botDetail?(botId: string): Promise<Bot>;
+  watchRoster?(changed: () => void): () => void;
   saveBot(input: BotInput, id?: string): Promise<Bot>;
   deleteBot(id: string): Promise<void>;
   stop(botId: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
-  /** Calls `changed` whenever the bot's conversation may have changed, until the returned function is called. */
-  watch?(botId: string, changed: () => void): () => void;
+  /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
+  watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
+  inflight?(botId: string): Inflight | undefined;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;

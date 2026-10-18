@@ -79,7 +79,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
-  /// The open conversation's change stream, as the web subscribes to it, and when it last spoke.
+  /// Latest live reply patch, retained across overlapping conversation reads.
+  private var latestInflight: Inflight?
+  /// Household roster stream, independent of the selected conversation.
+  private var rosterTask: Task<Void, Never>?
+  /// The open conversation's change stream and when it last spoke.
   private var eventTask: Task<Void, Never>?
   private var eventBotId: String?
   private var streamHeardAt: ContinuousClock.Instant?
@@ -113,7 +117,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   static let historyPageTurns = 20
   /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
   /// it, a foreground return and pull to refresh all refresh it sooner.
-  static let bootstrapInterval: Duration = .seconds(8)
+  static let bootstrapInterval: Duration = .seconds(45)
   /// Tests substitute a clock they advance by hand.
   var now: () -> ContinuousClock.Instant = { .now }
   private var bootstrapRefreshedAt: ContinuousClock.Instant?
@@ -324,6 +328,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
       return false
     }
+    watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)
     if conversationDue { await refreshConversation() }
@@ -348,6 +353,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     stopStream()
   }
   private func stopStream() {
+    rosterTask?.cancel()
+    rosterTask = nil
+    latestInflight = nil
     eventTask?.cancel()
     eventTask = nil
     eventBotId = nil
@@ -360,27 +368,67 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { return true }
     return now() - refreshed >= Self.streamFallbackInterval
   }
+  /// Refreshes the household roster when its visible assistants change.
+  private func watchRoster() {
+    guard rosterTask == nil, let api else { return }
+    rosterTask = Task { [weak self] in
+      var failures = 0
+      while !Task.isCancelled {
+        do {
+          let lines = try await api.events("/api/events")
+          guard let self, !Task.isCancelled else { return }
+          failures = 0
+          await self.refreshBootstrap()
+          for try await line in lines {
+            guard !Task.isCancelled else { return }
+            if line == "data: roster" { await self.refreshBootstrap() }
+          }
+        } catch {}
+        guard let self, !Task.isCancelled, !self.sessionExpired else { return }
+        failures += 1
+        try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
+      }
+    }
+  }
   /// Follows the selected assistant's change stream, reconnecting with a growing delay.
   private func watchConversation() {
     guard eventBotId != selectedBotId || eventTask == nil else { return }
     eventTask?.cancel()
     streamHeardAt = nil
     eventBotId = selectedBotId
+    latestInflight = nil
     guard let id = selectedBotId, let api else { eventTask = nil; return }
     eventTask = Task { [weak self] in
       var failures = 0
       while !Task.isCancelled {
         do {
-          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events")
+          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events?inflight=1")
           guard let self, !Task.isCancelled else { return }
           failures = 0
           self.streamHeardAt = self.now()
           // Notices sent before the subscription are lost, so connecting counts as one.
+          self.latestInflight = nil
           self.requestConversationRefresh()
+          var event = ""
           for try await line in lines {
             guard !Task.isCancelled else { return }
             self.streamHeardAt = self.now()
-            if line.hasPrefix("data:") && line != "data: ping" { self.requestConversationRefresh() }
+            if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+            if line.hasPrefix("data:") {
+              if event == "inflight", let data = String(line.dropFirst(5)).data(using: .utf8),
+                 let patch = try? JSONDecoder().decode(Inflight.self, from: data), self.selectedBotId == patch.botId {
+                self.latestInflight = patch
+                if let current = self.conversation {
+                  let value = patch.applying(to: current)
+                  self.conversation = value
+                  self.conversationCache[patch.botId] = value
+                }
+              } else if event != "inflight" && line != "data: ping" {
+                self.latestInflight = nil
+                self.requestConversationRefresh()
+              }
+              event = ""
+            }
           }
         } catch {}
         guard let self, !Task.isCancelled, !self.sessionExpired else { return }
@@ -422,7 +470,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrapRefreshedAt = now()
     let currentGeneration = generation
     do {
-      var value: Bootstrap = try await api.get("/bootstrap")
+      var value: Bootstrap = try await api.get("/bootstrap?roster=lean")
       guard generation == currentGeneration else { return }
       if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
         value.bots = previous.bots
@@ -490,6 +538,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     persistDraft()
     flushDraft()
     selectionGeneration = UUID()
+    latestInflight = nil
     selectedBotId = id
     if id != nil && navigate { conversationRequest = UUID() }
     conversation = id.flatMap { conversationCache[$0] }
@@ -634,6 +683,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   private func apply(_ value: Conversation, botId id: String) {
+    let value = latestInflight?.applying(to: value) ?? value
     if conversation?.activity.runId != value.activity.runId
       || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
     {
@@ -759,7 +809,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let count = (draftSaveFailures[localKey] ?? 0) + 1
       draftSaveFailures[localKey] = count
       let delay = Duration.seconds(min(30, pow(2, Double(count - 1))))
-      draftRetryAt[localKey] = .now + delay
+      draftRetryAt[localKey] = now() + delay
       Task {
         try? await Task.sleep(for: delay)
         guard currentGeneration == self.generation else { return }
@@ -794,7 +844,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func ensureDraftSaved(_ botId: String, retries: Int = 3) {
     guard settled(botId), let localKey = key("draft", botId) else { return }
     // A failing save retries on its backoff, however often the conversation polls.
-    if let retryAt = draftRetryAt[localKey], ContinuousClock.now < retryAt { return }
+    if let retryAt = draftRetryAt[localKey], now() < retryAt { return }
     if selectedBotId == botId && draftReady {
       if draft.dirty == true, scheduledDraftSave == nil { startDraftSave(botId: botId) }
     } else if let cached: Draft = read(localKey), cached.dirty == true, retries > 0 {

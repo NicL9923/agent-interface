@@ -120,9 +120,8 @@
       [
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
-          "instructions": "Be clear and useful.", "model": ranchModel.model,
+          "model": ranchModel.model,
           "provider": ranchModel.provider, "shared": true, "activity": "idle", "avatar": avatar,
-          "enabledMcpServers": ["existing-calendar"],
           "lastMessage": ["text": "The north gate battery needs replacing.", "at": ISO8601DateFormatter().string(from: Date())],
         ],
         [
@@ -502,6 +501,13 @@
         }
       } else if path == "/api/native/push/config" {
         object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
+      } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "GET" {
+        var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
+        detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
+        detail["enabledMcpServers"] = ["existing-calendar"]
+        detail["enabledTools"] = ["terminal"]
+        detail["enabledSkills"] = []
+        object = detail
       } else if path == "/api/bots", method == "POST" {
         var bot = body
         bot["id"] = "created"

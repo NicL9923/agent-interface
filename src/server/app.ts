@@ -11,6 +11,7 @@ import { z } from "zod";
 import { botIdFor } from "../shared/types.js";
 import type {
   Avatar,
+  Bot,
   BotInput,
   Bootstrap,
   CapabilityKey,
@@ -205,6 +206,12 @@ export async function createApp(
   };
   const params = (req: { params: unknown }) =>
     req.params as { id: string; approvalId?: string };
+  // Retain writable configuration across failed detail reads, like the runtime's roster fallback.
+  const botDetails = new Map<string, Bot>();
+  const rememberBot = (bot: Bot) => {
+    botDetails.set(bot.id, bot);
+    return bot;
+  };
   const decorateBot = (
     bot: Awaited<ReturnType<Runtime["listBots"]>>[number],
     nativeAvatar = false,
@@ -257,11 +264,41 @@ export async function createApp(
     })().finally(() => { snapshot = undefined; });
     return snapshot;
   };
+  const leanRoster = (bots: Bot[]) => bots.map(
+    ({ instructions, enabledMcpServers, enabledTools, enabledSkills, ...bot }) => bot,
+  );
+  const rosterFor = async (req: FastifyRequest, bots: Bot[], nativeAvatar: boolean) => {
+    const ids = new Set(bots.map(bot => bot.id));
+    for (const id of botDetails.keys()) if (!ids.has(id)) botDetails.delete(id);
+    const rows = bots.map(bot => decorateBot(bot, nativeAvatar))
+      .filter(bot => visible(bot, signedIn(req).id));
+    if ((req.query as { roster?: string }).roster === "lean") {
+      return leanRoster(rows);
+    }
+    // Build 5 and cached bundles initialize writable settings from these rows.
+    // Missing configuration is unsafe for those clients, so full remains the default.
+    const detailed = await Promise.all(rows.map(async bot => {
+      if (!runtime.botDetail) return bot;
+      try {
+        return decorateBot(rememberBot(await runtime.botDetail(bot.id)), nativeAvatar);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Unknown Hermes bot.") {
+          botDetails.delete(bot.id);
+          return undefined;
+        }
+        // Undefined configuration keys in Hermes's lean rows must not erase saved settings.
+        return { ...botDetails.get(bot.id), ...leanRoster([bot])[0] };
+      }
+    }));
+    return detailed.filter((bot): bot is Bot => bot !== undefined);
+  };
   app.get("/api/bootstrap", async (req) => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: preferencesFor(signedIn(req).id),
-    ...await runtimeSnapshot().then(value => ({ ...value, bots: value.bots.filter(bot => visible(bot, signedIn(req).id)) })),
+    ...await runtimeSnapshot().then(async value => ({ ...value,
+      bots: await rosterFor(req, value.bots, value.capabilities.avatarMetadata.supported),
+    })),
     csrfToken: req.csrfToken,
     vapidPublicKey: config.vapidPublicKey || undefined,
     nativeApp: config.nativeApp,
@@ -304,7 +341,7 @@ export async function createApp(
   });
   app.get("/api/bots", async (req) => {
     const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
-    return bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)).filter(bot => visible(bot, signedIn(req).id));
+    return rosterFor(req, bots, capabilities.avatarMetadata.supported);
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
@@ -333,7 +370,14 @@ export async function createApp(
     roster.forget();
     // A runtime that names it differently still gets its record.
     if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
-    return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
+    return decorateBot(rememberBot(bot), (await runtime.capabilities()).avatarMetadata.supported);
+  });
+  app.get("/api/bots/:id", async req => {
+    const botId = params(req).id;
+    const value = runtime.botDetail ? await runtime.botDetail(botId)
+      : (await runtime.listBots()).find(bot => bot.id === botId);
+    if (!value) throw failure(404, "Bot not found");
+    return decorateBot(rememberBot(value), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
@@ -356,11 +400,12 @@ export async function createApp(
     try { bot = await runtime.saveBot(input as BotInput, id); }
     catch (error) { store.restorePresentation(id, version, previous); throw error; }
     roster.forget();
-    return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
+    return decorateBot(rememberBot(bot), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.delete("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
     await runtime.deleteBot(params(req).id);
+    botDetails.delete(params(req).id);
     // A new assistant that reuses this ID starts with no owner, visibility or per-person state.
     store.forgetBot(params(req).id);
     roster.forget();
@@ -448,13 +493,95 @@ export async function createApp(
   // The app's own conversation writes notify at once, before Hermes reports their effect.
   const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId"]
     .map(path => `POST /api/bots/:id/${path}`));
+  // Gateway frames are hints, not roster changes. Compare each viewer's visible
+  // projection after one shared, cheap evaluation, at most once per second.
+  const rosterListeners = new Set<(bots: Bot[], nativeAvatar: boolean) => void>();
+  let rosterPending: ReturnType<typeof setTimeout> | undefined;
+  let rosterEvaluating = false, rosterAgain = false, rosterLast = 0;
+  let unwatchRoster: (() => void) | undefined;
+  const rosterProjection = (bots: Bot[], userId: string, nativeAvatar: boolean) => JSON.stringify(
+    leanRoster(bots.map(bot => decorateBot(bot, nativeAvatar)).filter(bot => visible(bot, userId)))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+  const evaluateRoster = () => {
+    if (!rosterListeners.size) return;
+    if (rosterEvaluating) { rosterAgain = true; return; }
+    rosterPending ??= setTimeout(() => {
+      rosterPending = undefined;
+      rosterEvaluating = true;
+      rosterLast = Date.now();
+      void Promise.all([runtime.listBots(), runtime.capabilities()]).then(([bots, capabilities]) => {
+        roster.note(bots);
+        for (const changed of rosterListeners) changed(bots, capabilities.avatarMetadata.supported);
+      }).catch(() => { /* The fallback bootstrap retries unavailable runtime reads. */ })
+        .finally(() => {
+          rosterEvaluating = false;
+          if (rosterAgain) { rosterAgain = false; evaluateRoster(); }
+        });
+    }, Math.max(0, rosterLast + 1000 - Date.now()));
+  };
   app.addHook("onResponse", async (req, reply) => {
-    if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
+    const path = routePattern(req);
+    if (req.method !== "GET" && reply.statusCode < 400 && path.startsWith("/api/bots")
+      && !/\/(draft|read-position|uploads)$/.test(path)) evaluateRoster();
+    if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${path}`))
       for (const changed of watchers.get(params(req).id) ?? []) changed();
   });
-  app.addHook("preClose", async () => { for (const end of streams) end(); });
+  app.addHook("preClose", async () => {
+    clearTimeout(rosterPending);
+    for (const end of streams) end();
+  });
+  app.get("/api/events", { exposeHeadRoute: false }, async (req, reply) => {
+    const initial = await runtimeSnapshot();
+    let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
+    reply.hijack();
+    const response = reply.raw;
+    response.writeHead(200, {
+      ...reply.getHeaders() as Record<string, string>,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Content-Encoding": "identity",
+      "X-Accel-Buffering": "no",
+      "Connection": "close",
+    });
+    let ended = false;
+    const send = (text: string) => {
+      if (!stillSignedIn(store, config, req)) end();
+      else if (!ended) response.write(text);
+    };
+    const changed = (bots: Bot[], nativeAvatar: boolean) => {
+      if (!stillSignedIn(store, config, req)) { end(); return; }
+      const next = rosterProjection(bots, signedIn(req).id, nativeAvatar);
+      if (next === projection) return;
+      projection = next;
+      send("event: roster\ndata: roster\n\n");
+    };
+    rosterListeners.add(changed);
+    unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
+    function end() {
+      if (ended) return;
+      ended = true;
+      rosterListeners.delete(changed);
+      if (!rosterListeners.size) {
+        unwatchRoster?.();
+        unwatchRoster = undefined;
+        clearTimeout(rosterPending);
+        rosterPending = undefined;
+      }
+      clearInterval(heartbeat);
+      streams.delete(end);
+      response.end();
+    }
+    streams.add(end);
+    response.on("close", end);
+    // Clients refetch on open; an initial notice would duplicate that read.
+    response.write("retry: 3000\n\n");
+  });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     const botId = id.parse(params(req).id);
+    const optedIn = (req.query as { inflight?: string }).inflight === "1";
+    let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
+    let hidden = JSON.stringify(store.privateBots());
     reply.hijack();
     const response = reply.raw;
     // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
@@ -478,9 +605,30 @@ export async function createApp(
       pending ??= setTimeout(() => { pending = undefined; last = Date.now(); send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
+    let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
+    const notice = (kind?: "inflight") => {
+      if (!optedIn || kind !== "inflight") {
+        clearTimeout(livePending); livePending = undefined;
+        if (optedIn) { redact = undefined; hidden = ""; }
+        changed(); return;
+      }
+      livePending ??= setTimeout(() => {
+        livePending = undefined; liveLast = Date.now();
+        void (async () => {
+          // Privacy can change through another assistant's settings while this stream stays open.
+          const next = JSON.stringify(store.privateBots());
+          if (next !== hidden) { redact = await redactAgents(store, roster, signedIn(req).id); hidden = next; }
+          if (next !== JSON.stringify(store.privateBots())) { changed(); return; }
+          const value = runtime.inflight?.(botId);
+          // A structural read is already pending when its snapshot was invalidated.
+          if (!value || !redact) return;
+          send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+        })().catch(() => changed());
+      }, Math.max(0, liveLast + 250 - Date.now()));
+    };
     const listeners = watchers.get(botId) ?? new Set();
     watchers.set(botId, listeners.add(changed));
-    const unwatch = runtime.watch?.(botId, changed);
+    const unwatch = runtime.watch?.(botId, notice);
     // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
     const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
     function end() {
@@ -490,6 +638,7 @@ export async function createApp(
       listeners.delete(changed);
       if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
       clearTimeout(pending);
+      clearTimeout(livePending);
       clearInterval(heartbeat);
       streams.delete(end);
       response.end();
@@ -519,13 +668,18 @@ export async function createApp(
       senderId: signedIn(req).id,
     };
     const previous = store.submission(input.requestId);
+    const interruptionRejected = previous?.receipt.status === "rejected"
+      && previous.receipt.message === "Review the interrupted task before starting another message.";
+    const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw failure(
           409,
           "This submission ID was already used for different content",
         );
-      if (!reviewedUncertain || previous.receipt.status !== "uncertain")
+      if (interruptionRejected && !reviewedInterruption)
+        throw failure(409, "Review the interrupted task before starting another message.");
+      if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
       await requireCapability("idempotency");
       const known = await runtime.lookupSubmission(input.requestId);
@@ -537,8 +691,9 @@ export async function createApp(
       await requireCapability("idempotency");
     }
     await requireCapability("chat");
-    const conversation = await runtime.conversation(input.botId, { history: false });
-    if (conversation.activity.state === "interrupted" && !reviewedInterruption)
+    const fast = await runtime.canonicalSubmit?.() === true;
+    const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
+    if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
       throw failure(
         409,
         "Review the interrupted task before starting another message.",
@@ -546,20 +701,26 @@ export async function createApp(
     const steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
-        conversation.activity.state,
+        conversation?.activity.state ?? "idle",
       );
-    if (steering) await requireCapability("steering");
+    if (steering || fast) await requireCapability("steering");
     const intent = store.intent(input);
-    if (!intent.created && !reviewedUncertain) return intent.receipt;
-    if (conversation.activity.runId)
+    if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
+    if (conversation?.activity.runId)
       store.participate(conversation.activity.runId, input.senderId);
     try {
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption }));
       store.receipt(receipt);
+      if (receipt.runId) store.participate(receipt.runId, input.senderId);
       return receipt;
-    } catch {
+    } catch (error) {
+      if ((error as { code?: string }).code === "interruption_pending") {
+        store.receipt({ requestId: input.requestId, status: "rejected",
+          message: "Review the interrupted task before starting another message." });
+        throw failure(409, "Review the interrupted task before starting another message.");
+      }
       return store.submission(input.requestId)!.receipt;
     }
   };

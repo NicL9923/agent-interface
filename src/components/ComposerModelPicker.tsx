@@ -27,7 +27,7 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
   const current = useRef(bot.id);
   current.current = bot.id;
   // A model-only save resends the assistant's other fields, so it needs the real instructions.
-  const unavailable = !bootstrap.capabilities.botConfiguration.supported || typeof bot.instructions !== "string";
+  const unavailable = !bootstrap.capabilities.botConfiguration.supported;
   const blocked = disabled || unavailable;
   useEffect(() => { setOpen(false); setBusy(false); setError(""); setConfirm(null); setSettingsBusy(false); }, [bot.id]);
   useEffect(() => { if (blocked) { setOpen(false); setConfirm(null); } }, [blocked]);
@@ -53,13 +53,16 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
   async function save(choice: ModelChoice, confirmed = false) {
     if (blocked || busy || settingsBusy) return;
     const target = bot.id;
-    const input: BotInput = {
-      name: bot.name, description: bot.description || "", instructions: bot.instructions || "",
-      model: choice.model, provider: choice.provider || undefined, shared: bot.shared,
-      enabledMcpServers: bot.enabledMcpServers || [], confirmModel: confirmed,
-    };
     setBusy(true); setError("");
     try {
+      const detail=await api<Bot>(`/bots/${encodeURIComponent(target)}`);
+      if(current.current!==target)return;
+      if(typeof detail.instructions!=="string")throw new Error("Assistant settings could not be loaded. Try again before changing the model.");
+      const input: BotInput = {
+        name: detail.name, description: detail.description || "", instructions: detail.instructions || "",
+        model: choice.model, provider: choice.provider || undefined, shared: detail.shared,
+        enabledMcpServers: detail.enabledMcpServers || [], confirmModel: confirmed,
+      };
       await write(`/bots/${encodeURIComponent(target)}`, input, "PATCH");
       onSaved();
       if (current.current !== target) return;

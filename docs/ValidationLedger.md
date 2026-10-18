@@ -1,5 +1,199 @@
 # Validation ledger
 
+## October 18 Patch owned-local-browser authorization
+
+Based on `4c2aeed`, implemented with OpenAI GPT-6.1 Sol. Round 2 addresses the
+independent Claude Opus 5.5 findings after `96125fc` and `eb6e901`. The add-on
+reads the default-off `browser.agent_interface.allow_local_network` from each
+active profile. Local classification also requires an effectively local native
+terminal policy and supervisor provenance verified against live process
+ownership, birth identity, parentage, the actual loopback listening socket, and
+browser websocket ID. Linux identity now uses raw kernel start ticks rather
+than process-specific epoch timestamps.
+
+The metadata floor remains in native navigation, redirect checks and
+`browser_exec`. The dispatch wrapper now uses native Hermes's URL-literal
+scanner and always-blocked matcher to reject metadata literals in console
+expressions, CDP `Page.navigate` and CDP `Runtime.evaluate`. Native local
+classification still skips the current-page metadata check before content
+tools; computed or obfuscated JavaScript URLs can escape the literal scan.
+This is not complete metadata isolation. Native website checks, TLS, human
+control and operation leases remain. No blanket private-URL permission, TLS
+bypass, Hermes upgrade or alternate browser transport was added.
+
+Round 1 incorrectly skipped `npm test` because TypeScript was unchanged and
+missed the Python/TypeScript qualification-input mismatch. Both qualifiers now
+read `src/shared/qualification-inputs.json`, including the manifest itself in
+the digest. Round 2 ran `npm test` successfully. Profile-policy helpers resolve
+and qualify at installation, and missing seams refuse installation before any
+native mutation. Wrapper tests verify exact-endpoint policy dispatch and
+unchanged native results for every other override.
+
+Validation for implementation commit `2bc941b` and the accompanying docs/evidence:
+
+- `TMPDIR=/Volumes/DevSSD/scratch/patch-local-browser/tmp python3 scripts/run-python-tests.py`
+  passed 21 files, skipped the system-terminal file for missing `tmux`, and had
+  no failures on Python 3.14.7. Two individual tests also skipped on macOS.
+  This includes all 33 computer tests and three qualification-runner tests.
+- `ruff check .` passed with Ruff 0.17.0. `npm run typecheck` passed.
+- `npm test` passed all 770 tests in 69 files with Node 26.10.0, including the
+  Python/TypeScript digest parity assertion.
+- `PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+  passed all 770 tests in 69 files with production's Node 24.21.0. Both Node
+  runs emitted the existing jsdom canvas-method notices.
+- `npm run build` passed. `git diff --check` passed. The documented gateway
+  checker's outer and embedded Python blocks parsed successfully.
+- Both real-native probes ran with the exact isolated environment commands in
+  [SharedComputer.md](SharedComputer.md#qualification-activation-and-rollback).
+  Hermes was `acc3cada0da86c81efc8aa6c5a291989549ca900` with approved repair
+  `30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+  `computer_probe.py` passed all 10 native routing/lease/recovery checks.
+  `computer_local_network_probe.py` passed all 14 checks, including a separate
+  reader process validating the supervisor's registration, the new console/CDP
+  metadata literal refusals, and confirmation of the native current-page gap.
+  Real native `browser_exec` against the self-signed fixture returned
+  `net::ERR_CERT_AUTHORITY_INVALID`; no HTTP request reached the fixture.
+- The new `run.py` helper also ran both real-native probes in another marked
+  disposable DevSSD home. Its 14-check local-network receipt matched the direct
+  probe receipt exactly, and its coordination receipt passed all 10 checks.
+  Unit checks cover receipt collection, a recorded skip without Chrome, and
+  propagation of browser-probe failures. This was a helper rehearsal, not a
+  full `run.py` qualification run.
+
+The first focused unit run caught a test-fixture field collision; it was fixed
+before the successful focused and full runs. The
+[round 2 receipt](evidence/hermes-local-network-mac-20261018-round2.json) is
+development evidence, not production qualification. The qualification runner
+now runs the local-network probe when Chrome is available, collects its receipt,
+and records a skipped receipt when no executable is available. The browser
+probe uses its own marked home so it cannot replace the running fixture
+gateway's config.
+
+Patch's live config and all VPS services are untouched. Full Chrome builds timed
+out in the earlier Mac rehearsal; Chromium headless shell completed both round 2
+runs. Desktop start was a fixture. The actual KVM, headed production browser,
+Linux cross-process behavior and live gateway admission remain unchecked.
+The activation checklist includes an exact read-only command using the live
+gateway's executable and environment, plus fresh gateway-turn admission checks.
+That diagnostic runs as an independent process, not inside the live gateway.
+The public guide now uses a generic device-certificate note.
+
+Fresh full native qualification and the controlled idle-gated `release-app.py`
+activation remain the release owner's work. Reproduction, profile configuration
+and guarded activation/rollback are in
+[SharedComputer.md](SharedComputer.md#profile-authorization-for-local-networks).
+Final source fingerprint, excluding this ledger:
+`sha256:98f5d6deaf4898d45e0442efc107af9910bcf6c77744f10a0a72166dc558d599`.
+## October 18 Hermes chat efficiency, pre-release
+
+Based on `4c2aeed`. GPT-6.1 Sol implemented
+five changes: opt-in inflight SSE patches on web and iOS, decorated history
+memoization in the add-on, lazy assistant configuration with household roster
+events, canonical send admission in one RPC, and incremental routine discovery.
+Legacy conversation streams keep their existing change cadence. The native API
+contract documents the new events and detail-only configuration fields.
+
+Round 3 also made the native draft-save backoff deterministic under test: CI's macOS runner let three conversation polls cross the one-second backoff and saw a second save. The backoff now reads the store's injectable clock, which the test holds still and then advances; the 95 native contract tests passed on an iPhone 17 simulator afterward.
+
+History cache misses still bind the full history because binding determines
+request IDs and earlier file context. The cache bypasses active, queued and
+unbound sessions and checks native row identities, DB/WAL/config file stamps,
+the journal's SQLite mutation count and a 30-second expiry. Approvals and
+clarifications retain one light route read for profile ownership, request kind
+and participation; the adapter reuses that read instead of opening again.
+Upstream has no forward execution cursor, so discovery checks job timestamps,
+rescans unchanged jobs after 60 seconds and supports a forced scan after edits.
+
+Checks on the Mac mini, Node 26.10.0 and Python 3.14.7:
+
+- `npm run typecheck`, `ruff check .` and `npm run build` passed.
+- `npm test` passed all 788 tests. The same 788 passed with
+  `PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+  on Node 24.21.0.
+- `python3 scripts/run-python-tests.py` reported 20 test files passed, one skipped,
+  zero failed. The terminal file requires tmux. Two tests inside passing files
+  require optional prepared Hermes source environments and skipped too.
+  `python3 tests/hermes_extension_journal_test.py` passed all 17 tests again
+  after the final cache change.
+- `IOS_DERIVED_DATA=.private/ios-build-efficiency bash .agents/tools/validate-ios.sh
+  39F5329D-FA70-4259-9B8A-6AECECDE2227 test` passed and exited 0 on iPhone 18 Pro:
+  249 unit tests and 43 UI tests, no failures. Two unit evidence tests and the
+  screenshot tour skipped without output paths; the iPad-only test skipped on
+  this iPhone. Xcode 27.1 used the iOS 27.0 runtime. The task booted one simulator
+  and shut it down afterward. After all tests finished, the optional
+  `simctl diagnose` collector stalled in its 600-second timeout. Stopping that
+  collector let Xcode finalize the result bundle and report `TEST SUCCEEDED`.
+
+Initial web and native checks found obsolete eight-second polling and stream
+count assertions; those now cover the 45-second fallback and opt-in streams.
+The first native run stopped after that polling test failed four assertions.
+The final run uses the corrected assertions and adds an inflight/roster contract test. Native build and
+result output uses the requested `.private` paths on the SSD worktree.
+No live Hermes probe or production receipt was collected. Independent review,
+a PR, release qualification and deployment remain with the orchestrator.
+
+Round 2, after Claude Opus 5.5's independent review, starts at the remote merge
+`f1aa063`. GPT-6.1 Sol made the fixes in `61e69c7`, `0ca53c2` and `8c05fe4`.
+The shared computer authorization files and their ledger entry were left untouched.
+
+Default bootstrap and bot lists again include full configuration for build 5
+and cached web clients. New clients request `roster=lean`; settings wait for
+detail and retain one dialog, header and Close control through loading and
+retry. A retry moves focus to the stable heading. Lean native fixtures
+now exercise the enabled composer model picker. Roster events compare each
+viewer's visible rows after one shared evaluation per second, so unchanged
+frames and another member's private activity produce no notice. Clients own
+the initial fetch. Live patches require an active matching run, and structural
+frames prevent stale history reads from replacing tools or live snapshots.
+
+Admission now checks stopped terminal events and inflight interruptions as well
+as restart records, including cold sessions. A reviewed admission remains
+idempotent. Discovery checks per-profile execution DB/WAL stamps, retains the
+60-second safety scan, and schedules full scans on the next tick after routine
+mutations. A mutation during an outstanding scan preserves the next full scan.
+The history cache prunes noncanonical sessions and caps itself at 32 entries.
+The API docs and misplaced Swift comments were corrected, and the dead
+`request.answer` result check was removed.
+
+Round 2 checks on the Mac mini, Node 26.10.0 and Python 3.14.7:
+
+- `npm run typecheck`, `ruff check .`, `npm run build` and `git diff --check`
+  passed.
+- `npm test` passed all 798 tests in 69 files. All 798 also passed with
+  `PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+  on Node 24.21.0.
+- `TMPDIR=/Volumes/DevSSD/scratch/agent-interface-efficiency/tmp python3 scripts/run-python-tests.py`
+  passed 21 files, skipped the tmux-dependent terminal file and failed none.
+  Two tests in passing files skipped for optional prepared environments. The
+  full runner passed again after the final admission adjustment. A focused run
+  of `tests/hermes_extension_journal_test.py` also passed all 19 add-on tests.
+
+- `IOS_DERIVED_DATA=.private/ios-build-efficiency-r2 bash .agents/tools/validate-ios.sh
+  B80F29A1-2C7A-4F0A-A801-4F498ABC9037 test` exited 0 with `TEST SUCCEEDED`.
+  Xcode 27.1 used the iPhone 17 simulator named AgentInterfaceValidation on
+  iOS 27.0. The result bundle reports 293 tests: 289 passed, four skipped,
+  zero failed. The unit suite had 250 tests with two evidence-output skips;
+  the UI suite had 43 tests with the screenshot tour and iPad-only test skipped.
+  The task booted this one simulator and shut it down afterward. After all
+  assertions passed, the optional `simctl diagnose` collector stayed idle.
+  Stopping that specific collector let Xcode finalize the successful result.
+  Evidence is `.private/ios-test-20261018T205300Z-86309.xcresult`; check logs
+  are under `/Volumes/DevSSD/scratch/agent-interface-efficiency/round2-*`.
+
+The first round 2 JavaScript run found obsolete bootstrap URL mocks, a default
+roster detail test double and a roster cache invalidation race during connection.
+Those were corrected before the final passing runs. No production probe, PR,
+merge or deployment was performed. The orchestrator owns the next independent
+review.
+
+Round 3 fixes H1 by retaining per-bot configuration when detail fails, merging
+current lean state, and dropping confirmed deleted bots; all six new endpoint
+regressions failed with 502 before the fix and passed afterward.
+`npm run typecheck`, `npm test` (804 tests in 69 files on Node 26.10.0),
+`PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+(the same 804 tests on Node 24.21.0), `npm run build`, and `git diff --check`
+passed; Python and iOS were not rerun for this server-only fix.
+
 ## October 18 app release 0fa04ff
 
 PR #147 merged at `0fa04ffbfdfcb7f7442735e9b0d8b9f2602d8a44`. The release is live at `https://agentui.wildflowersranch.com`,
