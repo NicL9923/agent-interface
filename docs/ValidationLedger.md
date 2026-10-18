@@ -25,10 +25,10 @@ forty smaller gaps.
   the in-app notification card and switch, group chats, search and Today.
 
 Final source fingerprint, excluding this ledger:
-`sha256:e80fa9ca6905d6126485ee5fafbd8901799234399221cad6b6c3c45646ed2999`.
+`sha256:1d1b31ce7d7c9c02c31560ca80accb8640b70dfc98dec852148a69141bcd1a11`.
 Native application source (`ios/AgentInterface`, `ios/AgentInterfaceShare`,
 `ios/AgentInterfaceWidgets`, `ios/Shared`):
-`sha256:51294b6e28bebca70b305e462881958c411d8215c92be971bd3670673d785f22`.
+`sha256:47e86e1a055ce060d118f184785326e303bd79057bc868b3cd7f729938f83c51`.
 Native tests: `sha256:a97297c3bc24b1a5e064415519b5793135645790e180706f921f13e32fb97ae7`.
 
 Xcode 27.1 on iOS 27.0 simulators with ad hoc signing. At `53b413b` the full
@@ -38,7 +38,8 @@ tests with two optional skips and 43 UI tests with two skips, no failures
 iPad `0EC750D2-1DB5-4FD6-945F-3869E8D4ADB0` the tablet, parity and discovery flows
 passed, 15 tests (`final-ipad-1411.xcresult`). All 752 web tests passed on Node
 24.21 and Node 26.10, including a new bearer-session event stream test. The new
-long-history UI test failed before the change and passes after it. Nothing here
+long-history UI test failed before the change and passes after it. After testing, only
+the build number changed, to version 1.0 build 4 across all three bundles. Nothing here
 was run through CI's Xcode 26.6; bodies were kept split for it.
 
 GPT-6.1 Sol reviewed the full diff in four rounds. Round one found voice
