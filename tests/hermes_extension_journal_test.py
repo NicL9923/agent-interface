@@ -156,6 +156,31 @@ class HistoryWindowTests(unittest.TestCase):
 
 
 class OpenTests(unittest.TestCase):
+    def test_decorated_cache_skips_projection_and_binding_and_invalidates(self):
+        with FakeHermes(turns(25, files={3})) as hermes:
+            expected = hermes.open(window={"turns": 20})
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock())
+            self.assertEqual(hermes.open(window={"turns": 20})["messages"], expected["messages"])
+            seen = []
+            hermes.journal.db.set_trace_callback(seen.append)
+            hit = hermes.open(window={"turns": 20})
+            hermes.journal.db.set_trace_callback(None)
+            self.assertEqual(hit["messages"], expected["messages"])
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            self.assertFalse(any("FROM tools" in sql or "row_id IN" in sql for sql in seen))
+            hermes.journal.event("default", "sid", "completed", "Result")
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            session["history"] = hermes.messages = turns(3)
+            self.assertEqual(len(hermes.open()["messages"]), 6)
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            session["history"][-1] = {"role":"assistant", "text":"Replacement"}
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
     def test_light_open_skips_native_history_and_a_window_cuts_it(self):
         with FakeHermes(turns(25, files={3})) as hermes:
             first = hermes.open(omit_messages=True)
