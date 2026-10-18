@@ -206,6 +206,12 @@ export async function createApp(
   };
   const params = (req: { params: unknown }) =>
     req.params as { id: string; approvalId?: string };
+  // Retain writable configuration across failed detail reads, like the runtime's roster fallback.
+  const botDetails = new Map<string, Bot>();
+  const rememberBot = (bot: Bot) => {
+    botDetails.set(bot.id, bot);
+    return bot;
+  };
   const decorateBot = (
     bot: Awaited<ReturnType<Runtime["listBots"]>>[number],
     nativeAvatar = false,
@@ -262,6 +268,8 @@ export async function createApp(
     ({ instructions, enabledMcpServers, enabledTools, enabledSkills, ...bot }) => bot,
   );
   const rosterFor = async (req: FastifyRequest, bots: Bot[], nativeAvatar: boolean) => {
+    const ids = new Set(bots.map(bot => bot.id));
+    for (const id of botDetails.keys()) if (!ids.has(id)) botDetails.delete(id);
     const rows = bots.map(bot => decorateBot(bot, nativeAvatar))
       .filter(bot => visible(bot, signedIn(req).id));
     if ((req.query as { roster?: string }).roster === "lean") {
@@ -269,8 +277,20 @@ export async function createApp(
     }
     // Build 5 and cached bundles initialize writable settings from these rows.
     // Missing configuration is unsafe for those clients, so full remains the default.
-    return Promise.all(rows.map(async bot => runtime.botDetail
-      ? decorateBot(await runtime.botDetail(bot.id), nativeAvatar) : bot));
+    const detailed = await Promise.all(rows.map(async bot => {
+      if (!runtime.botDetail) return bot;
+      try {
+        return decorateBot(rememberBot(await runtime.botDetail(bot.id)), nativeAvatar);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Unknown Hermes bot.") {
+          botDetails.delete(bot.id);
+          return undefined;
+        }
+        // Undefined configuration keys in Hermes's lean rows must not erase saved settings.
+        return { ...botDetails.get(bot.id), ...leanRoster([bot])[0] };
+      }
+    }));
+    return detailed.filter((bot): bot is Bot => bot !== undefined);
   };
   app.get("/api/bootstrap", async (req) => ({
     user: signedIn(req),
@@ -350,14 +370,14 @@ export async function createApp(
     roster.forget();
     // A runtime that names it differently still gets its record.
     if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
-    return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
+    return decorateBot(rememberBot(bot), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.get("/api/bots/:id", async req => {
     const botId = params(req).id;
     const value = runtime.botDetail ? await runtime.botDetail(botId)
       : (await runtime.listBots()).find(bot => bot.id === botId);
     if (!value) throw failure(404, "Bot not found");
-    return decorateBot(value, (await runtime.capabilities()).avatarMetadata.supported);
+    return decorateBot(rememberBot(value), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
@@ -380,11 +400,12 @@ export async function createApp(
     try { bot = await runtime.saveBot(input as BotInput, id); }
     catch (error) { store.restorePresentation(id, version, previous); throw error; }
     roster.forget();
-    return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
+    return decorateBot(rememberBot(bot), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.delete("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
     await runtime.deleteBot(params(req).id);
+    botDetails.delete(params(req).id);
     // A new assistant that reuses this ID starts with no owner, visibility or per-person state.
     store.forgetBot(params(req).id);
     roster.forget();

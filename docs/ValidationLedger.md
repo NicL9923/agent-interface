@@ -184,6 +184,14 @@ Those were corrected before the final passing runs. No production probe, PR,
 merge or deployment was performed. The orchestrator owns the next independent
 review.
 
+Round 3 fixes H1 by retaining per-bot configuration when detail fails, merging
+current lean state, and dropping confirmed deleted bots; all six new endpoint
+regressions failed with 502 before the fix and passed afterward.
+`npm run typecheck`, `npm test` (804 tests in 69 files on Node 26.10.0),
+`PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+(the same 804 tests on Node 24.21.0), `npm run build`, and `git diff --check`
+passed; Python and iOS were not rerun for this server-only fix.
+
 ## October 18 app release 0fa04ff
 
 PR #147 merged at `0fa04ffbfdfcb7f7442735e9b0d8b9f2602d8a44`. The release is live at `https://agentui.wildflowersranch.com`,
