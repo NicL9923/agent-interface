@@ -28,8 +28,9 @@ def image_text(text, images):
 
 class FakeHermes:
     """Just enough of tui_gateway for install() and agent-interface.open."""
-    def __init__(self, messages, bridge=False, environment=None, invocation=False):
+    def __init__(self, messages, bridge=False, environment=None, invocation=False, journal_path=None):
         self.messages = messages
+        self.journal_path = journal_path
         self.environment = environment or {}
         self.methods = {}
         server = types.ModuleType("tui_gateway.server")
@@ -97,7 +98,7 @@ class FakeHermes:
         for item in self.patches:
             item.start()
         self.directory = tempfile.TemporaryDirectory()
-        self.journal = extension.install(Path(self.directory.name) / "agent-interface.db")
+        self.journal = extension.install(self.journal_path or Path(self.directory.name) / "agent-interface.db")
         return self
 
     def __exit__(self, *exc):
@@ -173,8 +174,126 @@ class OpenTests(unittest.TestCase):
             self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
             with hermes.journal.db:
                 hermes.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','old',1)")
+                hermes.journal.db.execute("UPDATE receipts SET status='interrupted',row_id=77,terminal=1 WHERE request_id='one'")
+            self.assertEqual(submit("again",params)["result"],result)
+            live = hermes.methods["agent-interface.receipt"]("lookup", {"request_id": "one"})["result"]["receipt"]
+            self.assertEqual((live["status"], live["userRowId"]), ("interrupted", 77))
             refused=submit("send",{**params,"request_id":"two"})
             self.assertEqual(refused["error"]["code"],4094)
+            # An already admitted request needs no surviving canonical runtime session.
+            hermes.modules["tui_gateway.server"]._sessions.clear()
+            self.assertEqual(submit("again",params)["result"],result)
+            self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
+
+    def test_submit_response_survives_restart_without_canonical_activation(self):
+        params = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.db"
+            with FakeHermes([], journal_path=path) as hermes:
+                original = hermes.methods["agent-interface.submit"]("send", params)["result"]
+                self.assertEqual((original["status"], original["userRowId"]), ("accepted", None))
+                with hermes.journal.db:
+                    hermes.journal.db.execute("UPDATE receipts SET row_id=42 WHERE request_id='one'")
+                epoch = hermes.journal.epoch
+            for _ in range(2):
+                with FakeHermes([], journal_path=path) as hermes:
+                    self.assertNotEqual(hermes.journal.epoch, epoch)
+                    submit = hermes.methods["agent-interface.submit"]
+                    self.assertEqual(submit("retry", params)["result"], original)
+                    self.assertEqual(submit("stale-sid", {**params, "session_id": "retired"})["result"], original)
+                    self.assertEqual(hermes.journal.receipt("one")["status"], "interrupted")
+                    self.assertEqual(hermes.journal.receipt("one")["userRowId"], 42)
+                    self.assertEqual(hermes.native_calls, [])
+
+    def test_submit_failure_messages_survive_retry_and_restart(self):
+        failures = {
+            "finishing": ("rejected", "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles."),
+            "running-image": ("rejected", "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles."),
+            "image-preparation": ("rejected", "Image preparation failed before admission: Synthetic image failure"),
+            "native": ("uncertain", "Synthetic native failure"),
+        }
+        for mode, (status, message) in failures.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "journal.db"
+                params = {"profile": "default", "request_id": "failed", "sender_id": "member", "text": "Hello"}
+                with FakeHermes([], journal_path=path) as hermes:
+                    hermes.open()
+                    server = hermes.modules["tui_gateway.server"]
+                    session = server._sessions["sid"]
+                    submit = hermes.methods["agent-interface.submit"]
+                    if mode == "finishing":
+                        submit("root", {**params, "request_id": "root"})
+                    if mode in ("running-image", "image-preparation"):
+                        params["attachments"] = [{"path": "/photo.png", "mime": "image/png"}]
+                    if mode == "running-image":
+                        session["running"] = True
+                    native = Mock(wraps=server.handle_request)
+                    server.handle_request = native
+                    if mode == "image-preparation":
+                        session.update(history_lock=threading.Lock(), attached_images=["prior.png"])
+                        def fail_image(request, session=session):
+                            self.assertEqual(request["method"], "image.attach")
+                            session["attached_images"].append("new.png")
+                            raise RuntimeError("Synthetic image failure")
+                        native.side_effect = fail_image
+                    elif mode == "native":
+                        native.side_effect = RuntimeError("Synthetic native failure")
+                    original = submit("send", params)["result"]
+                    self.assertEqual((original["status"], original["message"]), (status, message))
+                    self.assertEqual(native.call_count, int(mode in ("image-preparation", "native")))
+                    if mode == "image-preparation":
+                        self.assertEqual(session["attached_images"], ["prior.png"])
+                    native.reset_mock()
+                    self.assertEqual(submit("retry", params)["result"], original)
+                    native.assert_not_called()
+                with FakeHermes([], journal_path=path) as hermes:
+                    self.assertEqual(hermes.methods["agent-interface.submit"]("retry", params)["result"], original)
+                    self.assertEqual(hermes.native_calls, [])
+
+    def test_old_receipt_without_snapshot_recovers_conservatively(self):
+        params = {"profile": "default", "request_id": "old", "sender_id": "member", "text": "Hello"}
+        # Dropping the new column reproduces the preceding journal schema. A NULL
+        # snapshot also covers a crash after durable intent but before a response.
+        for old_schema in (False, True):
+            with self.subTest(old_schema=old_schema), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "journal.db"
+                with FakeHermes([], journal_path=path) as hermes:
+                    hermes.methods["agent-interface.submit"]("send", params)
+                    with hermes.journal.db:
+                        if old_schema:
+                            hermes.journal.db.execute("ALTER TABLE receipts DROP COLUMN admission_response")
+                        else:
+                            hermes.journal.db.execute("UPDATE receipts SET admission_response=NULL,status='uncertain' WHERE request_id='old'")
+                with FakeHermes([], journal_path=path) as hermes:
+                    submit = hermes.methods["agent-interface.submit"]
+                    recovered = submit("retry", params)["result"]
+                    self.assertEqual((recovered["status"], recovered["userRowId"]), ("uncertain", None))
+                    self.assertEqual((recovered["requestId"], recovered["runId"], recovered["senderId"]), ("old", "old", "member"))
+                    self.assertEqual((recovered["app_run_id"], recovered["admission"]), ("old", "canonical"))
+                    self.assertIn("Original admission response is unavailable", recovered["message"])
+                    self.assertEqual(hermes.journal.receipt("old")["status"], "interrupted")
+                    with hermes.journal.db:
+                        hermes.journal.db.execute("UPDATE receipts SET status='accepted',row_id=99,terminal=1 WHERE request_id='old'")
+                    self.assertEqual(submit("retry", params)["result"], recovered)
+                    self.assertEqual(hermes.native_calls, [])
+                with FakeHermes([], journal_path=path) as hermes:
+                    self.assertEqual(hermes.methods["agent-interface.submit"]("retry", params)["result"], recovered)
+                    self.assertEqual(hermes.native_calls, [])
+
+    def test_submit_rejects_changed_input_before_refresh_or_interruption_guard(self):
+        with FakeHermes([]) as hermes:
+            params = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
+            submit = hermes.methods["agent-interface.submit"]
+            submit("send", params)
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','one',1)")
+            hermes.modules["tui_gateway.server"]._sessions.clear()
+            hermes.native_calls.clear()
+            for changes in ({"text": "Changed"}, {"sender_id": "other"}, {"profile": "other"},
+                            {"attachments": [{"path": "/photo.png", "mime": "image/png"}]}):
+                with self.subTest(changes=changes):
+                    self.assertEqual(submit("conflict", {**params, **changes})["error"]["code"], 4093)
+            self.assertEqual(hermes.native_calls, [])
 
     def test_submit_requires_review_after_stopped_terminal_or_inflight(self):
         for mode in ("terminal", "inflight", "cold"):

@@ -196,6 +196,55 @@ regressions failed with 502 before the fix and passed afterward.
 (the same 804 tests on Node 24.21.0), `npm run build`, and `git diff --check`
 passed; Python and iOS were not rerun for this server-only fix.
 
+Canonical receipt follow-up on `ae1f7ba963daae15f7bbee12d43c644a83b66226`,
+implemented by OpenAI GPT-6.1 Sol in the shared PR #151 checkout. Submit now
+stores its complete admission response as JSON beside the evolving receipt.
+The response and final admission state commit together, including messages for
+finishing-task rejection, images submitted during a run, image-preparation
+failure and native admission exceptions. The durable uncertain intent still
+commits before invoking native execution. Duplicate IDs check their input
+digest and recover the snapshot before canonical activation or interruption
+review. Changed input still returns 4093. `agent-interface.receipt` continues
+to report current status and row binding.
+
+Existing journals gain a nullable `admission_response` column. A legacy receipt
+or an intent interrupted before its response was saved has no recoverable
+original response. Its first duplicate stores an explicit `uncertain` recovery
+response with no row binding and a message directing the caller to live receipt
+lookup and task review. Subsequent duplicates retain that response across
+status changes and restarts. They never invoke native admission again.
+
+Focused validation on the Mac mini, Python 3.14.7 and Ruff 0.17.0:
+
+- `TMPDIR=/Volumes/DevSSD/scratch/agent-interface-merge/tmp python3 scripts/run-python-tests.py tests/hermes_extension_journal_test.py scripts/spike/dashboard_contract_test.py scripts/spike/qualification_contract_test.py`
+  passed three files with no skips or failures. The files contain 23 journal
+  tests, eight dashboard contract tests and three qualification contract tests.
+  Regressions cover response equality after row/status mutation, all four
+  failure messages, restarts, old-schema migration, missing snapshots and
+  changed-input conflicts without canonical refresh or native readmission.
+- `ruff check src/hermes/extension.py tests/hermes_extension_journal_test.py`
+  passed. The first lint run caught a loop-variable capture in the new image
+  fixture; it was bound explicitly before the final successful run.
+- `git diff --check` passed.
+
+Validated uncommitted source on the base above, SHA256 per file:
+
+- `src/hermes/extension.py`:
+  `d8573c6b0afc5f9beb236b348fe269ed104f42ac7d759e2a1719fe48dcd13a62`.
+- `tests/hermes_extension_journal_test.py`:
+  `21c1166205230d9a7ed5090d0ceffbaad788cbb8fd8c71627437ee60d34b4d51`.
+
+The parent ran the full Python suite on the exact source hashes above: 21 files
+passed, one terminal file skipped for missing tmux, and no failures in 125.0s.
+Both Node 26.10.0 and Node 24.21.0 passed all 804 tests in 69 files.
+`npm run build`, full-repository Ruff and `git diff --check` passed. The web
+build remains `0184994d2cdd199f`. No iOS inputs changed; the green iOS CI
+result at `ae1f7ba` remains applicable.
+
+This follow-up used native gateway fixtures. Real gateway exactly-once/restart
+probes remain part of the fresh merged-source host qualification. Grok 4.7 is
+reviewing the complete mixed-provider follow-up. Production was untouched.
+
 ## October 18 app release 0fa04ff
 
 PR #147 merged at `0fa04ffbfdfcb7f7442735e9b0d8b9f2602d8a44`. The release is live at `https://agentui.wildflowersranch.com`,

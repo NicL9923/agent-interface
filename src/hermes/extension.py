@@ -84,7 +84,7 @@ class Journal:
             self.db.execute("ALTER TABLE receipts ADD COLUMN input_text TEXT")
         if "steering" not in columns:
             self.db.execute("ALTER TABLE receipts ADD COLUMN steering INTEGER NOT NULL DEFAULT 0")
-        for column in ("stored_session", "attachments"):
+        for column in ("stored_session", "attachments", "admission_response"):
             if column not in columns:
                 self.db.execute(f"ALTER TABLE receipts ADD COLUMN {column} TEXT")
         if "artifacts" not in {row[1] for row in self.db.execute("PRAGMA table_info(tools)")}:
@@ -123,6 +123,23 @@ class Journal:
     def receipt(self, request_id):
         row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor FROM receipts WHERE request_id=?", (request_id,)).fetchone()
         return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3]}
+
+    def admission_response(self, request_id):
+        row = self.db.execute("SELECT admission_response FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+        if row is None:
+            return None
+        if row[0] is not None:
+            return json.loads(row[0])
+        # Older journals and intents interrupted before the response was saved cannot
+        # reconstruct the original result. Never infer permission to send again from
+        # their evolving status or row binding. Freeze an explicit recovery response.
+        value = {**self.receipt(request_id), "status": "uncertain", "userRowId": None,
+                 "admission": "canonical",
+                 "message": "Original admission response is unavailable. Check agent-interface.receipt and review the task before retrying."}
+        value["app_run_id"] = value["runId"]
+        with self.db:
+            self.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
+        return value
 
 
 # The web and iOS clients' history page, src/shared/history.ts HISTORY_PAGE_TURNS.
@@ -809,90 +826,98 @@ def install(path=None):
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 200 or not isinstance(actor, str) or not actor or not isinstance(text, str) or (not text.strip() and not attachments):
             return server._err(rid, -32602, "request_id, sender_id and non-empty text required")
         digest = hashlib.sha256(json.dumps([profile, actor, text, attachments], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        # Resolve before taking journal.lock: open_bot takes canonical_lock then the
-        # journal lock, and delivery uses the same submission fence.
         with submission_lock:
+            # Replays need neither fresh canonical activation nor interruption review.
+            # Keep the submission fence until admission finishes so only one call owns
+            # a request ID. Do not take canonical_lock while holding journal.lock.
+            with journal.lock:
+                previous = journal.db.execute("SELECT digest FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+                if previous:
+                    if previous[0] != digest:
+                        return server._err(rid, 4093, "Request ID already belongs to a different input")
+                    return server._ok(rid, journal.admission_response(request_id))
             if sid is None:
                 sid = open_canonical(profile)
-        with submission_lock, journal.lock:
-            if sid is None or canonical.get(profile) != sid:
-                return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
-            stored = server._sessions[sid].get("session_key")
-            running = bool(server._sessions[sid].get("running"))
-            current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-            interrupted = journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
-            terminal = journal.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
-            if not terminal:
-                latest = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, stored)).fetchone()
-                terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
-            inflight = server._sessions[sid].get("inflight_turn") or {}
-            interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
-            if interrupted and params.get("reviewed_interruption") is not True:
-                return server._err(rid, 4094, "Review the interrupted task before starting another turn")
-            # A replayed request ID returns this same receipt, so it carries only durable facts;
-            # the marker tells a server the add-on resolved the canonical session itself.
-            def admitted(value):
-                return {**value, "app_run_id": value.get("runId"), "admission": "canonical"}
-            previous = journal.db.execute("SELECT digest FROM receipts WHERE request_id=?", (request_id,)).fetchone()
-            if previous:
-                if previous[0] != digest:
-                    return server._err(rid, 4093, "Request ID already belongs to a different input")
-                return server._ok(rid, admitted(journal.receipt(request_id)))
-            if current and not server._sessions[sid].get("running"):
-                # Native releases running before draining its followup queue. No new root
-                # may be admitted in that interval or retired with the preceding task.
+            with journal.lock:
+                if sid is None or canonical.get(profile) != sid:
+                    return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
+                stored = server._sessions[sid].get("session_key")
+                running = bool(server._sessions[sid].get("running"))
+                current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
+                interrupted = journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
+                terminal = journal.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
+                if not terminal:
+                    latest = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, stored)).fetchone()
+                    terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
+                inflight = server._sessions[sid].get("inflight_turn") or {}
+                interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
+                if interrupted and params.get("reviewed_interruption") is not True:
+                    return server._err(rid, 4094, "Review the interrupted task before starting another turn")
+                def admitted(message=None):
+                    # Save the complete response in the same transaction as its final
+                    # admission state. receipt() remains the mutable status projection.
+                    value = journal.receipt(request_id)
+                    value.update(app_run_id=value["runId"], admission="canonical")
+                    if message is not None:
+                        value["message"] = message
+                    journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
+                    return server._ok(rid, value)
+                if current and not server._sessions[sid].get("running"):
+                    # Native releases running before draining its followup queue. No new root
+                    # may be admitted in that interval or retired with the preceding task.
+                    with journal.db:
+                        journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
+                        return admitted("Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles.")
+                steering = bool(params.get("steer")) or bool(server._sessions.get(sid, {}).get("running"))
+                if steering and any(str(x.get("mime", "")).startswith("image/") for x in attachments):
+                    with journal.db:
+                        journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
+                        return admitted("Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.")
+                run_id = current[0] if steering and current else request_id
+                # FULL-synchronous intent is durable before native execution may be admitted.
                 with journal.db:
-                    journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
-                return server._ok(rid, {**admitted(journal.receipt(request_id)), "message": "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles."})
-            steering = bool(params.get("steer")) or bool(server._sessions.get(sid, {}).get("running"))
-            if steering and any(str(x.get("mime", "")).startswith("image/") for x in attachments):
+                    journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, run_id, text, json.dumps(attachments), steering, "uncertain", time.time()))
+                staged = []
+                try:
+                    if not steering:
+                        for attachment in attachments:
+                            if str(attachment.get("mime", "")).startswith("image/"):
+                                prior = list(server._sessions[sid].get("attached_images", []))
+                                try:
+                                    attached = native("image.attach", {"session_id": sid, "profile": profile, "path": attachment["path"]})
+                                finally:
+                                    # Native image.attach can append before its result formatter fails.
+                                    remaining = list(prior)
+                                    for image in server._sessions[sid].get("attached_images", []):
+                                        if image in remaining:
+                                            remaining.remove(image)
+                                        else:
+                                            staged.append(image)
+                except Exception as exc:
+                    # No prompt invocation occurred. Remove only additions from this preparation,
+                    # preserve pre-existing staged images, and definitely reject this receipt.
+                    with server._sessions[sid]["history_lock"]:
+                        images = list(server._sessions[sid].get("attached_images", []))
+                        for image in reversed(staged):
+                            if image in images:
+                                images.pop(len(images) - 1 - images[::-1].index(image))
+                        server._sessions[sid]["attached_images"] = images
+                    with journal.db:
+                        journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
+                        return admitted("Image preparation failed before admission: " + str(exc)[:400])
+                try:
+                    method = "session.steer" if steering else "prompt.submit"
+                    result = native(method, {"session_id": sid, "profile": profile, "text": text})
+                except Exception as exc:
+                    # Once native admission is invoked, failures remain conservative.
+                    with journal.db:
+                        return admitted(str(exc)[:500])
+                status = "rejected" if result.get("status") == "rejected" else "accepted"
                 with journal.db:
-                    journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
-                return server._ok(rid, {**admitted(journal.receipt(request_id)), "message": "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles."})
-            run_id = current[0] if steering and current else request_id
-            # FULL-synchronous intent is durable before native execution may be admitted.
-            with journal.db:
-                journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, run_id, text, json.dumps(attachments), steering, "uncertain", time.time()))
-            staged = []
-            try:
-                if not steering:
-                    for attachment in attachments:
-                        if str(attachment.get("mime", "")).startswith("image/"):
-                            prior = list(server._sessions[sid].get("attached_images", []))
-                            try:
-                                attached = native("image.attach", {"session_id": sid, "profile": profile, "path": attachment["path"]})
-                            finally:
-                                # Native image.attach can append before its result formatter fails.
-                                remaining = list(prior)
-                                for image in server._sessions[sid].get("attached_images", []):
-                                    if image in remaining:
-                                        remaining.remove(image)
-                                    else:
-                                        staged.append(image)
-            except Exception as exc:
-                # No prompt invocation occurred. Remove only additions from this preparation,
-                # preserve pre-existing staged images, and definitely reject this receipt.
-                with server._sessions[sid]["history_lock"]:
-                    images = list(server._sessions[sid].get("attached_images", []))
-                    for image in reversed(staged):
-                        if image in images:
-                            images.pop(len(images) - 1 - images[::-1].index(image))
-                    server._sessions[sid]["attached_images"] = images
-                with journal.db:
-                    journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
-                return server._ok(rid, {**admitted(journal.receipt(request_id)), "message": "Image preparation failed before admission: " + str(exc)[:400]})
-            try:
-                method = "session.steer" if steering else "prompt.submit"
-                result = native(method, {"session_id": sid, "profile": profile, "text": text})
-            except Exception as exc:
-                # Once native admission is invoked, failures remain conservative.
-                return server._ok(rid, {**admitted(journal.receipt(request_id)), "message": str(exc)[:500]})
-            status = "rejected" if result.get("status") == "rejected" else "accepted"
-            with journal.db:
-                journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
-                if interrupted and status == "accepted":
-                    journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
-            return server._ok(rid, admitted(journal.receipt(request_id)))
+                    journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
+                    if interrupted and status == "accepted":
+                        journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
+                    return admitted()
 
     def receipt(rid, params):
         with journal.lock:
