@@ -20,6 +20,7 @@ let calls:{method:string;params:Record<string,any>}[];
 let sockets:WireSocket[];
 let runtime:Runtime;
 let addonReady:boolean;
+let explicitCredentials:boolean;
 let metadataConflict:boolean;
 let connectionFails:boolean;
 let imageReady:boolean;
@@ -53,7 +54,7 @@ class WireSocket extends EventTarget {
       return;
     }
     let result:unknown={};
-    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one'};
+    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(explicitCredentials?{explicit_credentials:true}:{})};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one'};
@@ -70,7 +71,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -118,6 +119,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',actor:'member-one',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
     const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));
     vi.stubGlobal('fetch',fetcher);
+    await runtime.status();
     await expect(runtime.vaultRequest!(payload)).rejects.toMatchObject({statusCode:409,message:expect.not.stringContaining('private synthetic canary')});
     expect(fetcher).toHaveBeenCalledOnce();
     expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual(payload);
@@ -1055,5 +1057,55 @@ describe('Hermes conversation and roster read costs', () => {
     await vi.waitFor(() => expect(calls.map(call => call.method)).toEqual(['client.capabilities', 'agent-interface.capabilities']));
     sockets[0].receive({jsonrpc: '2.0', id: calls[0].params && (calls[0] as Record<string, any>).id, result: {}});
     expect(await status).toMatchObject({connected: true, code: 'ready'});
+  });
+});
+
+describe('Review regressions for shared reads and credential negotiation', () => {
+  const describes = () => calls.filter(call => call.method === 'profiles.describe') as Record<string, any>[];
+  it('reads a profile again after an edit instead of joining a roster read that started before it', async () => {
+    await runtime.status();
+    deferredMethods.add('profiles.describe');
+    const roster = runtime.listBots();
+    await vi.waitFor(() => expect(describes()).toHaveLength(1));
+    const skills = runtime.skills('shared');
+    await vi.waitFor(() => expect(describes()).toHaveLength(2));
+    for (const call of describes()) sockets[0].receive({jsonrpc: '2.0', id: call.id, result: {toolsets: [], skills: [{name: 'fresh', enabled: true}], mcp_servers: []}});
+    await roster;
+    expect((await skills).map(skill => skill.id)).toEqual(['fresh']);
+  });
+
+  it('reports changes from frames that arrive before a first open names its session', async () => {
+    await runtime.status();
+    const notices = vi.fn();
+    runtime.watch!('shared', notices);
+    deferredMethods.add('agent-interface.open');
+    const read = runtime.conversation('shared', {window: {turns: 20}});
+    await vi.waitFor(() => expect(calls.some(call => call.method === 'agent-interface.open')).toBe(true));
+    sockets[0].receive({jsonrpc: '2.0', id: 'srq-early', method: 'vault.save_login', params: {session_id: 'live-one', origin: 'https://kvm.example.test', site: 'kvm.example.test'}});
+    expect(notices).toHaveBeenCalledOnce();
+    const open = calls.find(call => call.method === 'agent-interface.open') as Record<string, any>;
+    sockets[0].receive({jsonrpc: '2.0', id: open.id, result: structuredClone(snapshot)});
+    await read;
+    deferredMethods.delete('agent-interface.open');
+    snapshot.open_requests = [{id: 'srq-early', method: 'vault.save_login', app_local_secure: true, params: {origin: 'https://kvm.example.test', site: 'kvm.example.test'}}];
+    snapshot.executor_epoch = 'epoch-one';
+    expect((await runtime.conversation('shared', {window: {turns: 20}})).attention).toHaveLength(1);
+  });
+
+  it('sends the member only to an add-on that binds address-only logins to one', async () => {
+    const answer = {operation: 'answer' as const, profile: 'shared', requestId: 'srq', actor: 'member-one',
+      answer: {epoch: 'epoch-one', sessionId: 'live-one', method: 'vault.code' as const, value: '123456'}};
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: URL | string, init?: RequestInit) => { bodies.push(JSON.parse(init!.body as string)); return Response.json({status: 'ok'}); }));
+    explicitCredentials = false;
+    await runtime.status();
+    await runtime.vaultRequest!(answer);
+    expect(bodies.at(-1)).not.toHaveProperty('actor');
+    await runtime.close();
+    explicitCredentials = true;
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    await runtime.status();
+    await runtime.vaultRequest!(answer);
+    expect(bodies.at(-1)).toMatchObject({actor: 'member-one'});
   });
 });

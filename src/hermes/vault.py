@@ -215,9 +215,12 @@ def explicit_origin(value):
     host = parts.hostname or ""
     if parts.scheme not in ("https", "http") or parts.path not in ("", "/") or port == 0 or not host or len(host) > 253:
         raise invalid
-    if re.fullmatch(r"[0-9.]+", host):
+    # Browsers read a host ending in a numeric label as IPv4 (0x7f000001 is 127.0.0.1), so only
+    # the canonical dotted form can match the page a login is later filled on.
+    if re.fullmatch(r"0x[0-9a-f]*|[0-9]+", host.rsplit(".", 1)[-1]):
         try:
-            ipaddress.IPv4Address(host)
+            if str(ipaddress.IPv4Address(host)) != host:
+                raise invalid
         except ValueError:
             raise invalid from None
     elif not all(LABEL.fullmatch(label) for label in host.split(".")):

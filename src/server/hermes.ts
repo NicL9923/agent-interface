@@ -46,6 +46,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let closed = false;
   let extension = false;
   let requiredSkills = new Set<string>();
+  // An add-on that binds logins requested by address to their member. Earlier ones refuse the extra field.
+  let explicitCredentials = false;
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -54,6 +56,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const reads = new Map<string, Promise<Wire>>();
   const live = new Map<string, string>();
   const owners = new Map<string, string>();
+  // Assistants with an open in flight, counted, for frames that arrive before its session is known.
+  const opening = new Map<string, number>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
   const watchers = new Map<string, Set<() => void>>();
   let capabilityCache: Capabilities | undefined;
@@ -67,7 +71,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const touched = (botId: string) => { changeGenerations.set(botId, (changeGenerations.get(botId) ?? 0) + 1); };
   // Profile descriptions read files on the Hermes host. Polls reuse one until this app changes it, or a minute passes.
   const DESCRIPTION_MS = 60_000;
-  const descriptions = new Map<string, {at: number; value: Promise<Wire>}>();
+  const descriptions = new Map<string, {at: number; edit: number; fresh: boolean; pending: boolean; value: Promise<Wire>}>();
+  const descriptionEdits = new Map<string, number>();
   let capabilityRequest: Promise<Capabilities> | undefined;
   let rosterRequest: Promise<Bot[]> | undefined;
   const supported = (value:boolean, reason?:string) => ({supported:value,...(!value ? {reason:reason ?? 'The connected Hermes backend does not expose this capability.'}: {})});
@@ -172,6 +177,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       throw new TransportError('incompatible', 'The verified durable Hermes add-on has an incompatible contract. Install a qualified add-on revision and reconnect.');
     }
     extension = true;
+    explicitCredentials = capabilities.explicit_credentials === true;
     requiredSkills = new Set(Array.isArray(capabilities.essential_skills) ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string') : []);
   }
   async function connect(): Promise<void> {
@@ -359,6 +365,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       // Opening a conversation attaches this socket to its session, so its frames arrive here.
       const botId = owners.get(sid);
       if (botId !== undefined) changed(botId);
+      // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
+      else for (const pending of opening.keys()) changed(pending);
     }
   }
   /**
@@ -429,14 +437,15 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         error: failed && typeof result.error === 'string' ? result.error : undefined} : {}),
       ...(status === 'running' ? {startedAt: previous?.startedAt ?? new Date().toISOString()} : {completedAt: new Date().toISOString()})};
   }
-  async function rpc(method: string, params: Wire = {}): Promise<Wire> {
+  /** share=false never joins an in-flight read, as a read that must see a just-made edit needs. */
+  async function rpc(method: string, params: Wire = {}, share = true): Promise<Wire> {
     await connect();
     const current = connection;
     if (!current?.verified || current.ws.readyState !== WebSocket.OPEN) {
       if (current) disconnect(current, unavailable());
       throw unavailable();
     }
-    const key = readMethods.has(method) || method === 'image.generate' && params.probe === true ? `${method}:${JSON.stringify(params)}` : undefined;
+    const key = share && (readMethods.has(method) || method === 'image.generate' && params.probe === true) ? `${method}:${JSON.stringify(params)}` : undefined;
     if (key && reads.has(key)) return reads.get(key)!;
     const request = rawRpc(current, method, params);
     if (key) reads.set(key, request);
@@ -535,18 +544,21 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   // Most callers need only the session, its run state and open requests, so they skip the history read.
   async function open(botId:string,read:{history?:boolean;window?:ConversationOptions['window']}={history:false}):Promise<Wire>{
     await connect();
-    if(extension){const value=await rpc('agent-interface.open',{profile:botId,...(read.history===false?{omit_messages:true}:read.window?{window:read.window}:{})});live.set(botId,value.session_id);owners.set(value.session_id,botId);const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
+    if(extension){opening.set(botId,(opening.get(botId)??0)+1);let value:Wire;try{value=await rpc('agent-interface.open',{profile:botId,...(read.history===false?{omit_messages:true}:read.window?{window:read.window}:{})});}finally{const count=(opening.get(botId)??1)-1;if(count)opening.set(botId,count);else opening.delete(botId);}live.set(botId,value.session_id);owners.set(value.session_id,botId);const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
     throw new Error('The verified durable Hermes add-on is required before opening a conversation.');
   }
-  // fresh reads Hermes again, as settings and this app's own edits need.
+  // fresh reads Hermes again, as settings and this app's own edits need. Fresh reads share only
+  // with reads started after this app's last edit to the profile, never with one from before it.
   function describe(name:string,fresh=false):Promise<Wire>{
-    const now=Date.now(),cached=descriptions.get(name);
+    const now=Date.now(),cached=descriptions.get(name),edit=descriptionEdits.get(name)??0;
     if(!fresh&&cached&&now-cached.at<DESCRIPTION_MS)return cached.value;
-    const entry={at:now,value:rpc('profiles.describe',{name})};
+    if(fresh&&cached&&cached.edit===edit&&cached.fresh&&cached.pending)return cached.value;
+    const entry={at:now,edit,fresh,pending:true,value:rpc('profiles.describe',{name},false)};
     descriptions.set(name,entry);
-    entry.value.catch(()=>{if(descriptions.get(name)===entry)descriptions.delete(name);});
+    entry.value.then(()=>{entry.pending=false;},()=>{entry.pending=false;if(descriptions.get(name)===entry)descriptions.delete(name);});
     return entry.value;
   }
+  function edited(name:string):void{descriptions.delete(name);descriptionEdits.set(name,(descriptionEdits.get(name)??0)+1);}
   function preview(session?:Wire):Bot['lastMessage']{
     const text=typeof session?.preview==='string'?session.preview.replace(/\s+/g,' ').trim().slice(0,160):'';
     if(!text || messageOrigin({id:"preview",role:"user",text})?.visibility === "activity")return undefined;
@@ -677,7 +689,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         const explicit=secure?.method==='vault.save_login'&&!!secure.explicit;
         return {id:String(x.id),kind:secure?'secure' as const:x.method==='clarify'?'clarify' as const:'official' as const,
           title:explicit?'Hermes asks to save a login':secure?'Hermes needs secure input':x.method==='clarify'?'Hermes needs your answer':'Continue in the official Hermes client',
-          detail:explicit?'Check the address and reason first. The username and password go directly to the encrypted Hermes vault, never into this chat.':secure?'Enter this value securely. It will go directly to Hermes without becoming a chat message.':x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
+          detail:explicit?'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.':secure?'Enter this value securely. It will go directly to Hermes without becoming a chat message.':x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
           secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
       });
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];
@@ -809,8 +821,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if(input.model && input.model!=='Inherited'){config.model=input.model;config.provider=input.provider??(await rpc('profiles.describe',{name})).model.provider;if(input.confirmModel)config.confirm_expensive_model=true;}if(input.enabledMcpServers)config.enabled_mcp_servers=input.enabledMcpServers;
       if(input.enabledSkills){const all=await rpc('profiles.describe',{name});config.disabled_skills=all.skills.filter((x:Wire)=>!input.enabledSkills!.includes(x.name)).map((x:Wire)=>x.name);}
       const result=await rpc('profiles.configure',config);if(result.confirm_required)throw Object.assign(new Error(typeof result.confirm_message === 'string' ? result.confirm_message.slice(0, 2000) : 'Hermes requires confirmation for this model.'),{statusCode:409,code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
-      const roster=await rpc('profiles.list',{include_sessions:true});return bot(roster.profiles.find((x:Wire)=>x.name===name),await describe(name,true));}catch(error){descriptions.delete(name);if(created){try{await http(`/api/profiles/${encodeURIComponent(name)}`,{method:'DELETE'});live.delete(name);}catch{throw Object.assign(new Error('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot '+name+'.'),{createdBotId:name,cause:error});}}throw error;}},
-    async deleteBot(id){try{await http(`/api/profiles/${encodeURIComponent(id)}`,{method:'DELETE'});live.delete(id);}finally{descriptions.delete(id);}},
+      const roster=await rpc('profiles.list',{include_sessions:true});edited(name);return bot(roster.profiles.find((x:Wire)=>x.name===name),await describe(name,true));}catch(error){edited(name);if(created){try{await http(`/api/profiles/${encodeURIComponent(name)}`,{method:'DELETE'});live.delete(name);}catch{throw Object.assign(new Error('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot '+name+'.'),{createdBotId:name,cause:error});}}throw error;}},
+    async deleteBot(id){try{await http(`/api/profiles/${encodeURIComponent(id)}`,{method:'DELETE'});live.delete(id);}finally{edited(id);}},
     async stop(botId){const state=await open(botId);try{await rpc('session.interrupt',{session_id:state.session_id,profile:botId});}finally{touched(botId);}},
     async generatePortrait(botId,prompt){await open(botId);const result=await rpc('image.generate',{prompt,aspect_ratio:'square',max_bytes:2_000_000});if(!result.success||!result.image_data)throw new Error(typeof result.error==='string'&&/no image generation backend configured/i.test(result.error)?'No image generation backend configured.':'Hermes image generation did not deliver image bytes. Review the provider settings before retrying.');const [,mime,base64]=/^data:([^;]+);base64,(.*)$/.exec(result.image_data)??[];if(!mime||!base64)throw new Error('Hermes returned an invalid generated image.');return this.upload(botId,{name:'generated-portrait.png',mime,data:Buffer.from(base64,'base64')});},
     async setAvatar(botId,avatar:Avatar){
@@ -904,7 +916,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       return value;
     },
     async vaultRequest(input) {
-      const response=await http('/api/agent-interface/credentials',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)}).finally(()=>{if(input.operation==='answer')touched(input.profile);});
+      // An earlier add-on has no address-only logins and refuses the member field; it fails closed for them.
+      const {actor:_actor,...legacy}=input as Extract<typeof input,{operation:'answer'}>;
+      const payload=input.operation==='answer'&&!explicitCredentials?legacy:input;
+      const response=await http('/api/agent-interface/credentials',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).finally(()=>{if(input.operation==='answer')touched(input.profile);});
       if(!response.body)throw new Error('Hermes returned no credential status.');
       const chunks:Uint8Array[]=[];let size=0;
       for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){size+=chunk.byteLength;if(size>1024*1024)throw new Error('Hermes returned an invalid credential status.');chunks.push(chunk);}
@@ -931,9 +946,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       return new ClientWebSocket(url, {maxPayload: 4 * 1024 * 1024, followRedirects: false, handshakeTimeout: 10_000});
     },
     async tools(botId):Promise<Tool[]>{const result=await describe(botId,true);return result.toolsets.map((x:Wire)=>({id:x.name,name:x.label||x.name,description:x.description,enabled:x.enabled}));},
-    async setTools(botId,ids){const state=await open(botId);const catalog=await rpc('profiles.describe',{name:botId});const known=new Set(catalog.toolsets.map((x:Wire)=>x.name));if(ids.some(x=>!known.has(x)))throw new Error('Unknown Hermes toolset selected.');const disabling=catalog.toolsets.filter((x:Wire)=>x.enabled&&!ids.includes(x.name)).map((x:Wire)=>x.name);const enabling=catalog.toolsets.filter((x:Wire)=>!x.enabled&&ids.includes(x.name)).map((x:Wire)=>x.name);try{for(const [action,names] of [['disable',disabling],['enable',enabling]] as const){if(names.length){const result=await rpc('tools.configure',{session_id:state.session_id,action,names});if(result.unknown?.length||result.missing_servers?.length)throw new Error('Hermes could not apply all tool selections.');}}}finally{descriptions.delete(botId);}},
+    async setTools(botId,ids){const state=await open(botId);const catalog=await rpc('profiles.describe',{name:botId});const known=new Set(catalog.toolsets.map((x:Wire)=>x.name));if(ids.some(x=>!known.has(x)))throw new Error('Unknown Hermes toolset selected.');const disabling=catalog.toolsets.filter((x:Wire)=>x.enabled&&!ids.includes(x.name)).map((x:Wire)=>x.name);const enabling=catalog.toolsets.filter((x:Wire)=>!x.enabled&&ids.includes(x.name)).map((x:Wire)=>x.name);try{for(const [action,names] of [['disable',disabling],['enable',enabling]] as const){if(names.length){const result=await rpc('tools.configure',{session_id:state.session_id,action,names});if(result.unknown?.length||result.missing_servers?.length)throw new Error('Hermes could not apply all tool selections.');}}}finally{edited(botId);}},
     async skills(botId):Promise<Skill[]>{const result=await describe(botId,true);return result.skills.map((x:Wire)=>({id:x.name,name:x.name,description:requiredSkills.has(x.name)?'Required by Hermes':'Hermes profile skill',enabled:x.enabled,required:requiredSkills.has(x.name)}));},
-    async setSkills(botId,ids){const all=await rpc('profiles.describe',{name:botId});const result=await rpc('profiles.configure',{name:botId,disabled_skills:all.skills.filter((x:Wire)=>!ids.includes(x.name)).map((x:Wire)=>x.name)}).finally(()=>descriptions.delete(botId));if(!result.ok)throw new Error('Hermes refused the skill selection.');},
+    async setSkills(botId,ids){const all=await rpc('profiles.describe',{name:botId});const result=await rpc('profiles.configure',{name:botId,disabled_skills:all.skills.filter((x:Wire)=>!ids.includes(x.name)).map((x:Wire)=>x.name)}).finally(()=>edited(botId));if(!result.ok)throw new Error('Hermes refused the skill selection.');},
     async routines(): Promise<Routine[]> {
       const roster = await rpc('profiles.list', {include_sessions:false});
       const all: Routine[] = [];

@@ -844,7 +844,7 @@ def install(path=None):
         return server._ok(rid, {"cursor": str(ready[-1][0] if ready else cursor), "events": events})
 
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in {"open": open_bot, "submit": submit, "receipt": receipt, "discover": discover}.items():
         server.register_method("agent-interface." + name, handler)
 

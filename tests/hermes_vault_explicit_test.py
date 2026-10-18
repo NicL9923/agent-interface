@@ -110,12 +110,15 @@ class ToolTests(unittest.TestCase):
                        'https://example.test?next=1', 'https://example.test#x', 'https://exämple.test', 'https://[::1]',
                        'https://example.test:0', 'https://example.test:99999', 'https://-bad.example.test', ' https://example.test',
                        'https://example.test‮', 'javascript:alert(1)', 'https://999.1.1.1', 'https://', 'https://exa%6dple.test',
-                       'https://example.test.', 'https:example.test', 'https://example.test\\@evil.test', None, 42, 'https://' + 'a' * 2048]:
+                       'https://example.test.', 'https:example.test', 'https://example.test\\@evil.test', None, 42, 'https://' + 'a' * 2048,
+                       # Browsers read these as IPv4 addresses, so a login saved for them would never fill.
+                       'https://0x7f000001', 'https://1.0x2', 'https://0177.0.0.1', 'https://kvm.example.0x1', 'https://10.1']:
             self.assertEqual(self.call(origin=origin)['error_type'], 'invalid_origin', origin)
 
     def test_valid_origins_are_normalized(self):
         for origin, expected in [(ORIGIN, ORIGIN), ('https://192.0.2.10:8443', 'https://192.0.2.10:8443'),
-                                 ('http://10.0.0.5', 'http://10.0.0.5'), ('https://Example.TEST:443/', 'https://example.test')]:
+                                 ('http://10.0.0.5', 'http://10.0.0.5'), ('https://Example.TEST:443/', 'https://example.test'),
+                                 ('https://0xdead.example.test', 'https://0xdead.example.test')]:
             self.assertEqual(self.call(origin=origin)['origin'], expected)
 
     def test_label_purpose_and_unexpected_arguments_are_refused(self):
