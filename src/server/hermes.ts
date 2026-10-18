@@ -644,7 +644,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const value=await rpc('agent-interface.submit',{profile:input.botId,...(state?{session_id:state.session_id}:{}),request_id:input.requestId,sender_id:input.senderId,text:input.text+(references?'\n'+references:''),attachments,steer,reviewed_interruption:input.reviewedInterruption===true});
       // A misadvertised older add-on must not be retried after possible admission.
       // Fall back to its old read checks for future sends, and recover participation now.
-      if(fast&&(typeof value.running!=='boolean'||typeof value.interruption_pending!=='boolean')){
+      if(fast&&value.admission!=='canonical'){
         canonicalSubmit=false;
         const prior=await open(input.botId).catch(()=>undefined);
         return {...receipt(value),runId:value.runId??prior?.app_run_id};

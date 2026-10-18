@@ -93,6 +93,8 @@ events, canonical send admission in one RPC, and incremental routine discovery.
 Legacy conversation streams keep their existing change cadence. The native API
 contract documents the new events and detail-only configuration fields.
 
+Host qualification of the merged commit `643bba1` then failed the add-on's exactly-once probe: the canonical submit receipt carried the live `running` flag, so a replayed request ID did not return the identical receipt. The receipt now carries only durable facts plus a constant `admission: canonical` marker, which the server uses to recognize a capable add-on; a journal test replays a request after the session starts running and expects the same receipt.
+
 Round 3 also made the native draft-save backoff deterministic under test: CI's macOS runner let three conversation polls cross the one-second backoff and saw a second save. The backoff now reads the store's injectable clock, which the test holds still and then advances; the 95 native contract tests passed on an iPhone 17 simulator afterward.
 
 History cache misses still bind the full history because binding determines

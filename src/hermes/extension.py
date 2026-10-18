@@ -829,8 +829,10 @@ def install(path=None):
             interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
             if interrupted and params.get("reviewed_interruption") is not True:
                 return server._err(rid, 4094, "Review the interrupted task before starting another turn")
+            # A replayed request ID returns this same receipt, so it carries only durable facts;
+            # the marker tells a server the add-on resolved the canonical session itself.
             def admitted(value):
-                return {**value, "app_run_id": value.get("runId"), "interruption_pending": bool(interrupted), "running": running}
+                return {**value, "app_run_id": value.get("runId"), "admission": "canonical"}
             previous = journal.db.execute("SELECT digest FROM receipts WHERE request_id=?", (request_id,)).fetchone()
             if previous:
                 if previous[0] != digest:

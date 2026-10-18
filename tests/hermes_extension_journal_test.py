@@ -165,7 +165,11 @@ class OpenTests(unittest.TestCase):
             params={"profile":"default","request_id":"one","sender_id":"member","text":"Hello"}
             result=submit("send",params)["result"]
             self.assertEqual(result["status"],"accepted")
-            self.assertEqual((result["app_run_id"],result["running"],result["interruption_pending"]),("one",False,False))
+            self.assertEqual((result["app_run_id"],result["admission"]),("one","canonical"))
+            self.assertNotIn("running",result)
+            # Replaying the request ID returns the identical receipt, however the session's state moved.
+            hermes.modules["tui_gateway.server"]._sessions["sid"]["running"]=True
+            self.assertEqual(submit("again",params)["result"],result)
             self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
             with hermes.journal.db:
                 hermes.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','old',1)")
