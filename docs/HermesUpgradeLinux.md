@@ -160,6 +160,19 @@ script in worker `qualificationFiles`. Their exact bytes must remain unchanged
 between qualification and install. The worker also binds its configuration,
 platform helper, and directly referenced hook files.
 
+On a host that requires a specific sandboxed browser for the local-network probe,
+qualify the app release with `--computer-probe-browser /absolute/direct/ELF`.
+The receipt's optional `computerProbeBrowser` metadata carries that selection
+through controlled activation and later in-app updates. The worker reads the
+owner-private deployed receipt and checks the requested path, canonical executable
+and a fresh content hash for every qualification. A browser update between checks
+can change the hash at the same canonical path. Missing files, launcher scripts,
+malformed metadata and retargeted symlinks stop the check. Changes during a check
+prevent a receipt; changes before install require another check. The install
+also checks after backup and verification, before reopening work. Other probes
+keep the pinned PM Chromium. Older receipts without this metadata keep their
+existing default. There is no additional worker setting.
+
 For an installation with an approved source repair, save the original
 `git diff HEAD --binary` bytes in an owner-only immutable file. Set worker
 `approvedPatchFile` to that absolute path and `requiredPatchSha256` to its SHA256.

@@ -107,8 +107,11 @@ repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
     subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(live), "diff", "HEAD", "--binary"]))
 browser_facts = home / "tools/facts.json"
 browser = repair_worker["native_chromium"](home)
-host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
 qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
+probe_browser = qualification["computer_probe_browser"](PAYLOAD.get("computerProbeBrowser"))
+host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
+if probe_browser:
+    host_files[probe_browser["executable"]] = probe_browser["sha256"]
 digest = qualification["integration_digest"](release)
 operation = str(uuid.uuid4())
 stage = ops / ("qualification-" + operation)
@@ -120,6 +123,7 @@ fixture_home = stage / "host-home"
 fixture_home.mkdir(mode=0o700)
 env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if k in os.environ}
 env.update(HOME=str(fixture_home), PYTHONDONTWRITEBYTECODE="1", AGENT_BROWSER_EXECUTABLE_PATH=str(browser), PATH=str(Path(PAYLOAD["node"]).parent) + ":" + env.get("PATH", "/usr/bin:/bin"))
+env = qualification["computer_probe_environment"](env, probe_browser)
 
 def run(argv, name, environment=None, capture=False, cwd=release):
     with (stage / name).open("w") as output:
@@ -169,14 +173,16 @@ try:
         "shared-oauth-regressions.log", regression_env)
     run([qualified, runner, "google-auth", "--google-bundle", private / "google-plugin"],
         "google-regressions.log", regression_env)
+    utility = runpy.run_path(str(release / "scripts/hermes-qualified-python.py"))
+    assert utility["fingerprint"](qualified) == prepared["fingerprint"]
     assert snapshot(live) == snapshot(source) == baseline
     assert all(sha(p) == expected for p, expected in host_files.items())
     assert qualification["integration_digest"](release) == digest
     assert qualification["integration_digest"](isolated_app) == digest
-    utility = runpy.run_path(str(release / "scripts/hermes-qualified-python.py"))
-    assert utility["fingerprint"](qualified) == prepared["fingerprint"]
+    assert qualification["computer_probe_browser"](PAYLOAD.get("computerProbeBrowser")) == probe_browser, "Computer probe browser changed during qualification"
     receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
         qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
+    if probe_browser: receipt["computerProbeBrowser"] = probe_browser
     # approved_repair proved this tree derives from the approved artifact; keep that binding
     # so the next in-app update can prove a repair merged over adjacent upstream edits.
     if baseline[1]: receipt["repairArtifactSha256"] = worker["requiredPatchSha256"]
@@ -189,16 +195,19 @@ except BaseException:
 pruned = prune_stage(stage)
 finish(dict(qualificationComplete=True, receipt=str(receipt_path), integrationDigest=digest,
     revision=baseline[0], trackedPatchSha256=baseline[1], browserExecutableSha256=host_files[str(browser)], productionSourceUnchanged=True,
-    disposableFilesRemoved=pruned))
+    computerProbeBrowser=probe_browser, disposableFilesRemoved=pruned))
 '''
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name", help="staged release name from release-app.py prepare")
-    args = parser.parse_args()
+    parser.add_argument("--computer-probe-browser", help="absolute host path to a sandboxed browser ELF for the local-network probe only")
+    args = parser.parse_args(argv)
     if Path(args.name).name != args.name:
         parser.error("Use a release name, not a path")
+    if args.computer_probe_browser and not Path(args.computer_probe_browser).is_absolute():
+        parser.error("--computer-probe-browser must be an absolute host path")
     spec = importlib.util.spec_from_file_location("release_app", Path(__file__).with_name("release-app.py"))
     release_app = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(release_app)
@@ -206,7 +215,7 @@ def main():
     if manifest["status"] not in ("preparing", "prepared"):
         parser.error("Qualify an unactivated staged release only")
     facts = release_app.remote(manifest["host"], release_app.REMOTE_FACTS, {"appBase": manifest["appBase"]})
-    payload = {**manifest, "node": facts["prior"]["node"]}
+    payload = {**manifest, "node": facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser}
     result = release_app.remote(manifest["host"], REMOTE, payload, timeout=7200)
     release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

@@ -265,11 +265,15 @@ def source_state(source, dashboard_target=None):
     return revision, sha(patch) if patch else None, patch
 
 
-def integration_digest(app_root):
+def qualification_module(app_root):
     module_path = Path(app_root) / "src/hermes/qualification.py"
     spec = importlib.util.spec_from_file_location("upgrade_qualification", module_path)
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    return module.integration_digest(Path(app_root))
+    return module
+
+
+def integration_digest(app_root):
+    return qualification_module(app_root).integration_digest(Path(app_root))
 
 
 def dependency_inputs(source, revision):
@@ -478,7 +482,16 @@ class Worker:
             path = private_file(filename)
             if not path.is_absolute(): raise RuntimeError("Qualification dependency paths must be absolute")
             files[str(path)] = sha(path.read_bytes())
+        # Fingerprint the selection, not the whole receipt: controlled installation
+        # replaces that receipt. Rebind content for each run, retaining canonical path
+        # identity and detecting content/path changes during qualification and install.
+        files["computerProbeBrowser"] = self.computer_probe_browser()
         return files
+
+    def computer_probe_browser(self):
+        receipt_path = Path(self.config["qualificationReceipt"])
+        receipt = json.loads(private_file(receipt_path).read_text()) if os.path.lexists(receipt_path) else {}
+        return qualification_module(self.app).receipt_computer_probe_browser(receipt, rebind=True)
 
     def managed_fingerprint(self, python):
         utility = self.app / "scripts/hermes-qualified-python.py"
@@ -748,6 +761,8 @@ class Worker:
         current, current_patch, patch = self.check_step("source", "Current source and shared OAuth repair", lambda: self.snapshot(self.source))
         dashboard_link = self.dashboard_link()
         host_fingerprint = self.host_fingerprint()
+        probe_browser = host_fingerprint["computerProbeBrowser"]
+        self.environment = qualification_module(self.app).computer_probe_environment(self.environment, probe_browser)
         patch = self.check_step("repair", "Exact approved repair provenance", lambda: self.approved_repair(current, current_patch, patch))
         self.update(current=self.revision(current))
         digest = integration_digest(self.app)
@@ -864,12 +879,13 @@ class Worker:
         def regressions():
             for argv in self.config["hooks"]["regressions"]: self.run(argv)
         self.check_step("regressions", "Host OAuth, Google authentication and profile regressions", regressions)
-        if self.snapshot(self.source)[:2] != (current, current_patch) or self.snapshot(source)[:2] != (candidate, candidate_patch) or git_tag_refs(source) != git_tag_refs(self.source) or integration_digest(self.app) != digest or self.dashboard_link() != dashboard_link or self.host_fingerprint() != host_fingerprint:
-            raise RuntimeError("Qualification inputs changed while tests were running")
         if (self.managed_fingerprint(qualified_python) if managed else runtime_fingerprint(qualified_python)) != runtime:
             raise RuntimeError("The dependency environment changed during qualification")
+        if self.snapshot(self.source)[:2] != (current, current_patch) or self.snapshot(source)[:2] != (candidate, candidate_patch) or git_tag_refs(source) != git_tag_refs(self.source) or integration_digest(self.app) != digest or self.dashboard_link() != dashboard_link or self.host_fingerprint() != host_fingerprint:
+            raise RuntimeError("Qualification inputs changed while tests were running")
         receipt = {"schemaVersion": 1, "revision": candidate, "trackedPatchSha256": candidate_patch,
             "integrationDigest": digest, "qualifiedAt": now(), "checks": {"realIntegration": True, "hostRegressions": True}}
+        if probe_browser: receipt["computerProbeBrowser"] = probe_browser
         # Binds the staged repair to the approved artifact it was proven against.
         if self.config.get("approvedPatchFile") and candidate_patch: receipt["repairArtifactSha256"] = self.config["requiredPatchSha256"]
         atomic(stage / "qualification.json", receipt)
@@ -965,7 +981,9 @@ class Worker:
         old = (qualification["currentRevision"], qualification["currentPatchSha256"])
         target = (qualification["candidateRevision"], qualification["candidatePatchSha256"])
         expected = {"schemaVersion": 1, "revision": target[0], "trackedPatchSha256": target[1],
-            "integrationDigest": qualification["integrationDigest"], "checks": {"realIntegration": True, "hostRegressions": True}}
+            "integrationDigest": qualification["integrationDigest"], "checks": {"realIntegration": True, "hostRegressions": True},
+            "computerProbeBrowser": qualification["hostFingerprint"].get("computerProbeBrowser")}
+        qualification_module(self.app).receipt_computer_probe_browser(receipt)
         if any(receipt.get(key) != value for key, value in expected.items()) or not receipt.get("qualifiedAt"):
             raise RuntimeError("The target is not fully qualified")
         if git_tag_refs(stage / "source") != qualification["tagRefs"]:
@@ -995,6 +1013,8 @@ class Worker:
             if self.snapshot(self.source)[:2] != old or integration_digest(self.app) != receipt["integrationDigest"] or self.dashboard_link() != qualification.get("dashboardLink") or self.host_fingerprint() != qualification["hostFingerprint"]:
                 raise RuntimeError("The running source changed before installation")
             self.check_step("backup", "Recoverable source, runtime and household backup", lambda: self.hook("backup"))
+            if self.host_fingerprint() != qualification["hostFingerprint"]:
+                raise RuntimeError("Qualification inputs changed before installation")
             self.update(phase="installing", maintenance=True, message="Installing Hermes. Your conversations and settings are backed up.")
             attempted = True
             journal["installStarted"] = True; atomic(stage / "recovery.json", journal)
@@ -1004,6 +1024,8 @@ class Worker:
             def verify():
                 if self.snapshot(self.source)[:2] != target or self.dashboard_link() != qualification.get("dashboardLink"): raise RuntimeError("Installed source differs from qualified source")
                 self.hook("verify")
+                if self.computer_probe_browser() != qualification["hostFingerprint"].get("computerProbeBrowser"):
+                    raise RuntimeError("Computer probe browser changed during installation")
             self.check_step("verify", "Original sign-in, profiles, services and fresh connections", verify)
             self.update(current=self.revision(target[0]))
             self.cancellation()

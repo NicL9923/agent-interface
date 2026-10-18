@@ -230,7 +230,11 @@ class QualificationWorkerTests(unittest.TestCase):
         git("remote", "add", "origin", "https://github.com/NousResearch/hermes-agent.git")
         self.app = self.root / "app"; (self.app / "src/hermes").mkdir(parents=True); (self.app / "scripts/spike").mkdir(parents=True)
         (self.app / "node_modules").mkdir()
-        (self.app / "src/hermes/qualification.py").write_text("def integration_digest(root):\n    return 'a'*64\n")
+        # Exercise the real shared selector; only replace the integration manifest with
+        # this control-plane fixture's one input, not the native runtime suite.
+        shutil.copy2(Path(worker.__file__).resolve().parents[1] / "src/hermes/qualification.py", self.app / "src/hermes/qualification.py")
+        (self.app / "src/shared").mkdir()
+        (self.app / "src/shared/qualification-inputs.json").write_text('["src/hermes/qualification.py"]')
         (self.app / "scripts/spike/run.py").write_text("# Control-plane fixture, never production qualification.\nprint('fixture integration command complete')\n")
         for filename in ["package.json", "package-lock.json", "tsconfig.json"]: (self.app / filename).write_text("{}")
         hook = self.root / "hook.py"; hook.write_text(HOOK)
@@ -296,6 +300,146 @@ print("fixture integration command complete")
 ''')
         return counter
 
+    def select_browser(self):
+        browser = self.root / 'system-chrome'
+        browser.write_bytes(b'\x7fELFfixture'); browser.chmod(0o700)
+        selected = self.root / 'selected-chrome'
+        selected.unlink(missing_ok=True); selected.symlink_to(browser)
+        descriptor = worker.qualification_module(self.app).computer_probe_browser(str(selected))
+        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
+            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
+            'checks': {'realIntegration': True, 'hostRegressions': True}, 'computerProbeBrowser': descriptor})
+        return browser, selected, descriptor
+
+    def capture_browser_environment(self):
+        output = self.root / 'browser-environment.json'
+        (self.app / 'scripts/spike/run.py').write_text(f'''import json, os, pathlib
+pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) for key in
+    ('HERMES_COMPUTER_PROBE_BROWSER', 'AGENT_BROWSER_EXECUTABLE_PATH')}}))
+''')
+        return output
+
+    def test_legacy_receipt_qualifies_without_a_browser_override(self):
+        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
+            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
+            'checks': {'realIntegration': True, 'hostRegressions': True}})
+        seen = self.capture_browser_environment()
+        stage = self.check()
+        self.assertIsNone(json.loads(seen.read_text())['HERMES_COMPUTER_PROBE_BROWSER'])
+        self.assertNotIn('computerProbeBrowser', json.loads((stage / 'qualification.json').read_text()))
+        self.assertEqual(self.install()['status'], 'complete')
+        self.assertEqual(self.status()['phase'], 'succeeded')
+
+    def test_consecutive_updates_rebind_browser_content_and_preserve_canonical_selection(self):
+        browser, selected, descriptor = self.select_browser()
+        seen = self.capture_browser_environment()
+        for index in range(2):
+            if index:
+                # System Chrome can update between qualifications without changing its path.
+                browser.write_bytes(b'\x7fELFupdated-browser')
+                installed = self.new
+                (self.source / 'version').write_text('next update')
+                self.git('add', '.'); self.git('commit', '-m', 'next update')
+                self.new = self.git('rev-parse', 'HEAD').decode().strip()
+                self.git('update-ref', 'refs/remotes/origin/main', self.new)
+                self.git('checkout', '--detach', installed)
+            stage = self.check()
+            receipt = json.loads((stage / 'qualification.json').read_text())
+            expected = {**descriptor, 'sha256': worker.sha(browser.read_bytes())}
+            self.assertEqual(receipt['computerProbeBrowser'], expected)
+            self.assertEqual(self.status()['qualification']['hostFingerprint']['computerProbeBrowser'], expected)
+            self.assertEqual(json.loads(seen.read_text())['HERMES_COMPUTER_PROBE_BROWSER'], str(browser))
+            self.install()
+            self.assertEqual(self.status()['phase'], 'succeeded')
+            self.assertEqual(json.loads(self.receipt.read_text())['computerProbeBrowser'], expected)
+        self.assertNotEqual(expected['sha256'], descriptor['sha256'])
+        self.assertEqual(expected['requested'], str(selected))
+
+    def test_explicit_selection_errors_fail_before_staging(self):
+        for invalid in ('missing', 'retargeted', 'malformed', 'shared-receipt', 'symlink-receipt'):
+            with self.subTest(invalid=invalid):
+                browser, selected, descriptor = self.select_browser()
+                message = 'path is unavailable'
+                if invalid == 'missing': browser.unlink()
+                elif invalid == 'retargeted':
+                    other = self.root / 'other'; other.write_bytes(browser.read_bytes()); other.chmod(0o700)
+                    selected.unlink(); selected.symlink_to(other)
+                    message = 'resolved path changed'
+                elif invalid == 'malformed':
+                    worker.atomic(self.receipt, {'computerProbeBrowser': None})
+                    message = 'malformed computer probe browser'
+                elif invalid == 'shared-receipt':
+                    self.receipt.chmod(0o644); message = 'private file'
+                else:
+                    other_receipt = self.root / 'other-receipt'; self.receipt.replace(other_receipt)
+                    self.receipt.symlink_to(other_receipt); message = 'private file'
+                operation = str(uuid.uuid4())
+                worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking', 'checks': []})
+                with self.assertRaisesRegex((ValueError, RuntimeError), message):
+                    worker.Worker(self.config, self.state, 'check', operation).main()
+                self.assertFalse((self.root / 'stages' / ('qualification-' + operation)).exists())
+                self.receipt.unlink()
+
+    def test_browser_mutation_during_prepare_or_integration_prevents_receipt(self):
+        for boundary, mutation in (('prepare', 'content'), ('integration', 'content'), ('integration', 'symlink')):
+            with self.subTest(boundary=boundary, mutation=mutation):
+                browser, selected, descriptor = self.select_browser()
+                other = self.root / 'other'; other.write_bytes(browser.read_bytes()); other.chmod(0o700)
+                original_prepare = worker.Worker.stage_source
+                def mutate(mutation=mutation, browser=browser, selected=selected, other=other):
+                    if mutation == 'content': browser.write_bytes(b'\x7fELFchanged-during-check')
+                    else: selected.unlink(); selected.symlink_to(other)
+                def prepare(instance, *args, original_prepare=original_prepare, mutate=mutate):
+                    original_prepare(instance, *args)
+                    mutate()
+                if boundary == 'integration':
+                    (self.app / 'scripts/spike/run.py').write_text(
+                        f'import pathlib\npathlib.Path({str(browser)!r}).write_bytes(b"\\x7fELFchanged-during-check")\n'
+                        if mutation == 'content' else
+                        f'import pathlib\nlink=pathlib.Path({str(selected)!r})\nlink.unlink()\nlink.symlink_to({str(other)!r})\n')
+                operation = str(uuid.uuid4())
+                worker.atomic(self.state / 'status.json', {'operationId': operation, 'phase': 'checking', 'checks': []})
+                with patch.object(worker.Worker, 'stage_source', prepare if boundary == 'prepare' else original_prepare):
+                    with self.assertRaisesRegex((ValueError, RuntimeError), 'inputs changed|resolved path changed'):
+                        worker.Worker(self.config, self.state, 'check', operation).main()
+                stage = self.root / 'stages' / ('qualification-' + operation)
+                self.assertFalse((stage / 'qualification.json').exists())
+                self.assertNotIn('qualification', self.status())
+
+    def test_browser_or_receipt_changes_invalidate_install_before_hooks(self):
+        for mutation in ('content', 'symlink', 'missing-browser', 'missing-receipt', 'candidate-metadata'):
+            with self.subTest(mutation=mutation):
+                browser, selected, descriptor = self.select_browser()
+                stage = self.check()
+                if mutation == 'content': browser.write_bytes(b'\x7fELFchanged-before-install')
+                elif mutation == 'symlink':
+                    other = self.root / 'other'; other.write_bytes(browser.read_bytes()); other.chmod(0o700)
+                    selected.unlink(); selected.symlink_to(other)
+                elif mutation == 'missing-browser': browser.unlink()
+                elif mutation == 'missing-receipt': self.receipt.unlink()
+                else:
+                    receipt = json.loads((stage / 'qualification.json').read_text())
+                    receipt.pop('computerProbeBrowser'); worker.atomic(stage / 'qualification.json', receipt)
+                self.install(expect_error=True)
+                self.assertEqual(self.status()['phase'], 'blocked')
+                self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+                self.assertEqual((stage / 'hook-order.txt').read_text().splitlines(), ['regressions'])
+
+    def test_browser_mutation_in_backup_or_install_stops_or_rolls_back(self):
+        for boundary in ('backup', 'install'):
+            with self.subTest(boundary=boundary):
+                browser, selected, descriptor = self.select_browser()
+                stage = self.check()
+                original_hook = worker.Worker.hook
+                def hook(instance, name, original_hook=original_hook, boundary=boundary, browser=browser):
+                    original_hook(instance, name)
+                    if name == boundary: browser.write_bytes(b'\x7fELFchanged-in-host-hook')
+                with patch.object(worker.Worker, 'hook', hook): self.install()
+                self.assertEqual(self.status()['phase'], 'blocked' if boundary == 'backup' else 'rolled_back')
+                self.assertEqual(self.git('rev-parse', 'HEAD').decode().strip(), self.old)
+                self.assertEqual(json.loads(self.receipt.read_text())['computerProbeBrowser'], descriptor)
+                self.assertFalse((stage / 'gate').exists())
+
     def test_integration_suite_reruns_once_and_says_so(self):
         counter = self.flaky_integration(1)
         self.check()
@@ -336,7 +480,7 @@ print("fixture integration command complete")
     def test_sigterm_keeps_orphan_hook_lock_and_cancel_recovers_saved_baseline(self):
         stage = self.check()
         worker.atomic(self.receipt, {"schemaVersion": 1, "revision": self.old, "trackedPatchSha256": None,
-            "integrationDigest": "a" * 64, "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
+            "integrationDigest": worker.integration_digest(self.app), "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
         (stage / "pause-install").touch()
         operation, request = str(uuid.uuid4()), str(uuid.uuid4())
         state = self.status(); state.update(operationId=operation, requestId=request, phase="installing", maintenance=True)
@@ -375,7 +519,7 @@ print("fixture integration command complete")
     def test_live_install_cancellation_waits_for_boundary_then_restores(self):
         stage = self.check()
         worker.atomic(self.receipt, {"schemaVersion": 1, "revision": self.old, "trackedPatchSha256": None,
-            "integrationDigest": "a" * 64, "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
+            "integrationDigest": worker.integration_digest(self.app), "qualifiedAt": worker.now(), "checks": {"realIntegration": True, "hostRegressions": True}})
         (stage / "pause-install").touch()
         operation, request = str(uuid.uuid4()), str(uuid.uuid4())
         state = self.status(); state.update(operationId=operation, requestId=request, phase="installing", maintenance=True)
@@ -852,9 +996,12 @@ if __name__=="__main__":
         browser=self.root/'fixture-live-home/tools/chromium-1/chrome'; browser.parent.mkdir(parents=True)
         browser.write_text('#!/bin/sh\n'); browser.chmod(0o700)
         (browser.parents[1]/'facts.json').write_text(json.dumps({'packages':{'chromium':{'env':{'AGENT_BROWSER_EXECUTABLE_PATH':'{{store}}/chromium-1/chrome'}}}}))
-        (self.app/'scripts/spike/run.py').write_text(f"import os, pathlib\npathlib.Path({str(self.root/'browser-seen')!r}).write_text(os.environ.get('AGENT_BROWSER_EXECUTABLE_PATH', ''))\n")
+        selected_browser, _, descriptor = self.select_browser()
+        seen = self.capture_browser_environment()
         stage=self.check(); qualification=self.status()['qualification']
-        self.assertEqual((self.root/'browser-seen').read_text(),str(browser.resolve()))
+        self.assertEqual(json.loads(seen.read_text()), {'AGENT_BROWSER_EXECUTABLE_PATH': str(browser.resolve()),
+            'HERMES_COMPUTER_PROBE_BROWSER': str(selected_browser)})
+        self.assertEqual(json.loads((stage / 'qualification.json').read_text())['computerProbeBrowser'], descriptor)
         self.assertEqual(qualification['runtimeMode'],'managed'); self.assertEqual(qualification['qualificationPython'],str(stage/'qualified-python'))
         self.assertEqual(qualification['runtimeFingerprint']['dependenciesSha256'],'b'*64)
         self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
