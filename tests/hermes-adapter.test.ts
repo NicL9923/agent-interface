@@ -84,6 +84,17 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('never joins a forced routine scan that began before a later edit', async () => {
+    incrementalDiscovery=true;deferredMethods.add('agent-interface.discover');
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));
+    const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
+    const first=runtime.saveRoutine(routine,'job');
+    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
+    const second=runtime.saveRoutine({...routine,prompt:'Changed'},'job');
+    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(2));
+    for(const call of calls.filter(call=>call.method==='agent-interface.discover') as Record<string,any>[])sockets[0].receive({id:call.id,result:{cursor:'0',events:[]}});
+    await Promise.all([first,second]);
+  });
   it('forces discovery immediately after routine edits only when the add-on supports it', async () => {
     incrementalDiscovery=true;
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));

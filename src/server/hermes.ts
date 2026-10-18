@@ -659,7 +659,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   }
   async function scanRoutines():Promise<void>{
     discoveryFull=true;
-    try{await connect();if(incrementalDiscovery){await rpc('agent-interface.discover',{cursor:'0',full:true});discoveryFull=false;}}
+    try{await connect();if(incrementalDiscovery){await rpc('agent-interface.discover',{cursor:'0',full:true},false);discoveryFull=false;}}
     catch{/* A saved routine stays saved. The next discovery tick retries its scan. */}
   }
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {

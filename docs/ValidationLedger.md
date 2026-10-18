@@ -1,5 +1,51 @@
 # Validation ledger
 
+## October 18 Hermes chat efficiency, pre-release
+
+Based on `4c2aeed`. GPT-6.1 Sol implemented
+five changes: opt-in inflight SSE patches on web and iOS, decorated history
+memoization in the add-on, lazy assistant configuration with household roster
+events, canonical send admission in one RPC, and incremental routine discovery.
+Legacy conversation streams keep their existing change cadence. The native API
+contract documents the new events and detail-only configuration fields.
+
+History cache misses still bind the full history because binding determines
+request IDs and earlier file context. The cache bypasses active, queued and
+unbound sessions and checks native row identities, DB/WAL/config file stamps,
+the journal's SQLite mutation count and a 30-second expiry. Approvals and
+clarifications retain one light route read for profile ownership, request kind
+and participation; the adapter reuses that read instead of opening again.
+Upstream has no forward execution cursor, so discovery checks job timestamps,
+rescans unchanged jobs after 60 seconds and supports a forced scan after edits.
+
+Checks on the Mac mini, Node 26.10.0 and Python 3.14.7:
+
+- `npm run typecheck`, `ruff check .` and `npm run build` passed.
+- `npm test` passed all 788 tests. The same 788 passed with
+  `PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+  on Node 24.21.0.
+- `python3 scripts/run-python-tests.py` reported 20 test files passed, one skipped,
+  zero failed. The terminal file requires tmux. Two tests inside passing files
+  require optional prepared Hermes source environments and skipped too.
+  `python3 tests/hermes_extension_journal_test.py` passed all 17 tests again
+  after the final cache change.
+- `IOS_DERIVED_DATA=.private/ios-build-efficiency bash .agents/tools/validate-ios.sh
+  39F5329D-FA70-4259-9B8A-6AECECDE2227 test` passed and exited 0 on iPhone 18 Pro:
+  249 unit tests and 43 UI tests, no failures. Two unit evidence tests and the
+  screenshot tour skipped without output paths; the iPad-only test skipped on
+  this iPhone. Xcode 27.1 used the iOS 27.0 runtime. The task booted one simulator
+  and shut it down afterward. After all tests finished, the optional
+  `simctl diagnose` collector stalled in its 600-second timeout. Stopping that
+  collector let Xcode finalize the result bundle and report `TEST SUCCEEDED`.
+
+Initial web and native checks found obsolete eight-second polling and stream
+count assertions; those now cover the 45-second fallback and opt-in streams.
+The first native run stopped after that polling test failed four assertions.
+The final run uses the corrected assertions and adds an inflight/roster contract test. Native build and
+result output uses the requested `.private` paths on the SSD worktree.
+No live Hermes probe or production receipt was collected. Independent review,
+a PR, release qualification and deployment remain with the orchestrator.
+
 ## October 18 app release 0fa04ff
 
 PR #147 merged at `0fa04ffbfdfcb7f7442735e9b0d8b9f2602d8a44`. The release is live at `https://agentui.wildflowersranch.com`,
