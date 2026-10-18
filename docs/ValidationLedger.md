@@ -1,5 +1,41 @@
 # Validation ledger
 
+## October 18 Patch owned-local-browser authorization
+
+Based on `4c2aeed`, implemented with OpenAI GPT-6.1 Sol. The add-on reads the
+default-off `browser.agent_interface.allow_local_network` from each active
+profile. Local classification also requires an effectively local native terminal
+policy and supervisor provenance verified against live process ownership, birth
+times, parentage, the actual loopback listening socket, and browser websocket ID.
+Native metadata/website checks, TLS, human control and operation leases remain.
+Patch's live config and all VPS services are untouched; release qualification and
+the controlled idle-gated `release-app.py` activation remain the release owner's work.
+
+- `TMPDIR=/Volumes/DevSSD/scratch/patch-local-browser/tmp python3 scripts/run-python-tests.py`
+  passed 20 test files with the system-terminal file skipped for missing `tmux`.
+  Two other individual tests skipped on macOS. Final focused computer and
+  qualification reruns passed, including all 29 computer tests.
+- `ruff check .` with pinned ruff 0.17.0 and `git diff --check` passed.
+  TypeScript is unchanged; `npm test` was not run.
+- Real Hermes `acc3cada0da86c81efc8aa6c5a291989549ca900` plus approved repair
+  `30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`
+  ran in disposable DevSSD homes. `scripts/spike/computer_probe.py` passed all
+  10 native routing/lease/recovery checks. The new local-network probe passed
+  all 11 checks, including real native KVM preflight, consent revocation, remote
+  and container refusals, metadata/website policy, provenance and ownership.
+  Actual native `browser_exec` navigation to a self-signed local fixture returned
+  `net::ERR_CERT_AUTHORITY_INVALID`, with no HTTP request reaching the fixture.
+
+The [isolated receipt](evidence/hermes-local-network-mac-20261018.json) is development
+evidence, not a production qualification receipt. Full Chrome builds timed out
+on this Mac; Chromium headless shell completed the rehearsal. Desktop start was
+a fixture. The actual KVM, headed production browser and Linux activation remain
+unchecked. The KVM's invalid certificate still blocks trusted access. Reproduction,
+profile configuration and guarded activation/rollback are in
+[SharedComputer.md](SharedComputer.md#profile-authorization-for-local-networks).
+Final source fingerprint, excluding this ledger:
+`sha256:8892bf0f3155232db3905ea1037f7eba717ec42fb7c460c89d8ab22b3eaf5a9f`.
+
 ## October 18 app release 0fa04ff
 
 PR #147 merged at `0fa04ffbfdfcb7f7442735e9b0d8b9f2602d8a44`. The release is live at `https://agentui.wildflowersranch.com`,
