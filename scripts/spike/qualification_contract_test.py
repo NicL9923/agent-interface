@@ -20,6 +20,61 @@ def module(name, path):
 qualification = module("qualification_contract", APP / "src/hermes/qualification.py")
 extension = module("extension_contract", APP / "src/hermes/extension.py")
 
+class BrowserSelectionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.browser = self.root / "chrome"
+        self.browser.write_bytes(b"\x7fELFfixture"); self.browser.chmod(0o700)
+
+    def test_selection_preserves_pm_browser_and_legacy_default(self):
+        environment = {"AGENT_BROWSER_EXECUTABLE_PATH": "/pm/chromium"}
+        self.assertIsNone(qualification.computer_probe_browser(None))
+        self.assertIsNone(qualification.receipt_computer_probe_browser({}, rebind=True))
+        self.assertEqual(qualification.computer_probe_environment(environment, None), environment)
+        descriptor = qualification.computer_probe_browser(str(self.browser))
+        self.assertEqual(descriptor, dict(requested=str(self.browser), executable=str(self.browser),
+                                          sha256=hashlib.sha256(self.browser.read_bytes()).hexdigest()))
+        self.assertEqual(qualification.computer_probe_environment(environment, descriptor),
+                         {**environment, "HERMES_COMPUTER_PROBE_BROWSER": str(self.browser)})
+
+    def test_invalid_explicit_browser_fails_with_specific_error(self):
+        wrapper = self.root / "launcher"; wrapper.write_text("#!/bin/sh\n"); wrapper.chmod(0o700)
+        disabled = self.root / "disabled"; disabled.write_bytes(b"\x7fELFfixture"); disabled.chmod(0o600)
+        for requested, message in (("chrome", "absolute host path"),
+                                   (str(self.root / "missing"), "path is unavailable"),
+                                   (str(self.root), "executable regular file"),
+                                   (str(disabled), "executable regular file"),
+                                   (str(wrapper), "direct ELF executable, not a launcher script")):
+            with self.subTest(requested=requested), self.assertRaisesRegex(ValueError, message):
+                qualification.computer_probe_browser(requested)
+
+    def test_malformed_selection_is_never_treated_as_legacy(self):
+        descriptor = qualification.computer_probe_browser(str(self.browser))
+        for value in (None, {}, "chrome", {**descriptor, "requested": "chrome"},
+                      {**descriptor, "executable": 7}, {**descriptor, "sha256": "invalid"}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "malformed computer probe browser"):
+                qualification.receipt_computer_probe_browser({"computerProbeBrowser": value}, rebind=True)
+
+    def test_rebind_allows_content_update_but_refuses_missing_or_retargeted_selection(self):
+        link = self.root / "selected"; link.symlink_to(self.browser)
+        descriptor = qualification.computer_probe_browser(str(link))
+        receipt = {"computerProbeBrowser": descriptor}
+        self.browser.write_bytes(b"\x7fELFupdated")
+        rebound = qualification.receipt_computer_probe_browser(receipt, rebind=True)
+        self.assertEqual(rebound["executable"], descriptor["executable"])
+        self.assertNotEqual(rebound["sha256"], descriptor["sha256"])
+        # Reading historical metadata must not demand today's binary hash.
+        self.assertEqual(qualification.receipt_computer_probe_browser(receipt), descriptor)
+        other = self.root / "other"; other.write_bytes(self.browser.read_bytes()); other.chmod(0o700)
+        link.unlink(); link.symlink_to(other)
+        with self.assertRaisesRegex(ValueError, "resolved path changed since selection"):
+            qualification.receipt_computer_probe_browser(receipt, rebind=True)
+        other.unlink()
+        with self.assertRaisesRegex(ValueError, "path is unavailable"):
+            qualification.receipt_computer_probe_browser(receipt, rebind=True)
+
+
 class QualificationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="agent-interface-qualification-")

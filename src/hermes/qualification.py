@@ -19,6 +19,55 @@ def integration_digest(app_root):
     return hashlib.sha256("\n".join(rows).encode()).hexdigest()
 
 
+def computer_probe_browser(requested):
+    """Bind an explicitly selected host browser, never a launcher or discovered fallback."""
+    if requested is None:
+        return None
+    if not isinstance(requested, str) or "\0" in requested or not Path(requested).is_absolute():
+        raise ValueError("Computer probe browser must be an absolute host path")
+    try:
+        executable = Path(requested).resolve(strict=True)
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise ValueError("Computer probe browser must be an executable regular file")
+        with executable.open("rb") as stream:
+            if stream.read(4) != b"\x7fELF":
+                raise ValueError("Use the browser's direct ELF executable, not a launcher script")
+            stream.seek(0)
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    except (OSError, RuntimeError) as error:
+        raise ValueError("Computer probe browser path is unavailable: " + requested) from error
+    return dict(requested=requested, executable=str(executable), sha256=digest)
+
+
+def receipt_computer_probe_browser(receipt, *, rebind=False):
+    """Validate optional receipt metadata; a new run permits a browser content update only.
+
+    Keep receipt reads independent of the current host binary. A receipt attests a past
+    run; the updater freshly binds its canonical executable for each new qualification.
+    """
+    if not isinstance(receipt, dict):
+        raise ValueError("Qualification receipt must be an object.")
+    if "computerProbeBrowser" not in receipt:
+        return None
+    descriptor = receipt["computerProbeBrowser"]
+    if (not isinstance(descriptor, dict) or set(descriptor) != {"requested", "executable", "sha256"}
+            or any(not isinstance(descriptor.get(key), str) or "\0" in descriptor[key]
+                   or not Path(descriptor[key]).is_absolute() for key in ("requested", "executable"))
+            or not isinstance(descriptor.get("sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", descriptor["sha256"])):
+        raise ValueError("Qualification receipt has malformed computer probe browser metadata")
+    if not rebind:
+        return descriptor
+    current = computer_probe_browser(descriptor["requested"])
+    if current["executable"] != descriptor["executable"]:
+        raise ValueError("Computer probe browser resolved path changed since selection")
+    return current
+
+
+def computer_probe_environment(environment, descriptor):
+    return {**environment, **({"HERMES_COMPUTER_PROBE_BROWSER": descriptor["executable"]} if descriptor else {})}
+
+
 def read_receipt(path, app_root):
     path = Path(path)
     if not path.is_absolute() or path.is_symlink():
@@ -29,6 +78,7 @@ def read_receipt(path, app_root):
     receipt = json.loads(path.read_text())
     if not isinstance(receipt, dict):
         raise ValueError("Qualification receipt must be an object.")
+    receipt_computer_probe_browser(receipt)
     checks = receipt.get("checks")
     if (receipt.get("schemaVersion") != 1
             or not re.fullmatch(r"[0-9a-f]{40}", str(receipt.get("revision", "")))

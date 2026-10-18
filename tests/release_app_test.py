@@ -5,11 +5,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
@@ -40,6 +43,82 @@ def run_remote(program, payload):
     """Execute a host program locally, exactly as the wrapper sends it over SSH."""
     done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True)
     return done.returncode, done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "", done.stderr
+
+
+class QualificationBrowser(unittest.TestCase):
+    def test_operator_qualification_persists_selection_in_private_receipt(self):
+        # Real remote program, Git snapshots and shared selector. The runtime and
+        # probes below are fixture commands, not evidence of native qualification.
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            release = base / 'releases/test'; (release / 'src/hermes').mkdir(parents=True)
+            (release / 'src/shared').mkdir()
+            (release / 'scripts/spike').mkdir(parents=True)
+            (release / 'node_modules').mkdir()
+            shutil.copy2(ROOT / 'src/hermes/qualification.py', release / 'src/hermes/qualification.py')
+            shutil.copy2(ROOT / 'scripts/hermes-upgrade-worker.py', release / 'scripts/hermes-upgrade-worker.py')
+            (release / 'src/shared/qualification-inputs.json').write_text('["src/hermes/qualification.py"]')
+            seen = base / 'browser-seen.json'
+            (release / 'scripts/spike/run.py').write_text(f'''import json, os, pathlib
+pathlib.Path({str(seen)!r}).write_text(json.dumps({{key: os.environ.get(key) for key in
+    ('HERMES_COMPUTER_PROBE_BROWSER', 'AGENT_BROWSER_EXECUTABLE_PATH')}}))
+''')
+            (release / 'scripts/hermes-qualified-python.py').write_text('''import json, pathlib, shlex, sys
+def fingerprint(python): return {"fixture": "runtime"}
+if __name__ == "__main__":
+    stage = pathlib.Path(sys.argv[sys.argv.index("--stage") + 1])
+    launcher = stage / "qualified-python"
+    launcher.write_text("#!/bin/sh\\nexec " + shlex.quote(sys.executable) + ' "$@"\\n'); launcher.chmod(0o700)
+    print(json.dumps({"python": str(launcher), "fingerprint": fingerprint(launcher)}))
+''')
+            for name in ('package.json', 'package-lock.json', 'tsconfig.json'): (release / name).write_text('{}')
+            source = base / 'live'; source.mkdir()
+            (source / 'version').write_text('fixture')
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(source), *args], stderr=subprocess.DEVNULL).decode().strip()
+            git('init', '-q'); git('add', '.')
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
+            revision = git('rev-parse', 'HEAD')
+            home = base / 'home'; (home / 'tools/chromium').mkdir(parents=True)
+            pm = home / 'tools/chromium/chrome'; pm.write_text('#!/bin/sh\n'); pm.chmod(0o700)
+            (home / 'tools/facts.json').write_text(json.dumps({'packages': {'chromium': {'env': {
+                'AGENT_BROWSER_EXECUTABLE_PATH': '{{store}}/chromium/chrome'}}}}))
+            private = base / 'shared/upgrade-private'; private.mkdir(parents=True)
+            (private / 'regressions.py').write_text('# Fixture host regressions\n')
+            repair = base / 'repair.patch'; repair.write_bytes(b''); repair.chmod(0o600)
+            (base / 'shared/hermes-worker.json').write_text(json.dumps(dict(source=str(source), managedHome=str(home),
+                qualificationPython=sys.executable, managedLauncher='/fixture/launcher', approvedPatchFile=str(repair),
+                requiredPatchSha256=hashlib.sha256(b'').hexdigest(), qualificationFiles=[])))
+            browser = base / 'chrome'; browser.write_bytes(b'\x7fELFfixture'); browser.chmod(0o700)
+            selected = base / 'selected'; selected.symlink_to(browser)
+            ops = base / 'operations/test'; ops.mkdir(parents=True)
+            archive = ops / 'release.tar.gz'; archive.write_bytes(b'fixture')
+            payload = dict(appBase=str(base), release=str(release), operationDir=str(ops),
+                archiveSha256=hashlib.sha256(archive.read_bytes()).hexdigest(), hermesRevision=revision,
+                node=shutil.which('node'), computerProbeBrowser=str(selected))
+            code, output, error = run_remote(qualify_app.REMOTE, payload)
+            self.assertEqual(code, 0, error)
+            result = json.loads(output)
+            receipt_path = Path(result['receipt'])
+            receipt = json.loads(receipt_path.read_text())
+            descriptor = dict(requested=str(selected), executable=str(browser), sha256=hashlib.sha256(browser.read_bytes()).hexdigest())
+            self.assertEqual(receipt['computerProbeBrowser'], descriptor)
+            self.assertEqual(result['computerProbeBrowser'], descriptor)
+            self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(seen.read_text()), {'HERMES_COMPUTER_PROBE_BROWSER': str(browser),
+                'AGENT_BROWSER_EXECUTABLE_PATH': str(pm)})
+
+    def test_cli_forwards_host_path_without_resolving_it_on_operator_machine(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = dict(name="release-test", status="preparing", host="host", appBase="/srv/app")
+            remote = Mock(side_effect=[{"prior": {"node": "/pm/node"}}, {"qualificationComplete": True}])
+            module = types.SimpleNamespace(load_manifest=lambda _: manifest, remote=remote, REMOTE_FACTS="facts", MANIFESTS=Path(directory))
+            spec = types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda _: None))
+            with patch.object(qualify_app.importlib.util, "spec_from_file_location", return_value=spec), patch.object(qualify_app.importlib.util, "module_from_spec", return_value=module):
+                qualify_app.main(["release-test", "--computer-probe-browser", "/host-only/chrome"])
+            payload = remote.call_args.args[2]
+            self.assertEqual(payload["computerProbeBrowser"], "/host-only/chrome")
+            self.assertEqual(payload["node"], "/pm/node")
 
 
 class Host:

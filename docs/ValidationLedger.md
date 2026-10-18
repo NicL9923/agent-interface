@@ -1,5 +1,92 @@
 # Validation ledger
 
+## October 18 sandboxed browser selection for qualification
+
+Host qualification of `d7e11db7` passed replay/restart, 29 credential/service,
+10 computer coordination, 22 experience, four routine and 15 integration checks.
+The local-network probe then stopped with `No usable sandbox!` before any
+local-network receipt or final qualification receipt issued. Private OAuth and
+Google regressions and final source checks were not reached.
+
+The qualifier had selected PM Chromium, while this Ubuntu host's existing
+AppArmor profile grants user namespaces to `/opt/google/chrome/chrome`.
+Both `kernel.unprivileged_userns_clone=1` and
+`kernel.apparmor_restrict_unprivileged_userns=1` were retained. The installed
+Google Chrome started headless in a disposable profile without sandbox bypass
+flags. The attempt to dump `chrome://sandbox` returned New Tab, so that smoke
+proves startup only and does not report sandbox-status internals.
+
+OpenAI GPT-6.1 Sol added an explicit `--computer-probe-browser` option to the
+qualification tool. The host resolves an absolute executable ELF, rejects
+launcher scripts and invalid paths, records its requested/resolved path and
+SHA256, and rechecks resolution and content before receipt issuance. Only
+`HERMES_COMPUTER_PROBE_BROWSER` receives the override. Other probes keep
+`AGENT_BROWSER_EXECUTABLE_PATH` pointed to pinned PM Chromium. Default behavior
+is unchanged. No AppArmor, sysctl, production launch, private-URL or TLS setting
+was changed.
+
+The exact host selector returned `/opt/google/chrome/chrome`, SHA256
+`cb19b59995072b86cc7f887b3b1c7ab1f63518a7f2ed9f0d33249e1a040e2c76`.
+It preserved the separate PM environment value. The original selector-only
+change passed its three focused Python files, whole-repository Ruff and
+`git diff --check`. Independent Claude Opus 5.5 approved that scope.
+
+Review then found that future in-app updates would still select PM Chromium.
+OpenAI GPT-6.1 Sol moved browser validation, descriptor handling and environment
+selection into `src/hermes/qualification.py`. The operator now saves optional
+`computerProbeBrowser` metadata in `qualification.json` itself. Controlled
+activation carries it into the deployed receipt, which the updater reads as an
+owner-private file. Legacy receipts without metadata retain the default.
+Each new qualification binds a fresh hash at the selected canonical executable,
+so a system browser update between runs is allowed. Missing or malformed
+selections, non-executable files, wrappers and retargeted symlinks fail closed.
+The worker includes the fresh descriptor in its host fingerprint and candidate
+receipt. It checks that binding after qualification, before host hooks, after
+quiescence and backup, and after install verification. It fingerprints the
+selection rather than the full deployed receipt, so normal receipt activation
+can succeed. PM Chromium remains separate. No new configuration field was added.
+
+Current focused validation used Python 3.14.7 with
+`TMPDIR=/Volumes/DevSSD/scratch/agent-interface-merge/tmp` and
+`python3 scripts/run-python-tests.py tests/release_app_test.py tests/host_programs_test.py scripts/spike/qualification_contract_test.py scripts/hermes-upgrade-worker-test.py`.
+The separate `scripts/spike/run_computer_probes_test.py` run also passed.
+Coverage includes precise validation errors, forwarding a host-only CLI path,
+operator receipt persistence, the updater's isolated environment, separate PM
+selection, legacy receipts and two consecutive installed updates. The second
+update accepts new browser content at the same canonical path. Binary and
+symlink mutations during staging or integration prevent a receipt. Mutations
+before install stop before hooks; mutations in backup stop installation, and
+mutations during installation cause rollback. Synthetic ELF files and fixture
+commands prove controller behavior only, not native browser qualification.
+
+All 22 discovered Python test files ran across the focused and remaining-file
+runs: 21 passed and the tmux acceptance file skipped because tmux is unavailable.
+The worker and bot-delivery files each skipped their existing optional native
+source test because `HERMES_NATIVE_LOCK_SOURCE` and
+`HERMES_NATIVE_DELIVERY_SOURCE` were unset. No other skips or failures occurred.
+The TypeScript qualification contract passed all three tests, including digest
+agreement with Python. Whole-repository Ruff and `git diff --check` passed.
+
+The worker and shared qualification module now change integration inputs.
+The current integration digest is
+`d279b39292d0a7482f6f4ad39640db830f336c80e9acdf29055f59101b6c77cc`.
+The earlier selector-only digest and hashes no longer describe this scope.
+Current SHA256 values are:
+
+- `.agents/tools/qualify-app-release.py`: `3bededff05482f48707536783c40ad7c99882ed8b2821e6404b5e970e94a0ce0`
+- `scripts/hermes-upgrade-worker.py`: `06f40e8b1b6282985b1e9e40bd252db38767b8b397c89e4a6a15cebd53f5b8b3`
+- `src/hermes/qualification.py`: `8ee24f197dd80ceb1261698b0d3ae17ee5e6259155bcd1101329d8fe0444de91`
+- `tests/release_app_test.py`: `fe284c005f98aad5a060684f7ec3391b1cd6e4572caa67ba9a1547e495e39268`
+- `scripts/hermes-upgrade-worker-test.py`: `f7f3b28f962c794a1bee4014064f3ca86cfb226c6fb6fb650355e0f5e953bc01`
+- `scripts/spike/qualification_contract_test.py`: `7b56025a5d32be21a1f4fff420b42c85d06b36bc298641992e52fc15d74107e9`
+
+Independent Claude Opus 5.5 reviewed all nine files at the handoff hashes and
+approved the expanded scope with no P1 or P2 findings. It verified receipt
+compatibility, legacy defaults, environment separation, consecutive updates,
+installation fences and maintenance recovery. The parent also ran the full
+Node 24.21.0 Vitest suite: all 804 tests passed in 69 files. Fresh full host
+qualification remains required. Production is unchanged.
+
 ## October 18 credential qualification interruption review
 
 The full host qualification of merged source `172dcddf` passed native replay,
