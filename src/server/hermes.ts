@@ -1,6 +1,6 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
 import ClientWebSocket from 'ws';
 import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
@@ -59,7 +59,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   // Assistants with an open in flight, counted, for frames that arrive before its session is known.
   const opening = new Map<string, number>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
-  const watchers = new Map<string, Set<() => void>>();
+  const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]}>();
   let capabilityCache: Capabilities | undefined;
   // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
   const SHARED_READ_MS = 3_000;
@@ -89,13 +90,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
   const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
-  function changed(botId?: string): void {
+  function changed(botId?: string, kind?: "inflight"): void {
     if (botId === undefined) changeEpoch++;
     else touched(botId);
     for (const [watched, listeners] of watchers) {
       if (botId !== undefined && watched !== botId) continue;
       for (const listener of listeners) {
-        try { listener(); } catch { /* A watcher never stops frame processing. */ }
+        try { listener(kind); } catch { /* A watcher never stops frame processing. */ }
       }
     }
   }
@@ -153,6 +154,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // A disconnected stream cannot identify which turn is now active. Fresh
     // native snapshots restore current activity, reasoning and tools.
     transient.clear();
+    snapshots.clear();
     // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
     // but failed attempts during an outage, which never carried frames, stay quiet.
     if (current.verified) changed();
@@ -372,7 +374,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       // Opening a conversation attaches this socket to its session, so its frames arrive here.
       const botId = owners.get(sid);
-      if (botId !== undefined) changed(botId);
+      if (botId !== undefined) {
+        const delta=frame.method === "event" && ["message.delta", "reasoning.delta", "thinking.delta", "tool.generating", "status.update", "tool.start"].includes(params.type);
+        if(!delta)snapshots.delete(botId);
+        changed(botId,delta?"inflight":undefined);
+      }
       // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
       else for (const pending of opening.keys()) changed(pending);
     }
@@ -552,7 +558,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   // Most callers need only the session, its run state and open requests, so they skip the history read.
   async function open(botId:string,read:{history?:boolean;window?:ConversationOptions['window']}={history:false}):Promise<Wire>{
     await connect();
-    if(extension){opening.set(botId,(opening.get(botId)??0)+1);let value:Wire;try{value=await rpc('agent-interface.open',{profile:botId,...(read.history===false?{omit_messages:true}:read.window?{window:read.window}:{})});}finally{const count=(opening.get(botId)??1)-1;if(count)opening.set(botId,count);else opening.delete(botId);}live.set(botId,value.session_id);owners.set(value.session_id,botId);const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
+    if(extension){opening.set(botId,(opening.get(botId)??0)+1);let value:Wire;try{value=await rpc('agent-interface.open',{profile:botId,...(read.history===false?{omit_messages:true}:read.window?{window:read.window}:{})});}finally{const count=(opening.get(botId)??1)-1;if(count)opening.set(botId,count);else opening.delete(botId);}live.set(botId,value.session_id);owners.set(value.session_id,botId);if(!transient.has(value.session_id))transient.set(value.session_id,{text:value.inflight?.assistant??'',reasoning:value.inflight?.reasoning??'',state:value.info?.running?'thinking':'idle',requests:[],tools:[]});const state=transient.get(value.session_id);if(state){state.requests=Array.isArray(value.open_requests)?value.open_requests:[];if(state.state==='disconnected'){state.state=value.app_interruption?'interrupted':value.info?.running?'thinking':'idle';state.text='';state.tools=[];}else if(!state.requests.length&&['waiting','blocked'].includes(state.state)){state.state=value.info?.running?'thinking':'idle';}}return value;}
     throw new Error('The verified durable Hermes add-on is required before opening a conversation.');
   }
   // fresh reads Hermes again, as settings and this app's own edits need. Fresh reads share only
@@ -640,6 +646,33 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     if (isEnabled(job) !== input.enabled) throw new Error('Hermes did not apply the routine state. Reload before retrying.');
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
+  function inflightMessage(value:Wire,rows:Message[]):Message{
+      const sid=value.session_id;
+      const state=transient.get(sid);const inflight=value.inflight??{};
+      const active=!!value.info?.running||!!value.app_run_id;
+      // Live text and reasoning accumulate across the whole turn, while each segment
+      // before a tool call is already a history row. Show only the unpersisted tail.
+      // The run ID proves rows belong to this task, and queued follow-ups share it, so
+      // only rows after the latest prompt count. Without a run ID, nothing is removed.
+      const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
+      const lastPrompt=rows.findLastIndex(row=>row.role==='user');
+      const lastTurn=rows.slice(lastPrompt+1).filter(row=>row.role==='assistant');
+      // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
+      // the saved turn too, unless the snapshot names a newer prompt than the last saved one.
+      // The snapshot's prompt keeps file references that the saved display text drops.
+      const prompt=typeof inflight.user==='string'?inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/,'').trim():'';
+      const savedPrompt=!prompt||prompt===rows[lastPrompt]?.text.trim();
+      const persisted=run?lastTurn.filter(row=>row.runId===run):!active&&savedPrompt?lastTurn:[];
+      const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
+      const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
+      let message:Message={id:`${sid}-inflight`,role:"assistant",text:""};
+      if(text||reasoning) {
+        const origin = !savedPrompt ? wireOrigin({id:'inflight-prompt',role:'user',text:prompt},inflight) ?? {kind:'human' as const,visibility:'conversation' as const} : undefined;
+        message={id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})};
+      }
+      // Inherit the saved prompt origin exactly as a conversation read does.
+      return withMessageOrigins([...rows,message]).at(-1)!;
+  }
   async function readConversation(botId:string,options:ConversationOptions):Promise<Conversation>{await connect();const value=await open(botId,options.history===false?{history:false}:{window:options.window});const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
       const rows:Message[]=history.filter((x:Wire)=>x.display_kind!=='hidden').map((row:Wire,listed:number)=>{
         // A windowed read keeps each row's position among all visible rows, so positional IDs never change.
@@ -660,30 +693,14 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         const origin = wireOrigin(message, row);
         return origin ? { ...message, origin } : message;
       });
-      const state=transient.get(sid);const inflight=value.inflight??{};
-      const active=!!value.info?.running||!!value.app_run_id;
-      // Live text and reasoning accumulate across the whole turn, while each segment
-      // before a tool call is already a history row. Show only the unpersisted tail.
-      // The run ID proves rows belong to this task, and queued follow-ups share it, so
-      // only rows after the latest prompt count. Without a run ID, nothing is removed.
-      const run=active&&typeof value.app_run_id==='string'?value.app_run_id:undefined;
-      const lastPrompt=rows.findLastIndex(row=>row.role==='user');
-      const lastTurn=rows.slice(lastPrompt+1).filter(row=>row.role==='assistant');
-      // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
-      // the saved turn too, unless the snapshot names a newer prompt than the last saved one.
-      // The snapshot's prompt keeps file references that the saved display text drops.
-      const prompt=typeof inflight.user==='string'?inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/,'').trim():'';
-      const savedPrompt=!prompt||prompt===rows[lastPrompt]?.text.trim();
-      const persisted=run?lastTurn.filter(row=>row.runId===run):!active&&savedPrompt?lastTurn:[];
-      const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
-      const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
+      const state=transient.get(sid),inflight=value.inflight??{},active=!!value.info?.running||!!value.app_run_id;
+      // Seed a socket attached mid-turn, without replacing text that already advanced during the read.
+      if(active&&state&&typeof inflight.assistant==='string'&&(!state.text||inflight.assistant.startsWith(state.text)))state.text=inflight.assistant;
+      if(active&&state&&typeof inflight.reasoning==='string'&&(!state.reasoning||inflight.reasoning.startsWith(state.reasoning)))state.reasoning=inflight.reasoning;
+      const tail=inflightMessage(value,rows);
+      if(tail.text||tail.reasoning)rows.push(tail);
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
-      // Hermes settles a task after its last frame, with no frame of its own. Prompt one more read.
       if(active&&state&&['done','failed','interrupted'].includes(state.state))settleSoon(botId);
-      if(text||reasoning) {
-        const origin = !savedPrompt ? wireOrigin({id:'inflight-prompt',role:'user',text:prompt},inflight) ?? {kind:'human' as const,visibility:'conversation' as const} : undefined;
-        rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})});
-      }
       const requests=Array.isArray(value.open_requests)?value.open_requests:[];
       const approvals=requests.filter((x:Wire)=>x.method==='approval').map((x:Wire)=>({id:String(x.id),title:'Action approval',detail:x.params?.description??x.params?.command??'Hermes requests approval.',status:'pending' as const}));
       const attention=requests.filter((x:Wire)=>x.method!=='approval').map((x:Wire)=>{
@@ -703,8 +720,10 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
       });
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];
+      if(active&&state)state.tools=toolCalls;
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
+      if(options.history!==false)snapshots.set(botId,{value,rows:rows.filter(row=>row.id!==`${sid}-inflight`),activity:{state:attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined}});
       // Hermes returns a window's earlier rows first: those the app needs for files and origins.
       const cut=value.app_window&&Number.isInteger(value.app_window.earlier)&&Number.isInteger(value.app_window.context)?value.app_window as {earlier:number;context:number}:undefined;
       const shown=withMessageOrigins(rows);
@@ -995,6 +1014,12 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       // Routine deliveries settle outside the open session's frames; the journal names their bot.
       for(const event of result.events??[])if(typeof event.botId==='string')changed(event.botId);
       return result;},
+    inflight(botId):Inflight|undefined {
+      const saved=snapshots.get(botId),sid=live.get(botId),state=sid?transient.get(sid):undefined;
+      if(!saved||!sid||!state||saved.value.session_id!==sid)return undefined;
+      const message=inflightMessage({...saved.value,inflight:{...saved.value.inflight,assistant:state.text,reasoning:state.reasoning}},saved.rows);
+      return {botId,message,activity:{...saved.activity,state:["waiting","blocked","interrupted"].includes(saved.activity.state)?saved.activity.state:state.state,detail:state.detail},toolCalls:state.tools};
+    },
     watch(botId, listener) {
       const listeners = watchers.get(botId) ?? new Set();
       watchers.set(botId, listeners);

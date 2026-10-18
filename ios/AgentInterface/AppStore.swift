@@ -371,16 +371,29 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       var failures = 0
       while !Task.isCancelled {
         do {
-          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events")
+          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events?inflight=1")
           guard let self, !Task.isCancelled else { return }
           failures = 0
           self.streamHeardAt = self.now()
           // Notices sent before the subscription are lost, so connecting counts as one.
           self.requestConversationRefresh()
+          var event = ""
           for try await line in lines {
             guard !Task.isCancelled else { return }
             self.streamHeardAt = self.now()
-            if line.hasPrefix("data:") && line != "data: ping" { self.requestConversationRefresh() }
+            if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+            if line.hasPrefix("data:") {
+              if event == "inflight", let data = String(line.dropFirst(5)).data(using: .utf8),
+                 let patch = try? JSONDecoder().decode(Inflight.self, from: data),
+                 var value = self.conversation, value.botId == patch.botId, self.selectedBotId == patch.botId {
+                value.messages.removeAll { $0.id.hasSuffix("-inflight") }
+                if !patch.message.text.isEmpty || !(patch.message.reasoning ?? "").isEmpty { value.messages.append(patch.message) }
+                value.activity = patch.activity
+                value.toolCalls = patch.toolCalls
+                self.conversation = value
+              } else if event != "inflight" && line != "data: ping" { self.requestConversationRefresh() }
+              event = ""
+            }
           }
         } catch {}
         guard let self, !Task.isCancelled, !self.sessionExpired else { return }

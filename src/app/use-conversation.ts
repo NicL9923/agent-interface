@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, ApiError, cachedResponse, changeStream, pollWhileVisible, write } from "../client-api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
-import type { Message } from "../shared/types";
+import type { Inflight, Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
@@ -66,6 +66,13 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
     let start: string | undefined;
     const cachedStart = cached?.botId === botId ? cached.messages[0]?.id : undefined;
+    let latestInflight: Inflight | undefined;
+    const patch = (value: SavedConversation, live?: Inflight): SavedConversation => {
+      if (!live || live.botId !== value.botId) return value;
+      const messages = value.messages.filter(message => !message.id.endsWith("-inflight"));
+      if (live.message.text || live.message.reasoning) messages.push(live.message);
+      return {...value, messages, activity: live.activity, toolCalls: live.toolCalls};
+    };
     let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;
     let watch: ReplyWatch = {};
@@ -104,7 +111,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         if (heard.reply) setReply({ botId, id: String(++announced), text: replySnippet(heard.reply.text) });
         firstConversation = false;
         if (result !== current.current) holdPlace();
-        setConversation(result);
+        setConversation(patch(result, latestInflight));
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
@@ -130,7 +137,15 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       void load();
     };
     void load();
-    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events`, () => void load());
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=1`, () => {
+      latestInflight = undefined;
+      void load();
+    }, value => {
+      if (!live || value.botId !== botId) return;
+      latestInflight = value;
+      holdPlace();
+      setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
+    });
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
       if (navigator.onLine === false || document.visibilityState === "hidden") return;

@@ -106,6 +106,16 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("patches an inflight reply without fetching the transcript", async () => {
+    conversation = {...conversation, activity:{state:"thinking",runId:"run"},messages:[{id:"u",role:"user",text:"Hello"}]};
+    await render();
+    const reads = vi.mocked(api).mock.calls.length;
+    await act(async () => {
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
+    });
+    expect(container.textContent).toContain("Growing reply");
+    expect(vi.mocked(api).mock.calls).toHaveLength(reads);
+  });
   it("preserves a pending secure form across polling while keeping credentials out of the chat draft", async () => {
     const secure = { method: "vault.save_login" as const, epoch: "current", sessionId: "session", origin: "https://example.invalid", site: "Example" };
     conversation = { ...conversation, attention: [{ id: "login-request", kind: "secure", title: "Save login", detail: "Native request", secure }] };

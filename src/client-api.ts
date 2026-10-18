@@ -1,3 +1,4 @@
+import type { Inflight } from "./shared/types";
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
@@ -141,7 +142,7 @@ const STREAM_SILENCE = 60_000;
  * connects, since notices sent before the subscription are lost. EventSource retries a drop
  * itself but never a refusal, so `open` replaces a closed or silent stream.
  */
-export function changeStream(path: string, onChange: () => void) {
+export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void) {
   let source: EventSource | undefined, heard = 0;
   const close = () => {
     source?.close();
@@ -157,6 +158,10 @@ export function changeStream(path: string, onChange: () => void) {
       heard = Date.now();
       onChange();
     };
+    if (onInflight) current.addEventListener("inflight", event => {
+      heard = Date.now();
+      try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
+    });
     current.addEventListener("ping", () => { heard = Date.now(); });
     current.onmessage = () => {
       heard = Date.now();

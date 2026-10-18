@@ -466,6 +466,12 @@ struct ConversationTurn: Identifiable, Equatable {
     return groups
   }
 }
+struct Inflight: Codable {
+  var botId: String
+  var message: Message
+  var activity: Activity
+  var toolCalls: [ToolCall]
+}
 struct Conversation: Codable, Equatable {
   var attention: [Attention]?
   var botId: String

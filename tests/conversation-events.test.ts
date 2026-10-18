@@ -10,11 +10,12 @@ afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
 
 // An app contract double whose watched conversations change when a test says so.
 function runtimeDouble() {
-  const watchers = new Map<string, Set<() => void>>();
+  const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
   const fixed: Partial<Runtime> = {
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
     listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
+    inflight: botId => ({botId,message:{id:"sid-inflight",role:"assistant",text:"Live reply"},activity:{state:"thinking"},toolCalls:[]}),
     conversation: async botId => ({ botId, messages: [], activity: { state: "idle" }, approvals: [], files: [] }),
     submit: async input => ({ requestId: input.requestId, status: "accepted", runId: "run" }),
     lookupSubmission: async () => null,
@@ -27,7 +28,7 @@ function runtimeDouble() {
       return () => set.delete(changed);
     },
   };
-  return { runtime: fixed as Runtime, change: (botId: string) => { for (const changed of watchers.get(botId) ?? []) changed(); }, watchers };
+  return { runtime: fixed as Runtime, change: (botId: string, kind?: "inflight") => { for (const changed of watchers.get(botId) ?? []) changed(kind); }, watchers };
 }
 async function setup() {
   const fake = runtimeDouble();
@@ -68,6 +69,21 @@ async function stream(url: string, cookie: string, headers: Record<string, strin
 }
 
 describe("conversation change stream", () => {
+  it("sends opted-in deltas without conversation notices and keeps legacy delta notices", async () => {
+    const s = await setup();
+    const current = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
+    const legacy = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
+    await current.until(() => current.notices() === 1);
+    for (let i=0;i<20;i++) s.change("shared", "inflight");
+    await current.until(() => current.text.includes("event: inflight"));
+    await legacy.until(() => legacy.notices() === 1);
+    expect(current.text).toContain('"text":"Live reply"');
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(current.notices()).toBe(1);
+    s.change("shared");
+    await current.until(() => current.notices() === 2);
+    await current.close(); await legacy.close();
+  });
   it("refuses a request without a session, as the conversation read does", async () => {
     const s = await setup();
     for (const path of ["events", "conversation"]) {

@@ -455,6 +455,9 @@ export async function createApp(
   app.addHook("preClose", async () => { for (const end of streams) end(); });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     const botId = id.parse(params(req).id);
+    const optedIn = (req.query as {inflight?: string}).inflight === "1";
+    let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
+    let hidden = JSON.stringify(store.privateBots());
     reply.hijack();
     const response = reply.raw;
     // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
@@ -478,9 +481,28 @@ export async function createApp(
       pending ??= setTimeout(() => { pending = undefined; last = Date.now(); send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
+    let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
+    const notice = (kind?: "inflight") => {
+      if (!optedIn || kind !== "inflight") {
+        clearTimeout(livePending); livePending = undefined;
+        if (optedIn) void redactAgents(store, roster, signedIn(req).id).then(value => { redact = value; });
+        changed(); return;
+      }
+      livePending ??= setTimeout(() => {
+        livePending = undefined; liveLast = Date.now();
+        void (async () => {
+          // Privacy can change through another assistant's settings while this stream stays open.
+          const next = JSON.stringify(store.privateBots());
+          if (next !== hidden) { redact = await redactAgents(store, roster, signedIn(req).id); hidden = next; }
+          const value = runtime.inflight?.(botId);
+          if (!value || !redact) { changed(); return; }
+          send(`event: inflight\ndata: ${JSON.stringify({...value,message:redact.message(value.message),toolCalls:value.toolCalls.map(redact.call)})}\n\n`);
+        })().catch(() => changed());
+      }, Math.max(0, liveLast + 250 - Date.now()));
+    };
     const listeners = watchers.get(botId) ?? new Set();
     watchers.set(botId, listeners.add(changed));
-    const unwatch = runtime.watch?.(botId, changed);
+    const unwatch = runtime.watch?.(botId, notice);
     // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
     const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
     function end() {
@@ -490,6 +512,7 @@ export async function createApp(
       listeners.delete(changed);
       if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
       clearTimeout(pending);
+      clearTimeout(livePending);
       clearInterval(heartbeat);
       streams.delete(end);
       response.end();
@@ -497,6 +520,7 @@ export async function createApp(
     streams.add(end);
     response.on("close", end);
     response.write("retry: 3000\n\n");
+    if (optedIn) changed();
   });
   const submit = async (req: FastifyRequest, explicitSteering = false) => {
     const body = z

@@ -242,6 +242,12 @@ export interface Conversation {
     context: Message[];
   };
 }
+export interface Inflight {
+  botId: string;
+  message: Message;
+  activity: Activity;
+  toolCalls: ToolCall[];
+}
 export interface ConversationOptions {
   /** The app's history window, cut by the runtime when it can. */
   window?: { start?: string; turns?: number };
@@ -353,7 +359,8 @@ export interface Runtime {
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** Calls `changed` whenever the bot's conversation may have changed, until the returned function is called. */
-  watch?(botId: string, changed: () => void): () => void;
+  watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
+  inflight?(botId: string): Inflight | undefined;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;

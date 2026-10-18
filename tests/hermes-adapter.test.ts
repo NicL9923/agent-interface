@@ -82,6 +82,19 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('streams only the unpersisted tail with the saved prompt origin and no open RPC', async () => {
+    snapshot.info={running:true}; snapshot.app_run_id='run';
+    snapshot.inflight={user:'[Cron delivery: morning] prompt',assistant:'Saved segment\nTail',reasoning:'Saved thought\nNext'};
+    snapshot.messages=[{role:'user',text:'[Cron delivery: morning] prompt'}, {role:'assistant',text:'Saved segment',reasoning:'Saved thought',app_run_id:'run'}];
+    await runtime.conversation('shared');
+    const opens=calls.filter(call=>call.method==='agent-interface.open').length;
+    sockets.at(-1)!.receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{delta:' grows'}}});
+    const value=runtime.inflight!('shared')!;
+    expect(value.message.text).toBe('Tail grows');
+    expect(value.message.reasoning).toBe('Next');
+    expect(value.message.origin?.kind).toBe('scheduled');
+    expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(opens);
+  });
   it('preserves canonical run provenance without inventing attribution for unrelated rows', async () => {
     snapshot.messages=[{row_id:1,role:'assistant',text:'Finished',app_run_id:'known-run'},{row_id:2,role:'assistant',text:'Native unattributed reply'}];
     const conversation=await runtime.conversation('shared');

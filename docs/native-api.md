@@ -73,6 +73,17 @@ event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
 
+Clients may opt in with `/api/bots/:id/events?inflight=1`. Token, reasoning,
+status and tool-start frames then send `event: inflight` at most four times a
+second, with JSON `{botId, message, activity, toolCalls}`. `message` is the
+synthetic assistant row whose ID ends in `-inflight`, including optional
+`reasoning` and `origin`. Replace that row, or remove it if both text and
+reasoning are empty, and replace `activity` and `toolCalls` without a GET.
+Persisted text segments are excluded and private agent handoffs are redacted.
+Structural events still send `data: change`, meaning refetch, including on
+stream open. Refetch on reconnect. Streams without the parameter retain their
+one-change-per-second streaming cadence.
+
 A personal assistant with a recorded owner is private to that owner. For anyone
 else it does not exist: lists such as `/api/bots`, bootstrap, Today, search, saved
 items, automations, routines and group chats leave it out, and every route that
