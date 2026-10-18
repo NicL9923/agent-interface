@@ -1,5 +1,52 @@
 # Validation ledger
 
+## October 18 short Chrome socket namespace in native qualification
+
+Full qualification of `763c4ecf` passed the earlier gateway, credential and
+coordination probes, then installed sandboxed Chrome aborted because the PM
+stage's temporary directory made its singleton socket path too long. No final
+receipt issued and private OAuth/Google regressions were not reached.
+
+The local-network probe now gives only its Chrome child a unique short
+`/tmp/agentui-computer-*` directory through TMPDIR, TMP and TEMP. It removes
+that directory after stopping the browser. The browser profile and other bulk
+data remain in the marked disposable qualification home. This follows the
+existing canonical secure-fill probe's socket-directory pattern. No sandbox,
+private-network, TLS or production launch setting changed.
+
+OpenAI GPT-6.1 Sol reproduced the original failure on the Linux host in a new
+owner-private app copy and disposable home with a 182-character TMPDIR. The
+changed probe then completed all 14 real-native checks with a 181-character
+inherited TMPDIR. Cross-process provenance, metadata literal refusals,
+unauthorized profiles, remote/container terminal restrictions, website policy,
+human/operation fencing and shutdown revocation passed. Actual native
+`browser_exec` rejected the synthetic loopback certificate with
+`net::ERR_CERT_AUTHORITY_INVALID`; the TLS fixture received no HTTP request.
+The documented native current-page metadata limitation remains unchanged.
+
+The focused rehearsal used installed native `acc3cada0da86c81efc8aa6c5a291989549ca900`
+and its existing selected dependency tree read-only, approved repair
+`30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`,
+and sandboxed `/opt/google/chrome/chrome`. Its scrubbed environment set only
+fixture HOME/HERMES_HOME, selected native source/site-packages, browser paths,
+language and disabled lazy installs/bytecode. No live profile, shared desktop,
+credential store or service control was used. The native desktop start remained
+a fixture; Chrome, socket ownership and native preflight/dispatch were real.
+Evidence remains in host operations `short-socket-rehearsal-b0ujgf0r`, including
+before/after logs and the after home's `computer-local-network-probe.json`.
+This is focused rehearsal evidence, not a full qualification receipt.
+
+Probe SHA256:
+`a0f85087a46efad3f64c0596cec2eb5b09bbb30538a8b81b895c12a8951db3e7`.
+Integration digest:
+`95a2add812dc07830f3d548fbf6b1621c11d24c918007676db3a2d6c04f48f71`.
+The Python qualification-contract and computer-runner files passed, as did
+all three TypeScript qualification-contract tests on Node 24.21.0. Whole-repo
+Ruff and `git diff --check` passed. Independent Claude Opus 5.5 reviewed the
+change and approved with no blocking findings, verifying path length, child-only
+environment scope and cleanup after Chrome stops. Full merged-source host
+qualification remains required. Production is unchanged.
+
 ## October 18 sandboxed browser selection for qualification
 
 Host qualification of `d7e11db7` passed replay/restart, 29 credential/service,

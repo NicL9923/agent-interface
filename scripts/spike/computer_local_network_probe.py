@@ -15,6 +15,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -81,17 +82,22 @@ def write_receipt(status):
     return result
 
 child = None
+chrome_tmp = None
 recovery = []
 server = None
 try:
     with profile("patch", authorized=True):
         decisions["authorized_without_registration"] = blocked()
     chrome = os.environ["HERMES_COMPUTER_PROBE_BROWSER"]
+    # Chromium's singleton socket must fit Unix's short path limit even when
+    # the disposable qualification home is nested deeply. Keep its profile above.
+    chrome_tmp = tempfile.TemporaryDirectory(prefix="agentui-computer-", dir="/tmp")
     child = subprocess.Popen([chrome, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
         "--disable-background-networking", "--user-data-dir=" + str(resource / "chrome"),
         "--remote-debugging-port=" + str(endpoint.rsplit(":", 1)[1]), "--remote-debugging-address=127.0.0.1",
         "about:blank"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=(home / "chrome.log").open("w"))
+        stderr=(home / "chrome.log").open("w"),
+        env={**os.environ, "TMPDIR": chrome_tmp.name, "TMP": chrome_tmp.name, "TEMP": chrome_tmp.name})
     deadline = time.monotonic() + 25
     while not computer._browser_ready():
         assert child.poll() is None and time.monotonic() < deadline, "Disposable Chrome did not start"
@@ -247,6 +253,8 @@ finally:
         if server is not None:
             server.shutdown(); server.server_close()
         (computer.state / "computer-browser.json").unlink(missing_ok=True)
+        if chrome_tmp is not None:
+            chrome_tmp.cleanup()
 
 with profile("patch", authorized=True):
     assert not computer.verified_local_browser()
