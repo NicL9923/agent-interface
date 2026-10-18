@@ -7,29 +7,9 @@ import re
 import stat
 from pathlib import Path
 
-INTEGRATION_FILES = (
-    "src/shared/inline-ui-instructions.json", "src/shared/inline-ui.ts", "src/server/inline-ui.ts",
-    "src/shared/message-origin.ts", "src/shared/collaboration.ts", "src/server/collaboration.ts",
-  "src/shared/discovery.ts", "src/server/discovery.ts",
-    "src/hermes/vault.py", "src/server/vault.ts", "src/shared/vault.ts", "scripts/spike/vault_probe.py",
-    "src/hermes/experience.py", "src/hermes/extension.py", "src/hermes/service_auth.py",
-    "src/hermes/dashboard.py", "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/bot_delivery.py", "src/hermes/integrations.py", "src/hermes/computer.py", "src/hermes/computer_host.py",
-    "src/server/store.ts", "src/server/experience.ts", "src/server/voice.ts", "src/server/hermes.ts", "src/server/hermes-qualification.ts", "src/server/integrations.ts",
-    "src/server/app.ts", "src/server/config.ts", "src/server/upgrades.ts", "src/server/computer.ts", "src/server/terminal.ts", "src/server/terminal-host.py",
-    "src/shared/experience.ts", "src/shared/reply-cards.ts", "src/shared/routine-presets.ts", "src/shared/voice.ts", "src/shared/types.ts", "src/shared/upgrades.ts", "src/shared/integrations.ts", "src/shared/computer.ts",
-    "scripts/spike/run.py", "scripts/spike/probe.py",
-    "scripts/spike/extension_probe.py", "scripts/spike/routine_probe.py",
-    "scripts/spike/app-probe.mjs", "scripts/spike/requirements.lock.txt",
-    "scripts/spike/provider.py",
-    "scripts/spike/maintenance_guard_probe.py",
-    "scripts/spike/service_probe.py",
-    "scripts/spike/experience_probe.py", "scripts/spike/integrations_probe.py",
-    "scripts/spike/computer_probe.py",
-    "scripts/spike/computer_local_network_probe.py",
-    "scripts/spike/computer_acceptance.py",
-    "scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py", "scripts/hermes-qualified-python.py",
-    "package-lock.json",
-)
+# Shared with the app. Include the manifest itself so list changes invalidate receipts.
+INTEGRATION_FILES = tuple(json.loads(
+    (Path(__file__).resolve().parents[1] / "shared/qualification-inputs.json").read_text()))
 
 
 def integration_digest(app_root):

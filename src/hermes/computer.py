@@ -15,6 +15,7 @@ import secrets
 import re
 import stat
 import subprocess
+import sys
 import time
 import threading
 from urllib.parse import urlsplit
@@ -179,6 +180,7 @@ class Computer:
         self.lease = lease
         self.state = self.home / "bot-desktop"
         self._operation = threading.local()
+        self._local_policy = None
 
     def _private_dir(self):
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -305,7 +307,11 @@ class Computer:
         process = psutil.Process(pid)
         if process.uids().real != os.getuid() or process.status() == psutil.STATUS_ZOMBIE:
             raise ComputerError("The household browser process is not owned by this runtime.")
-        return {"pid": process.pid, "started": process.create_time()}
+        # Linux epoch create_time depends on each process's cached boot time.
+        # Raw kernel start ticks are stable across the supervisor and gateway.
+        started = (int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+                   if sys.platform == "linux" else process.create_time())
+        return {"pid": process.pid, "started": started}
 
     def register_browser(self, child):
         """Supervisor-only publication after launching its own browser child.
@@ -350,29 +356,28 @@ class Computer:
                        for connection in browser.net_connections(kind="tcp")):
                 return False
             return hmac.compare_digest(self._browser_endpoint(), record["websocket"])
-        except (OSError, ValueError, KeyError, TypeError, ComputerError, psutil.Error):
+        except (OSError, ValueError, IndexError, KeyError, TypeError, ComputerError, psutil.Error):
             return False
 
     def profile_local_browser(self):
         """Extra local classification, never a private-URL permission override."""
-        from hermes_cli.config import read_raw_config
-        from hermes_constants import get_hermes_home_override
-        from tools.terminal_scope import get_terminal_scope, terminal_env, TerminalPolicyUnavailable
-        from tools.terminal_tool import _ensure_terminal_env_bridged
+        policy = self._local_policy
+        if policy is None:
+            return False
         try:
-            browser = read_raw_config().get("browser", {})
+            browser = policy.config.read_raw_config().get("browser", {})
             config = browser.get("agent_interface", {})
             if config.get("allow_local_network") is not True:
                 return False
             # Routed profiles must have their own complete policy. Falling back
             # to the launch profile's environment would widen their authority.
-            if get_terminal_scope() is None and get_hermes_home_override() is not None:
+            if policy.scope.get_terminal_scope() is None and policy.constants.get_hermes_home_override() is not None:
                 return False
-            _ensure_terminal_env_bridged()
-            if terminal_env("TERMINAL_ENV", "local") != "local":
+            policy.terminal._ensure_terminal_env_bridged()
+            if policy.scope.terminal_env("TERMINAL_ENV", "local") != "local":
                 return False
             return self.verified_local_browser()
-        except (OSError, ValueError, AttributeError, TerminalPolicyUnavailable):
+        except (OSError, ValueError, AttributeError, policy.scope.TerminalPolicyUnavailable):
             return False
 
     def status(self, params=None):
@@ -517,14 +522,28 @@ def install_tools():
     from tools import browser_tool as bt, browser_tool_cdp as cdp, browser_tool_session as session
     from tools import browser_tool_lifecycle as lifecycle, browser_use_cli, browser_tool_cloud as cloud
     from tools import browser_extension_router as router
+    try:
+        from hermes_cli import config
+        import hermes_constants
+        from tools import terminal_scope, terminal_tool, url_safety, browser_tool_eval_policy
+    except ImportError as exc:
+        raise ComputerError("Shared computer native tool seams require qualification.") from exc
     required = ((registry, "dispatch"), (runtime, "start"), (runtime, "desktop_env"), (runtime, "stop_if_idle"),
                 (lease, "get"), (lease, "acquire"), (lease, "release"), (lease, "assert_agent_may_act"),
                 (cdp, "_get_cdp_override_raw"), (session, "_run_browser_command"),
                 (lifecycle, "_cleanup_single_browser_session"), (router, "routed_browser_handler"),
+                (config, "read_raw_config"), (hermes_constants, "get_hermes_home_override"),
+                (terminal_scope, "get_terminal_scope"), (terminal_scope, "terminal_env"),
+                (terminal_scope, "TerminalPolicyUnavailable"), (terminal_tool, "_ensure_terminal_env_bridged"),
+                (url_safety, "is_always_blocked_url"),
                 (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"), (cloud, "_is_local_backend"))
-    if any(not callable(getattr(module, name, None)) for module, name in required):
+    if (any(not callable(getattr(module, name, None)) for module, name in required)
+            or not callable(getattr(getattr(browser_tool_eval_policy, "_JS_URL_LITERAL_RE", None), "findall", None))):
         raise ComputerError("Shared computer native tool seams require qualification.")
     computer = Computer(home, endpoint, runtime, lease)
+    from types import SimpleNamespace
+    computer._local_policy = SimpleNamespace(config=config, constants=hermes_constants,
+        scope=terminal_scope, terminal=terminal_tool)
     computer._private_dir()
     # Module-specific resource mapping. Conversational get_hermes_home remains unchanged.
     runtime.get_hermes_home = lambda: home
@@ -540,7 +559,7 @@ def install_tools():
             return _native(*args, **kwargs)
         setattr(lease, name, mapped)
     cdp._get_cdp_override_raw = lambda: endpoint
-    # Revision-qualified private seam: preserve native metadata/site checks and
+    # Revision-qualified private seam: retain native navigation/site checks and
     # every other backend's classification. Only our registered browser can
     # acquire the active profile's explicit local-network authorization.
     native_local_backend = cloud._is_local_backend
@@ -648,6 +667,21 @@ def install_tools():
             args["session"] = "household-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
         try:
             with computer.bot_operation(profile):
+                # Native eval guards skip all checks for local backends. Keep
+                # the metadata floor for explicit literals using native parsing.
+                expression, target = "", ""
+                if name == "browser_console":
+                    expression = args.get("expression", "")
+                elif name == "browser_cdp":
+                    params = args.get("params") or {}
+                    if args.get("method") == "Page.navigate":
+                        target = str(params.get("url") or "").strip()
+                    elif args.get("method") == "Runtime.evaluate":
+                        expression = params.get("expression", "")
+                literals = browser_tool_eval_policy._JS_URL_LITERAL_RE.findall(expression) if isinstance(expression, str) else []
+                urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in literals]
+                if any(url_safety.is_always_blocked_url(url) for url in urls):
+                    return json.dumps({"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
                 return native_dispatch(name, args, **kwargs)
         except (ComputerError, lease.HumanHasControl) as exc:
             return json.dumps({"success": False, "error": str(exc)})

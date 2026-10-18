@@ -3,30 +3,10 @@ import { lstatSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const integrationFiles = [
-  "src/shared/inline-ui-instructions.json", "src/shared/inline-ui.ts", "src/server/inline-ui.ts",
-  "src/shared/message-origin.ts",
-  "src/shared/collaboration.ts", "src/server/collaboration.ts",
-  "src/shared/discovery.ts", "src/server/discovery.ts",
-  "src/hermes/vault.py", "src/server/vault.ts", "src/shared/vault.ts", "scripts/spike/vault_probe.py",
-  "src/hermes/experience.py", "src/server/store.ts", "src/server/experience.ts", "src/server/voice.ts",
-  "src/shared/experience.ts", "src/shared/reply-cards.ts", "src/shared/routine-presets.ts", "src/shared/voice.ts",
-  "scripts/spike/experience_probe.py",
-  "src/hermes/extension.py", "src/hermes/service_auth.py", "src/hermes/dashboard.py",
-  "src/hermes/qualification.py", "src/hermes/gateway_guard.py", "src/hermes/bot_delivery.py", "src/hermes/integrations.py", "src/server/hermes.ts", "src/server/hermes-qualification.ts", "src/server/integrations.ts",
-  "src/hermes/computer.py", "src/hermes/computer_host.py", "src/server/computer.ts", "src/server/terminal.ts", "src/server/terminal-host.py", "src/shared/computer.ts",
-  "src/server/app.ts", "src/server/config.ts", "src/server/upgrades.ts", "src/shared/types.ts", "src/shared/upgrades.ts", "src/shared/integrations.ts",
-  "scripts/spike/run.py", "scripts/spike/probe.py", "scripts/spike/extension_probe.py",
-  "scripts/spike/routine_probe.py", "scripts/spike/app-probe.mjs",
-  "scripts/spike/requirements.lock.txt", "package-lock.json",
-  "scripts/spike/provider.py",
-  "scripts/spike/maintenance_guard_probe.py",
-  "scripts/spike/service_probe.py",
-  "scripts/spike/integrations_probe.py",
-  "scripts/spike/computer_probe.py",
-  "scripts/spike/computer_acceptance.py",
-  "scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py", "scripts/hermes-qualified-python.py",
-].sort();
+// Shared with the Python qualifier, including this manifest in its own digest.
+import qualificationInputs from "../shared/qualification-inputs.json";
+
+const integrationFiles = [...qualificationInputs].sort();
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function integrationDigest(root = appRoot): string {
   const rows = integrationFiles.map(path => path + "\0" + createHash("sha256").update(readFileSync(resolve(root, path))).digest("hex"));

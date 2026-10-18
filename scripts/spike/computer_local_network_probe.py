@@ -14,6 +14,7 @@ from pathlib import Path
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 
@@ -101,6 +102,14 @@ try:
     computer.register_browser(child)
     assert computer.verified_local_browser()
     checks["live_owned_browser_registration"] = True
+    # A gateway-side reader must validate a different process's registration.
+    subprocess.run([sys.executable, "-c", "import importlib.util, sys; "
+        "spec = importlib.util.spec_from_file_location('checker', sys.argv[1]); "
+        "addon = importlib.util.module_from_spec(spec); spec.loader.exec_module(addon); "
+        "home, endpoint = addon.configured(); "
+        "assert addon.Computer(home, endpoint, None, None).verified_local_browser()",
+        str(root / "src/hermes/computer.py")], check=True, timeout=15)
+    checks["separate_process_verifies_supervisor_registration"] = True
     with profile("patch", authorized=True):
         for url in (private, kvm):
             assert bt.evaluate_url_safety(url) is None
@@ -111,7 +120,19 @@ try:
                     "http://metadata.google.internal"):
             assert "metadata" in bt.evaluate_url_safety(url)["error"]
             assert "metadata" in browser_use_cli._code_url_verdict(f'goto_url("{url}")').blocked
-        checks["metadata_floor_preserved"] = True
+        checks["navigation_and_browser_exec_metadata_floor_preserved"] = True
+        for name, args in (
+            ("browser_console", {"expression": 'fetch("http://169.254.169.254/latest/meta-data")'}),
+            ("browser_cdp", {"method": "Page.navigate", "params": {"url": "http://169.254.170.2"}}),
+            ("browser_cdp", {"method": "Runtime.evaluate", "params": {
+                "expression": 'fetch("http://metadata.google.internal")'}}),
+        ):
+            result = json.loads(registry.dispatch(name, args, task_id="metadata-literal-probe"))
+            assert not result["success"] and "metadata" in result["error"], result
+        checks["dispatch_console_and_cdp_metadata_literals_blocked"] = True
+        from tools import browser_tool_eval_policy
+        assert not browser_tool_eval_policy._eval_ssrf_guard_active("metadata-literal-probe")
+        checks["native_local_current_page_guard_gap_confirmed"] = True
         original_override = cdp._get_cdp_override_raw
         try:
             for arbitrary in ("http://external.example:9222", "http://127.0.0.1:1"):
