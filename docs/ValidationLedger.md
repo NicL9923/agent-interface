@@ -62,6 +62,8 @@ file, ruff, typecheck and the production build. 248 iOS unit tests passed on
 iPhone 18 Pro `39F5329D-FA70-4259-9B8A-6AECECDE2227`; the new iOS card was not
 screenshot. Final source fingerprint, excluding this ledger:
 `sha256:0637e90210b914d7f55c5fc427eb2e3555f3987d1b95799305f0d0788da0c7e3`.
+After release, only the native build number changed, to version 1.0 build 5 across
+all three bundles, for TestFlight.
 Native application source:
 `sha256:e0fe9af33e5777a87f1fff6134c3610f405a627dde75e3ac6a0eb2a326045ec3`.
 
