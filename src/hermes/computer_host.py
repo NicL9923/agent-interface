@@ -97,6 +97,8 @@ def main():
     restart = None
     held = contextlib.ExitStack()
     try:
+        # A previous supervisor's registration never authorizes a new process.
+        (computer.state / "computer-browser.json").unlink(missing_ok=True)
         with module.resource_scope(home):
             runtime.start()
             executable = browser.executable()
@@ -118,6 +120,7 @@ def main():
             if child.poll() is not None or time.monotonic() >= deadline:
                 raise RuntimeError("The household browser did not become ready.")
             time.sleep(.2)
+        computer.register_browser(child)
         print("Household desktop and persistent browser are ready.", flush=True)
         next_check = time.monotonic() + CODE_CHECK_SECONDS
         while not stop:
@@ -145,6 +148,7 @@ def main():
                 restart = None
             time.sleep(1)
     finally:
+        (computer.state / "computer-browser.json").unlink(missing_ok=True)
         if child is not None and child.poll() is None:
             child.terminate()
             try: child.wait(timeout=10)

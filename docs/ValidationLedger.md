@@ -1,5 +1,89 @@
 # Validation ledger
 
+## October 18 Patch owned-local-browser authorization
+
+Based on `4c2aeed`, implemented with OpenAI GPT-6.1 Sol. Round 2 addresses the
+independent Claude Opus 5.5 findings after `96125fc` and `eb6e901`. The add-on
+reads the default-off `browser.agent_interface.allow_local_network` from each
+active profile. Local classification also requires an effectively local native
+terminal policy and supervisor provenance verified against live process
+ownership, birth identity, parentage, the actual loopback listening socket, and
+browser websocket ID. Linux identity now uses raw kernel start ticks rather
+than process-specific epoch timestamps.
+
+The metadata floor remains in native navigation, redirect checks and
+`browser_exec`. The dispatch wrapper now uses native Hermes's URL-literal
+scanner and always-blocked matcher to reject metadata literals in console
+expressions, CDP `Page.navigate` and CDP `Runtime.evaluate`. Native local
+classification still skips the current-page metadata check before content
+tools; computed or obfuscated JavaScript URLs can escape the literal scan.
+This is not complete metadata isolation. Native website checks, TLS, human
+control and operation leases remain. No blanket private-URL permission, TLS
+bypass, Hermes upgrade or alternate browser transport was added.
+
+Round 1 incorrectly skipped `npm test` because TypeScript was unchanged and
+missed the Python/TypeScript qualification-input mismatch. Both qualifiers now
+read `src/shared/qualification-inputs.json`, including the manifest itself in
+the digest. Round 2 ran `npm test` successfully. Profile-policy helpers resolve
+and qualify at installation, and missing seams refuse installation before any
+native mutation. Wrapper tests verify exact-endpoint policy dispatch and
+unchanged native results for every other override.
+
+Validation for implementation commit `2bc941b` and the accompanying docs/evidence:
+
+- `TMPDIR=/Volumes/DevSSD/scratch/patch-local-browser/tmp python3 scripts/run-python-tests.py`
+  passed 21 files, skipped the system-terminal file for missing `tmux`, and had
+  no failures on Python 3.14.7. Two individual tests also skipped on macOS.
+  This includes all 33 computer tests and three qualification-runner tests.
+- `ruff check .` passed with Ruff 0.17.0. `npm run typecheck` passed.
+- `npm test` passed all 770 tests in 69 files with Node 26.10.0, including the
+  Python/TypeScript digest parity assertion.
+- `PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+  passed all 770 tests in 69 files with production's Node 24.21.0. Both Node
+  runs emitted the existing jsdom canvas-method notices.
+- `npm run build` passed. `git diff --check` passed. The documented gateway
+  checker's outer and embedded Python blocks parsed successfully.
+- Both real-native probes ran with the exact isolated environment commands in
+  [SharedComputer.md](SharedComputer.md#qualification-activation-and-rollback).
+  Hermes was `acc3cada0da86c81efc8aa6c5a291989549ca900` with approved repair
+  `30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+  `computer_probe.py` passed all 10 native routing/lease/recovery checks.
+  `computer_local_network_probe.py` passed all 14 checks, including a separate
+  reader process validating the supervisor's registration, the new console/CDP
+  metadata literal refusals, and confirmation of the native current-page gap.
+  Real native `browser_exec` against the self-signed fixture returned
+  `net::ERR_CERT_AUTHORITY_INVALID`; no HTTP request reached the fixture.
+- The new `run.py` helper also ran both real-native probes in another marked
+  disposable DevSSD home. Its 14-check local-network receipt matched the direct
+  probe receipt exactly, and its coordination receipt passed all 10 checks.
+  Unit checks cover receipt collection, a recorded skip without Chrome, and
+  propagation of browser-probe failures. This was a helper rehearsal, not a
+  full `run.py` qualification run.
+
+The first focused unit run caught a test-fixture field collision; it was fixed
+before the successful focused and full runs. The
+[round 2 receipt](evidence/hermes-local-network-mac-20261018-round2.json) is
+development evidence, not production qualification. The qualification runner
+now runs the local-network probe when Chrome is available, collects its receipt,
+and records a skipped receipt when no executable is available. The browser
+probe uses its own marked home so it cannot replace the running fixture
+gateway's config.
+
+Patch's live config and all VPS services are untouched. Full Chrome builds timed
+out in the earlier Mac rehearsal; Chromium headless shell completed both round 2
+runs. Desktop start was a fixture. The actual KVM, headed production browser,
+Linux cross-process behavior and live gateway admission remain unchecked.
+The activation checklist includes an exact read-only command using the live
+gateway's executable and environment, plus fresh gateway-turn admission checks.
+That diagnostic runs as an independent process, not inside the live gateway.
+The public guide now uses a generic device-certificate note.
+
+Fresh full native qualification and the controlled idle-gated `release-app.py`
+activation remain the release owner's work. Reproduction, profile configuration
+and guarded activation/rollback are in
+[SharedComputer.md](SharedComputer.md#profile-authorization-for-local-networks).
+Final source fingerprint, excluding this ledger:
+`sha256:98f5d6deaf4898d45e0442efc107af9910bcf6c77744f10a0a72166dc558d599`.
 ## October 18 Hermes chat efficiency, pre-release
 
 Based on `4c2aeed`. GPT-6.1 Sol implemented
