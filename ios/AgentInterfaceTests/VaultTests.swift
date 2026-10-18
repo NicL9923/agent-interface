@@ -47,6 +47,25 @@ private final class VaultProtocol: URLProtocol, @unchecked Sendable {
     XCTAssertEqual(Set(payload.keys), ["epoch", "sessionId", "method", "identifier", "password"])
     XCTAssertEqual(payload["epoch"] as? String, "native-epoch"); XCTAssertEqual(payload["password"] as? String, "fixture-password")
   }
+  func testExplicitLoginRepeatsTheAddressItShowedAndCancelsWithoutIt() async throws {
+    var explicit = request(); explicit.origin = "https://kvm.example.test"
+    explicit.explicit = ExplicitLoginRequest(label: "Comet KVM", purpose: "Check the console.", profile: "patch", requestedBy: .init(id: "one", name: "One"))
+    _ = try await api().answerSecureRequest(botId: "patch", requestId: "request", answer: SecureRequestAnswer(request: explicit, identifier: "kvm-admin", value: "fixture-password", cancel: false))
+    var payload = try body()
+    XCTAssertEqual(Set(payload.keys), ["epoch", "sessionId", "method", "identifier", "password", "origin"])
+    XCTAssertEqual(payload["origin"] as? String, "https://kvm.example.test")
+    _ = try await api().answerSecureRequest(botId: "patch", requestId: "request", answer: SecureRequestAnswer(request: explicit, identifier: "kvm-admin", value: "fixture-password", cancel: true))
+    payload = try body(); XCTAssertEqual(Set(payload.keys), ["epoch", "sessionId", "method", "cancel"])
+  }
+  func testExplicitLoginDecodesAndOnlyItsRequesterMayAnswer() throws {
+    let json = #"{"epoch":"e","sessionId":"s","method":"vault.save_login","origin":"https://kvm.example.test","site":"kvm.example.test","explicit":{"label":"Comet KVM","purpose":"Why","profile":"patch","requestedBy":{"id":"one","name":"One"}}}"#
+    let decoded = try JSONDecoder().decode(SecureRequest.self, from: Data(json.utf8))
+    let explicit = try XCTUnwrap(decoded.explicit)
+    XCTAssertTrue(decoded.supported); XCTAssertEqual(explicit.label, "Comet KVM")
+    XCTAssertTrue(explicit.answerable(by: "one")); XCTAssertFalse(explicit.answerable(by: "two")); XCTAssertFalse(explicit.answerable(by: nil))
+    XCTAssertTrue(ExplicitLoginRequest(label: "KVM", purpose: "Why", profile: "patch").answerable(by: "two"))
+    XCTAssertNil(try JSONDecoder().decode(SecureRequest.self, from: Data(#"{"epoch":"e","sessionId":"s","method":"vault.save_login","origin":"https://a.test","site":"a.test"}"#.utf8)).explicit)
+  }
   func testCancellationOmitsAllEnteredCredentialFields() async throws {
     let client = api(); _ = try await client.answerSecureRequest(botId: "bot", requestId: "request", answer: SecureRequestAnswer(request: request(), identifier: "fixture-parent", value: "fixture-password", cancel: true))
     let payload = try body(); XCTAssertEqual(Set(payload.keys), ["epoch", "sessionId", "method", "cancel"]); XCTAssertEqual(payload["cancel"] as? Bool, true)

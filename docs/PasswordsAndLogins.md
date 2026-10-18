@@ -19,6 +19,26 @@ inline path. Native secret requests identify the environment variable and save
 through Hermes's environment credential store, separately from the encrypted
 login vault. Sudo and unsupported setup requests use the official interface.
 
+An assistant can also ask for a login by address, without a browser page, with
+its `vault_save_login` tool. Use this for a private network device, a service
+Hermes cannot reach, or a login with no browser form. The tool takes an exact
+origin such as `https://comet-pro-kvm.mesh.wildflowersranch.com`, a short name and
+a one-sentence reason. Origins are http or https with an ASCII host or IPv4
+address and an optional port, with no path, query or credentials. The card shows
+the address, name, reason, the requesting assistant and household member, the
+encrypted profile storage, and that profiles are not a household security
+boundary. Only the member whose task asked can save or cancel it; others see
+who it is waiting for. The answer repeats the address the card showed. Hermes
+saves the login in the profile's local vault and gives the assistant a handle and
+the username, never the password. Saving does not open, check or sign in to the
+address, and Hermes fills the password only on a page whose origin matches
+exactly. The tool uses the same native save-login prompt as a browser page, so
+the Hermes desktop app and dashboard chat show their usual login prompt for it.
+Scheduled, messaging and API runs have no prompt, so the tool refuses and tells
+the assistant not to ask in chat. API keys and tokens are not logins; native
+secret requests still handle them. The terminal CLI and TUI do not load the
+WildBots add-on, so the tool is unavailable there.
+
 These fields never become chat messages or drafts. They clear on submission,
 backgrounding and dismissal. An uncertain result disables resubmission of the
 same request; Refresh request checks its current state. Management failures ask

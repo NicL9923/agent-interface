@@ -1,5 +1,65 @@
 # Validation ledger
 
+## October 18 logins by address and lighter chat loading
+
+Based on `9e2f96d`. Claude Opus 5.5 implemented both changes.
+
+- **Logins by address:** the `vault_save_login` assistant tool asks for a website
+  or device login for an exact origin with no browser page, through the native
+  save-login prompt, and stores it in the profile's encrypted vault. The model
+  gets a handle and the username, never the password. WildBots cards on the web
+  and iOS show the address, name, reason, asking assistant and member, storage
+  and profile boundary. Only the member whose task asked can answer or cancel,
+  and the answer repeats the address. Scheduled, messaging and API runs refuse.
+- **Chat loading:** the add-on cuts history to the app's window before it leaves
+  Hermes. Write checks and Live Activities skip history. Viewers share one read
+  until Hermes or this app changes the conversation, for at most three seconds,
+  and running tasks are never shared. Roster polls share profile descriptions
+  for ten seconds. A background heartbeat checks a quiet socket and reconnects
+  open chats.
+
+Hermes `acc3cada0da8` with the approved repair, `git diff HEAD` SHA256
+`30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`, ran in
+disposable homes on the Mac mini:
+
+- The service and vault probes passed all 28 checks. That includes six for the
+  new tool against real Hermes: the unreachable private origin
+  `https://comet-pro-kvm.mesh.wildflowersranch.com` saved with no browser
+  call, reconnect, wrong member, missing or changed address, old epoch, other
+  session and profile, replay, cancel, interrupt, timeout, storage failure,
+  exact-origin fill, and canary scans of frames, model requests, journal, logs
+  and every home file. The existing browser save, CDP fill, code, unlock and
+  named-secret checks still pass.
+- The extension probe passed durability, steering, approval, clarification,
+  file and restart recovery with the windowing add-on.
+- The real web client drove the app server and add-on with a synthetic canary.
+  The requester saved through the masked card, a second member saw a read-only
+  waiting card, and the canary reached only the one answer request and the
+  encrypted vault: no URL, browser storage, app database, Hermes database, log
+  or model request held it.
+- On a 604-row synthetic chat, a 20-turn add-on read moved 150 KB instead of
+  1.96 MB, 34 ms instead of 47 ms. The old and new apps returned identical
+  bodies for six window shapes. App reads took 101 ms before and 81 ms after,
+  0.8 ms when shared.
+
+All 770 web tests passed on Node 24.21 and Node 26.10, with every Python test
+file, ruff, typecheck and the production build. 248 iOS unit tests passed on
+iPhone 18 Pro `39F5329D-FA70-4259-9B8A-6AECECDE2227`; the new iOS card was not
+screenshot. Final source fingerprint, excluding this ledger:
+`sha256:0637e90210b914d7f55c5fc427eb2e3555f3987d1b95799305f0d0788da0c7e3`.
+Native application source:
+`sha256:e0fe9af33e5777a87f1fff6134c3610f405a627dde75e3ac6a0eb2a326045ec3`.
+
+GPT-6.1 Sol reviewed the full diff in three rounds. Round one found a profile
+read after an edit joining an older read, frames before a first open naming no
+assistant, a new app breaking older add-ons' credential answers, numeric hosts
+browsers read as IPv4, and copy promising the username stays out of chat. Round
+two found connections leaving stale MCP server lists cached and task settlement
+hidden by a shared read. All were fixed with regression tests; round three found
+nothing further. Not established here: the Hermes desktop and dashboard prompts
+show only the address, the terminal CLI and TUI do not load the add-on, and IPv6
+origins are refused.
+
 ## October 18 app release f86b377
 
 PR #143 merged at `f86b3778beb71b87cb94a0ebcc2f035d203bcd9b`. The release is live at `https://agentui.wildflowersranch.com`,

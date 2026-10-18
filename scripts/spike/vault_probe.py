@@ -99,6 +99,8 @@ def exercise(client, headers, journal):
                     assert load_env()[params['env_var']] == env_canary
                     assert env_canary not in redact_sensitive_text('echo ' + env_canary, force=True)
                     from tools.registry import registry
+                    # Built-in tools register when model_tools is imported, which a new session may still be doing.
+                    import model_tools  # noqa: F401
                     import shlex
                     output_file=profile_home / 'synthetic-output.txt'
                     output_file.write_text(env_canary)
@@ -155,6 +157,7 @@ def exercise(client, headers, journal):
         response=call('remove_login',itemId=identity)
         assert response.status_code==200 and response.json()['removed']
         assert not any(item['id']==identity for item in call().json()['items'])
+        checks.update(explicit_task(client,headers,journal,home,profile,call))
         checks.update(canonical_task(client,headers,journal,home,profile,call,canary))
         checks['native_remove_local_and_missing_manager_explicit'] = True
         for row in call().json()['sources']:
@@ -174,6 +177,194 @@ def exercise(client, headers, journal):
             assert owned == (home / 'profiles' / name).resolve()
             shutil.rmtree(owned / "vault", ignore_errors=True)
             assert not (owned / "vault").exists(), "Temporary encrypted credential cleanup failed"
+
+
+def explicit_task(client, headers, journal, home, profile, call):
+    """A login the agent asks for by address: real model-wire tool call, no browser, unreachable private origin."""
+    from http.server import ThreadingHTTPServer
+    import queue
+    import uuid
+    from provider import Provider
+    from hermes_cli.web_server_profiles import _config_profile_scope
+    from hermes_cli.config import load_config, save_config
+    from agent.vault_backends.unlock import set_save_login_prompt_callback, set_unlock_prompt_callback
+    from agent.vault_store import VaultStore
+    from tools import browser_vault_tool as browser
+    from tools.registry import registry
+    from tui_gateway import server_requests
+    from service_auth import TICKET_PATH
+    canary = 'CanarySyntheticExplicitLogin-7d41a9!'
+    destination = 'https://comet-pro-kvm.mesh.wildflowersranch.com'
+    checks = {}
+    entry = registry.get_entry('vault_save_login')
+    assert entry is not None and entry.toolset == 'clarify', 'Explicit-origin login tool is not registered with clarify'
+    # Unsupported surfaces refuse before asking: no callback here, and a scheduled run even with one.
+    refused = json.loads(registry.dispatch('vault_save_login', dict(origin=destination, label='Comet KVM', purpose='Probe'), task_id='explicit-headless'))
+    assert refused['error_type'] == 'prompt_unavailable', 'A session without a masked prompt did not refuse'
+    asked = []
+    set_save_login_prompt_callback(lambda origin, site: asked.append(origin)); set_unlock_prompt_callback(lambda *_: '')
+    try:
+        with patch.dict(os.environ, {'HERMES_CRON_SESSION': '1'}):
+            refused = json.loads(registry.dispatch('vault_save_login', dict(origin=destination, label='Comet KVM', purpose='Probe'), task_id='explicit-cron'))
+        assert refused['error_type'] == 'prompt_unavailable' and not asked, 'A scheduled run asked for a credential'
+        for origin in ('comet-pro-kvm.mesh.wildflowersranch.com', destination + '/login', 'https://user:pw@kvm.example.test', 'https://exämple.test'):
+            refused = json.loads(registry.dispatch('vault_save_login', dict(origin=origin, label='Comet KVM', purpose='Probe'), task_id='explicit-invalid'))
+            assert refused['error_type'] == 'invalid_origin' and not asked, 'An invalid origin reached the prompt'
+    finally:
+        set_save_login_prompt_callback(None); set_unlock_prompt_callback(None)
+    checks['explicit_login_tool_registered_headless_and_invalid_origins_refused'] = True
+    model = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
+    threading.Thread(target=model.serve_forever, daemon=True).start()
+    provider_log = home / 'runtime/explicit-provider.jsonl'
+    provider_log.parent.mkdir(parents=True, exist_ok=True)
+    previous_log = os.environ.get('HERMES_SPIKE_PROVIDER_LOG')
+    os.environ['HERMES_SPIKE_PROVIDER_LOG'] = str(provider_log)
+    with _config_profile_scope(profile):
+        config = load_config(); base = 'http://127.0.0.1:' + str(model.server_port) + '/v1'
+        config.update(model=dict(default='spike-model', provider='spike-fixture', base_url=base), providers={'spike-fixture': dict(base_url=base, api_key='isolated-fixture', models=['spike-model'])}, agent=dict(max_turns=3))
+        save_config(config)
+    class Socket:
+        def __init__(self):
+            ticket = client.post(TICKET_PATH, headers=headers).json()['ticket']
+            self.context = client.websocket_connect('ws://127.0.0.1/api/ws?ticket=' + ticket)
+            self.socket = self.context.__enter__(); self.incoming = queue.Queue(); self.frames = []; self.count = 0
+            def reader():
+                try:
+                    while True:
+                        frame = self.socket.receive_json(); self.frames.append(frame); self.incoming.put(frame)
+                except BaseException:
+                    pass
+            self.thread = threading.Thread(target=reader, daemon=True); self.thread.start()
+            self.rpc('client.capabilities', server_requests=True)
+        def rpc(self, method, **params):
+            self.count += 1; identity = self.count
+            self.socket.send_json(dict(jsonrpc='2.0', id=identity, method=method, params=params))
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                frame = self.incoming.get(timeout=max(.01, deadline - time.monotonic()))
+                if frame.get('id') == identity:
+                    assert 'error' not in frame, 'Explicit credential fixture RPC refused: ' + method
+                    return frame.get('result', {})
+            raise AssertionError('Explicit credential fixture RPC timed out')
+        def close(self):
+            self.context.__exit__(None, None, None); self.thread.join(timeout=2)
+    socket = Socket()
+    frames = []
+    def pending_request():
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            state = socket.rpc('agent-interface.open', profile=profile)
+            pending = next((r for r in state.get('open_requests', []) if r['method'] == 'vault.save_login'), None)
+            if pending:
+                return state, pending
+            time.sleep(.05)
+        raise AssertionError('The explicit-origin tool produced no masked prompt')
+    def settled():
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            state = socket.rpc('agent-interface.open', profile=profile)
+            if not state.get('app_run_id') and not state.get('info', {}).get('running'):
+                return state
+            time.sleep(.05)
+        raise AssertionError('The explicit-origin task did not settle')
+    def start(sender='synthetic-person'):
+        socket.rpc('agent-interface.submit', profile=profile, session_id=socket.rpc('agent-interface.open', profile=profile)['session_id'],
+                   request_id='vault-explicit-' + uuid.uuid4().hex, sender_id=sender, text='PROBE_VAULT_EXPLICIT Public synthetic KVM login', attachments=[])
+        return pending_request()
+    def tool_result():
+        rows = [json.loads(line) for line in provider_log.read_text().splitlines()]
+        return json.loads(next(m['content'] for m in reversed(rows[-1]['messages']) if m['role'] == 'tool'))
+    def answer(state, pending, actor='synthetic-person', **values):
+        payload = dict(epoch=state['executor_epoch'], sessionId=state['session_id'], method='vault.save_login', **values)
+        return call('answer', requestId=pending['id'], answer=payload, **({'actor': actor} if actor else {}))
+    page = [patch.object(browser, name) for name in ('_current_page_origin', '_focus_bound_origin', '_eval_js', '_eval_js_secret', '_ensure_supervisor')]
+    mocks = [item.start() for item in page]
+    try:
+        before = len(call().json()['items'])
+        state, pending = start()
+        assert pending['params']['origin'] == destination and pending.get('app_local_secure') is True
+        assert pending.get('app_credential') == dict(label='Comet KVM', purpose='Sign in to the KVM to check the server console.', profile=profile, requesterId='synthetic-person'), 'Card context or owner missing'
+        # A reconnecting client sees the same bound request.
+        frames.extend(socket.frames); socket.close(); socket = Socket()
+        state, again = pending_request()
+        assert again['id'] == pending['id'] and again.get('app_credential') == pending['app_credential'], 'Reconnect lost the explicit request'
+        login = dict(identifier='kvm-admin', password=canary, origin=destination)
+        for actor, values, codes in [('another-person', login, (409,)), (None, login, (409,)),
+                                     ('synthetic-person', {k: v for k, v in login.items() if k != 'origin'}, (400,)),
+                                     ('synthetic-person', dict(login, origin=destination + '.evil.test'), (409,))]:
+            assert answer(state, pending, actor, **values).status_code in codes, 'A mismatched answer settled the request'
+        assert call('answer', requestId=pending['id'], actor='synthetic-person', answer=dict(epoch='old-epoch', sessionId=state['session_id'], method='vault.save_login', **login)).status_code in (400, 409)
+        assert call('answer', requestId=pending['id'], actor='synthetic-person', answer=dict(epoch=state['executor_epoch'], sessionId='other-session', method='vault.save_login', **login)).status_code in (400, 409)
+        assert call('answer', target='vault-other', requestId=pending['id'], actor='synthetic-person', answer=dict(epoch=state['executor_epoch'], sessionId=state['session_id'], method='vault.save_login', **login)).status_code == 409
+        assert server_requests._open.get(pending['id']) is not None, 'A refused answer settled the native request'
+        response = answer(state, pending, **login)
+        assert response.status_code == 200 and response.json()['status'] == 'ok'
+        assert answer(state, pending, **login).json()['status'] == 'expired', 'A replayed answer was accepted'
+        final = settled()
+        result = tool_result()
+        item = next(row for row in call().json()['items'] if row['id'] == result.get('handle'))
+        assert result['status'] == 'saved' and result['origin'] == destination and canary not in json.dumps(result)
+        assert (item['origin'], item['label'], item['identifier'], len(call().json()['items'])) == (destination, 'Comet KVM', 'kvm-admin', before + 1)
+        for mock in mocks:
+            mock.assert_not_called()
+        assert 'Credential tool returned' in json.dumps(final['messages']) and canary not in json.dumps(final), 'The agent transcript is missing the handle-only result'
+        checks['explicit_login_saved_without_browser_for_unreachable_private_origin'] = True
+        checks['explicit_login_reconnect_owner_destination_epoch_session_profile_and_replay_bound'] = True
+        # Cancel by the owner, an interrupt that withdraws the prompt, a timeout and a storage failure save nothing.
+        state, pending = start()
+        assert answer(state, pending, cancel=True).json()['status'] == 'ok'
+        settled(); assert tool_result()['error_type'] == 'not_saved'
+        state, pending = start()
+        socket.rpc('session.interrupt', session_id=state['session_id'], profile=profile); settled()
+        assert answer(state, pending, **login).json()['status'] == 'expired', 'A late answer after interruption settled'
+        original = server_requests.send
+        with patch.object(server_requests, 'send', lambda method, sid, params, timeout=None, **kw: original(method, sid, params, timeout=1.0 if method == 'vault.save_login' else timeout, **kw)):
+            state, pending = start()
+            settled()
+        assert tool_result()['error_type'] == 'not_saved' and answer(state, pending, **login).json()['status'] == 'expired', 'A late answer after timeout settled'
+        with patch.object(VaultStore, 'add_item', side_effect=OSError('synthetic storage failure ' + canary)):
+            state, pending = start()
+            assert answer(state, pending, **login).json()['status'] == 'ok'
+            settled()
+        result = tool_result()
+        assert result['error_type'] == 'save_failed' and canary not in json.dumps(result)
+        assert len(call().json()['items']) == before + 1, 'A refused explicit request saved a login'
+        checks['explicit_login_cancel_interrupt_timeout_and_storage_failure_save_nothing'] = True
+    finally:
+        for patcher in page:
+            patcher.stop()
+        # A live agent keeps this fixture's provider. Close the session so the next task resumes with its own.
+        socket.rpc('session.close', session_id=socket.rpc('agent-interface.open', profile=profile)['session_id'])
+        frames.extend(socket.frames); socket.close()
+        model.shutdown(); model.server_close()
+        if previous_log is None: os.environ.pop('HERMES_SPIKE_PROVIDER_LOG', None)
+        else: os.environ['HERMES_SPIKE_PROVIDER_LOG'] = previous_log
+    # Saving is separate from use: the native fill still requires the exact saved origin.
+    handle = item['id']
+    with _config_profile_scope(profile):
+        with patch.object(browser, '_focus_bound_origin', return_value=None), patch.object(browser, '_current_page_origin', return_value='https://foreign.example.test'), patch.object(browser, '_eval_js_secret') as write:
+            assert json.loads(browser.browser_vault_fill(handle, task_id='explicit-proof'))['error_type'] == 'origin_mismatch'; write.assert_not_called()
+        controls = [dict(index=0, tag='input', type='password', name='password', id='password', autocomplete='current-password', visible=True, disabled=False, readonly=False)]
+        with patch.object(browser, '_focus_bound_origin', return_value=destination), patch.object(browser, '_current_page_origin', return_value=destination), \
+                patch.object(browser, '_eval_js', return_value={'success': True, 'result': controls}), \
+                patch.object(browser, '_eval_js_secret', return_value={'success': True, 'result': {'filled': 1}}) as write:
+            filled = json.loads(browser.browser_vault_fill(handle, task_id='explicit-proof'))
+            assert filled['success'] and filled['origin'] == destination and json.dumps(destination) in write.call_args[0][1], 'Exact-origin fill did not bind its origin'
+        assert canary not in redact_text('Echo ' + canary)
+    checks['explicit_login_fill_requires_exact_saved_origin'] = True
+    assert canary not in json.dumps(frames) and canary.encode() not in provider_log.read_bytes(), 'Explicit credential reached frames or model requests'
+    for table in ('receipts', 'events', 'tools'):
+        assert canary not in repr(journal.db.execute('SELECT * FROM ' + table).fetchall())
+    for path in home.rglob('*'):
+        if path.is_file() and not path.is_symlink():
+            assert canary.encode() not in path.read_bytes(), 'Explicit credential persisted outside the encrypted vault: ' + path.name
+    checks['explicit_login_absent_from_frames_model_requests_journal_logs_and_home_files'] = True
+    return checks
+
+
+def redact_text(text):
+    from agent.redact import redact_sensitive_text
+    return redact_sensitive_text(text, force=True)
 
 
 def canonical_task(client, headers, journal, home, profile, call, canary):

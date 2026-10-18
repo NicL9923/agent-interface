@@ -121,6 +121,10 @@ def bootstrap():
     integrations.register_file_tool()
     integrations.register_google_tasks_tool()
     integrations.register_tool_catalog()
+    # Messaging, scheduled and API runs here have no masked prompt, so the tool refuses clearly.
+    vault_spec = importlib.util.spec_from_file_location("agent_interface_vault", Path(__file__).resolve().with_name("vault.py"))
+    vault = importlib.util.module_from_spec(vault_spec); vault_spec.loader.exec_module(vault)
+    vault.register_tool()
     # The gateway delivers routine output. Keep household Bot Chat deliveries with the dashboard add-on.
     delivery_spec = importlib.util.spec_from_file_location("agent_interface_bot_delivery", Path(__file__).resolve().with_name("bot_delivery.py"))
     delivery = importlib.util.module_from_spec(delivery_spec); delivery_spec.loader.exec_module(delivery)

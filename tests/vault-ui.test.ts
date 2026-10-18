@@ -107,3 +107,33 @@ it("keeps the password when a website page was entered instead of an origin", as
   expect(write).not.toHaveBeenCalled(); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("preserved-password");
   expect(container.textContent).toContain("through the hostname");
 });
+const explicit: SecureRequest = { ...request, origin: "https://kvm.example.invalid", site: "kvm.example.invalid",
+  explicit: { label: "Comet KVM", purpose: "Check the server console.", profile: "patch", requestedBy: { id: "one", name: "One" } } };
+const explicitCard = (ownerId = "one", secure = explicit) => createElement(SecureRequestCard, { request: secure, requestId: "native-request", botId: "patch", ownerId,
+  title: "Hermes asks to save a login", detail: "Check first", assistantName: "Patch" });
+it("shows an address-only login's destination, reason, storage and boundary, and repeats the destination it showed", async () => {
+  vi.mocked(write).mockResolvedValue({ status: "ok" });
+  await render(explicitCard());
+  for (const text of ["https://kvm.example.invalid", "Hermes has not opened or checked it", "Comet KVM", "Patch (Hermes profile patch) for One",
+    "Check the server console.", "encrypted Hermes vault", "never the password", "not a household security boundary"]) expect(container.textContent).toContain(text);
+  expect(container.textContent).not.toContain("does not use HTTPS");
+  await type("Username, email or phone", "kvm-admin"); await type("Password", "explicit-secret"); await submit();
+  expect(write).toHaveBeenCalledWith("/bots/patch/secure-requests/native-request", { epoch: "epoch", sessionId: "session", method: "vault.save_login",
+    identifier: "kvm-admin", password: "explicit-secret", origin: "https://kvm.example.invalid" });
+  expect(container.querySelector('input[type="password"]')).toBeNull(); expect(localStorage.length + sessionStorage.length).toBe(0);
+});
+it("lets only the requesting member answer or cancel an address-only login", async () => {
+  await render(explicitCard("two"));
+  expect(container.textContent).toContain("Waiting for One. Only they can save or cancel this login.");
+  expect(container.querySelector("form")).toBeNull(); expect(container.querySelector('input[type="password"]')).toBeNull();
+  await render(explicitCard("two", { ...explicit, explicit: { ...explicit.explicit!, requestedBy: { id: "gone" } } }));
+  expect(container.textContent).toContain("Waiting for the household member who started this task");
+  expect(write).not.toHaveBeenCalled();
+});
+it("warns that an http destination does not use HTTPS and cancels without the destination", async () => {
+  vi.mocked(write).mockResolvedValue({ status: "ok" });
+  await render(explicitCard("one", { ...explicit, origin: "http://10.0.0.5", explicit: { ...explicit.explicit!, requestedBy: undefined } }));
+  expect(container.textContent).toContain("This address does not use HTTPS.");
+  await type("Password", "never-sent"); await click("Cancel request");
+  expect(write).toHaveBeenCalledWith("/bots/patch/secure-requests/native-request", { epoch: "epoch", sessionId: "session", method: "vault.save_login", cancel: true });
+});

@@ -234,6 +234,19 @@ export interface Conversation {
   approvals: Approval[];
   files: FileRef[];
   toolCalls?: ToolCall[];
+  /** Set when the runtime already cut history to the requested window. */
+  window?: {
+    /** Visible messages before the window. */
+    earlier: number;
+    /** The earlier messages the app still needs: those with files, and the prompts their replies answer. */
+    context: Message[];
+  };
+}
+export interface ConversationOptions {
+  /** The app's history window, cut by the runtime when it can. */
+  window?: { start?: string; turns?: number };
+  /** false reads current state, approvals and requests without history, as write checks need. */
+  history?: false;
 }
 export interface Tool {
   id: string;
@@ -338,7 +351,7 @@ export interface Runtime {
   stop(botId: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
-  conversation(botId: string): Promise<Conversation>;
+  conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** Calls `changed` whenever the bot's conversation may have changed, until the returned function is called. */
   watch?(botId: string, changed: () => void): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;

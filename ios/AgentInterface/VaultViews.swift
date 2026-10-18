@@ -63,6 +63,8 @@ struct SecureRequest: Codable, Equatable {
   var displayName: String?
   var envVar: String?
   var prompt: String?
+  /// A login the assistant asked for by address, with no browser page.
+  var explicit: ExplicitLoginRequest?
   var supported: Bool {
     guard !epoch.isEmpty, !sessionId.isEmpty else { return false }
     switch method {
@@ -75,6 +77,16 @@ struct SecureRequest: Codable, Equatable {
   }
   var binding: String { [epoch, sessionId, method].joined(separator: "|") }
 }
+/// Everything but the requester is the assistant's own text. Hermes checks only the address.
+struct ExplicitLoginRequest: Codable, Equatable {
+  struct Requester: Codable, Equatable { var id: String; var name: String? }
+  var label: String
+  var purpose: String
+  var profile: String
+  /// The member whose task asked. Only they may answer or cancel.
+  var requestedBy: Requester?
+  func answerable(by userId: String?) -> Bool { requestedBy == nil || requestedBy?.id == userId }
+}
 struct SecureRequestAnswer: Encodable {
   var epoch: String
   var sessionId: String
@@ -83,10 +95,15 @@ struct SecureRequestAnswer: Encodable {
   var identifier: String?
   var password: String?
   var value: String?
+  /// An explicit-origin answer repeats the address its card showed.
+  var origin: String?
   init(request: SecureRequest, identifier: String, value: String, cancel: Bool) {
     epoch = request.epoch; sessionId = request.sessionId; method = request.method
     if cancel { self.cancel = true }
-    else if request.method == "vault.save_login" { self.identifier = identifier; password = value }
+    else if request.method == "vault.save_login" {
+      self.identifier = identifier; password = value
+      if request.explicit != nil { origin = request.origin }
+    }
     else { self.value = value }
   }
 }
@@ -425,10 +442,18 @@ struct SecureAttentionView: View {
   private var key: String { [store.scope ?? "", botId, request.id, request.secure?.binding ?? ""].joined(separator: "|") }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      if let secure = request.secure {
+      if let secure = request.secure, let explicit = secure.explicit, !explicit.answerable(by: store.bootstrap?.user.id) {
+        ExplicitLoginDetails(origin: secure.origin ?? "", request: explicit, assistantName: assistantName)
+        Text("Waiting for \(explicit.requestedBy?.name ?? "the household member who started this task"). Only they can save or cancel this login.")
+          .font(.footnote).accessibilityIdentifier("secure.waiting")
+      } else if let secure = request.secure {
         if secure.method == "vault.save_login" {
-          Text("Save login for \(secure.site ?? "this site")").font(.subheadline.bold())
-          Text(secure.origin ?? "").font(.footnote).textSelection(.enabled)
+          if let explicit = secure.explicit {
+            ExplicitLoginDetails(origin: secure.origin ?? "", request: explicit, assistantName: assistantName)
+          } else {
+            Text("Save login for \(secure.site ?? "this site")").font(.subheadline.bold())
+            Text(secure.origin ?? "").font(.footnote).textSelection(.enabled)
+          }
           TextField("Username or email", text: $input.identifier).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("secure.identifier").disabled(input.busy || input.blocked)
         } else if secure.method == "vault.unlock_prompt" {
           Text("Unlock \(secure.displayName ?? "password source") in Hermes").font(.subheadline.bold())
@@ -458,6 +483,7 @@ struct SecureAttentionView: View {
       .onChange(of: scenePhase) { _, phase in if phase != .active { input.clear() } }
       .onDisappear { input.teardown() }
   }
+  private var assistantName: String? { store.bootstrap?.bots.first { $0.id == botId }?.name }
   private func fieldLabel(_ secure: SecureRequest) -> String {
     switch secure.method {
     case "vault.save_login": "Password"
@@ -467,10 +493,39 @@ struct SecureAttentionView: View {
     }
   }
   private func submit(cancel: Bool) {
-    guard let api = store.api, let secure = request.secure, store.connected else { input.clear(); return }
+    guard let api = store.api, let secure = request.secure, store.connected,
+      secure.explicit?.answerable(by: store.bootstrap?.user.id) != false else { input.clear(); return }
     let binding = key, token = api.token
     input.submit(api: api, botId: botId, requestId: request.id, request: secure, key: binding, cancel: cancel,
       current: { store.api === api && api.token == token && key == binding && !store.sessionExpired },
       refresh: { await store.refreshConversation() })
+  }
+}
+
+/// What the assistant asked for, as the web card shows it. The address is the only part Hermes checks.
+struct ExplicitLoginDetails: View {
+  var origin: String
+  var request: ExplicitLoginRequest
+  var assistantName: String?
+  private var asker: String {
+    let profile = "Hermes profile \(request.profile)"
+    let assistant = assistantName.flatMap { $0 == request.profile ? nil : "\($0) (\(profile))" } ?? profile
+    return request.requestedBy?.name.map { "\(assistant) for \($0)" } ?? assistant
+  }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Save a login for \(request.label)").font(.subheadline.bold())
+      LabeledContent("Address") {
+        Text(origin).font(.footnote.monospaced()).textSelection(.enabled).accessibilityIdentifier("secure.origin")
+      }
+      Text("Hermes has not opened or checked this address." + (origin.hasPrefix("http://") ? " It does not use HTTPS." : ""))
+        .font(.caption).foregroundStyle(.secondary)
+      LabeledContent("Asked by", value: asker)
+      LabeledContent("Reason, in the assistant's words") { Text(request.purpose).font(.footnote) }
+      Text("Saved in this profile's encrypted Hermes vault until someone removes it in Logins. The assistant gets a handle and the username, never the password. Hermes fills the password only on pages at exactly this address.")
+        .font(.caption).foregroundStyle(.secondary)
+      Text("Profiles organize access but are not a household security boundary. Household members with Hermes access, and tools running on the Hermes server, can reach saved logins.")
+        .font(.caption).foregroundStyle(.secondary)
+    }.accessibilityElement(children: .contain).accessibilityIdentifier("secure.explicit")
   }
 }

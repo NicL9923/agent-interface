@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, write } from "../client-api";
 import type { Conversation } from "../shared/types";
-import type { SecureRequest, SecureRequestAnswer } from "../shared/vault";
+import type { ExplicitLoginRequest, SecureRequest, SecureRequestAnswer } from "../shared/vault";
 import "./vault.css";
 
 // Volatile binding metadata only. Reopening the same native prompt must not turn
 // an uncertain submission into a fresh attempt. Never persist entered values.
 const uncertainRequests = new Set<string>();
 
-export function SecureRequestCard({ request, requestId, botId, ownerId, title, detail }: {
-  request: SecureRequest; requestId: string; botId: string; ownerId: string; title: string; detail: string;
+export function SecureRequestCard({ request, requestId, botId, ownerId, title, detail, assistantName }: {
+  request: SecureRequest; requestId: string; botId: string; ownerId: string; title: string; detail: string; assistantName?: string;
 }) {
   const scope = JSON.stringify({ request, requestId, botId, ownerId });
   const [identifier, setIdentifier] = useState("");
@@ -35,12 +35,17 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
     return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", clear); };
   }, []);
   const active = (started: string) => mounted.current && current.current === started;
+  // A login the assistant asked for by address. Only the member whose task asked may answer it.
+  const explicit = request.method === "vault.save_login" ? request.explicit : undefined;
+  const requester = explicit?.requestedBy;
+  const answerable = !requester || requester.id === ownerId;
   async function answer(cancel = false) {
-    if (busy || uncertain || settled || uncertainRequests.has(scope)) return;
+    if (busy || uncertain || settled || !answerable || uncertainRequests.has(scope)) return;
     const started = scope;
     const binding = { epoch: request.epoch, sessionId: request.sessionId, method: request.method };
     const payload: SecureRequestAnswer = cancel ? { ...binding, cancel: true }
-      : request.method === "vault.save_login" ? { ...binding, method: "vault.save_login", identifier, password: secret }
+      : request.method === "vault.save_login" ? { ...binding, method: "vault.save_login", identifier, password: secret,
+        ...(explicit ? { origin: request.origin } : {}) }
       : { ...binding, method: request.method, value: secret };
     uncertainRequests.add(started);
     setSecret(""); setIdentifier(""); setBusy(true); setError(""); setNotice("");
@@ -81,10 +86,12 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
     : request.method === "vault.unlock_prompt" ? `${request.displayName} master password` : "Secret value";
   return <article className="approval-card secure-request" data-request-id={requestId}>
     <p className="eyebrow">Secure input for Hermes</p><h2>{title}</h2><p>{detail}</p>
-    {login && <p className="vault-origin">Website: {request.origin}</p>}
+    {login && !explicit && <p className="vault-origin">Website: {request.origin}</p>}
+    {login && explicit && <ExplicitLoginDetails origin={request.origin} request={explicit} assistantName={assistantName} />}
     {request.method === "vault.code" && request.site && <p className="vault-origin">Website: {request.site}</p>}
     {request.method === "secret" && <p>Hermes setting: <code>{request.envVar}</code>. Hermes saves this in its profile environment, separately from saved logins.</p>}
-    {!settled && <form autoComplete="off" onSubmit={event => { event.preventDefault(); void answer(); }}>
+    {!settled && !answerable && <p role="status">Waiting for {requester?.name ?? "the household member who started this task"}. Only they can save or cancel this login.</p>}
+    {!settled && answerable && <form autoComplete="off" onSubmit={event => { event.preventDefault(); void answer(); }}>
       {login && <label>Username, email or phone<input required maxLength={1000} autoComplete="off" value={identifier}
         disabled={busy || uncertain} onChange={event => setIdentifier(event.target.value)} /></label>}
       <label>{secretLabel}<input required type="password" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={4096} value={secret}
@@ -97,4 +104,23 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
     {(uncertain || settled || error) && <button type="button" disabled={busy} onClick={() => void refresh()}>Refresh request</button>}
     {error && <p className="form-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
   </article>;
+}
+
+/** What the assistant asked for. The address is the only part Hermes checks; the rest is the assistant's own text. */
+function ExplicitLoginDetails({ origin, request, assistantName }: { origin: string; request: ExplicitLoginRequest; assistantName?: string }) {
+  const assistant = assistantName && assistantName !== request.profile ? `${assistantName} (Hermes profile ${request.profile})` : `Hermes profile ${request.profile}`;
+  return <dl className="credential-context">
+    <dt>Address</dt>
+    <dd><span className="vault-origin">{origin}</span>
+      <span className="muted">Hermes has not opened or checked it.{origin.startsWith("http://") && " This address does not use HTTPS."}</span></dd>
+    <dt>Name</dt><dd>{request.label}</dd>
+    <dt>Asked by</dt><dd>{assistant}{request.requestedBy?.name ? ` for ${request.requestedBy.name}` : ""}</dd>
+    <dt>Reason, in the assistant's words</dt><dd>{request.purpose}</dd>
+    <dt>Storage</dt>
+    <dd>Saved in this profile's encrypted Hermes vault until someone removes it in Logins. The assistant gets a handle and
+      the username, never the password. Hermes fills the password only on pages at exactly this address.</dd>
+    <dt>Who can reach it</dt>
+    <dd>Profiles organize access but are not a household security boundary. Household members with Hermes access, and
+      tools running on the Hermes server, can reach saved logins.</dd>
+  </dl>;
 }

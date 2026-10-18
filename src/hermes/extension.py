@@ -119,6 +119,52 @@ class Journal:
         return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3]}
 
 
+# The web and iOS clients' history page, src/shared/history.ts HISTORY_PAGE_TURNS.
+PAGE_TURNS = 20
+
+
+def history_window(messages, sid, start=None, turns=0):
+    """The app's history window, cut here so earlier rows never cross the socket.
+
+    Mirrors historyWindow in src/shared/history.ts over the rows the app shows, with the
+    app's own message IDs. Returns (rows, window). Rows before the window are kept only
+    when the app still needs them: those carrying files, for its earlier-file count, and
+    the prompt each such reply answers, for its origin. Each returned row carries its
+    position among visible rows, so positional IDs stay the same. ``window`` is None,
+    and every row is returned, when nothing is cut or the cut would start mid-turn.
+    """
+    visible = [row for row in messages if row.get("display_kind") != "hidden"]
+    def identity(index):
+        row = visible[index]
+        for key in ("app_request_id", "row_id"):
+            if row.get(key) is not None:
+                return str(row[key])
+        return f"{sid}-{index}"
+    turns = turns if type(turns) is int and turns >= 0 else 0
+    end = next((index for index in range(len(visible)) if identity(index) == start), -1) if isinstance(start, str) and start else -1
+    if end < 0:
+        end, turns = len(visible), max(turns, PAGE_TURNS)
+    first = end
+    while first > 0 and turns > 0:
+        first -= 1
+        if visible[first].get("role") == "user":
+            turns -= 1
+    if first == 0 or visible[first].get("role") != "user":
+        return messages, None
+    kept, prompt = set(), None
+    for index in range(first):
+        row = visible[index]
+        if row.get("role") == "user":
+            prompt = index
+        files = row.get("app_attachments") if row.get("role") == "user" else row.get("app_artifacts")
+        if isinstance(files, list) and files:
+            kept.add(index)
+            if row.get("role") == "assistant" and prompt is not None:
+                kept.add(prompt)
+    rows = [dict(visible[index], app_index=index) for index in sorted(kept) + list(range(first, len(visible)))]
+    return rows, {"earlier": first, "context": len(kept)}
+
+
 def event_body(value):
     """A bounded, single-line excerpt for event bodies; the app shortens it further for display."""
     if not isinstance(value, str):
@@ -501,9 +547,13 @@ def install(path=None):
 
     def open_bot(rid, params):
         profile = params.get("profile", "default")
+        # Callers that need only the session, its run state and open requests skip the
+        # native history read. A first open still resumes with history.
+        omit = params.get("omit_messages") is True
+        window = params.get("window") if isinstance(params.get("window"), dict) and not omit else None
         with canonical_lock:
             if profile in canonical and canonical[profile] in server._sessions:
-                value = native("session.activate", {"session_id": canonical[profile], "profile": profile})
+                value = native("session.activate", {"session_id": canonical[profile], "profile": profile, **({"omit_messages": True} if omit else {})})
             else:
                 roster = native("profiles.list", {"include_sessions": True})["profiles"]
                 bot = next((x for x in roster if x["name"] == profile), None)
@@ -529,10 +579,15 @@ def install(path=None):
             # capture when this executor's native registry can settle the exact
             # canonical request and register its values at its own egress guard.
             from tui_gateway import server_requests as secure_requests
+            explicit = getattr(journal, "explicit_credential", lambda _request_id: None)
             with secure_requests._lock:
                 for request in value["open_requests"]:
                     local = secure_requests._open.get(request.get("id"))
                     request["app_local_secure"] = bool(local is not None and local.sid == value["session_id"] and local.method == request.get("method"))
+                    # A login the agent asked for by address, with what the card must show besides it.
+                    credential = explicit(request.get("id")) if request["app_local_secure"] and request.get("method") == "vault.save_login" else None
+                    if credential:
+                        request["app_credential"] = credential
             sid = value["session_id"]
             session = server._sessions[sid]
             if session.get("running") and session.get("app_exposed_reasoning"):
@@ -663,6 +718,10 @@ def install(path=None):
                                 break
                     if not represented:
                         value["app_tool_calls"].append(call)
+            if window is not None:
+                value["messages"], cut = history_window(value.get("messages", []), sid, window.get("start"), window.get("turns", 0))
+                if cut:
+                    value["app_window"] = cut
             return server._ok(rid, value)
 
     def submit(rid, params):
@@ -785,7 +844,7 @@ def install(path=None):
         return server._ok(rid, {"cursor": str(ready[-1][0] if ready else cursor), "events": events})
 
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in {"open": open_bot, "submit": submit, "receipt": receipt, "discover": discover}.items():
         server.register_method("agent-interface." + name, handler)
 
