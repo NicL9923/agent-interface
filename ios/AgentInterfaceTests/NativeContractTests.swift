@@ -156,7 +156,13 @@ private final class NativeMockServer: @unchecked Sendable {
     /// Answers change-stream requests with an open stream instead of a JSON body.
     func serveEventStreams() { lock.withLock { streaming = true } }
     /// A change notice, as the server sends one when the conversation changes.
-    func notifyChange() { for stream in lock.withLock({ streams }) { stream.send("data: change\n\n") } }
+    func notifyChange() { for stream in lock.withLock({ streams }).filter({ $0.request.url?.path != "/api/events" }) { stream.send("data: change\n\n") } }
+    func notifyInflight() {
+        for stream in lock.withLock({ streams }).filter({ $0.request.url?.path != "/api/events" }) {
+            stream.send("event: inflight\ndata: {\"botId\":\"bot\",\"message\":{\"id\":\"sid-inflight\",\"role\":\"assistant\",\"text\":\"Live native reply\"},\"activity\":{\"state\":\"thinking\",\"runId\":\"live-run\"},\"toolCalls\":[]}\n\n")
+        }
+    }
+    func notifyRoster() { for stream in lock.withLock({ streams }).filter({ $0.request.url?.path == "/api/events" }) { stream.send("event: roster\ndata: roster\n\n") } }
     func receive(_ protocolInstance: NativeMockProtocol) {
         let path = protocolInstance.request.url!.path
         if path.hasSuffix("/events"), lock.withLock({ streaming }) {
@@ -877,10 +883,10 @@ private final class NativeMockServer: @unchecked Sendable {
         for _ in 0..<5 { await tick(1.5) }
         XCTAssertEqual(bootstraps(), 1, "Bootstrap must not ride the 1.5 second conversation cadence")
         XCTAssertEqual(polls(), 6)
-        await tick(1)
-        XCTAssertEqual(bootstraps(), 2, "Like the web, bootstrap refreshes every 8 seconds")
+        await tick(38)
+        XCTAssertEqual(bootstraps(), 2, "Like the web, bootstrap falls back every 45 seconds")
         await value.refreshBootstrap()
-        await tick(7)
+        await tick(44)
         XCTAssertEqual(bootstraps(), 3, "An action's refresh restarts the timer")
         await tick(2)
         XCTAssertEqual(bootstraps(), 4)
@@ -1003,6 +1009,23 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.conversation?.messages.first?.id, "m41")
         await value.refreshConversation()
         XCTAssertEqual(server.conversationQueries.last, "start=m41", "The window then stays where it opened")
+    }
+
+    func testInflightPatchesTheTranscriptWithoutFetchingAndRosterRefreshesBootstrap() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveEventStreams()
+        _ = await value.pollOnce()
+        try await Task.sleep(for: .milliseconds(200))
+        let reads = server.conversationQueries.count
+        server.notifyInflight()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(value.conversation?.messages.last?.text, "Live native reply")
+        XCTAssertEqual(value.conversation?.activity.runId, "live-run")
+        XCTAssertEqual(server.conversationQueries.count, reads)
+        let bootstraps = server.requestCount("/api/bootstrap")
+        server.notifyRoster()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(server.requestCount("/api/bootstrap"), bootstraps + 1)
     }
 
     func testALiveChangeStreamReplacesFastConversationPollingLikeTheWeb() async throws {

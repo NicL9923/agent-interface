@@ -83,6 +83,19 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('seeds a mid-turn native snapshot and retains its running tool activity', async () => {
+    snapshot.info={running:true};snapshot.app_run_id='run';snapshot.inflight={assistant:'Reply already streaming'};
+    snapshot.app_tool_calls=[{id:'tool',name:'terminal',status:'running'}];
+    beforeSend=(request,socket)=>{if(request.method==='agent-interface.open')socket.receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{text:'streaming'}}});};
+    await runtime.conversation('shared');
+    expect(runtime.inflight!('shared')).toMatchObject({message:{text:'Reply already streaming'},activity:{state:'working'},toolCalls:[{id:'tool'}]});
+  });
+  it('hears native roster changes without refetching watched conversations', async () => {
+    await runtime.conversation('shared');
+    const roster=vi.fn(),chat=vi.fn();runtime.watchRoster!(roster);runtime.watch!('shared',chat);
+    sockets.at(-1)!.receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
+    expect(roster).toHaveBeenCalledOnce();expect(chat).not.toHaveBeenCalled();
+  });
   it('admits through one canonical submit RPC and maps interruption rejection', async () => {
     canonicalSubmission=true;
     await runtime.status(); calls=[];
@@ -93,10 +106,10 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
   });
   it('lets native answers prove staleness without a second open', async () => {
-    rpcErrors.delete('request.answer'); await runtime.status(); calls=[];
+    rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];
     beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
     await expect(runtime.approve('shared','stale','approved','person')).rejects.toThrow('expired');
-    await expect(runtime.answerRequest('shared','stale',{})).rejects.toThrow('expired');
+    await expect(runtime.answerRequest('shared','question',{})).rejects.toThrow('expired');
     expect(calls.map(call=>call.method)).toEqual(['request.answer','request.answer']);
   });
   it('lists bots without loading profile descriptions and loads detail lazily', async () => {

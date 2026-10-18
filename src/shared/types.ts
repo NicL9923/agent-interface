@@ -361,7 +361,7 @@ export interface Runtime {
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
-  /** Calls `changed` whenever the bot's conversation may have changed, until the returned function is called. */
+  /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
   inflight?(botId: string): Inflight | undefined;
   submit(input: Submission): Promise<SubmissionReceipt>;

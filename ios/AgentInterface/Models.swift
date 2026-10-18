@@ -471,6 +471,15 @@ struct Inflight: Codable {
   var message: Message
   var activity: Activity
   var toolCalls: [ToolCall]
+  func applying(to conversation: Conversation) -> Conversation {
+    guard conversation.botId == botId else { return conversation }
+    var value = conversation
+    value.messages.removeAll { $0.id.hasSuffix("-inflight") }
+    if !message.text.isEmpty || !(message.reasoning ?? "").isEmpty { value.messages.append(message) }
+    value.activity = activity
+    value.toolCalls = toolCalls
+    return value
+  }
 }
 struct Conversation: Codable, Equatable {
   var attention: [Attention]?

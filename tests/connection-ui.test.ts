@@ -222,7 +222,7 @@ describe('setup and recovery interface',()=>{
     await renderApp();expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
     expect(container.querySelector('.transcript')?.textContent).toContain('Existing canonical answer');
     hermesDown=true;boot={...boot,bots:[],connection:{connected:false,code:'unreachable'}};
-    await advance(8000);
+    await advance(45_000);
     expect(new URL(location.href).searchParams.get('bot')).toBe('shared');
     expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
     expect(container.querySelector('.transcript')?.textContent).toContain('Existing canonical answer');
@@ -410,8 +410,8 @@ describe('pushed conversation updates',()=>{
   const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
   const opened=async()=>{
     await renderApp();await advance(20);
-    expect(FakeEventSource.created).toEqual(['/api/bots/shared/events']);
-    const [stream]=FakeEventSource.streams;
+    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=1']);
+    const stream=[...FakeEventSource.streams].find(stream=>stream.url.includes('/bots/'))!;
     // A change between the first read and the subscription would be lost, so connecting reloads.
     const before=reads();
     await act(async()=>stream.connect());await advance(0);
@@ -442,15 +442,15 @@ describe('pushed conversation updates',()=>{
     // A refusal is never retried by EventSource itself.
     await act(async()=>stream.fail());
     await advance(30_000);
-    expect(FakeEventSource.created).toHaveLength(2);
-    const [replacement]=FakeEventSource.streams;
+    expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
+    const replacement=[...FakeEventSource.streams].find(stream=>stream.url.includes("/bots/"))!;
     const replaced=reads();
     await act(async()=>replacement.connect());await advance(0);
     expect(reads()).toBe(replaced+1);
     // A minute without a ping looks like a dead connection; the next poll after that replaces it.
-    await advance(59_000);expect(FakeEventSource.created).toHaveLength(2);await advance(31_000);
-    expect(FakeEventSource.created).toHaveLength(3);
-    expect(FakeEventSource.streams.size).toBe(1);
+    await advance(59_000);expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);await advance(31_000);
+    expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(3);
+    expect(FakeEventSource.streams.size).toBe(2);
   });
   it('closes the stream and stops polling while hidden, then refreshes at once when shown',async()=>{
     let visibility:DocumentVisibilityState='visible';
@@ -465,8 +465,8 @@ describe('pushed conversation updates',()=>{
       expect(reads()).toBe(hidden);
       await shown('visible');await advance(0);
       expect(reads()).toBe(hidden+1);
-      expect(FakeEventSource.created).toHaveLength(2);
-      expect(FakeEventSource.streams.size).toBe(1);
+      expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
+      expect(FakeEventSource.streams.size).toBe(2);
     }finally{Reflect.deleteProperty(document,'visibilityState');}
   });
 });

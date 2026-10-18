@@ -80,6 +80,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
   /// The open conversation's change stream, as the web subscribes to it, and when it last spoke.
+  private var latestInflight: Inflight?
   private var rosterTask: Task<Void, Never>?
   private var eventTask: Task<Void, Never>?
   private var eventBotId: String?
@@ -352,6 +353,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func stopStream() {
     rosterTask?.cancel()
     rosterTask = nil
+    latestInflight = nil
     eventTask?.cancel()
     eventTask = nil
     eventBotId = nil
@@ -391,6 +393,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     eventTask?.cancel()
     streamHeardAt = nil
     eventBotId = selectedBotId
+    latestInflight = nil
     guard let id = selectedBotId, let api else { eventTask = nil; return }
     eventTask = Task { [weak self] in
       var failures = 0
@@ -401,6 +404,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           failures = 0
           self.streamHeardAt = self.now()
           // Notices sent before the subscription are lost, so connecting counts as one.
+          self.latestInflight = nil
           self.requestConversationRefresh()
           var event = ""
           for try await line in lines {
@@ -409,14 +413,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
             if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("data:") {
               if event == "inflight", let data = String(line.dropFirst(5)).data(using: .utf8),
-                 let patch = try? JSONDecoder().decode(Inflight.self, from: data),
-                 var value = self.conversation, value.botId == patch.botId, self.selectedBotId == patch.botId {
-                value.messages.removeAll { $0.id.hasSuffix("-inflight") }
-                if !patch.message.text.isEmpty || !(patch.message.reasoning ?? "").isEmpty { value.messages.append(patch.message) }
-                value.activity = patch.activity
-                value.toolCalls = patch.toolCalls
-                self.conversation = value
-              } else if event != "inflight" && line != "data: ping" { self.requestConversationRefresh() }
+                 let patch = try? JSONDecoder().decode(Inflight.self, from: data), self.selectedBotId == patch.botId {
+                self.latestInflight = patch
+                if let current = self.conversation {
+                  let value = patch.applying(to: current)
+                  self.conversation = value
+                  self.conversationCache[patch.botId] = value
+                }
+              } else if event != "inflight" && line != "data: ping" {
+                self.latestInflight = nil
+                self.requestConversationRefresh()
+              }
               event = ""
             }
           }
@@ -528,6 +535,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     persistDraft()
     flushDraft()
     selectionGeneration = UUID()
+    latestInflight = nil
     selectedBotId = id
     if id != nil && navigate { conversationRequest = UUID() }
     conversation = id.flatMap { conversationCache[$0] }
@@ -672,6 +680,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   private func apply(_ value: Conversation, botId id: String) {
+    let value = latestInflight?.applying(to: value) ?? value
     if conversation?.activity.runId != value.activity.runId
       || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
     {

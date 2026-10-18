@@ -79,7 +79,8 @@ second, with JSON `{botId, message, activity, toolCalls}`. `message` is the
 synthetic assistant row whose ID ends in `-inflight`, including optional
 `reasoning` and `origin`. Replace that row, or remove it if both text and
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
-Persisted text segments are excluded and private agent handoffs are redacted.
+The same persisted-segment and origin rules as conversation reads apply,
+and private agent handoffs are redacted.
 Structural events still send `data: change`, meaning refetch, including on
 stream open. Refetch on reconnect. Streams without the parameter retain their
 one-change-per-second streaming cadence.

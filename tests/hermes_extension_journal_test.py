@@ -176,7 +176,7 @@ class OpenTests(unittest.TestCase):
         with FakeHermes(turns(25, files={3})) as hermes:
             expected = hermes.open(window={"turns": 20})
             session = hermes.modules["tui_gateway.server"]._sessions["sid"]
-            session.update(history=hermes.messages, history_lock=threading.Lock())
+            session.update(history=hermes.messages, history_lock=threading.Lock(),profile_home=hermes.directory.name)
             self.assertEqual(hermes.open(window={"turns": 20})["messages"], expected["messages"])
             seen = []
             hermes.journal.db.set_trace_callback(seen.append)
@@ -190,8 +190,20 @@ class OpenTests(unittest.TestCase):
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
             hermes.open()
             self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            for filename in ("state.db", "state.db-wal", "config.yaml"):
+                hermes.open()
+                Path(hermes.directory.name,filename).write_text("changed")
+                hermes.open()
+                self.assertNotIn("omit_messages",hermes.native_calls[-1][1])
+            session["running"]=True
+            hermes.open(); hermes.open()
+            self.assertNotIn("omit_messages",hermes.native_calls[-1][1])
+            session["running"]=False
             session["history"] = hermes.messages = turns(3)
             self.assertEqual(len(hermes.open()["messages"]), 6)
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            session["history"][0]["_row_id"]=12345
+            hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
             session["history"][-1] = {"role":"assistant", "text":"Replacement"}
             hermes.open()

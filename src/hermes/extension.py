@@ -556,14 +556,27 @@ def install(path=None):
         if "history" not in session or "history_lock" not in session:
             return None
         with session["history_lock"]:
-            prefix, history = session.get("display_history_prefix") or [], session.get("history") or []
-            # Native version also catches replacements inside a same-length history. Object
-            # identity catches unpersisted last rows; persisted rows carry stable SQLite IDs.
-            def last(rows):
-                row = rows[-1] if rows else None
-                return (id(row), row.get("_row_id")) if isinstance(row, dict) else id(row)
-            return (session.get("session_key"), len(prefix), last(prefix), len(history), last(history),
-                    session.get("history_version"), bool(session.get("resume_hydrating")), bool(session.get("running")))
+            if any(session.get(key) for key in ("running", "queued_prompt", "queued_prompts", "pending_steer",
+                                                "_auto_continue_scheduled", "_compute_host_open_request", "resume_hydrating")):
+                return None
+            prefix, history = session.get("display_history_prefix"), session.get("history")
+            def rows_identity(rows):
+                # Flush stamps row IDs in place without changing history_version.
+                return (id(rows), len(rows or []), tuple((id(row), row.get("_row_id")) for row in rows or [] if isinstance(row, dict)))
+            memory = (session.get("session_key"), session.get("history_version"), rows_identity(prefix), rows_identity(history))
+            home = Path(session.get("profile_home") or get_hermes_home())
+        db = server._get_db() if not session.get("profile_home") and hasattr(server, "_get_db") else None
+        db_path = Path(getattr(db, "db_path", home / "state.db"))
+        def stamp(path):
+            try:
+                info = path.stat()
+                return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+            except FileNotFoundError:
+                return None
+        # Like the native change watcher, observe both DB and WAL: another native
+        # connection can commit a display lineage without changing the warm history.
+        # File replacement, checkpoint and profile commentary configuration invalidate too.
+        return memory, tuple(stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml"))
 
     def open_bot(rid, params):
         profile = params.get("profile", "default")
@@ -574,12 +587,14 @@ def install(path=None):
         with canonical_lock:
             cached = None
             identity = None
+            mutation = None
             if profile in canonical and canonical[profile] in server._sessions:
                 sid = canonical[profile]
-                identity = history_identity(server._sessions[sid])
+                identity = None if omit else history_identity(server._sessions[sid])
                 with journal.lock:
+                    mutation = journal.mutation
                     entry = decorated.get(sid)
-                    if not omit and identity is not None and journal.mutation is not None and entry and entry[:2] == (identity, journal.mutation):
+                    if not omit and not params.get("_skip_cache") and identity is not None and mutation is not None and entry and entry[:2] == (identity, mutation) and time.monotonic() - entry[3] < 30:
                         cached = entry[2]
                 value = native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
                 # Native activation takes its own snapshot. Never combine cached history with
@@ -729,11 +744,18 @@ def install(path=None):
                                             arguments = None
                                         if arguments == (message.get("args") or {}):
                                             message["app_tool_call"] = detail
-                    after = history_identity(session)
-                    if not omit and identity is not None and after == identity and journal.mutation is not None:
-                        # Keep full binding: start cursors use request IDs resolved here, and
-                        # earlier file context is known only after tool/receipt attribution.
-                        decorated[sid] = (identity, journal.mutation, messages)
+                    bound_mutation = journal.mutation
+                    cacheable = not unbound
+            # Never acquire history_lock while holding journal.lock: native flushes
+            # emit frames under history_lock and the frame hook needs journal.lock.
+            after = history_identity(session) if not omit else None
+            if cached is not None and (after != identity or mutation != journal.mutation):
+                return open_bot(rid, {**params, "_skip_cache": True})
+            with journal.lock:
+                if cached is None:
+                    if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
+                        # Full binding preserves cursor identities and earlier file context.
+                        decorated[sid] = (identity, journal.mutation, messages, time.monotonic())
                     else:
                         decorated.pop(sid, None)
             # Standard native tools flush before completion; Codex can expose

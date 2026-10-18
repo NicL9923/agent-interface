@@ -81,9 +81,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   // This app's own writes change a conversation before Hermes reports it.
   const touched = (botId: string) => { changeGenerations.set(botId, (changeGenerations.get(botId) ?? 0) + 1); };
-  // Profile descriptions read files on the Hermes host. Every client's roster poll shares one until this
-  // app changes the profile or ten seconds pass, near a client's own poll, so a native dashboard edit is
-  // not resent stale by a later save.
+  // Lazy detail reads share expensive profile files for ten seconds. This app's
+  // profile edits invalidate them, and settings catalog reads ask for fresh detail.
   const DESCRIPTION_MS = 10_000;
   const descriptions = new Map<string, {at: number; edit: number; fresh: boolean; pending: boolean; value: Promise<Wire>}>();
   const descriptionEdits = new Map<string, number>();
@@ -350,6 +349,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       const params = frame.params ?? {};
       const sid = params.session_id;
+      // Native display-lineage changes include other clients and sessions this socket
+      // has never opened. Refresh the cheap roster without refetching every open chat.
+      if(!sid&&frame.method==='event'&&['sessions.changed','profiles.changed'].includes(params.type))rosterChanged();
       if (!sid) continue;
       const state = transient.get(sid) ?? {text: '', reasoning: '', state: 'idle' as ActivityState, requests: [], tools: []};
       const previousActivity=state.state;
@@ -650,6 +652,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     }
   }
 
+  async function checkRequest(botId:string,id:string,method:string):Promise<void>{
+    const state=transient.get(live.get(botId)??'');
+    const requests=state?.requests??(await open(botId)).open_requests??[];
+    if(!requests.some((request:Wire)=>String(request.id)===id&&request.method===method))throw new Error(method==='approval'?'That approval is stale or already resolved.':'That question is stale or already resolved.');
+  }
   async function scanRoutines():Promise<void>{
     discoveryFull=true;
     try{await connect();if(incrementalDiscovery){await rpc('agent-interface.discover',{cursor:'0',full:true});discoveryFull=false;}}
@@ -704,7 +711,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         message={id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})};
       }
       // Inherit the saved prompt origin exactly as a conversation read does.
-      return withMessageOrigins([...rows,message]).at(-1)!;
+      return message.text||message.reasoning?withMessageOrigins([...rows,message]).at(-1)!:message;
   }
   async function readConversation(botId:string,options:ConversationOptions):Promise<Conversation>{await connect();const value=await open(botId,options.history===false?{history:false}:{window:options.window});const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
       const rows:Message[]=history.filter((x:Wire)=>x.display_kind!=='hidden').map((row:Wire,listed:number)=>{
@@ -728,8 +735,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       });
       const state=transient.get(sid),inflight=value.inflight??{},active=!!value.info?.running||!!value.app_run_id;
       // Seed a socket attached mid-turn, without replacing text that already advanced during the read.
-      if(active&&state&&typeof inflight.assistant==='string'&&(!state.text||inflight.assistant.startsWith(state.text)))state.text=inflight.assistant;
-      if(active&&state&&typeof inflight.reasoning==='string'&&(!state.reasoning||inflight.reasoning.startsWith(state.reasoning)))state.reasoning=inflight.reasoning;
+      if(active&&state&&typeof inflight.assistant==='string'&&(!state.text||inflight.assistant.startsWith(state.text)||inflight.assistant.endsWith(state.text)))state.text=inflight.assistant;
+      if(active&&state&&typeof inflight.reasoning==='string'&&(!state.reasoning||inflight.reasoning.startsWith(state.reasoning)||inflight.reasoning.endsWith(state.reasoning)))state.reasoning=inflight.reasoning;
       const tail=inflightMessage(value,rows);
       if(tail.text||tail.reasoning)rows.push(tail);
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
@@ -756,7 +763,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if(active&&state)state.tools=toolCalls;
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
-      if(options.history!==false)snapshots.set(botId,{value,rows:rows.filter(row=>row.id!==`${sid}-inflight`),activity:{state:attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined}});
+      // Live patches need only the last prompt and its persisted assistant segments,
+      // never a second retained copy of an older client's full transcript.
+      if(options.history!==false)snapshots.set(botId,{value:{session_id:sid,info:{running:value.info?.running},app_run_id:value.app_run_id,inflight:{user:inflight.user,display_kind:inflight.display_kind,display_metadata:inflight.display_metadata}},rows:rows.slice(Math.max(0,rows.findLastIndex(row=>row.role==='user'))).filter(row=>row.id!==`${sid}-inflight`&&(row.role==='user'||row.role==='assistant')),activity:{state:attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined}});
       // Hermes returns a window's earlier rows first: those the app needs for files and origins.
       const cut=value.app_window&&Number.isInteger(value.app_window.earlier)&&Number.isInteger(value.app_window.context)?value.app_window as {earlier:number;context:number}:undefined;
       const shown=withMessageOrigins(rows);
@@ -932,8 +941,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async lookupSubmission(requestId){await connect();if(!extension)return null;const result=await rpc('agent-interface.receipt',{request_id:requestId});return result.receipt?receipt(result.receipt):null;},
     // Routes verify profile and request kind with one light read. Native answers prove
     // final staleness, so do not repeat that read here.
-    async approve(botId,approvalId,decision,_senderId){const result=await rpc('request.answer',{id:approvalId,profile:botId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
-    async answerRequest(botId,requestId,answers){const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That question expired before it was answered.');},
+    async approve(botId,approvalId,decision,_senderId){await checkRequest(botId,approvalId,'approval');const result=await rpc('request.answer',{id:approvalId,profile:botId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
+    async answerRequest(botId,requestId,answers){await checkRequest(botId,requestId,'clarify');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){
@@ -1058,7 +1067,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const saved=snapshots.get(botId),sid=live.get(botId),state=sid?transient.get(sid):undefined;
       if(!saved||!sid||!state||saved.value.session_id!==sid)return undefined;
       const message=inflightMessage({...saved.value,inflight:{...saved.value.inflight,assistant:state.text,reasoning:state.reasoning}},saved.rows);
-      return {botId,message,activity:{...saved.activity,state:["waiting","blocked","interrupted"].includes(saved.activity.state)?saved.activity.state:state.state,detail:state.detail},toolCalls:state.tools};
+      return {botId,message,activity:{...saved.activity,state:["waiting","blocked","interrupted"].includes(saved.activity.state)?saved.activity.state:state.tools.some(tool=>tool.status==='running')?'working':["idle","disconnected"].includes(state.state)?saved.activity.state:state.state,detail:state.detail??saved.activity.detail},toolCalls:state.tools};
     },
     watch(botId, listener) {
       const listeners = watchers.get(botId) ?? new Set();

@@ -70,6 +70,21 @@ async function stream(url: string, cookie: string, headers: Record<string, strin
 }
 
 describe("conversation change stream", () => {
+  it("rebuilds inflight redaction when another assistant becomes private", async () => {
+    const s=await setup();
+    const events=await stream(`${s.base}/api/bots/shared/events?inflight=1`,s.cookie);
+    await events.until(()=>events.notices()===1);
+    s.runtime.inflight=botId=>({botId,message:{id:"sid-inflight",role:"assistant",text:"Private reply",reasoning:"Private thought",origin:{kind:"agent",visibility:"activity",handle:"hidden"}},activity:{state:"working"},toolCalls:[{id:"call",name:"message_agent",arguments:JSON.stringify({target:"hidden",text:"private input"}),result:"private output",status:"running"}]});
+    s.store.savePresentation("hidden",{shared:false,ownerId:"local-two"});
+    s.change("shared","inflight");
+    await events.until(()=>events.text.includes("event: inflight"));
+    expect(events.text).not.toContain("Private reply");
+    expect(events.text).not.toContain("Private thought");
+    expect(events.text).not.toContain("private input");
+    expect(events.text).not.toContain("private output");
+    expect(events.text).toContain("another member's assistant");
+    await events.close();
+  });
   it("returns configuration through the lazy detail route", async () => {
     const s=await setup();
     const response=await fetch(`${s.base}/api/bots/shared`,{headers:{cookie:s.cookie}});

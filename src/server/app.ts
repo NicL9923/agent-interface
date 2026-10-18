@@ -456,7 +456,9 @@ export async function createApp(
     .map(path => `POST /api/bots/:id/${path}`));
   const rosterListeners = new Set<() => void>();
   app.addHook("onResponse", async (req, reply) => {
-    if(req.method!=="GET"&&reply.statusCode<400)for(const changed of rosterListeners)changed();
+    const path=routePattern(req);
+    if(req.method!=="GET"&&reply.statusCode<400&&path.startsWith('/api/bots')&&!/\/(draft|read-position|uploads)$/.test(path))
+      for(const changed of rosterListeners)changed();
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
       for (const changed of watchers.get(params(req).id) ?? []) changed();
   });
@@ -506,7 +508,7 @@ export async function createApp(
     const notice = (kind?: "inflight") => {
       if (!optedIn || kind !== "inflight") {
         clearTimeout(livePending); livePending = undefined;
-        if (optedIn) void redactAgents(store, roster, signedIn(req).id).then(value => { redact = value; });
+        if (optedIn) { redact = undefined; hidden = ""; }
         changed(); return;
       }
       livePending ??= setTimeout(() => {
@@ -515,8 +517,10 @@ export async function createApp(
           // Privacy can change through another assistant's settings while this stream stays open.
           const next = JSON.stringify(store.privateBots());
           if (next !== hidden) { redact = await redactAgents(store, roster, signedIn(req).id); hidden = next; }
+          if (next !== JSON.stringify(store.privateBots())) { changed(); return; }
           const value = runtime.inflight?.(botId);
-          if (!value || !redact) { changed(); return; }
+          // A structural read is already pending when its snapshot was invalidated.
+          if (!value || !redact) return;
           send(`event: inflight\ndata: ${JSON.stringify({...value,message:redact.message(value.message),toolCalls:value.toolCalls.map(redact.call)})}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
