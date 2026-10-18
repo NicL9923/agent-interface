@@ -67,10 +67,18 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const changeGenerations = new Map<string, number>();
   const sharedReads = new Map<string, {generation: string; at: number; value: Promise<Conversation>}>();
   const generationOf = (botId: string) => `${changeEpoch}:${changeGenerations.get(botId) ?? 0}`;
+  const settling = new Set<string>();
+  function settleSoon(botId: string): void {
+    if (settling.has(botId)) return;
+    settling.add(botId);
+    setTimeout(() => { settling.delete(botId); changed(botId); }, 1_000).unref?.();
+  }
   // This app's own writes change a conversation before Hermes reports it.
   const touched = (botId: string) => { changeGenerations.set(botId, (changeGenerations.get(botId) ?? 0) + 1); };
-  // Profile descriptions read files on the Hermes host. Polls reuse one until this app changes it, or a minute passes.
-  const DESCRIPTION_MS = 60_000;
+  // Profile descriptions read files on the Hermes host. Every client's roster poll shares one until this
+  // app changes the profile or ten seconds pass, near a client's own poll, so a native dashboard edit is
+  // not resent stale by a later save.
+  const DESCRIPTION_MS = 10_000;
   const descriptions = new Map<string, {at: number; edit: number; fresh: boolean; pending: boolean; value: Promise<Wire>}>();
   const descriptionEdits = new Map<string, number>();
   let capabilityRequest: Promise<Capabilities> | undefined;
@@ -670,6 +678,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const text=unseen(inflight.assistant||(active?state?.text:undefined),persisted.map(row=>row.text));
       const reasoning=unseen(typeof inflight.reasoning==='string'?inflight.reasoning:active?state?.reasoning:undefined,persisted.map(row=>row.reasoning));
       if(!active&&state){state.text='';state.reasoning='';state.tools=[];}
+      // Hermes settles a task after its last frame, with no frame of its own. Prompt one more read.
+      if(active&&state&&['done','failed','interrupted'].includes(state.state))settleSoon(botId);
       if(text||reasoning) {
         const origin = !savedPrompt ? wireOrigin({id:'inflight-prompt',role:'user',text:prompt},inflight) ?? {kind:'human' as const,visibility:'conversation' as const} : undefined;
         rows.push({id:`${sid}-inflight`,role:'assistant',text:text??'',reasoning,...(origin ? {origin:{...origin,visibility:origin.kind==='agent'||origin.kind==='diagnostic'?'activity':'conversation'}} : {})});
@@ -852,6 +862,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const entry = {generation, at: now, value: readConversation(botId, options)};
       sharedReads.set(key, entry);
       entry.value.then(value => {
+        // A running task can settle without a frame, so only settled state is kept for later readers.
+        if (value.activity.runId || ['thinking', 'working', 'waiting', 'blocked'].includes(value.activity.state)) {
+          if (sharedReads.get(key) === entry) sharedReads.delete(key);
+          return;
+        }
         // A reader polls next from its window's first message, which is this same read until something changes.
         const first = value.messages[0]?.id;
         if (first && options.window && generationOf(botId) === generation) sharedReads.set(botId + '\0' + JSON.stringify({start: first}), entry);
@@ -925,7 +940,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){size+=chunk.byteLength;if(size>1024*1024)throw new Error('Hermes returned an invalid credential status.');chunks.push(chunk);}
       return JSON.parse(Buffer.concat(chunks).toString('utf8'));
     },
-    async integrationRequest(input){return await (await http('/api/agent-interface/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).json();},
+    // Connections can change a profile's MCP servers; a later save must not resend the old list.
+    async integrationRequest(input){try{return await (await http('/api/agent-interface/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).json();}finally{if(!['list','check'].includes(input.operation))edited(input.profile);}},
     async computerRequest(input) {
       try {
         return await rpc('agent-interface.computer', {...input, ...(serviceAuth ? {service_key: options.token} : {})}) as ComputerStatus | ComputerAttachment;

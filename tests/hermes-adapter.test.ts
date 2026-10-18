@@ -1109,3 +1109,36 @@ describe('Review regressions for shared reads and credential negotiation', () =>
     expect(bodies.at(-1)).toMatchObject({actor: 'member-one'});
   });
 });
+
+describe('Review round two regressions', () => {
+  it('reads descriptions again after a connection changes a profile', async () => {
+    await runtime.status();
+    const describes = () => calls.filter(call => call.method === 'profiles.describe').length;
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ok: true})));
+    await runtime.listBots();
+    await runtime.integrationRequest!({operation: 'list', profile: 'shared'});
+    await runtime.listBots();
+    expect(describes()).toBe(1);
+    await runtime.integrationRequest!({operation: 'add_mcp', profile: 'shared'});
+    await runtime.listBots();
+    expect(describes()).toBe(2);
+  });
+
+  it('never shares a running read and asks clients to read again after a turn completes', async () => {
+    vi.useFakeTimers();
+    await runtime.status();
+    const notices = vi.fn();
+    runtime.watch!('shared', notices);
+    snapshot.info.running = true; snapshot.app_run_id = 'task-one';
+    await runtime.conversation('shared', {window: {turns: 20}});
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.complete', payload: {status: 'complete'}}});
+    notices.mockClear();
+    expect((await runtime.conversation('shared', {window: {turns: 20}})).activity.state).toBe('thinking');
+    // Hermes retires the task receipt after its final frame, without another frame.
+    snapshot.info.running = false; delete snapshot.app_run_id; snapshot.app_task_state = 'done';
+    expect((await runtime.conversation('shared', {window: {turns: 20}})).activity.state).toBe('done');
+    expect(notices).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(notices).toHaveBeenCalledOnce();
+  });
+});
