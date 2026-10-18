@@ -84,22 +84,38 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
-  it('never joins a forced routine scan that began before a later edit', async () => {
-    incrementalDiscovery=true;deferredMethods.add('agent-interface.discover');
+  it('returns routine mutations before discovery and forces the next tick', async () => {
+    incrementalDiscovery=true;
+    deferredMethods.add('agent-interface.discover');
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));
     const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
-    const first=runtime.saveRoutine(routine,'job');
+    await runtime.saveRoutine(routine,'job');
+    await runtime.setRoutineEnabled!('shared','job',true);
+    await runtime.deleteRoutine('job');
+    expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(0);
+    const tick=runtime.discoverEvents('7');
     await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
-    const second=runtime.saveRoutine({...routine,prompt:'Changed'},'job');
-    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(2));
-    for(const call of calls.filter(call=>call.method==='agent-interface.discover') as Record<string,any>[])sockets[0].receive({id:call.id,result:{cursor:'0',events:[]}});
-    await Promise.all([first,second]);
+    const call=calls.find(call=>call.method==='agent-interface.discover') as Record<string,any>;
+    expect(call.params).toEqual({cursor:'7',full:true});
+    sockets[0].receive({id:call.id,result:{cursor:'7',events:[]}});
+    await tick;
   });
-  it('forces discovery immediately after routine edits only when the add-on supports it', async () => {
+  it('retains a forced next tick when a routine changes during an outstanding scan', async () => {
     incrementalDiscovery=true;
+    await runtime.status();
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));
-    await runtime.saveRoutine({botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true},'job');
-    expect(calls.filter(call=>call.method==='agent-interface.discover').map(call=>call.params)).toEqual([{cursor:'0',full:true}]);
+    const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
+    await runtime.saveRoutine(routine,'job');
+    deferredMethods.add('agent-interface.discover');
+    const first=runtime.discoverEvents('0');
+    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
+    await runtime.saveRoutine({...routine,prompt:'Changed'},'job');
+    const request=calls.find(call=>call.method==='agent-interface.discover') as Record<string,any>;
+    sockets[0].receive({id:request.id,result:{cursor:'0',events:[]}});
+    await first;
+    deferredMethods.delete('agent-interface.discover');
+    await runtime.discoverEvents('1');
+    expect(calls.filter(call=>call.method==='agent-interface.discover').at(-1)?.params).toEqual({cursor:'1',full:true});
   });
   it('keeps older discovery add-ons free of new parameters', async () => {
     await runtime.discoverEvents('1');
@@ -120,11 +136,44 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await runtime.conversation('shared');
     expect(runtime.inflight!('shared')).toMatchObject({message:{text:'Reply already streaming'},activity:{state:'working'},toolCalls:[{id:'tool'}]});
   });
+  it('does not overwrite a tool start or restore a snapshot across a structural frame', async () => {
+    snapshot.info={running:true};snapshot.app_run_id='run';snapshot.app_tool_calls=[];
+    await runtime.conversation('shared');
+    hermesChanged();
+    beforeSend=(request,socket)=>{
+      if(request.method==='agent-interface.open')socket.receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'new',name:'terminal'}}});
+    };
+    await runtime.conversation('shared');
+    expect(runtime.inflight!('shared')!.toolCalls).toMatchObject([{id:'new',status:'running'}]);
+    beforeSend=(request,socket)=>{
+      if(request.method==='agent-interface.open')socket.receive({method:'event',params:{session_id:'live-one',type:'message.complete',payload:{status:'complete'}}});
+    };
+    hermesChanged();
+    await runtime.conversation('shared');
+    expect(runtime.inflight!('shared')).toBeUndefined();
+  });
   it('hears native roster changes without refetching watched conversations', async () => {
     await runtime.conversation('shared');
     const roster=vi.fn(),chat=vi.fn();runtime.watchRoster!(roster);runtime.watch!('shared',chat);
     sockets.at(-1)!.receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
     expect(roster).toHaveBeenCalledOnce();expect(chat).not.toHaveBeenCalled();
+  });
+  it('does not join a roster read that began before a native change', async () => {
+    await runtime.status();
+    deferredMethods.add('profiles.list');
+    const first=runtime.listBots();
+    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='profiles.list')).toHaveLength(1));
+    sockets[0].receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
+    const second=runtime.listBots();
+    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='profiles.list')).toHaveLength(2));
+    const requests=calls.filter(call=>call.method==='profiles.list') as Record<string,any>[];
+    sockets[0].receive({id:requests[1].id,result:{profiles:[{name:'new'}]}});
+    expect((await second)[0].id).toBe('new');
+    sockets[0].receive({id:requests[0].id,result:{profiles:[{name:'old'}]}});
+    await first;
+    rpcErrors.set('profiles.list',{code:-1,message:'Offline'});
+    deferredMethods.delete('profiles.list');
+    expect((await runtime.listBots())[0].id).toBe('new');
   });
   it('admits through one canonical submit RPC and maps interruption rejection', async () => {
     canonicalSubmission=true;

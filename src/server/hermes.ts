@@ -51,6 +51,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let canonicalSubmit = false;
   let incrementalDiscovery = false;
   let discoveryFull = false;
+  let discoveryGeneration = 0;
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -63,8 +64,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const opening = new Map<string, number>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
   const rosterWatchers = new Set<() => void>();
-  const rosterChanged = () => { for(const listener of rosterWatchers) { try { listener(); } catch { /* Isolate listeners. */ } } };
+  const rosterChanged = () => { rosterRequest=undefined; for(const listener of rosterWatchers) { try { listener(); } catch { /* Isolate listeners. */ } } };
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  const structuralGenerations = new Map<string, number>();
+  const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
   const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]}>();
   let capabilityCache: Capabilities | undefined;
   // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
@@ -95,7 +98,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
   function changed(botId?: string, kind?: "inflight"): void {
-    if(!kind)rosterChanged();
+    if(!kind){rosterChanged();if(botId)structuralGenerations.set(botId,(structuralGenerations.get(botId)??0)+1);}
     if (botId === undefined) changeEpoch++;
     else touched(botId);
     for (const [watched, listeners] of watchers) {
@@ -351,7 +354,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const sid = params.session_id;
       // Native display-lineage changes include other clients and sessions this socket
       // has never opened. Refresh the cheap roster without refetching every open chat.
-      if(!sid&&frame.method==='event'&&['sessions.changed','profiles.changed'].includes(params.type))rosterChanged();
+      if(!sid&&frame.method==='event'&&params.type==='sessions.changed')rosterChanged();
       if (!sid) continue;
       const state = transient.get(sid) ?? {text: '', reasoning: '', state: 'idle' as ActivityState, requests: [], tools: []};
       const previousActivity=state.state;
@@ -387,14 +390,15 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       // Opening a conversation attaches this socket to its session, so its frames arrive here.
       const botId = owners.get(sid);
+      const delta=frame.method === "event" && ["message.delta", "reasoning.delta", "thinking.delta", "tool.generating", "status.update", "tool.start"].includes(params.type);
       if (botId !== undefined) {
-        const delta=frame.method === "event" && ["message.delta", "reasoning.delta", "thinking.delta", "tool.generating", "status.update", "tool.start"].includes(params.type);
         if(delta&&state.state!==previousActivity)rosterChanged();
         if(!delta)snapshots.delete(botId);
+        if(delta&&params.type==='tool.start')structuralGenerations.set(botId,(structuralGenerations.get(botId)??0)+1);
         changed(botId,delta?"inflight":undefined);
       }
       // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
-      else for (const pending of opening.keys()) changed(pending);
+      else for (const pending of opening.keys()) changed(pending,delta&&params.type!=='tool.start'?"inflight":undefined);
     }
   }
   /**
@@ -586,7 +590,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     entry.value.then(()=>{entry.pending=false;},()=>{entry.pending=false;if(descriptions.get(name)===entry)descriptions.delete(name);});
     return entry.value;
   }
-  function edited(name:string):void{descriptions.delete(name);descriptionEdits.set(name,(descriptionEdits.get(name)??0)+1);}
+  function edited(name:string):void{rosterRequest=undefined;descriptions.delete(name);descriptionEdits.set(name,(descriptionEdits.get(name)??0)+1);}
   function preview(session?:Wire):Bot['lastMessage']{
     const text=typeof session?.preview==='string'?session.preview.replace(/\s+/g,' ').trim().slice(0,160):'';
     if(!text || messageOrigin({id:"preview",role:"user",text})?.visibility === "activity")return undefined;
@@ -657,11 +661,6 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     const requests=state?.requests??(await open(botId)).open_requests??[];
     if(!requests.some((request:Wire)=>String(request.id)===id&&request.method===method))throw new Error(method==='approval'?'That approval is stale or already resolved.':'That question is stale or already resolved.');
   }
-  async function scanRoutines():Promise<void>{
-    discoveryFull=true;
-    try{await connect();if(incrementalDiscovery){await rpc('agent-interface.discover',{cursor:'0',full:true},false);discoveryFull=false;}}
-    catch{/* A saved routine stays saved. The next discovery tick retries its scan. */}
-  }
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
     const body = {
@@ -683,7 +682,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       job = await (await http(`/api/cron/jobs/${encodeURIComponent(jobId)}/${input.enabled ? 'resume' : 'pause'}${profile}`, { method: 'POST' })).json() as Wire;
     }
     if (isEnabled(job) !== input.enabled) throw new Error('Hermes did not apply the routine state. Reload before retrying.');
-    await scanRoutines();
+    discoveryFull=true;discoveryGeneration++;
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
   function inflightMessage(value:Wire,rows:Message[]):Message{
@@ -713,7 +712,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       // Inherit the saved prompt origin exactly as a conversation read does.
       return message.text||message.reasoning?withMessageOrigins([...rows,message]).at(-1)!:message;
   }
-  async function readConversation(botId:string,options:ConversationOptions):Promise<Conversation>{await connect();const value=await open(botId,options.history===false?{history:false}:{window:options.window});const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
+  async function readConversation(botId:string,options:ConversationOptions):Promise<Conversation>{await connect();const generation=structuralGenerationOf(botId);const value=await open(botId,options.history===false?{history:false}:{window:options.window});const sid=value.session_id;const history=value.messages??(await rpc('session.history',{session_id:sid,profile:botId})).messages;
       const rows:Message[]=history.filter((x:Wire)=>x.display_kind!=='hidden').map((row:Wire,listed:number)=>{
         // A windowed read keeps each row's position among all visible rows, so positional IDs never change.
         const index=typeof row.app_index==='number'?row.app_index:listed;
@@ -760,12 +759,12 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
       });
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];
-      if(active&&state)state.tools=toolCalls;
+      if(active&&state&&generation===structuralGenerationOf(botId))state.tools=toolCalls;
       const runningTool=toolCalls.find(tool=>tool.status==='running');
       const activity:ActivityState=value.app_interruption?'interrupted':approvals.length?'waiting':active?(runningTool||state?.state==='working'&&value.app_tool_calls===undefined?'working':'thinking'):inflight.error?'failed':inflight.interrupted?'interrupted':['done','failed','interrupted'].includes(value.app_task_state)?value.app_task_state:state&&['done','failed','interrupted'].includes(state.state)?state.state:'idle';
       // Live patches need only the last prompt and its persisted assistant segments,
       // never a second retained copy of an older client's full transcript.
-      if(options.history!==false)snapshots.set(botId,{value:{session_id:sid,info:{running:value.info?.running},app_run_id:value.app_run_id,inflight:{user:inflight.user,display_kind:inflight.display_kind,display_metadata:inflight.display_metadata}},rows:rows.slice(Math.max(0,rows.findLastIndex(row=>row.role==='user'))).filter(row=>row.id!==`${sid}-inflight`&&(row.role==='user'||row.role==='assistant')),activity:{state:attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined}});
+      if(options.history!==false&&generation===structuralGenerationOf(botId))snapshots.set(botId,{value:{session_id:sid,info:{running:value.info?.running},app_run_id:value.app_run_id,inflight:{user:inflight.user,display_kind:inflight.display_kind,display_metadata:inflight.display_metadata}},rows:rows.slice(Math.max(0,rows.findLastIndex(row=>row.role==='user'))).filter(row=>row.id!==`${sid}-inflight`&&(row.role==='user'||row.role==='assistant')),activity:{state:attention.length?'blocked':activity,detail:active?(runningTool?`Using ${runningTool.name}`:state?.detail):undefined,runId:value.app_run_id??value.app_interruption?.runId??undefined}});
       // Hermes returns a window's earlier rows first: those the app needs for files and origins.
       const cut=value.app_window&&Number.isInteger(value.app_window.earlier)&&Number.isInteger(value.app_window.context)?value.app_window as {earlier:number;context:number}:undefined;
       const shown=withMessageOrigins(rows);
@@ -872,14 +871,16 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     async canonicalSubmit(){await connect();return canonicalSubmit;},
     async listBots() {
+      try{await connect();}catch{return botCache.map(row=>({...row,activity:'disconnected' as const}));}
       if (rosterRequest) return rosterRequest;
-      const request = (async () => {
+      let request!: Promise<Bot[]>;
+      request = (async () => {
         try {
-          const roster = await rpc('profiles.list', {include_sessions: true});
+          const roster = await rpc('profiles.list', {include_sessions: true}, false);
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
           const bots = roster.profiles.map((row: Wire) => bot(row));
-          botCache = bots;
+          if(rosterRequest===request)botCache = bots;
           return bots;
         } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
       })();
@@ -941,8 +942,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     async lookupSubmission(requestId){await connect();if(!extension)return null;const result=await rpc('agent-interface.receipt',{request_id:requestId});return result.receipt?receipt(result.receipt):null;},
     // Routes verify profile and request kind with one light read. Native answers prove
     // final staleness, so do not repeat that read here.
-    async approve(botId,approvalId,decision,_senderId){await checkRequest(botId,approvalId,'approval');const result=await rpc('request.answer',{id:approvalId,profile:botId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That approval expired before it was answered.');},
-    async answerRequest(botId,requestId,answers){await checkRequest(botId,requestId,'clarify');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired'||result.resolved===false)throw new Error('That question expired before it was answered.');},
+    async approve(botId,approvalId,decision,_senderId){await checkRequest(botId,approvalId,'approval');const result=await rpc('request.answer',{id:approvalId,profile:botId,result:{choice:decision==='approved'?'once':'deny'}}).finally(()=>touched(botId));if(result.status==='expired')throw new Error('That approval expired before it was answered.');},
+    async answerRequest(botId,requestId,answers){await checkRequest(botId,requestId,'clarify');const result=await rpc('request.answer',{id:requestId,profile:botId,result:{answers}}).finally(()=>touched(botId));if(result.status==='expired')throw new Error('That question expired before it was answered.');},
     async upload(botId,input){const state=await open(botId);const result=await rpc('file.attach',{session_id:state.session_id,profile:botId,name:input.name,data_url:`data:${input.mime};base64,${input.data.toString('base64')}`});const path=result.path;if(typeof path!=='string'||!path.startsWith('/')||path.includes('\0')||path.split('/').includes('..'))throw new Error('Hermes did not return a staged file path.');return {...signFile({path,name:input.name,mime:input.mime,botId,kind:'upload',version:1}),size:input.data.length};},
     fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){
@@ -978,7 +979,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     },
     async experienceRequest(input) {
       const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
-      if(input.operation==='run')await scanRoutines();
+      if(input.operation==='run'){discoveryFull=true;discoveryGeneration++;}
       if (input.operation === 'history') {
         const seed = value.app_prior_prompt;
         const seedOrigin = seed ? wireOrigin({ id: 'prior', role: 'user', text: seed.text ?? '' }, seed) : undefined;
@@ -1055,11 +1056,11 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const response = await (await http(`/api/cron/jobs/${encodeURIComponent(id)}/${enabled?'resume':'pause'}?profile=${encodeURIComponent(botId)}`,{method:'POST'})).json() as Wire;
       const job=response.job ?? response;
       if(job.error || (job.enabled !== false && job.state !== 'paused') !== enabled) throw new Error('Hermes did not confirm the routine state. Reload before retrying.');
-      await scanRoutines();
+      discoveryFull=true;discoveryGeneration++;
     },
     saveRoutine: routineMutation,
-    async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});await scanRoutines();},
-    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const full=incrementalDiscovery&&discoveryFull;const result=await rpc('agent-interface.discover',{cursor,...(full?{full:true}:{})}) as RuntimeDiscovery;if(full)discoveryFull=false;
+    async deleteRoutine(id){await http(`/api/cron/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});discoveryFull=true;discoveryGeneration++;},
+    async discoverEvents(cursor):Promise<RuntimeDiscovery>{await connect();if(!extension)throw new Error('Durable discovery requires the verified Hermes add-on.');const full=incrementalDiscovery&&discoveryFull,generation=discoveryGeneration;const result=await rpc('agent-interface.discover',{cursor,...(full?{full:true}:{})}) as RuntimeDiscovery;if(full&&generation===discoveryGeneration)discoveryFull=false;
       // Routine deliveries settle outside the open session's frames; the journal names their bot.
       for(const event of result.events??[])if(typeof event.botId==='string')changed(event.botId);
       return result;},

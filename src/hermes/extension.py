@@ -585,6 +585,11 @@ def install(path=None):
         omit = params.get("omit_messages") is True
         window = params.get("window") if isinstance(params.get("window"), dict) and not omit else None
         with canonical_lock:
+            # Retain only live canonical sessions, with a bounded household cache.
+            live_canonical = set(canonical.values()) & server._sessions.keys()
+            for old in list(decorated):
+                if old not in live_canonical:
+                    del decorated[old]
             cached = None
             identity = None
             mutation = None
@@ -756,6 +761,8 @@ def install(path=None):
                     if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
                         # Full binding preserves cursor identities and earlier file context.
                         decorated[sid] = (identity, journal.mutation, messages, time.monotonic())
+                        while len(decorated) > 32:
+                            del decorated[min(decorated, key=lambda key: decorated[key][3])]
                     else:
                         decorated.pop(sid, None)
             # Standard native tools flush before completion; Codex can expose
@@ -812,7 +819,14 @@ def install(path=None):
                 return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
             stored = server._sessions[sid].get("session_key")
             running = bool(server._sessions[sid].get("running"))
+            current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
             interrupted = journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
+            terminal = journal.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
+            if not terminal:
+                latest = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, stored)).fetchone()
+                terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
+            inflight = server._sessions[sid].get("inflight_turn") or {}
+            interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
             if interrupted and params.get("reviewed_interruption") is not True:
                 return server._err(rid, 4094, "Review the interrupted task before starting another turn")
             def admitted(value):
@@ -822,7 +836,6 @@ def install(path=None):
                 if previous[0] != digest:
                     return server._err(rid, 4093, "Request ID already belongs to a different input")
                 return server._ok(rid, admitted(journal.receipt(request_id)))
-            current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
             if current and not server._sessions[sid].get("running"):
                 # Native releases running before draining its followup queue. No new root
                 # may be admitted in that interval or retired with the preceding task.
@@ -834,7 +847,6 @@ def install(path=None):
                 with journal.db:
                     journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
                 return server._ok(rid, {**admitted(journal.receipt(request_id)), "message": "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles."})
-            current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
             run_id = current[0] if steering and current else request_id
             # FULL-synchronous intent is durable before native execution may be admitted.
             with journal.db:
@@ -897,23 +909,29 @@ def install(path=None):
         from hermes_cli.web_routers.cron import _owner_home_scope, _list_cron_jobs_sync
         from cron.executions import list_executions
         # Upstream supports only before_claimed_at (backwards pagination), not a
-        # since filter. Job timestamps gate indexed ledger reads; a minute safety
-        # scan catches completions that did not update job metadata or manual trials.
+        # since filter. Observe the execution DB and WAL, not job metadata: a
+        # terminal ledger write can arrive later or without a job-row change.
         with discovery_lock:
             now = time.monotonic()
             present = set()
             for profile in native("profiles.list", {"include_sessions": False})["profiles"]:
                 name = profile["name"]
-                jobs = _list_cron_jobs_sync(name)
+                present.add(name)
                 with _owner_home_scope(name):
-                    for job in jobs:
+                    from cron import executions
+                    ledger = executions.EXECUTIONS_FILE or Path(get_hermes_home()).resolve() / "cron" / "executions.db"
+                    def stamp(path):
+                        try:
+                            info = path.stat()
+                            return (info.st_size, info.st_mtime_ns, info.st_ino)
+                        except FileNotFoundError:
+                            return None
+                    signature = tuple(stamp(path) for path in (ledger, ledger.with_name(ledger.name + "-wal")))
+                    previous = routine_scans.get(name)
+                    if params.get("full") is not True and previous and previous[0] == signature and now - previous[1] < 60:
+                        continue
+                    for job in _list_cron_jobs_sync(name):
                         job_id = job.get("id") or job["job_id"]
-                        key = (name, job_id)
-                        present.add(key)
-                        signature = (job.get("last_run_at"), job.get("next_run_at"), job.get("last_status"))
-                        previous = routine_scans.get(key)
-                        if params.get("full") is not True and previous and previous[0] == signature and now - previous[1] < 60:
-                            continue
                         for execution in list_executions(job_id=job_id, limit=100):
                             status = execution.get("status")
                             if status not in ("completed", "failed", "unknown"):
@@ -923,7 +941,7 @@ def install(path=None):
                             kind = "completed" if status == "completed" else "failed" if status == "failed" else "interrupted"
                             journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, event_key=f"{run_id}:{status}", routine_id=job_id)
                         # Record only after the scan succeeds, so failed reads retry next tick.
-                        routine_scans[key] = (signature, now)
+                    routine_scans[name] = (signature, now)
             for key in list(routine_scans):
                 if key not in present:
                     del routine_scans[key]

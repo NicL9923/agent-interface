@@ -418,7 +418,7 @@ describe("authentication and household state", () => {
   });
 });
 describe("safe admission, steering, and approvals", () => {
-  it("skips conversation reads with canonical admission and keeps interruption review retryable", async () => {
+  it.each(["a Hermes restart", "a stopped task terminal event"])("keeps interruption review retryable after %s with canonical admission", async () => {
     const fake=runtimeDouble();
     fake.runtime.canonicalSubmit=async()=>true;
     fake.runtime.conversation=vi.fn().mockRejectedValue(new Error("Unexpected read"));

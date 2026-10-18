@@ -172,6 +172,50 @@ class OpenTests(unittest.TestCase):
             refused=submit("send",{**params,"request_id":"two"})
             self.assertEqual(refused["error"]["code"],4094)
 
+    def test_submit_requires_review_after_stopped_terminal_or_inflight(self):
+        for mode in ("terminal", "inflight", "cold"):
+            with self.subTest(mode=mode), FakeHermes([]) as hermes:
+                hermes.open()
+                session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+                if mode == "inflight":
+                    session["inflight_turn"] = {"user": "Stopped", "interrupted": True}
+                elif mode == "cold":
+                    with hermes.journal.db:
+                        hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES('old','d','default','old-sid','stored','member','e','old','Ask','[]',0,'accepted',1,1)")
+                    hermes.journal.event("default", "old-sid", "interrupted", "Stopped", "old")
+                else:
+                    hermes.journal.event("default", "sid", "interrupted", "Stopped")
+                submit = hermes.methods["agent-interface.submit"]
+                params = {"profile": "default", "request_id": "new", "sender_id": "member", "text": "Hello"}
+                self.assertEqual(submit("send", params)["error"]["code"], 4094)
+                self.assertNotIn("prompt.submit", [method for method, _ in hermes.native_calls])
+                self.assertEqual(submit("send", {**params, "reviewed_interruption": True})["result"]["status"], "accepted")
+                # Once reviewed admission has started a new run, an idempotent retry
+                # sees that current run rather than reapplying its predecessor's stop.
+                self.assertEqual(submit("send", params)["result"]["status"], "accepted")
+
+    def test_history_cache_prunes_noncanonical_sessions_and_caps_entries(self):
+        with FakeHermes(turns(1)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            method = hermes.methods["agent-interface.open"]
+            cells = dict(zip(method.__code__.co_freevars, (cell.cell_contents for cell in method.__closure__)))
+            cache, canonical = cells["decorated"], cells["canonical"]
+            cache["obsolete"] = cache["sid"]
+            hermes.open()
+            self.assertNotIn("obsolete", cache)
+            # Simulate many profiles with retained histories. Each read enforces the cap.
+            for index in range(40):
+                sid = f"profile-{index}"
+                canonical[sid] = sid
+                hermes.modules["tui_gateway.server"]._sessions[sid] = dict(session)
+                cache[sid] = cache["sid"]
+            cache.pop("sid")
+            hermes.open()
+            self.assertLessEqual(len(cache), 32)
+
     def test_decorated_cache_skips_projection_and_binding_and_invalidates(self):
         with FakeHermes(turns(25, files={3})) as hermes:
             expected = hermes.open(window={"turns": 20})
@@ -471,30 +515,41 @@ class BotDeliveryInstallTests(unittest.TestCase):
 
 
 class DiscoveryTests(unittest.TestCase):
-    def test_unchanged_jobs_skip_ledgers_with_safety_net_and_forced_scans(self):
-        jobs=[{"id":"job", "last_run_at":"one", "next_run_at":"two"}]
-        ledger=Mock(return_value=[{"id":"execution", "status":"completed", "session_id":"sid"}])
-        modules={"hermes_cli.web_routers.cron":types.SimpleNamespace(_owner_home_scope=lambda _:contextlib.nullcontext(),_list_cron_jobs_sync=lambda _:jobs),
-                 "cron.executions":types.SimpleNamespace(list_executions=ledger)}
-        with FakeHermes([]) as hermes, patch.dict(sys.modules,modules), patch.object(extension.time,"monotonic",return_value=100) as clock:
-            discover=hermes.methods["agent-interface.discover"]
-            first=discover("tick",{"cursor":"0"})["result"]
-            self.assertEqual(len(first["events"]),1)
-            ledger.assert_called_once_with(job_id="job",limit=100)
-            clock.return_value=105
-            self.assertEqual(discover("tick",{"cursor":first["cursor"]})["result"]["events"],[])
-            self.assertEqual(ledger.call_count,1)
-            jobs[0]["last_run_at"]="moved"
-            discover("tick",{})
-            self.assertEqual(ledger.call_count,2)
-            clock.return_value=164
-            discover("tick",{})
-            self.assertEqual(ledger.call_count,2)
-            clock.return_value=165
-            discover("tick",{})
-            self.assertEqual(ledger.call_count,3)
-            discover("tick",{"full":True})
-            self.assertEqual(ledger.call_count,4)
+    def test_ledger_only_writes_trigger_scan_with_safety_net_and_forced_scans(self):
+        jobs = [{"id": "job", "last_run_at": "one", "next_run_at": "two"}]
+        ledger = Mock(return_value=[{"id": "execution", "status": "completed", "session_id": "sid"}])
+        with FakeHermes([]) as hermes:
+            db = Path(hermes.directory.name) / "executions.db"
+            db.write_text("first")
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = ledger, db
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: jobs),
+                       "cron": cron, "cron.executions": executions}
+            with patch.dict(sys.modules, modules), patch.object(extension.time, "monotonic", return_value=100) as clock:
+                discover = hermes.methods["agent-interface.discover"]
+                first = discover("tick", {"cursor": "0"})["result"]
+                self.assertEqual(len(first["events"]), 1)
+                ledger.assert_called_once_with(job_id="job", limit=100)
+                clock.return_value = 105
+                self.assertEqual(discover("tick", {"cursor": first["cursor"]})["result"]["events"], [])
+                self.assertEqual(ledger.call_count, 1)
+                # Job metadata has not moved, but both DB and WAL writes must be seen.
+                db.write_text("a terminal execution write")
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 2)
+                db.with_name("executions.db-wal").write_text("another terminal execution")
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 3)
+                clock.return_value = 164
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 3)
+                clock.return_value = 165
+                discover("tick", {})
+                self.assertEqual(ledger.call_count, 4)
+                discover("tick", {"full": True})
+                self.assertEqual(ledger.call_count, 5)
 
 
 if __name__ == "__main__":
