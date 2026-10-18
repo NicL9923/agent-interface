@@ -19,11 +19,11 @@ const bootstrap = { capabilities: { botConfiguration: { supported: true } }, pre
 let container: HTMLDivElement, root: Root;
 const onSaved = vi.fn();
 beforeEach(() => {
-  vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : catalog) as T); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : path === "/bots/ranch" ? bot : catalog) as T); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
-const render = (value: Bot = bot) => act(async () => root.render(createElement(ComposerModelPicker, { bot: value, bootstrap, disabled: false, onSaved })));
+const render = (value: Bot = bot, disabled = false) => act(async () => root.render(createElement(ComposerModelPicker, { bot: value, bootstrap, disabled, onSaved })));
 const settleFocus = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
 const openPicker = async () => { await act(async () => trigger().click()); await settleFocus(); };
 const trigger = () => container.querySelector<HTMLButtonElement>(".composer-model > button")!;
@@ -51,9 +51,12 @@ it("asks before retrying a model Hermes wants confirmed", async () => {
   expect(onSaved).toHaveBeenCalledOnce();
 });
 
-it("stays disabled when the instructions it must resend are unknown", async () => {
+it("fetches detail before saving when roster instructions are omitted", async () => {
   await render({ ...bot, instructions: undefined });
-  expect(trigger().disabled).toBe(true);
+  expect(trigger().disabled).toBe(false);
+  await openPicker(); await click("New model");
+  expect(api).toHaveBeenCalledWith("/bots/ranch");
+  expect(write).toHaveBeenCalledWith("/bots/ranch",expect.objectContaining({instructions:"Be kind.",enabledMcpServers:["calendar"]}),"PATCH");
 });
 
 it("drops a late confirmation request after switching assistants", async () => {
@@ -72,7 +75,7 @@ it("closes when the assistant can no longer be saved safely and returns focus af
   vi.mocked(write).mockResolvedValue({});
   await render(); await openPicker();
   expect(document.activeElement).toBe(document.body.querySelector("input[type=search]"));
-  await render({ ...bot, instructions: undefined });
+  await render(bot, true);
   expect(document.body.querySelector(".model-popover")).toBeNull();
   await render(); await openPicker();
   await click("New model");

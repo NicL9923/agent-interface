@@ -84,6 +84,22 @@ Structural events still send `data: change`, meaning refetch, including on
 stream open. Refetch on reconnect. Streams without the parameter retain their
 one-change-per-second streaming cadence.
 
+`GET /api/bootstrap` and `GET /api/bots` return roster fields only: `id`,
+`name`, `description`, `model`, `provider`, `shared`, `ownerId`, `avatar`,
+`sessionId`, `activity` and `lastMessage`. Optional configuration fields
+`instructions`, `enabledTools`, `enabledSkills` and `enabledMcpServers` load
+from `GET /api/bots/:id`. Fetch detail before initializing a settings form or
+resending configuration during a model change. Model fallback from profile
+configuration is also available in detail. These fields were already optional
+in native build 5.
+
+`GET /api/events` is an authenticated household SSE stream. `event: roster`
+with `data: roster` means refresh bootstrap. It carries no assistant IDs or
+previews. It sends an initial roster notice, coalesces changes to at most one
+per second, sends a ping every 25 seconds and ends on sign-out. Refresh on
+reconnect and foreground as well. A 45-second bootstrap poll covers missed
+notices and changes made outside this app.
+
 A personal assistant with a recorded owner is private to that owner. For anyone
 else it does not exist: lists such as `/api/bots`, bootstrap, Today, search, saved
 items, automations, routines and group chats leave it out, and every route that

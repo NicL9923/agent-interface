@@ -82,6 +82,12 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('lists bots without loading profile descriptions and loads detail lazily', async () => {
+    await runtime.listBots(); await runtime.listBots();
+    expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(0);
+    expect((await runtime.botDetail!('shared')).enabledTools).toEqual(['terminal']);
+    expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(1);
+  });
   it('streams only the unpersisted tail with the saved prompt origin and no open RPC', async () => {
     snapshot.info={running:true}; snapshot.app_run_id='run';
     snapshot.inflight={user:'[Cron delivery: morning] prompt',assistant:'Saved segment\nTail',reasoning:'Saved thought\nNext'};
@@ -1031,20 +1037,20 @@ describe('Hermes conversation and roster read costs', () => {
     expect(opens().filter(call => call.params.omit_messages)).toHaveLength(3);
   });
 
-  it('reuses profile descriptions across roster polls until a minute passes or this app edits them', async () => {
+  it('reuses profile descriptions across detail reads until ten seconds passes or this app edits them', async () => {
     vi.useFakeTimers();
     const describes = () => calls.filter(call => call.method === 'profiles.describe').length;
-    await runtime.listBots(); await runtime.listBots();
+    await runtime.botDetail!('shared'); await runtime.botDetail!('shared');
     expect(describes()).toBe(1);
     await runtime.skills('shared');
     expect(describes()).toBe(2);
-    await runtime.listBots();
+    await runtime.botDetail!('shared');
     expect(describes()).toBe(2);
     await runtime.setSkills('shared', []);
-    await runtime.listBots();
+    await runtime.botDetail!('shared');
     expect(describes()).toBe(4);
     await vi.advanceTimersByTimeAsync(60_000);
-    await runtime.listBots();
+    await runtime.botDetail!('shared');
     expect(describes()).toBe(5);
   });
 
@@ -1078,7 +1084,7 @@ describe('Review regressions for shared reads and credential negotiation', () =>
   it('reads a profile again after an edit instead of joining a roster read that started before it', async () => {
     await runtime.status();
     deferredMethods.add('profiles.describe');
-    const roster = runtime.listBots();
+    const roster = runtime.botDetail!('shared');
     await vi.waitFor(() => expect(describes()).toHaveLength(1));
     const skills = runtime.skills('shared');
     await vi.waitFor(() => expect(describes()).toHaveLength(2));
@@ -1128,12 +1134,12 @@ describe('Review round two regressions', () => {
     await runtime.status();
     const describes = () => calls.filter(call => call.method === 'profiles.describe').length;
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ok: true})));
-    await runtime.listBots();
+    await runtime.botDetail!('shared');
     await runtime.integrationRequest!({operation: 'list', profile: 'shared'});
-    await runtime.listBots();
+    await runtime.botDetail!('shared');
     expect(describes()).toBe(1);
     await runtime.integrationRequest!({operation: 'add_mcp', profile: 'shared'});
-    await runtime.listBots();
+    await runtime.botDetail!('shared');
     expect(describes()).toBe(2);
   });
 

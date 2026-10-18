@@ -502,6 +502,10 @@
         }
       } else if path == "/api/native/push/config" {
         object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
+      } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "GET" {
+        var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
+        detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
+        object = detail
       } else if path == "/api/bots", method == "POST" {
         var bot = body
         bot["id"] = "created"

@@ -335,6 +335,12 @@ export async function createApp(
     if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
     return decorateBot(bot, (await runtime.capabilities()).avatarMetadata.supported);
   });
+  app.get("/api/bots/:id", async req => {
+    const botId=params(req).id;
+    const value=runtime.botDetail ? await runtime.botDetail(botId) : (await runtime.listBots()).find(bot=>bot.id===botId);
+    if(!value)throw failure(404,"Bot not found");
+    return decorateBot(value,(await runtime.capabilities()).avatarMetadata.supported);
+  });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
     const { confirmPrivate, ...input } = botInput.parse(req.body);
@@ -448,11 +454,26 @@ export async function createApp(
   // The app's own conversation writes notify at once, before Hermes reports their effect.
   const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId"]
     .map(path => `POST /api/bots/:id/${path}`));
+  const rosterListeners = new Set<() => void>();
   app.addHook("onResponse", async (req, reply) => {
+    if(req.method!=="GET"&&reply.statusCode<400)for(const changed of rosterListeners)changed();
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
       for (const changed of watchers.get(params(req).id) ?? []) changed();
   });
   app.addHook("preClose", async () => { for (const end of streams) end(); });
+  app.get("/api/events", {exposeHeadRoute:false}, async (req,reply) => {
+    reply.hijack();
+    const response=reply.raw;
+    response.writeHead(200,{...reply.getHeaders() as Record<string,string>,"Content-Type":"text/event-stream; charset=utf-8","Content-Encoding":"identity","X-Accel-Buffering":"no","Connection":"close"});
+    let ended=false,last=0,pending:ReturnType<typeof setTimeout>|undefined;
+    const send=(text:string)=>{if(!stillSignedIn(store,config,req))end();else if(!ended)response.write(text);};
+    const changed=()=>{pending??=setTimeout(()=>{pending=undefined;last=Date.now();send("event: roster\ndata: roster\n\n");},Math.max(0,last+1000-Date.now()));};
+    const unwatch=runtime.watchRoster?.(changed);
+    rosterListeners.add(changed);
+    const heartbeat=setInterval(()=>send("event: ping\ndata: ping\n\n"),25_000);
+    function end(){if(ended)return;ended=true;unwatch?.();rosterListeners.delete(changed);clearTimeout(pending);clearInterval(heartbeat);streams.delete(end);response.end();}
+    streams.add(end);response.on("close",end);response.write("retry: 3000\n\n");changed();
+  });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     const botId = id.parse(params(req).id);
     const optedIn = (req.query as {inflight?: string}).inflight === "1";

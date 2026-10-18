@@ -39,7 +39,7 @@ function useCompactSettings() {
   }, []);
   return compact;
 }
-export function BotSettings({
+function LoadedBotSettings({
   bot,
   bootstrap,
   onClose,
@@ -950,4 +950,20 @@ function RoutineManager({
 function SaveProgress({ state, label }: { state?: "saving" | "saved"; label: string }) {
   return state === "saving" ? <><Icon name="spinner" className="spin" size={16} />Saving…</>
     : state === "saved" ? <><Icon name="check" size={16} />Saved</> : <>{label}</>;
+}
+
+/** Roster rows intentionally omit configuration. Never initialize a writable form from one. */
+export function BotSettings(props: Parameters<typeof LoadedBotSettings>[0]) {
+  const [detail,setDetail]=useState<Bot>();
+  const [error,setError]=useState("");
+  const bot=props.bot;
+  useEffect(()=>{
+    if(bot==="new"||typeof bot.instructions==="string")return;
+    const controller=new AbortController();
+    void api<Bot>(`/bots/${encodeURIComponent(bot.id)}`,{signal:controller.signal}).then(value=>{if(!controller.signal.aborted)setDetail(value);}).catch(error=>{if(!controller.signal.aborted)setError(error.message);});
+    return ()=>controller.abort();
+  },[bot]);
+  if(bot==="new"||typeof bot.instructions==="string")return <LoadedBotSettings {...props}/>;
+  if(detail?.id===bot.id)return <LoadedBotSettings {...props} bot={detail}/>;
+  return <Dialog open onClose={props.onClose}><p role={error?"alert":"status"}>{error||"Loading assistant settings…"}</p><Button onClick={props.onClose}>Close</Button></Dialog>;
 }

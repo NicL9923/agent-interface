@@ -12,6 +12,7 @@ afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
 function runtimeDouble() {
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
   const fixed: Partial<Runtime> = {
+    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledTools:["terminal"],enabledSkills:["research"]}),
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
     listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
@@ -69,6 +70,12 @@ async function stream(url: string, cookie: string, headers: Record<string, strin
 }
 
 describe("conversation change stream", () => {
+  it("returns configuration through the lazy detail route", async () => {
+    const s=await setup();
+    const response=await fetch(`${s.base}/api/bots/shared`,{headers:{cookie:s.cookie}});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({instructions:"Saved soul",enabledTools:["terminal"],enabledSkills:["research"]});
+  });
   it("sends opted-in deltas without conversation notices and keeps legacy delta notices", async () => {
     const s = await setup();
     const current = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);

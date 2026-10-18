@@ -162,6 +162,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       heard = Date.now();
       try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
     });
+    current.addEventListener("roster", () => { heard = Date.now(); onChange(); });
     current.addEventListener("ping", () => { heard = Date.now(); });
     current.onmessage = () => {
       heard = Date.now();

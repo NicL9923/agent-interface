@@ -21,7 +21,7 @@ export class FakeEventSource extends EventTarget {
   }
   /** Sends a change notice on every open stream. */
   static notifyAll() {
-    for (const stream of FakeEventSource.streams) stream.emit("message", "change");
+    for (const stream of FakeEventSource.streams) if (stream.url !== "/api/events") stream.emit("message", "change");
   }
   connect() {
     this.readyState = FakeEventSource.OPEN;

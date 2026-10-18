@@ -80,6 +80,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
   /// The open conversation's change stream, as the web subscribes to it, and when it last spoke.
+  private var rosterTask: Task<Void, Never>?
   private var eventTask: Task<Void, Never>?
   private var eventBotId: String?
   private var streamHeardAt: ContinuousClock.Instant?
@@ -113,7 +114,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   static let historyPageTurns = 20
   /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
   /// it, a foreground return and pull to refresh all refresh it sooner.
-  static let bootstrapInterval: Duration = .seconds(8)
+  static let bootstrapInterval: Duration = .seconds(45)
   /// Tests substitute a clock they advance by hand.
   var now: () -> ContinuousClock.Instant = { .now }
   private var bootstrapRefreshedAt: ContinuousClock.Instant?
@@ -324,6 +325,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
       return false
     }
+    watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)
     if conversationDue { await refreshConversation() }
@@ -348,6 +350,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     stopStream()
   }
   private func stopStream() {
+    rosterTask?.cancel()
+    rosterTask = nil
     eventTask?.cancel()
     eventTask = nil
     eventBotId = nil
@@ -361,6 +365,27 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     return now() - refreshed >= Self.streamFallbackInterval
   }
   /// Follows the selected assistant's change stream, reconnecting with a growing delay.
+  private func watchRoster() {
+    guard rosterTask == nil, let api else { return }
+    rosterTask = Task { [weak self] in
+      var failures = 0
+      while !Task.isCancelled {
+        do {
+          let lines = try await api.events("/api/events")
+          guard let self, !Task.isCancelled else { return }
+          failures = 0
+          await self.refreshBootstrap()
+          for try await line in lines {
+            guard !Task.isCancelled else { return }
+            if line == "data: roster" { await self.refreshBootstrap() }
+          }
+        } catch {}
+        guard let self, !Task.isCancelled, !self.sessionExpired else { return }
+        failures += 1
+        try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
+      }
+    }
+  }
   private func watchConversation() {
     guard eventBotId != selectedBotId || eventTask == nil else { return }
     eventTask?.cancel()

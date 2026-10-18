@@ -19,7 +19,7 @@ vi.mock("../src/client-api", async (original) => ({
   write: vi.fn().mockResolvedValue({}),
 }));
 
-const bot: Bot = { id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" };
+const bot: Bot = { instructions: "", id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" };
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
   household: [],
@@ -505,4 +505,13 @@ it("offers only the owner as a recipient of a private assistant's routines", asy
   };
   expect(await recipients({ ...bot, id: "mine", shared: false, ownerId: "one" })).toEqual(["One"]);
   expect(await recipients(bot)).toEqual(["One", "Two"]);
+});
+
+it("loads roster detail before showing a writable settings form", async () => {
+  let finish!: (value: Bot) => void;
+  vi.mocked(api).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  await act(async()=>root.render(createElement(BotSettings,{bot:{...bot,instructions:undefined},bootstrap,onClose,onSaved})));
+  expect(container.querySelector("form")).toBeNull();
+  await act(async()=>finish({...bot,instructions:"Saved instructions",enabledMcpServers:["calendar"]}));
+  expect(container.querySelector("textarea")!.value).toBe("Saved instructions");
 });

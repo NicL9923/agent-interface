@@ -106,6 +106,13 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("refreshes bootstrap on a household roster notice", async () => {
+    await render();
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==="/bootstrap").length;
+    const before=reads();
+    await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==="/api/events")stream.emit("roster","roster");});
+    expect(reads()).toBe(before+1);
+  });
   it("patches an inflight reply without fetching the transcript", async () => {
     conversation = {...conversation, activity:{state:"thinking",runId:"run"},messages:[{id:"u",role:"user",text:"Hello"}]};
     await render();
@@ -195,7 +202,7 @@ describe("conversation state", () => {
     await advance(2000);
     const settled = renders.avatar;
     expect(settled).toBeGreaterThan(0);
-    await advance(16_000);
+    await advance(90_000);
     expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap").length).toBeGreaterThanOrEqual(3);
     expect(renders.avatar).toBe(settled);
   });
@@ -720,7 +727,7 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap"
       ? { ...bootstrap, preferences: {...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
       : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
-    await advance(8000);
+    await act(async()=>{ for(const stream of FakeEventSource.streams)if(stream.url==="/api/events")stream.emit("roster","roster"); });
     expect(container.querySelectorAll('[data-tool-call-id="call-1"]')).toHaveLength(1);
     expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(2);
     const completed = container.querySelector<HTMLDetailsElement>('[data-tool-call-id="call-1"]')!;

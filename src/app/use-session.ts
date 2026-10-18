@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
-import { api, ApiError, clearResponseCache, setCsrf, write } from "../client-api";
+import { api, ApiError, changeStream, clearResponseCache, setCsrf, write } from "../client-api";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -104,7 +104,7 @@ export function useSession(events: SessionEvents) {
     void refresh();
     const id = setInterval(() => {
       if (!authRef.current && document.visibilityState !== "hidden" && navigator.onLine !== false) void refresh();
-    }, 8000);
+    }, 45_000);
     const wake = () => {
       setOffline(navigator.onLine === false);
       if (navigator.onLine !== false && document.visibilityState !== "hidden") void refresh();
@@ -122,6 +122,13 @@ export function useSession(events: SessionEvents) {
       document.removeEventListener("visibilitychange", wake);
     };
   }, [refresh]);
+  useEffect(() => {
+    if(!boot?.user.id || auth)return;
+    const stream=changeStream("/events",()=>void refresh());
+    const wake=()=>{if(document.visibilityState!=="hidden"&&navigator.onLine!==false)stream.open();else stream.close();};
+    wake();window.addEventListener("online",wake);window.addEventListener("agent-interface:reconnect",wake);document.addEventListener("visibilitychange",wake);
+    return ()=>{stream.close();window.removeEventListener("online",wake);window.removeEventListener("agent-interface:reconnect",wake);document.removeEventListener("visibilitychange",wake);};
+  },[boot?.user.id,auth,refresh]);
   const savePreferences = async (value: Preferences) => {
     const epoch = identityEpoch.current;
     try {

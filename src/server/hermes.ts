@@ -59,6 +59,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   // Assistants with an open in flight, counted, for frames that arrive before its session is known.
   const opening = new Map<string, number>();
   const transient = new Map<string, {text:string;reasoning:string;state:ActivityState;requests:Wire[];tools:ToolCall[];detail?:string}>();
+  const rosterWatchers = new Set<() => void>();
+  const rosterChanged = () => { for(const listener of rosterWatchers) { try { listener(); } catch { /* Isolate listeners. */ } } };
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
   const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]}>();
   let capabilityCache: Capabilities | undefined;
@@ -91,6 +93,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const authHeaders = (): Record<string, string> => serviceAuth ? {'Authorization': `Bearer ${options.token}`} : {'X-Hermes-Session-Token': options.token!};
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
   function changed(botId?: string, kind?: "inflight"): void {
+    if(!kind)rosterChanged();
     if (botId === undefined) changeEpoch++;
     else touched(botId);
     for (const [watched, listeners] of watchers) {
@@ -309,7 +312,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const current = connection;
       if (current?.verified && current.ws.readyState === WebSocket.OPEN) {
         if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) void rpc('agent-interface.capabilities').catch(() => {});
-      } else if (watchers.size && retryAt <= Date.now()) void connect().catch(() => {});
+      } else if ((watchers.size||rosterWatchers.size) && retryAt <= Date.now()) void connect().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeat.unref?.();
   }
@@ -342,6 +345,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const sid = params.session_id;
       if (!sid) continue;
       const state = transient.get(sid) ?? {text: '', reasoning: '', state: 'idle' as ActivityState, requests: [], tools: []};
+      const previousActivity=state.state;
       transient.set(sid, state);
       if (frame.method === 'event') {
         const payload = params.payload ?? {};
@@ -376,6 +380,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const botId = owners.get(sid);
       if (botId !== undefined) {
         const delta=frame.method === "event" && ["message.delta", "reasoning.delta", "thinking.delta", "tool.generating", "status.update", "tool.start"].includes(params.type);
+        if(delta&&state.state!==previousActivity)rosterChanged();
         if(!delta)snapshots.delete(botId);
         changed(botId,delta?"inflight":undefined);
       }
@@ -581,7 +586,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   }
   function bot(row:Wire,detail?:Wire):Bot{
     const meta=row.ui_meta?.agent_interface??{};
-    return {id:row.name,name:meta.name||row.display_name||row.ui_meta?.['hermes-bots']?.title||row.name,description:row.description,instructions:detail?.soul,model:row.model??detail?.model?.default??'Inherited',provider:row.provider??detail?.model?.provider,shared:meta.shared??true,avatar:meta.avatar,enabledTools:detail?.toolsets?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledSkills:detail?.skills?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledMcpServers:detail?.mcp_servers?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),sessionId:row.canonical_session?.resolved_id,activity:transient.get(live.get(row.name)??'')?.state??'idle',lastMessage:preview(row.canonical_session)};
+    return {id:row.name,name:meta.name||row.display_name||row.ui_meta?.['hermes-bots']?.title||row.name,description:row.description,instructions:detail?detail.soul??'':undefined,model:row.model??detail?.model?.default??'Inherited',provider:row.provider??detail?.model?.provider,shared:meta.shared??true,avatar:meta.avatar,enabledTools:detail?.toolsets?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledSkills:detail?.skills?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),enabledMcpServers:detail?.mcp_servers?.filter((x:Wire)=>x.enabled).map((x:Wire)=>x.name),sessionId:row.canonical_session?.resolved_id,activity:transient.get(live.get(row.name)??'')?.state??'idle',lastMessage:preview(row.canonical_session)};
   }
   function signFile(value:RegisteredFile):FileRef{
     if(!options.token)throw unavailable();const body=Buffer.from(JSON.stringify(value)).toString('base64url');const signature=createHmac('sha256',options.token).update(body).digest('base64url');
@@ -835,7 +840,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           const roster = await rpc('profiles.list', {include_sessions: true});
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
-          const bots = await Promise.all(roster.profiles.map(async (row: Wire) => bot(row, await describe(row.name))));
+          const bots = roster.profiles.map((row: Wire) => bot(row));
           botCache = bots;
           return bots;
         } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
@@ -843,6 +848,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       rosterRequest = request;
       try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }
     },
+    watchRoster(listener){rosterWatchers.add(listener);return ()=>{rosterWatchers.delete(listener);};},
+    async botDetail(botId){const roster=await rpc('profiles.list',{include_sessions:true});const row=roster.profiles.find((row:Wire)=>row.name===botId);if(!row)throw new Error('Unknown Hermes bot.');return bot(row,await describe(botId));},
     async saveBot(input:BotInput,id?:string){await connect();const name=id??botIdFor(input.name);if(!name)throw new Error('Bot name needs letters or numbers.');
       let created=false;try{if(!id){await rpc('profiles.create',{name,description:input.description,soul:input.instructions,mirror_credentials:true,no_alias:true});created=true;}
       const rosterBefore=await rpc('profiles.list',{include_sessions:false});const previous=rosterBefore.profiles.find((x:Wire)=>x.name===name);
