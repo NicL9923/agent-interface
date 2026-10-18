@@ -126,8 +126,10 @@ export function useSession(events: SessionEvents) {
     if(!boot?.user.id || auth)return;
     const stream=changeStream("/events",()=>void refresh());
     const wake=()=>{if(document.visibilityState!=="hidden"&&navigator.onLine!==false)stream.open();else stream.close();};
-    wake();window.addEventListener("online",wake);window.addEventListener("agent-interface:reconnect",wake);document.addEventListener("visibilitychange",wake);
-    return ()=>{stream.close();window.removeEventListener("online",wake);window.removeEventListener("agent-interface:reconnect",wake);document.removeEventListener("visibilitychange",wake);};
+    wake();
+    const retry=setInterval(wake,45_000);
+    window.addEventListener("online",wake);window.addEventListener("focus",wake);window.addEventListener("agent-interface:reconnect",wake);document.addEventListener("visibilitychange",wake);
+    return ()=>{clearInterval(retry);stream.close();window.removeEventListener("online",wake);window.removeEventListener("focus",wake);window.removeEventListener("agent-interface:reconnect",wake);document.removeEventListener("visibilitychange",wake);};
   },[boot?.user.id,auth,refresh]);
   const savePreferences = async (value: Preferences) => {
     const epoch = identityEpoch.current;

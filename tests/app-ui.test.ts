@@ -106,6 +106,13 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("reopens a refused household stream at the fallback interval", async () => {
+    await render();
+    const stream=[...FakeEventSource.streams].find(stream=>stream.url==="/api/events")!;
+    await act(async()=>stream.fail());
+    await advance(45_000);
+    expect(FakeEventSource.created.filter(url=>url==="/api/events")).toHaveLength(2);
+  });
   it("refreshes bootstrap on a household roster notice", async () => {
     await render();
     const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==="/bootstrap").length;

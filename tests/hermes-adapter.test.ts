@@ -22,6 +22,7 @@ let runtime:Runtime;
 let addonReady:boolean;
 let explicitCredentials:boolean;
 let canonicalSubmission:boolean;
+let incrementalDiscovery:boolean;
 let metadataConflict:boolean;
 let connectionFails:boolean;
 let imageReady:boolean;
@@ -55,7 +56,7 @@ class WireSocket extends EventTarget {
       return;
     }
     let result:unknown={};
-    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{})};
+    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{})};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',running:false,interruption_pending:false}:{})};
@@ -72,7 +73,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -83,6 +84,24 @@ const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_
 const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
 
 describe('Hermes adapter trust and recovery boundary',()=>{
+  it('forces discovery immediately after routine edits only when the add-on supports it', async () => {
+    incrementalDiscovery=true;
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));
+    await runtime.saveRoutine({botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true},'job');
+    expect(calls.filter(call=>call.method==='agent-interface.discover').map(call=>call.params)).toEqual([{cursor:'0',full:true}]);
+  });
+  it('keeps older discovery add-ons free of new parameters', async () => {
+    await runtime.discoverEvents('1');
+    expect(calls.find(call=>call.method==='agent-interface.discover')?.params).toEqual({cursor:'1'});
+  });
+  it('falls back after an incomplete canonical receipt without replaying admission', async () => {
+    canonicalSubmission=true;
+    beforeSend=(request,socket)=>{if(request.method==='agent-interface.submit'){deferredMethods.add('agent-interface.submit');queueMicrotask(()=>socket.receive({id:request.id,result:{requestId:request.params.request_id,status:'accepted',runId:'run'}}));}};
+    expect(await runtime.submit({...input(),text:'Hello'})).toMatchObject({status:'accepted',runId:'run'});
+    expect(calls.filter(call=>call.method==='agent-interface.submit')).toHaveLength(1);
+    expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(1);
+    expect(await runtime.canonicalSubmit!()).toBe(false);
+  });
   it('seeds a mid-turn native snapshot and retains its running tool activity', async () => {
     snapshot.info={running:true};snapshot.app_run_id='run';snapshot.inflight={assistant:'Reply already streaming'};
     snapshot.app_tool_calls=[{id:'tool',name:'terminal',status:'running'}];
