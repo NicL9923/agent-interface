@@ -41,6 +41,18 @@ class Provider(BaseHTTPRequestHandler):
                 else ("browser_vault", {"action": "save_login", **label}) if "browser_vault" in tool_names \
                 else ("tool_call", {"calls": [{"name": "browser_vault", "arguments": {"action": "save_login", **label}}]})
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-vault-login", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+        elif "PROBE_VAULT_EXPLICIT" in user and not after_tool and tool_names & {"vault_save_login", "tool_call"}:
+            # A login requested by address with no browser page. The address defaults to an
+            # unreachable private device; ORIGIN=... in the prompt picks another one.
+            match = re.search(r"ORIGIN=(\S+)", user)
+            arguments = {"origin": match.group(1) if match else "https://comet-pro-kvm.mesh.wildflowersranch.com",
+                         "label": "Comet KVM", "purpose": "Sign in to the KVM to check the server console."}
+            name, arguments = ("vault_save_login", arguments) if "vault_save_login" in tool_names \
+                else ("tool_call", {"calls": [{"name": "vault_save_login", "arguments": arguments}]})
+            message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-vault-explicit", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+        elif "PROBE_VAULT_EXPLICIT" in user and after_tool:
+            # Repeat exactly what the model received, so a transcript shows the tool kept the password out.
+            message = {"role": "assistant", "content": "Credential tool returned: " + str(messages[-1].get("content", ""))}
         elif "PROBE_CLARIFY" in user and not after_tool and "clarify" in tool_names:
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-clarify", "type": "function", "function": {"name": "clarify", "arguments": json.dumps({"questions": [{"qid": "spike-question", "question": "Which synthetic option?", "choices": ["First", "Second"]}]})}}]}
         elif "markdown formatting example" in user.lower():

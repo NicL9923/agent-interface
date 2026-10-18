@@ -27,7 +27,7 @@ import type { ApnsSender } from "./apns.js";
 import type { LiveActivitySender } from "./live-activity.js";
 import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
-import { installVaultRoutes } from "./vault.js";
+import { installVaultRoutes, nameRequesters } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
 import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
@@ -402,6 +402,7 @@ export async function createApp(
         ? { ...message, origin: undefined, sender: { id: user.id, name: user.name } }
         : message;
     }).map(redact.message);
+    result.attention = nameRequesters(result.attention, userId => store.getUser(userId)?.name);
     const visibleFileIds = new Set(result.messages.flatMap(message => message.files ?? []).map(file => file.id));
     result.files = result.files?.filter(file => !originalFileIds.has(file.id) || visibleFileIds.has(file.id));
     // Without a window, as for the native app, the whole history is returned.

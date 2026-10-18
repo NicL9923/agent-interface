@@ -148,7 +148,7 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
           request.kind === "secure" && request.secure ? <SecureRequestCard
             key={`${boot.user.id}:${botId}:${request.id}:${JSON.stringify(request.secure)}`}
             request={request.secure} requestId={request.id} botId={botId} ownerId={boot.user.id}
-            title={request.title} detail={request.detail}
+            title={request.title} detail={request.detail} assistantName={selected?.name}
           /> : <AttentionCard
             key={request.id}
             request={request}

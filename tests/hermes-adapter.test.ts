@@ -99,8 +99,21 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.attention!.slice(1).map(request=>request.kind)).toEqual(['official','official']);
   });
 
+  it('shows a login asked for by address with its bounded assistant text and owner', async () => {
+    snapshot.executor_epoch='epoch-one';
+    snapshot.open_requests=[
+      {id:'srq-explicit',method:'vault.save_login',app_local_secure:true,params:{origin:'https://kvm.example.invalid',site:'kvm.example.invalid'},
+        app_credential:{label:'Comet KVM',purpose:'x'.repeat(400),profile:'patch',requesterId:'member-one'}},
+      {id:'srq-malformed',method:'vault.save_login',app_local_secure:true,params:{origin:'https://page.invalid',site:'page.invalid'},app_credential:{label:'',purpose:'Why',profile:'patch'}},
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toMatchObject({title:'Hermes asks to save a login',secure:{origin:'https://kvm.example.invalid',
+      explicit:{label:'Comet KVM',purpose:'x'.repeat(300),profile:'patch',requestedBy:{id:'member-one'}}}});
+    expect(result.attention![1].secure).toEqual({epoch:'epoch-one',sessionId:'live-one',method:'vault.save_login',origin:'https://page.invalid',site:'page.invalid'});
+  });
+
   it('transmits credentials privately once and never forwards native secret-bearing error text',async()=>{
-    const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
+    const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',actor:'member-one',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
     const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));
     vi.stubGlobal('fetch',fetcher);
     await expect(runtime.vaultRequest!(payload)).rejects.toMatchObject({statusCode:409,message:expect.not.stringContaining('private synthetic canary')});

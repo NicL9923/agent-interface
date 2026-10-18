@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, FileRef, Message, Routine, Runtime, RuntimeDiscovery, RuntimeStatus, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
 import ClientWebSocket from 'ws';
-import type { SecureRequest } from '../shared/vault.js';
+import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import { withMessageOrigins, wireOrigin, messageOrigin } from "../shared/message-origin.js";
 import { formatBytes } from '../shared/uploads.js';
@@ -520,6 +520,13 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     if(!options.token)throw unavailable();const [body,signature,...extra]=id.split('.');if(!body||!signature||extra.length)throw new Error('Invalid file identifier.');
     const expected=createHmac('sha256',options.token).update(body).digest();const actual=Buffer.from(signature,'base64url');if(expected.length!==actual.length||!timingSafeEqual(expected,actual))throw new Error('Invalid file identifier.');const value=JSON.parse(Buffer.from(body,'base64url').toString());if(value.version!==1||!['upload','artifact'].includes(value.kind)||typeof value.path!=='string'||!value.path.startsWith('/')||value.path.includes('\0')||value.path.split('/').includes('..')||typeof value.botId!=='string'||typeof value.name!=='string'||typeof value.mime!=='string')throw new Error('Unregistered file identifier.');return value;
   }
+  // The add-on's context for a login requested by address. Every field is assistant text except the requester.
+  function explicitLogin(value:unknown):{explicit?:ExplicitLoginRequest}{
+    const row=value as Wire;
+    if(!row||typeof row!=='object'||!['label','purpose','profile'].every(key=>typeof row[key]==='string'&&row[key]))return {};
+    return {explicit:{label:row.label.slice(0,80),purpose:row.purpose.slice(0,300),profile:row.profile.slice(0,200),
+      ...(typeof row.requesterId==='string'&&row.requesterId?{requestedBy:{id:row.requesterId}}:{})}};
+  }
   function receipt(value:Wire):SubmissionReceipt{return {requestId:value.requestId,status:value.status,runId:value.runId,...(value.userRowId!=null?{messageId:String(value.userRowId)}:{}),message:value.message};}
   function artifacts(botId:string,row:Wire):FileRef[]{
     // Only the revision-bound executor can attest output provenance and path policy.
@@ -753,14 +760,15 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         let secure:SecureRequest|undefined;
         const owner={epoch:value.executor_epoch,sessionId:sid};
         if(x.app_local_secure===true&&typeof owner.epoch==='string'&&typeof owner.sessionId==='string') {
-          if(x.method==='vault.save_login'&&typeof params.origin==='string'&&typeof params.site==='string')secure={...owner,method:x.method,origin:params.origin,site:params.site};
+          if(x.method==='vault.save_login'&&typeof params.origin==='string'&&typeof params.site==='string')secure={...owner,method:x.method,origin:params.origin,site:params.site,...explicitLogin(x.app_credential)};
           if(x.method==='vault.code')secure={...owner,method:x.method,site:typeof params.site==='string'?params.site:undefined,hint:typeof params.hint==='string'?params.hint:undefined};
           if(x.method==='vault.unlock_prompt'&&['onepassword','bitwarden'].includes(params.backend)&&typeof params.display_name==='string')secure={...owner,method:x.method,backend:params.backend,displayName:params.display_name};
           if(x.method==='secret'&&typeof params.env_var==='string'&&typeof params.prompt==='string')secure={...owner,method:x.method,envVar:params.env_var,prompt:params.prompt};
         }
+        const explicit=secure?.method==='vault.save_login'&&!!secure.explicit;
         return {id:String(x.id),kind:secure?'secure' as const:x.method==='clarify'?'clarify' as const:'official' as const,
-          title:secure?'Hermes needs secure input':x.method==='clarify'?'Hermes needs your answer':'Continue in the official Hermes client',
-          detail:secure?'Enter this value securely. It will go directly to Hermes without becoming a chat message.':x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
+          title:explicit?'Hermes asks to save a login':secure?'Hermes needs secure input':x.method==='clarify'?'Hermes needs your answer':'Continue in the official Hermes client',
+          detail:explicit?'Check the address and reason first. The username and password go directly to the encrypted Hermes vault, never into this chat.':secure?'Enter this value securely. It will go directly to Hermes without becoming a chat message.':x.method==='clarify'?'Answer the questions to continue this task.':`Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
           secure,questions:x.method==='clarify'?(params.questions??[]).map((q:Wire)=>({id:q.qid,prompt:q.question??'',options:q.choices})):undefined};
       });
       const toolCalls:ToolCall[]=Array.isArray(value.app_tool_calls)?value.app_tool_calls.map(unbridged):state?.tools??[];

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { installAuth, hash } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
-import { installVaultRoutes } from '../src/server/vault.js';
+import { installVaultRoutes, nameRequesters } from '../src/server/vault.js';
 import type { Runtime } from '../src/shared/types.js';
 const origin = 'https://vault.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
@@ -32,12 +32,13 @@ it('authenticates and CSRF-protects secret capture and rejects caller origin/res
   const payload={...owner,identifier:'test@example.invalid',password:canary};
   for(const [headers,status] of [[{},401],[{cookie:s.headers.cookie,origin},403],[{...s.headers,origin:'https://foreign.invalid'},403]] as const)
     expect((await s.app.inject({method:'POST',url,headers,payload})).statusCode).toBe(status);
-  for(const extra of [{origin:'https://foreign.invalid'},{result:{value:canary}},{cancel:false}])
+  // An origin is only a confirmation echo; Hermes refuses one on a browser-page request (tests/hermes_vault_explicit_test.py).
+  for(const extra of [{result:{value:canary}},{cancel:false},{actor:'two'}])
     expect((await s.app.inject({method:'POST',url,headers:s.headers,payload:{...payload,...extra}})).statusCode).toBe(400);
   expect(s.vaultRequest).not.toHaveBeenCalled();
   const response=await s.app.inject({method:'POST',url,headers:s.headers,payload});
   expect(response.statusCode).toBe(200); expect(response.body).not.toContain(canary);
-  expect(s.vaultRequest).toHaveBeenCalledWith({operation:'answer',profile:'shared',requestId:'srq-example',answer:payload});
+  expect(s.vaultRequest).toHaveBeenCalledWith({operation:'answer',profile:'shared',requestId:'srq-example',answer:payload,actor:'one'});
   expect((await s.app.inject({method:'POST',url:'/api/bots/missing/secure-requests/srq-example',headers:s.headers,payload})).statusCode).toBe(404);
 });
 it('uses strict native management contracts and keeps unavailable/errors model blind',async()=>{
@@ -64,4 +65,21 @@ it('does not replay uncertain secret submission and rejects overlapping mutation
   reject(new Error(canary)); const response=await first;
   expect(response.statusCode).toBe(502);expect(response.body).not.toContain(canary);
   expect(s.vaultRequest).toHaveBeenCalledOnce();
+});
+it('forwards an explicit-origin answer with its destination and the signed-in member, never a client-chosen actor',async()=>{
+  const s=await setup(), url='/api/bots/shared/secure-requests/srq-explicit';
+  const payload={...owner,identifier:'kvm-admin',password:canary,origin:'https://kvm.example.invalid'};
+  expect((await s.app.inject({method:'POST',url,headers:s.headers,payload:{...payload,actor:'two'}})).statusCode).toBe(400);
+  expect((await s.app.inject({method:'POST',url,headers:s.headers,payload:{...payload,origin:'x'.repeat(2049)}})).statusCode).toBe(400);
+  expect(s.vaultRequest).not.toHaveBeenCalled();
+  const response=await s.app.inject({method:'POST',url,headers:s.headers,payload});
+  expect(response.statusCode).toBe(200); expect(response.body).not.toContain(canary);
+  expect(s.vaultRequest).toHaveBeenCalledWith({operation:'answer',profile:'shared',requestId:'srq-explicit',answer:payload,actor:'one'});
+});
+it('names only known requesters of explicit-origin logins',()=>{
+  const base={epoch:'e',sessionId:'s',method:'vault.save_login' as const,origin:'https://kvm.example.invalid',site:'kvm.example.invalid'};
+  const explicit=(id:string)=>({id,secure:{...base,explicit:{label:'KVM',purpose:'Why',profile:'patch',requestedBy:{id}}}});
+  const named=nameRequesters([explicit('one'),explicit('ghost'),{id:'page',secure:base},{id:'other'}],id=>id==='one'?'One':undefined)!;
+  expect(named.map(item=>(item.secure as {explicit?:{requestedBy?:unknown}}|undefined)?.explicit?.requestedBy)).toEqual([{id:'one',name:'One'},{id:'ghost'},undefined,undefined]);
+  expect(nameRequesters(undefined,()=>'x')).toBeUndefined();
 });

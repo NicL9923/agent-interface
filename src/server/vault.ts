@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
-import type { SecureRequestAnswer, VaultRequest } from '../shared/vault.js';
+import type { SecureRequest, SecureRequestAnswer, VaultRequest } from '../shared/vault.js';
 const failure = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 const source = z.enum(['onepassword', 'bitwarden']);
 const method = z.enum(['vault.save_login', 'vault.code', 'vault.unlock_prompt', 'secret']);
@@ -11,7 +11,8 @@ const text = z.string().min(1).max(20000);
 const owner = { epoch: id, sessionId: id };
 const answer = z.union([
   z.object({ ...owner, method, cancel: z.literal(true) }).strict(),
-  z.object({ ...owner, method: z.literal('vault.save_login'), identifier: z.string().trim().min(1).max(1000), password: text }).strict(),
+  z.object({ ...owner, method: z.literal('vault.save_login'), identifier: z.string().trim().min(1).max(1000), password: text,
+    origin: z.string().min(1).max(2048).optional() }).strict(),
   z.object({ ...owner, method: z.enum(['vault.code', 'vault.unlock_prompt', 'secret']), value: text }).strict(),
 ]);
 const login = z.object({
@@ -68,6 +69,16 @@ export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime)
   app.post('/api/bots/:id/secure-requests/:requestId', req => {
     const params = z.object({ id, requestId: id }).strict().parse(req.params);
     const payload = answer.parse(req.body) as SecureRequestAnswer;
-    return request(signedIn(req).id, { operation: 'answer', profile: params.id, requestId: params.requestId, answer: payload });
+    // Hermes binds a login the assistant asked for by address to the member whose task asked.
+    return request(signedIn(req).id, { operation: 'answer', profile: params.id, requestId: params.requestId, answer: payload, actor: signedIn(req).id });
+  });
+}
+/** Names the member who owns each login requested by address, for its card. An unknown member stays unnamed. */
+export function nameRequesters<T extends { secure?: SecureRequest }>(attention: T[] | undefined, name: (id: string) => string | undefined) {
+  return attention?.map(item => {
+    const secure = item.secure;
+    if (secure?.method !== 'vault.save_login' || !secure.explicit?.requestedBy) return item;
+    const id = secure.explicit.requestedBy.id, known = name(id);
+    return { ...item, secure: { ...secure, explicit: { ...secure.explicit, requestedBy: { id, ...(known ? { name: known } : {}) } } } };
   });
 }

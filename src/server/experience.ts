@@ -8,6 +8,7 @@ import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
+import { nameRequesters } from './vault.js';
 const id = z.string().min(1).max(200);
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
@@ -66,7 +67,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
           const files = messages.filter(message => message.createdAt && Date.parse(message.createdAt) > Date.parse(since) || message.runId && unreadRuns.has(message.runId) && message.role !== 'user').flatMap(message => message.files ?? []);
           return { botId: bot.id, botName: bot.name, activity: conversation.activity,
             approvals: conversation.approvals.filter(approval => approval.status === 'pending'),
-            attention: conversation.attention ?? [],
+            attention: nameRequesters(conversation.attention, userId => store.getUser(userId)?.name) ?? [],
             ...(latest ? { latestMessage: { id: latest.id, text: redact.text(redact.message(latest).text), createdAt: latest.createdAt, files: latest.files } } : {}),
             files: [...new Map(files.map(file => [file.id, file])).values()] };
         } catch {

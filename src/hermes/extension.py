@@ -529,10 +529,15 @@ def install(path=None):
             # capture when this executor's native registry can settle the exact
             # canonical request and register its values at its own egress guard.
             from tui_gateway import server_requests as secure_requests
+            explicit = getattr(journal, "explicit_credential", lambda _request_id: None)
             with secure_requests._lock:
                 for request in value["open_requests"]:
                     local = secure_requests._open.get(request.get("id"))
                     request["app_local_secure"] = bool(local is not None and local.sid == value["session_id"] and local.method == request.get("method"))
+                    # A login the agent asked for by address, with what the card must show besides it.
+                    credential = explicit(request.get("id")) if request["app_local_secure"] and request.get("method") == "vault.save_login" else None
+                    if credential:
+                        request["app_credential"] = credential
             sid = value["session_id"]
             session = server._sessions[sid]
             if session.get("running") and session.get("app_exposed_reasoning"):
