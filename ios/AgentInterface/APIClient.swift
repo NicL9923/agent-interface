@@ -107,6 +107,7 @@ extension Data {
     self.baseURL = baseURL
     if let session {
       self.session = session
+      injectedSession = true
     } else {
       let config = URLSessionConfiguration.ephemeral
       config.urlCache = nil
@@ -156,19 +157,12 @@ extension Data {
       path: path, method: method, body: body, contentType: contentType,
       authenticated: authenticated, conditional: method == "GET")
   }
-  private func data(
-    path: String, method: String, body: Data?, contentType: String?, authenticated: Bool,
-    conditional: Bool
-  ) async throws -> Data {
+  private func request(path: String, method: String, contentType: String?, authenticated: Bool) throws -> URLRequest {
     var request = URLRequest(url: try url(path))
     request.httpMethod = method
-    request.httpBody = body
     request.timeoutInterval = method == "GET" ? 20 : 60
     // Without a local HTTP cache, a 304 reaches the app instead of being replaced by a cached body.
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    let sent = conditional ? validated[path] : nil
-    let generation = validatedGeneration
-    if let sent { request.setValue(sent.etag, forHTTPHeaderField: "If-None-Match") }
     if authenticated, let token {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
@@ -178,16 +172,34 @@ extension Data {
     }
     if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
     request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+    return request
+  }
+  private static func unreachable(_ error: Error) -> Error {
+    if error is CancellationError || (error as? URLError)?.code == .cancelled { return CancellationError() }
+    return APIError(
+      message:
+        "Can't reach the app server. Your draft is kept; sent messages will be checked before retrying.",
+      status: 503, code: "CONNECTION_UNAVAILABLE")
+  }
+  private static func failure(_ status: Int, _ data: Data) -> APIError {
+    let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    return APIError(
+      message: object?["detail"] as? String ?? object?["error"] as? String
+        ?? "Request failed (\(status)).", status: status,
+      code: object?["code"] as? String,
+      confirmRequired: object?["confirmRequired"] as? Bool ?? false, body: data)
+  }
+  private func data(
+    path: String, method: String, body: Data?, contentType: String?, authenticated: Bool,
+    conditional: Bool
+  ) async throws -> Data {
+    var request = try self.request(path: path, method: method, contentType: contentType, authenticated: authenticated)
+    request.httpBody = body
+    let sent = conditional ? validated[path] : nil
+    let generation = validatedGeneration
+    if let sent { request.setValue(sent.etag, forHTTPHeaderField: "If-None-Match") }
     let (data, response): (Data, URLResponse)
-    do { (data, response) = try await session.data(for: request) } catch is CancellationError {
-      throw CancellationError()
-    } catch {
-      if (error as? URLError)?.code == .cancelled { throw CancellationError() }
-      throw APIError(
-        message:
-          "Can't reach the app server. Your draft is kept; sent messages will be checked before retrying.",
-        status: 503, code: "CONNECTION_UNAVAILABLE")
-    }
+    do { (data, response) = try await session.data(for: request) } catch { throw Self.unreachable(error) }
     guard let response = response as? HTTPURLResponse else {
       throw APIError(message: "The server returned an invalid response.", status: 502)
     }
@@ -203,18 +215,14 @@ extension Data {
         authenticated: authenticated, conditional: false)
     }
     guard (200..<300).contains(response.statusCode) else {
-      let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      let failure = Self.failure(response.statusCode, data)
       // An assistant turned private while this read ran; the server dropped it, so read once more.
-      if method == "GET", conditional, response.statusCode == 503, object?["code"] as? String == "assistants_changed" {
+      if method == "GET", conditional, response.statusCode == 503, failure.code == "assistants_changed" {
         return try await self.data(
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: false)
       }
-      throw APIError(
-        message: object?["detail"] as? String ?? object?["error"] as? String
-          ?? "Request failed (\(response.statusCode)).", status: response.statusCode,
-        code: object?["code"] as? String,
-        confirmRequired: object?["confirmRequired"] as? Bool ?? false, body: data)
+      throw failure
     }
     if method == "GET", generation == validatedGeneration {
       // Only JSON is kept; file downloads can be large and are never polled.
@@ -222,6 +230,34 @@ extension Data {
       remember(path, etag: json ? response.value(forHTTPHeaderField: "ETag") : nil, data: data)
     }
     return data
+  }
+  /// Event streams stay open for hours, so they get their own session without the resource
+  /// timeout. Tests that supply a session stream through it.
+  private var injectedSession = false
+  private lazy var streamSession: URLSession = {
+    if injectedSession { return session }
+    let config = URLSessionConfiguration.ephemeral
+    config.urlCache = nil
+    config.requestCachePolicy = .reloadIgnoringLocalCacheData
+    // The server pings every 25 seconds; a longer silence is a dead connection.
+    config.timeoutIntervalForRequest = 70
+    config.timeoutIntervalForResource = 24 * 60 * 60
+    config.httpCookieStorage = session.configuration.httpCookieStorage
+    return URLSession(configuration: config, delegate: SameOriginRedirectDelegate(origin: baseURL), delegateQueue: nil)
+  }()
+  /// The lines of a server event stream. Anything but an open stream throws.
+  func events(_ path: String) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
+    var request = URLRequest(url: try url(path))
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    let (bytes, response) = try await streamSession.bytes(for: request)
+    let http = response as? HTTPURLResponse
+    guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
+      bytes.task.cancel()
+      throw APIError(message: "The change stream is unavailable.", status: http?.statusCode ?? 0)
+    }
+    return bytes.lines
   }
   func get<T: Decodable>(_ path: String) async throws -> T {
     try Self.decode(await data(path: "/api" + path), from: "/api" + path)
@@ -279,13 +315,16 @@ extension Data {
     @unknown default: return "response could not be decoded"
     }
   }
-  func upload(botId: String, name: String, mime: String, data: Data) async throws -> FileRef {
-    guard
-      ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"]
-        .contains(mime), data.count <= 20 * 1024 * 1024
-    else {
-      throw APIError(
-        message: "Choose an image, PDF, or plain-text file no larger than 20 MB.", status: 400)
+  /// Uploads one attachment. `progress` hears the share of the request body sent, from 0 to 1.
+  func upload(
+    botId: String, name: String, mime: String, data: Data,
+    progress: (@MainActor (Double) -> Void)? = nil
+  ) async throws -> FileRef {
+    guard UploadRules.mimeTypes.contains(mime) else {
+      throw APIError(message: "Use \(UploadRules.kinds).", status: 415)
+    }
+    guard data.count <= UploadRules.maxBytes else {
+      throw APIError(message: "\(name) is larger than \(UploadRules.formatBytes(UploadRules.maxBytes)).", status: 413)
     }
     let boundary = "AgentInterface-\(UUID().uuidString)"
     let safeName = name.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(
@@ -297,10 +336,32 @@ extension Data {
     body.append(data)
     body.append(Data("\r\n--\(boundary)--\r\n".utf8))
     let path = "/api/bots/\(Self.component(botId))/uploads"
-    return try Self.decode(
-      await self.data(
-        path: path, method: "POST", body: body,
-        contentType: "multipart/form-data; boundary=\(boundary)"), from: path)
+    let request = try self.request(
+      path: path, method: "POST", contentType: "multipart/form-data; boundary=\(boundary)", authenticated: true)
+    let (result, response): (Data, URLResponse)
+    do {
+      (result, response) = try await session.upload(
+        for: request, from: body, delegate: progress.map { UploadProgressDelegate(report: $0) })
+    } catch { throw Self.unreachable(error) }
+    guard let response = response as? HTTPURLResponse else {
+      throw APIError(message: "The server returned an invalid response.", status: 502)
+    }
+    guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }
+    return try Self.decode(result, from: path)
+  }
+}
+
+/// Reports an upload's progress on the main actor.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  let report: @MainActor (Double) -> Void
+  init(report: @escaping @MainActor (Double) -> Void) { self.report = report }
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+    totalBytesSent: Int64, totalBytesExpectedToSend: Int64
+  ) {
+    guard totalBytesExpectedToSend > 0 else { return }
+    let fraction = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
+    Task { @MainActor in self.report(fraction) }
   }
 }
 

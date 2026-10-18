@@ -19,6 +19,13 @@ private final class NativeMockProtocol: URLProtocol, @unchecked Sendable {
     }
     override func stopLoading() {}
     func fail(_ error: URLError) { client?.urlProtocol(self, didFailWithError: error) }
+    /// Opens a server event stream that stays open until the client goes away.
+    func openStream() {
+        guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream; charset=utf-8"]) else { return }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("retry: 3000\n\n".utf8))
+    }
+    func send(_ text: String) { client?.urlProtocol(self, didLoad: Data(text.utf8)) }
     func respond(status: Int, data: Data, headers: [String: String] = [:]) {
         guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "application/json"]) { value, _ in value }) else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -51,7 +58,6 @@ private final class NativeMockServer: @unchecked Sendable {
     private var conversationStatus = 200
     private var botHidden = false
     private var assistantsChanged = 0
-    private var failAnchoredOnce = false
     private var history: [String]?
     private var heldOnce: Set<String> = []
     private var fileOwners: [String: [String]] = [:]
@@ -78,7 +84,6 @@ private final class NativeMockServer: @unchecked Sendable {
     func requestCount(_ path: String) -> Int { requests.filter { $0.url?.path == path }.count }
     func disconnect(_ value: Bool = true) { lock.withLock { connected = !value } }
     /// Fails the next conversation request that starts at a message, as a saved reading position does.
-    func failNextAnchoredConversation() { lock.withLock { failAnchoredOnce = true } }
     func failConversation(_ fail: Bool = true) { lock.withLock { conversationStatus = fail ? 503 : 200 } }
     /// Another member made "bot" their personal assistant: it leaves the roster and its routes answer 404.
     func hideBot() { lock.withLock { botHidden = true } }
@@ -90,6 +95,9 @@ private final class NativeMockServer: @unchecked Sendable {
     /// Answers every draft save with a server error, without acting on it.
     func failDraftSaves(_ fail: Bool = true) { lock.withLock { draftSavesFail = fail } }
     private var draftSavesFail = false
+    private var submissionAnswer: String?
+    /// Answers submission checks with this status, as the app server does once it knows.
+    func answerSubmissions(_ status: String?) { lock.withLock { submissionAnswer = status } }
     func failHeld(_ path: String) {
         lock.withLock { () -> NativeMockProtocol? in heldPaths.remove(path); return held.removeValue(forKey: path) }?
             .respond(status: 500, data: Self.json(["error": "Synthetic save failure"]))
@@ -143,8 +151,18 @@ private final class NativeMockServer: @unchecked Sendable {
         changeDraft(bot, text: text, reason: "edit")
         return (200, Self.json(draftRecord(bot)!))
     }
+    private var streaming = false
+    private var streams: [NativeMockProtocol] = []
+    /// Answers change-stream requests with an open stream instead of a JSON body.
+    func serveEventStreams() { lock.withLock { streaming = true } }
+    /// A change notice, as the server sends one when the conversation changes.
+    func notifyChange() { for stream in lock.withLock({ streams }) { stream.send("data: change\n\n") } }
     func receive(_ protocolInstance: NativeMockProtocol) {
         let path = protocolInstance.request.url!.path
+        if path.hasSuffix("/events"), lock.withLock({ streaming }) {
+            lock.withLock { recorded.append(protocolInstance.request); streams.append(protocolInstance) }
+            protocolInstance.openStream(); return
+        }
         let delay = lock.withLock {
             recorded.append(protocolInstance.request)
             if heldPaths.contains(path) || heldOnce.remove(path) != nil { held[path] = protocolInstance; return true }
@@ -217,7 +235,8 @@ private final class NativeMockServer: @unchecked Sendable {
         return Self.json(body)
     }
     private func messageBody(_ id: String) -> [String: Any] {
-        var message: [String: Any] = ["id": id, "role": "user", "text": id]
+        // History IDs that start with "reply" are the assistant's answers.
+        var message: [String: Any] = ["id": id, "role": id.hasPrefix("reply") ? "assistant" : "user", "text": id]
         let owned: [String] = lock.withLock { fileOwners[id] ?? [] }
         if !owned.isEmpty { message["files"] = owned.map { (file: String) -> [String: Any] in fileBody(file) } }
         return message
@@ -290,12 +309,6 @@ private final class NativeMockServer: @unchecked Sendable {
         else if path == "/api/bots/bot/files" { data = earlierFilesData(query: request.url?.query) }
         else if path.hasSuffix("/conversation") {
             status = lock.withLock { conversationStatus }
-            let anchored: Bool = lock.withLock {
-                guard failAnchoredOnce, request.url?.query?.hasPrefix("start=") == true else { return false }
-                failAnchoredOnce = false
-                return true
-            }
-            if anchored { status = 503 }
             data = status == 200 ? conversationData(request.url!.pathComponents.dropLast().last ?? "bot", query: request.url?.query) : Self.json(["error": "Synthetic conversation outage"])
         }
         else if path.hasSuffix("/draft") && request.httpMethod == "PUT" && lock.withLock({ draftSavesFail }) {
@@ -319,6 +332,13 @@ private final class NativeMockServer: @unchecked Sendable {
             status = lock.withLock { uploadStatus }
             data = status == 200 ? Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) : Self.json(["error": "Synthetic upload failure"])
         }
+        else if path.hasPrefix("/api/submissions/"), let answer = lock.withLock({ submissionAnswer }) {
+            data = Self.json(["requestId": request.url!.lastPathComponent, "status": answer])
+        }
+        else if path.hasSuffix("/voice/speak") {
+            data = Self.json(["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-17T12:05:00Z"])
+        }
+        else if path.hasPrefix("/api/voice/audio/") { data = Self.silence }
         else if path == "/api/native/push/config" { data = Self.json(["available": lock.withLock { pushAvailable }]) }
         else if path == "/api/preferences" { data = Self.body(request) ?? Data() }
         else if path == "/api/auth/logout" {
@@ -348,6 +368,15 @@ private final class NativeMockServer: @unchecked Sendable {
         }
         if !park { answer() }
     }
+    /// A second of 8 kHz, 8-bit mono silence as WAV.
+    static let silence: Data = {
+        var data = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        append(UInt32(36 + 8_000)); data.append(Data("WAVEfmt ".utf8))
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(8_000)); append(UInt16(1)); append(UInt16(8))
+        data.append(Data("data".utf8)); append(UInt32(8_000)); data.append(Data(repeating: 128, count: 8_000))
+        return data
+    }()
     static func errorBody(_ message: String, code: String?) -> Data {
         json(code.map { ["error": message, "code": $0] } ?? ["error": message])
     }
@@ -397,44 +426,65 @@ private final class NativeMockServer: @unchecked Sendable {
         NativeMockProtocol.remove(host: server.origin.host!)
     }
 
-    func testNotificationPermissionAutomaticallyAsksOnceAndRegistersWithoutLegacyOptIn() async throws {
+    /// A controller whose iOS permission and APNs are scripted, so no OS alert appears.
+    @MainActor private final class NotificationHarness {
+        var status: UNAuthorizationStatus
+        var requests = 0, registrations = 0, unregistrations = 0
+        var grant = true
+        let controller: NotificationController
+        init(_ status: UNAuthorizationStatus = .notDetermined, store: AppStore) {
+            self.status = status
+            var box: NotificationHarness?
+            controller = NotificationController(permissions: NotificationPermissions(status: { box?.status ?? .notDetermined }, request: {
+                box?.requests += 1
+                let granted = box?.grant ?? false
+                box?.status = granted ? .authorized : .denied
+                return granted
+            }), register: { box?.registrations += 1 }, unregister: { box?.unregistrations += 1 })
+            box = self
+            controller.store = store
+        }
+        func devicePuts(_ server: NativeMockServer) -> Int { server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/native/push/device" }.count }
+        func deviceDeletes(_ server: NativeMockServer) -> Int { server.requests.filter { $0.httpMethod == "DELETE" && $0.url?.path == "/api/native/push/device" }.count }
+    }
+    func testNotificationPermissionIsAskedOnlyAfterEnableThenRegisters() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        var status: UNAuthorizationStatus = .notDetermined
-        var requests = 0, registrations = 0
-        let controller = NotificationController(permissions: NotificationPermissions(status: { status }, request: {
-            requests += 1; status = .authorized; return true
-        }), register: { registrations += 1 }, unregister: {})
-        controller.store = value
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
         await controller.synchronize()
-        XCTAssertEqual(requests, 1); XCTAssertEqual(registrations, 1)
+        XCTAssertEqual(notifications.requests, 0, "Signing in must not ask iOS for permission")
+        XCTAssertEqual(value.deviceNotifications, .ready(prompt: true))
+        await controller.enable()
+        XCTAssertEqual(notifications.requests, 1); XCTAssertEqual(notifications.registrations, 1)
+        XCTAssertEqual(value.deviceNotifications, .registering)
         controller.token = String(repeating: "ab", count: 32)
         await controller.synchronize()
-        XCTAssertEqual(requests, 1)
-        XCTAssertEqual(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path == "/api/native/push/device" }.count, 1)
-        status = .denied
+        XCTAssertEqual(notifications.requests, 1); XCTAssertEqual(notifications.devicePuts(server), 1)
+        XCTAssertEqual(value.deviceNotifications, .enabledState)
+        notifications.status = .denied
         await controller.synchronize()
-        XCTAssertEqual(requests, 1)
-        XCTAssertEqual(server.requests.last?.httpMethod, "DELETE")
-        XCTAssertEqual(server.requests.last?.url?.path, "/api/native/push/device")
-        XCTAssertNil(controller.token)
-        status = .authorized
+        XCTAssertEqual(server.requests.last?.httpMethod, "DELETE"); XCTAssertNil(controller.token)
+        XCTAssertTrue(value.deviceNotifications.blockedInSettings); XCTAssertFalse(value.deviceNotifications.enabled)
+        notifications.status = .authorized
         await controller.synchronize()
-        XCTAssertEqual(registrations, 2, "Re-enabling in iOS Settings registers with APNs again")
-        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(notifications.registrations, 2, "Re-enabling in iOS Settings registers with APNs again")
+        XCTAssertEqual(notifications.requests, 1)
     }
-    func testDeniedPermissionDoesNotReaskAndUnavailableServerDoesNotPrompt() async throws {
+    func testDeclinedPermissionBlocksAndDeniedOrUnavailableNeverPrompts() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        var status: UNAuthorizationStatus = .notDetermined
-        var requested = 0
-        let controller = NotificationController(permissions: NotificationPermissions(status: { status }, request: { requested += 1; return false }), register: { XCTFail("Must not register") }, unregister: {})
-        controller.store = value
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
         server.configurePush(false)
         await controller.synchronize()
-        XCTAssertEqual(requested, 0)
-        status = .denied
+        XCTAssertEqual(value.deviceNotifications, .unconfigured)
+        await controller.enable()
+        XCTAssertEqual(notifications.requests, 0, "A server without push never triggers the iOS prompt")
         server.configurePush(true)
-        await controller.synchronize(); await controller.synchronize()
-        XCTAssertEqual(requested, 0)
+        notifications.grant = false
+        await controller.synchronize()
+        await controller.enable()
+        XCTAssertEqual(notifications.requests, 1); XCTAssertEqual(notifications.registrations, 0)
+        XCTAssertTrue(value.deviceNotifications.blockedInSettings)
+        await controller.synchronize(); await controller.enable()
+        XCTAssertEqual(notifications.requests, 1, "A denial is final until iOS Settings changes it")
     }
     func testNotificationPermissionAnswerCannotRegisterAnotherAccount() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
@@ -443,7 +493,117 @@ private final class NativeMockServer: @unchecked Sendable {
         }), register: { XCTFail("Old permission answer must not register another account") }, unregister: {})
         controller.store = value
         await controller.synchronize()
+        await controller.enable()
         XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/native/push/device" })
+    }
+    func testNotNowIsRememberedPerAccountAndNeverReasks() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
+        await controller.synchronize()
+        XCTAssertTrue(value.deviceNotifications.prompt)
+        controller.dismissPrompt()
+        XCTAssertFalse(value.deviceNotifications.prompt)
+        await controller.synchronize()
+        XCTAssertFalse(value.deviceNotifications.prompt, "Not now holds across launches")
+        XCTAssertTrue(value.deviceNotifications.canEnable, "Settings can still turn notifications on")
+        XCTAssertEqual(notifications.requests, 0)
+        server.user = "two"; await value.refreshBootstrap()
+        await controller.synchronize()
+        XCTAssertTrue(value.deviceNotifications.prompt, "Another account has its own answer")
+    }
+    func testSettingsSwitchUnregistersThisDeviceAndStaysOffAcrossSyncs() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(store: value), controller = notifications.controller
+        controller.token = String(repeating: "cd", count: 32)
+        await controller.synchronize()
+        await controller.enable()
+        XCTAssertEqual(notifications.devicePuts(server), 1); XCTAssertTrue(value.deviceNotifications.enabled)
+        await controller.disable()
+        XCTAssertEqual(notifications.deviceDeletes(server), 1); XCTAssertEqual(notifications.unregistrations, 1)
+        XCTAssertNil(controller.token); XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
+        await controller.synchronize()
+        XCTAssertEqual(notifications.devicePuts(server), 1, "A person who turned it off is not registered again by a sync")
+        XCTAssertEqual(notifications.registrations, 0)
+        XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
+        await controller.enable()
+        XCTAssertEqual(notifications.registrations, 1, "The switch registers again without asking iOS twice")
+        XCTAssertEqual(notifications.requests, 1)
+    }
+    func testPreviouslyAllowedDeviceKeepsNotificationsUntilTurnedOff() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ef", count: 32)
+        await controller.synchronize()
+        XCTAssertEqual(notifications.devicePuts(server), 1); XCTAssertEqual(value.deviceNotifications, .enabledState)
+        XCTAssertEqual(notifications.requests, 0)
+    }
+    func testTurningOffDuringAnInFlightRegistrationEndsUnregistered() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        let path = "/api/native/push/device"
+        server.holdNext(path)
+        let sync = Task { await controller.synchronize() }
+        try await server.waitForHeld(path)
+        await controller.disable()
+        XCTAssertEqual(notifications.deviceDeletes(server), 1)
+        server.release(path); await sync.value
+        XCTAssertEqual(server.requests.last { $0.url?.path == path }?.httpMethod, "DELETE", "The late registration is removed again")
+        XCTAssertEqual(value.deviceNotifications, .disabledByChoice)
+    }
+    func testAnAccountSwitchDuringTurnOffSyncsTheNewAccountWhenItEnds() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize()
+        let path = "/api/native/push/device"
+        server.holdNext(path)
+        let turningOff = Task { await controller.disable() }
+        try await server.waitForHeld(path)
+        server.user = "two"; await value.refreshBootstrap()
+        value.deviceNotifications = DeviceNotificationState()
+        await controller.synchronize()
+        server.release(path); await turningOff.value
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(value.deviceNotifications, .enabledState, "The new account's own state replaces Checking")
+    }
+    func testEnableDuringACleanupSyncEndsRegistered() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize(); await controller.disable()
+        controller.token = String(repeating: "ab", count: 32)
+        let path = "/api/native/push/device"
+        server.holdNext(path)
+        let cleanup = Task { await controller.synchronize() }
+        try await server.waitForHeld(path)
+        await controller.enable()
+        server.release(path); await cleanup.value
+        XCTAssertEqual(server.requests.last { $0.url?.path == path }?.httpMethod, "PUT", "The late removal is followed by registering again")
+        XCTAssertEqual(value.deviceNotifications, .enabledState)
+    }
+    func testFailedTurnOffKeepsSwitchOnAndRetryRecovers() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        controller.token = String(repeating: "ab", count: 32)
+        await controller.synchronize()
+        server.setOffline(true)
+        await controller.disable()
+        XCTAssertTrue(value.deviceNotifications.enabled, "The server may still deliver here")
+        XCTAssertNotNil(value.deviceNotifications.error); XCTAssertFalse(value.deviceNotifications.busy)
+        server.setOffline(false)
+        await controller.retry()
+        XCTAssertNil(value.deviceNotifications.error); XCTAssertEqual(value.deviceNotifications, .enabledState)
+    }
+    func testColdLaunchWithSavedSignInStaysConnectingThroughAnOutageAndRecovers() async throws {
+        let server = NativeMockServer(), value = launchedStore(server, token: "saved-session"); defer { clean(server, value) }
+        server.failBootstrap(status: 503)
+        await value.restore()
+        XCTAssertTrue(value.connectingToHousehold, "An outage keeps the connecting screen, not the sign-in controls")
+        XCTAssertTrue(value.appUnavailable)
+        server.failBootstrap(status: 200)
+        await value.restore()
+        XCTAssertFalse(value.connectingToHousehold); XCTAssertNotNil(value.bootstrap)
     }
     func testFailedAttachmentBlocksSendUntilRetryOrRemovalAndNeverSendsAutomatically() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
@@ -471,7 +631,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft.attachments = (0..<9).map { FileRef(id: "existing-\($0)", name: "Existing.txt", mime: "text/plain") }
         await value.attach(urls: [file, file])
         XCTAssertEqual(value.draft.attachments.count, 10)
-        XCTAssertEqual(value.error, "A message can carry up to 10 attachments, so 1 wasn't added.")
+        XCTAssertEqual(value.attachNotice, ["A message can carry up to 10 attachments, so 1 of these wasn't added."])
         XCTAssertTrue(value.attachmentUploads.isEmpty)
     }
 
@@ -622,11 +782,12 @@ private final class NativeMockServer: @unchecked Sendable {
     }
 
     func testDefinitiveAdmissionRejectionAndUncertainServerFailureKeepDifferentRetryState() async throws {
-        for status in [409, 503] {
+        // As on the web, every answer below 500 is a refusal, including a 408.
+        for status in [409, 408, 503] {
             let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
             server.sendStatus = status; await value.send()
             XCTAssertEqual(value.draft.text, "Send this")
-            if status == 409 { XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "rejected") }
+            if status < 500 { XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "rejected") }
             else { XCTAssertNotNil(value.pending); XCTAssertEqual(value.receipt?.status, "uncertain") }
         }
     }
@@ -713,19 +874,19 @@ private final class NativeMockServer: @unchecked Sendable {
         let tick = { (seconds: Double) in time += .seconds(seconds); _ = await value.pollOnce() }
         _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), 1, "A fresh poll loop starts from current data")
-        for _ in 0..<30 { await tick(1.5) }
+        for _ in 0..<5 { await tick(1.5) }
         XCTAssertEqual(bootstraps(), 1, "Bootstrap must not ride the 1.5 second conversation cadence")
-        XCTAssertEqual(polls(), 31)
-        await tick(30)
-        XCTAssertEqual(bootstraps(), 2, "The slow timer refreshes bootstrap about once a minute")
+        XCTAssertEqual(polls(), 6)
+        await tick(1)
+        XCTAssertEqual(bootstraps(), 2, "Like the web, bootstrap refreshes every 8 seconds")
         await value.refreshBootstrap()
-        await tick(59)
+        await tick(7)
         XCTAssertEqual(bootstraps(), 3, "An action's refresh restarts the timer")
         await tick(2)
         XCTAssertEqual(bootstraps(), 4)
         value.suspend(); _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), 5, "Returning to the foreground refreshes at once")
-        XCTAssertEqual(polls(), 35)
+        XCTAssertEqual(polls(), 10)
     }
 
     func testPollingKeepsRefreshingBootstrapWhileTheServerIsDisconnectedOrFailing() async throws {
@@ -834,39 +995,111 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.conversationFiles.map(\.id), ["only.txt"])
     }
 
-    func testASavedReadingPositionOlderThanTheLatestPageOpensTheWindowThatEndsAtIt() async throws {
+    func testASavedReadingPositionStillOpensTheLatestPageLikeTheWeb() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.serveHistory(ids(1...60)); server.serveReadAnchor("m35")
         await value.refreshConversation()
-        XCTAssertEqual(server.conversationQueries, ["turns=20", "start=m35&turns=20"])
-        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m35")
-        XCTAssertEqual(value.conversation?.messages.first?.id, "m15", "The page reaches back 20 turns from the saved message")
+        XCTAssertEqual(server.conversationQueries, ["turns=20"], "Opening never waits on a second page for an old position")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m41")
         await value.refreshConversation()
-        XCTAssertEqual(server.conversationQueries.last, "start=m15", "The window stays where the position put it")
+        XCTAssertEqual(server.conversationQueries.last, "start=m41", "The window then stays where it opened")
     }
 
-    func testAFailedSavedPositionFetchKeepsRestorationPendingUntilThePollRetries() async throws {
+    func testALiveChangeStreamReplacesFastConversationPollingLikeTheWeb() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var time = ContinuousClock.now
         value.now = { time }
-        server.serveHistory(ids(1...60)); server.serveReadAnchor("m35")
-        server.failNextAnchoredConversation()
-        await value.refreshConversation()
-        XCTAssertTrue(value.conversation?.messages.isEmpty ?? true, "The latest page must not stand in for the saved position")
-        XCTAssertNotNil(value.error); XCTAssertFalse(value.connected)
-        XCTAssertFalse(server.requests.contains { $0.url?.path.hasSuffix("/read-position") == true })
-        time += .seconds(2); _ = await value.pollOnce()
-        XCTAssertEqual(server.conversationQueries, ["turns=20", "start=m35&turns=20", "turns=20", "start=m35&turns=20"])
-        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m35")
-        XCTAssertTrue(value.connected)
+        let polls = { server.conversationQueries.count }
+        let settle = { try await Task.sleep(for: .milliseconds(150)) }
+        server.serveEventStreams()
+        _ = await value.pollOnce(); try await settle()
+        XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
+        let connected = polls()
+        XCTAssertGreaterThanOrEqual(connected, 2, "Connecting reads the conversation, since earlier notices were lost")
+        for _ in 0..<10 { time += .seconds(1.5); _ = await value.pollOnce() }
+        XCTAssertEqual(polls(), connected, "A live stream replaces the 1.5 second conversation poll")
+        server.notifyChange(); try await settle()
+        XCTAssertEqual(polls(), connected + 1, "A change notice reads the conversation")
+        time += .seconds(30); _ = await value.pollOnce()
+        XCTAssertEqual(polls(), connected + 2, "A slow poll still covers a stream that failed unnoticed")
+        time += .seconds(61); _ = await value.pollOnce()
+        XCTAssertEqual(polls(), connected + 3, "A silent stream falls back to polling every pass")
     }
 
-    func testRecentOrMissingReadingPositionsStayOnTheLatestPage() async throws {
+    func testAnOlderConversationReadCannotUndoANewerOne() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        server.serveHistory(ids(1...60)); server.serveReadAnchor("m58")
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        server.holdNext(path)
+        let older = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        server.serveHistory(ids(1...31))
         await value.refreshConversation()
-        XCTAssertEqual(server.conversationQueries, ["turns=20"])
-        XCTAssertEqual(value.conversation?.restorableReadAnchor(value.readMessageId()), "m58")
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m31")
+        // The held read answers last, with what the server had when it was asked.
+        server.serveHistory(ids(1...30)); server.release(path); await older.value
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m31", "A late, older response must not remove the newer reply")
+    }
+
+    func testTheFirstReadAfterOpeningIsTheAnnouncementBaselineEvenWhenUnchanged() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(["m01", "reply-1"])
+        await value.refreshConversation()
+        await value.select("bot")
+        XCTAssertNil(value.replyAnnouncement, "Reopening reads the same conversation as the cache, quietly")
+        server.serveHistory(["m01", "reply-1", "m02", "reply-2"])
+        await value.refreshConversation()
+        XCTAssertEqual(value.replyAnnouncement?.text, "reply-2", "The next reply is new, not a baseline")
+    }
+
+    func testAnExpiringSignInStopsTheChangeStreamToo() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveEventStreams()
+        _ = await value.pollOnce(); try await Task.sleep(for: .milliseconds(150))
+        let reads = server.conversationQueries.count
+        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), forKey: "connection.expiry.\(server.origin.absoluteString)")
+        defer { UserDefaults.standard.removeObject(forKey: "connection.expiry.\(server.origin.absoluteString)") }
+        let continues = await value.pollOnce()
+        XCTAssertFalse(continues); XCTAssertTrue(value.sessionExpired)
+        server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(server.conversationQueries.count, reads, "The stream ends with polling, so no read follows a notice")
+    }
+
+    func testAnOlderMissingAssistantErrorCannotCloseAConversationANewerReadShowed() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.holdNext(path)
+        let older = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        await value.refreshConversation()
+        server.hideBot(); server.release(path); await older.value
+        XCTAssertEqual(value.selectedBotId, "bot", "Only a current read may close the conversation")
+        XCTAssertNil(value.notice)
+    }
+
+    func testAnEarlierPageAnsweringAfterANewerReadKeepsTheNewerTurns() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m11")
+        // The page is read now and answered later, after a newer turn has been shown.
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        server.serveHistory(ids(1...31))
+        await value.refreshConversation()
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m01", "The wider window is kept")
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m31", "The newer turn is not undone by the older page")
+    }
+
+    func testWithoutAStreamTheConversationIsPolledEveryPass() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        for _ in 0..<4 { _ = await value.pollOnce(); time += .seconds(1.5) }
+        XCTAssertEqual(server.conversationQueries.count, 4)
     }
 
     func testFailedEarlierHistoryReportsWithoutMarkingTheServerUnavailable() async throws {
@@ -931,7 +1164,7 @@ private final class NativeMockServer: @unchecked Sendable {
             if let edit { value.draft.text = edit }
             value.discardUnconfirmedSubmission()
             XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
-            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
+            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
             XCTAssertEqual(value.draft.text, edit == "Send this and more" ? "Send this and more" : "Send this")
             try await Task.sleep(for: .milliseconds(800))
             let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }
@@ -949,8 +1182,8 @@ private final class NativeMockServer: @unchecked Sendable {
         server.versionDrafts("other")
         value.pending = PendingSubmission(requestId: "lost", botId: "other", text: "Lost message", attachments: [], reviewedInterruption: false)
         server.setOffline(true)
-        value.discardUnconfirmedSubmission()
-        XCTAssertNil(value.pending); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
+        value.discardUnconfirmedSubmission(botId: "other")
+        XCTAssertNil(value.pendings["other"]); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
         let saved = UserDefaults.standard.data(forKey: value.key("draft", "other")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(saved?.text, "Lost message"); XCTAssertEqual(saved?.dirty, true)
         server.setOffline(false)
@@ -1241,12 +1474,157 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.attach(urls: [file])
         XCTAssertEqual(value.attachmentUploads.count, 1); XCTAssertNil(value.attachmentUploads.first?.error)
         XCTAssertEqual(server.requestCount("/api/bots/bot/uploads"), 0)
-        value.bootstrap?.connection.connected = true
-        await value.drainUploads()
+        // The next poll finds the connection back and starts the queued file without being asked.
+        let polling = await value.pollOnce(); XCTAssertTrue(polling)
+        for _ in 0..<200 where !value.attachmentUploads.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(value.attachmentUploads.isEmpty); XCTAssertEqual(value.draft.attachments.count, 1)
         XCTAssertEqual(server.requestCount("/api/bots/bot/messages"), 0)
     }
 
+    func testAttachNamesEveryRefusedFileInOneNoticeAndSendsAnyTextFormatAsPlainText() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("native-kinds-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["server.log", "script.py", "data.json", "big.txt"]
+        for name in names { try Data("text".utf8).write(to: directory.appendingPathComponent(name)) }
+        let big = try FileHandle(forWritingTo: directory.appendingPathComponent("big.txt"))
+        try big.truncate(atOffset: UInt64(UploadRules.maxBytes + 1)); try big.close()
+        let path = "/api/bots/bot/uploads"; server.hold(path)
+        let attaching = Task { await value.attach(urls: names.map { directory.appendingPathComponent($0) }) }
+        try await server.waitForHeld(path)
+        XCTAssertEqual(value.attachNotice, [
+            "data.json can't be attached. Use PNG, JPEG, WebP or GIF images, PDFs, or plain text.",
+            "big.txt is 20 MB. Each attachment can be up to 20 MB.",
+        ])
+        XCTAssertEqual(value.attachmentUploads.map(\.name), ["server.log", "script.py"])
+        XCTAssertEqual(value.attachmentUploads.map(\.mime), ["text/plain", "text/plain"])
+        // One file at a time, in order: the first is on its way, the second waits.
+        XCTAssertEqual(value.attachmentUploads.map(\.caption), ["Uploading 0%", "Waiting…"])
+        XCTAssertFalse(value.canSend, "A message never goes out while its files are still uploading")
+        server.release(path); await attaching.value
+        XCTAssertTrue(value.attachmentUploads.isEmpty)
+        XCTAssertEqual(value.draft.attachments.count, 2)
+        XCTAssertEqual(value.draft.attachments.first?.size, 4, "The tray shows the size of what was uploaded")
+    }
+    func testUploadProgressReadsLikeTheWebUntilTheServerFinishes() {
+        var upload = AttachmentUpload(botId: "bot", url: URL(fileURLWithPath: "/tmp/a.png"), name: "a.png", mime: "image/png")
+        XCTAssertEqual(upload.caption, "Waiting…")
+        upload.record(sent: 0.5)
+        XCTAssertEqual(upload.caption, "Waiting…", "Progress for a file not yet started is ignored")
+        upload.status = .uploading
+        upload.record(sent: 0.426); XCTAssertEqual(upload.caption, "Uploading 43%")
+        upload.record(sent: 1); XCTAssertEqual(upload.caption, "Finishing…")
+        upload.status = .failed; upload.record(sent: 0.2)
+        XCTAssertEqual(upload.caption, "Didn't upload")
+    }
+    func testAttachingIsRefusedWithTheReasonWhenUploadsAreUnavailableOrTheDraftIsFull() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-refused-\(UUID().uuidString).txt")
+        try Data("Refused".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertNil(value.attachUnavailable("bot"))
+        value.draftReady = false
+        XCTAssertEqual(value.attachUnavailable("bot"), "Your draft is still loading.")
+        value.draftReady = true
+        value.draft.attachments = (0..<10).map { FileRef(id: "file-\($0)", name: "File.txt", mime: "text/plain") }
+        await value.attach(urls: [file])
+        XCTAssertEqual(value.attachNotice, ["A message can carry up to 10 attachments."])
+        value.bootstrap?.capabilities["uploads"] = Capability(supported: false, reason: "This Hermes cannot store files.")
+        XCTAssertEqual(value.attachUnavailable("bot"), "This Hermes cannot store files.")
+        XCTAssertEqual(server.requestCount("/api/bots/bot/uploads"), 0)
+    }
+    func testPastedAndPhotographedImagesGetReadableNames() {
+        var parts = DateComponents(); parts.year = 2026; parts.month = 10; parts.day = 17; parts.hour = 9; parts.minute = 3; parts.second = 7
+        let date = Calendar.current.date(from: parts)!
+        XCTAssertEqual(UploadRules.imageName("Pasted image", at: date, index: 0, ext: "png"), "Pasted image 09.03.07.png")
+        XCTAssertEqual(UploadRules.imageName("Photo", at: date, index: 2, ext: "jpg"), "Photo 09.03.07 (3).jpg")
+    }
+    func testEachAssistantKeepsItsOwnUnconfirmedSendAndEveryOneIsReconciled() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.sendStatus = 503; await value.send()
+        XCTAssertNotNil(value.pending)
+        // Another assistant is not held up by this one's unconfirmed message, as on the web.
+        value.selectedBotId = "other"
+        value.draft = Draft(text: "For the other assistant", attachments: [], dirty: true); value.draftReady = true
+        XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
+        await value.send()
+        XCTAssertEqual(Set(value.pendings.keys), ["bot", "other"])
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "other")!))
+        server.answerSubmissions("accepted")
+        await value.reconcilePending()
+        XCTAssertTrue(value.pendings.isEmpty)
+        XCTAssertEqual(server.requests.filter { $0.url?.path.hasPrefix("/api/submissions/") == true }.count, 2)
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        let closed = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertEqual(closed?.text, "", "The accepted message clears the closed assistant's draft")
+    }
+    func testASingleUnconfirmedSendSavedByAnOlderVersionMovesToItsAssistant() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let legacy = PendingSubmission(requestId: "legacy", botId: "bot", text: "Old send", attachments: [], reviewedInterruption: false)
+        UserDefaults.standard.set(try JSONEncoder().encode(legacy), forKey: value.key("pending")!)
+        await value.refreshBootstrap()
+        XCTAssertEqual(value.pending?.requestId, "legacy"); XCTAssertFalse(value.canSend)
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        value.discardUnconfirmedSubmission()
+        XCTAssertNil(value.pending); XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        XCTAssertTrue(value.draft.text.contains("Old send"))
+    }
+    func testTheDraftLoadNoticeClearsOnceALaterReadBringsTheDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.draftReady = false
+        value.error = "Your saved draft could not be loaded. Retrying. Can't reach the app server."
+        await value.refreshConversation()
+        XCTAssertNil(value.error); XCTAssertTrue(value.draftReady)
+        value.error = "Something else went wrong"
+        await value.refreshConversation()
+        XCTAssertEqual(value.error, "Something else went wrong", "Only the draft notice is the draft's to clear")
+    }
+    func testMessageLengthIsCountedInUTF16LikeTheServer() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // Each emoji is one Character but two UTF-16 units, as JavaScript counts it.
+        value.draft.text = String(repeating: "😀", count: 25_000)
+        XCTAssertTrue(value.canSend)
+        value.draft.text += "a"
+        XCTAssertFalse(value.canSend)
+    }
+    func testHardwareReturnSendsUnlessShiftedOrComposing() {
+        XCTAssertTrue(ComposerUITextView.sends(.keyboardReturnOrEnter, [], composing: false))
+        XCTAssertTrue(ComposerUITextView.sends(.keypadEnter, [], composing: false))
+        XCTAssertTrue(ComposerUITextView.sends(.keyboardReturnOrEnter, .alphaShift, composing: false), "Caps Lock is not Shift")
+        XCTAssertFalse(ComposerUITextView.sends(.keyboardReturnOrEnter, .shift, composing: false))
+        XCTAssertFalse(ComposerUITextView.sends(.keyboardReturnOrEnter, [], composing: true))
+        XCTAssertFalse(ComposerUITextView.sends(.keyboardA, [], composing: false))
+    }
+    func testATranscriptJoinsTheDraftOnItsOwnLine() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        XCTAssertTrue(value.appendTranscript("Check the gate", botId: "bot"))
+        XCTAssertEqual(value.draft.text, "Send this\nCheck the gate")
+        value.draft.text = "  \n"
+        value.appendTranscript("Only this", botId: "bot")
+        XCTAssertEqual(value.draft.text, "Only this")
+        XCTAssertFalse(value.appendTranscript("Wrong assistant", botId: "other"))
+        XCTAssertEqual(value.draft.text, "Only this")
+    }
+    func testListenToReplyUsesTheServersVoiceAndRefusesLongReplies() async throws {
+        let server = NativeMockServer(); defer { NativeMockProtocol.remove(host: server.origin.host!) }
+        let voice = VoiceController(); voice.api = client(server); voice.botId = "bot"
+        defer { voice.cancel() }
+        let long = Message(id: "long", role: "assistant", text: String(repeating: "a", count: VoiceController.maxSpokenText + 1))
+        voice.speak(long)
+        XCTAssertEqual(voice.error, "This reply is too long to read aloud. Ask for a shorter summary.")
+        XCTAssertEqual(voice.state, .idle); XCTAssertTrue(server.requests.isEmpty)
+        voice.speak(Message(id: "reply-1", role: "assistant", text: "The gate is closed."))
+        XCTAssertEqual(voice.state, .preparing); XCTAssertEqual(voice.error, "")
+        for _ in 0..<300 where voice.state == .preparing { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(voice.state, .speaking, voice.error)
+        let speak = try XCTUnwrap(server.requests.first { $0.url?.path == "/api/bots/bot/voice/speak" })
+        XCTAssertEqual(speak.httpMethod, "POST")
+        XCTAssertEqual(NativeMockServer.body(speak).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }, ["messageId": "reply-1"])
+        XCTAssertTrue(server.requests.contains { $0.url?.path.hasPrefix("/api/voice/audio/") == true && $0.value(forHTTPHeaderField: "Authorization") != nil })
+        voice.cancel()
+        XCTAssertEqual(voice.state, .idle)
+    }
     func testDelayedPreferencesCannotReplaceNewIdentityPreferencesAndFailedLogoutRetainsToken() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var preferences = Preferences(); preferences.theme = "dark"

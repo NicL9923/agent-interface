@@ -1,5 +1,6 @@
 #if DEBUG
   import Foundation
+  import UserNotifications
 
   /// UI test transport only. Shipping Release builds contain no fixture transport.
   /// Simulator results validate native interaction, not Hermes or APNs execution.
@@ -11,6 +12,7 @@
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
+      VoiceController.fixtureRecording = true
       let config = URLSessionConfiguration.ephemeral
       config.protocolClasses = [FixtureProtocol.self]
       let session = URLSession(configuration: config)
@@ -37,12 +39,25 @@
           ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
         ]
       }
+      if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
+        // Enough turns for three history pages, with replies tall enough to scroll.
+        FixtureProtocol.messages = (1...60).flatMap { turn -> [[String: Any]] in
+          [["id": "prompt-\(turn)", "role": "user", "text": "Fixture question \(turn)"],
+           ["id": "reply-\(turn)", "role": "assistant", "text": "Fixture answer \(turn).\n\n" + Array(repeating: "A line of synthetic history so each turn takes some room.", count: 4).joined(separator: "\n\n")]]
+        }
+      }
       if environment["AGENT_INTERFACE_UI_MIXED_TOOL"] == "1" {
         FixtureProtocol.preferences["presentation"] = "advanced"
         FixtureProtocol.messages = [
           ["id": "mixed", "role": "assistant", "text": "Fixture single visible reply", "reasoning": "Fixture grouped reasoning", "toolCall": ["id": "mixed-call", "name": "fixture_search", "status": "completed", "result": "Fixture tool result"]],
           ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
         ]
+      }
+      if environment["AGENT_INTERFACE_UI_PUSH"] == "1" {
+        // iOS permission starts undecided; Enable grants it, as tapping Allow would.
+        var status = UNAuthorizationStatus.notDetermined
+        NotificationController.shared.useFixtureSystem(permissions: NotificationPermissions(
+          status: { status }, request: { status = .authorized; return true }))
       }
       await store.refreshBootstrap()
       if environment["AGENT_INTERFACE_UI_HOME"] != "1" { await store.select(store.selectedBotId) }
@@ -91,6 +106,7 @@
     static var todaySince = "2026-09-30T13:30:00Z"
     static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
     static var upgradePhase = "idle"
+    static var upgradeOperation = "check"
     static var integrationChecked = false
     static var integrationDisconnected = false
     static var upgradeReadsRemaining = 0
@@ -154,13 +170,30 @@
       } else {
         body = [:]
       }
-      if path == "/api/search" {
+      if path.hasPrefix("/api/voice/audio/") {
+        // Ten seconds of quiet, so a test can stop the reply while it plays.
+        respond(raw: Self.silence(seconds: 10), type: "audio/wav")
+        return
+      }
+      if path.hasSuffix("/voice/transcribe") {
+        object = ["text": "Fixture transcript: check the north gate."]
+      } else if path.hasSuffix("/voice/speak") {
+        object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
+      } else if path == "/api/search" {
         object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list."]],"unavailableBots":[]]
       } else if path.contains("/history/") {
-        object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":[["id":"history-reply","role":"assistant","text":"Fixture: five easy dinners."]]]
+        // A person's Markdown stays literal, an assistant's exchange is its card, and the saved
+        // reply sits below the fold so opening it has to scroll there.
+        let filler: [[String: Any]] = (1...12).map { ["id": "history-filler-\($0)", "role": "assistant", "text": "History filler \($0).\n\n" + Array(repeating: "Earlier dinner planning notes.", count: 6).joined(separator: "\n\n")] }
+        let lead: [[String: Any]] = [["id":"history-reply","role":"assistant","text":"Fixture: five easy dinners."],
+          ["id":"history-user","role":"user","text":"Use **only** pantry staples"],
+          ["id":"history-agent","role":"user","text":"Pantry list is ready","origin":["kind":"agent","visibility":"conversation","name":"Kitchen companion"]]]
+        let saved: [[String: Any]] = [["id":"history-saved","role":"assistant","text":"Fixture saved reply: brisket on Sunday."]]
+        object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":lead + filler + saved]
       } else if path == "/api/saved" {
         if method == "POST" { object = ["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"] }
-        else { object = [["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"]] }
+        else { object = [["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"],
+          ["id":"saved-2","botId":"ranch","kind":"session","sessionId":"history-1","messageId":"history-saved","offset":0,"title":"Brisket reply","createdAt":"2026-10-02T12:05:00Z"]] }
       } else if path.hasSuffix("/starters") {
         object = [["id":"meals","title":"Plan dinners","prompt":"Help me plan five easy dinners. Ask about our preferences first."]]
       } else if path == "/api/automations" {
@@ -191,12 +224,32 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
           object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_OUTAGE"] == "1" {
+          status = 503; object = ["error": "Fixture: the app server is unreachable"]
+        } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DISCONNECTED"] == "1" {
+          // A fresh installation whose Hermes connection was never set up.
+          object = (object as! [String: Any]).merging(["bots": [], "connection": ["connected": false, "code": "not_configured", "detail": "Fixture: Hermes is not configured."]]) { $1 }
+        }
       } else if path.hasSuffix("/conversation") {
         object = [
           "botId": path.components(separatedBy: "/")[3], "messages": Self.messages,
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
+          // The server's history window (src/shared/history.ts): `start` pins the oldest loaded
+          // message, `turns` adds that many turns above it, and no start means the latest page.
+          let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+          let start = query.first { $0.name == "start" }?.value
+          var turns = Int(query.first { $0.name == "turns" }?.value ?? "") ?? 0
+          var end = start.flatMap { id in Self.messages.firstIndex { $0["id"] as? String == id } } ?? -1
+          if end < 0 { end = Self.messages.count; turns = max(turns, 20) }
+          var from = end
+          while from > 0 && turns > 0 { from -= 1; if Self.messages[from]["role"] as? String == "user" { turns -= 1 } }
+          var window = object as! [String: Any]
+          window["messages"] = Array(Self.messages[from...]); window["earlier"] = from; window["earlierFiles"] = 0
+          object = window
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           object = [
             "botId": path.components(separatedBy: "/")[3],
@@ -245,7 +298,9 @@
       } else if path.contains("/vault/logins/"), method == "DELETE" {
         Self.vaultItems.removeAll { $0["id"] as? String == request.url!.lastPathComponent }; object = ["removed": true]
       } else if path.hasSuffix("/bitwarden/unlock") {
-        Self.vaultUnlocked = true
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT_UNLOCK_FAILS"] == "1" {
+          status = 503; object = ["error": "Fixture connection lost during unlock"]
+        } else { Self.vaultUnlocked = true }
       } else if path.hasSuffix("/bitwarden/lock") {
         Self.vaultUnlocked = false
       } else if path.hasSuffix("/sources/bitwarden"), method == "PUT" {
@@ -311,14 +366,22 @@
       } else if path.hasPrefix("/api/integrations/") && path.hasSuffix("/check") {
         Self.integrationChecked = true
         object = ["id": "workspace", "name": "Google Workspace", "category": "productivity", "owner": "Hermes", "profile": "ranch", "status": "connected", "detail": "Fixture check passed.", "permissions": [], "actions": ["connect": true, "check": true, "disconnect": false], "setup": [], "capabilities": [], "botIds": ["ranch"]]
+      } else if path == "/api/computer" {
+        let unavailable = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] == "1"
+        object = ["available": !unavailable, "running": !unavailable, "browserReady": !unavailable, "label": "Fixture host",
+          "reason": unavailable ? "The fixture desktop is stopped." as Any : NSNull(),
+          "control": ["kind": "bot", "name": "Ranch hand"],
+          "terminal": ["available": false, "target": ""]]
       } else if path.hasPrefix("/api/hermes/upgrade") {
         if path.hasSuffix("/control") {
           Self.upgradePhase = "recovering"
           Self.upgradeReadsRemaining = 1
         } else if path.hasSuffix("/check") {
+          Self.upgradeOperation = "check"
           Self.upgradePhase = "qualifying"
           Self.upgradeReadsRemaining = 1
         } else if path.hasSuffix("/install") {
+          Self.upgradeOperation = "install"
           Self.upgradePhase = "installing"
           Self.upgradeReadsRemaining = 3
           if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_UNCERTAIN"] == "1" {
@@ -335,7 +398,7 @@
           default: break
           }
         }
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed" }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed"; Self.upgradeOperation = "install" }
         let phase = Self.upgradePhase
         let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": "compatibility", "label": "App compatibility", "status": phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
         let fixtureMessage: String
@@ -352,7 +415,7 @@
           "message": fixtureMessage,
           "checks": fixtureChecks,
           "canCheck": ["idle", "ready", "succeeded"].contains(phase),
-          "canInstall": phase == "ready", "canRetry": phase == "failed", "canCancel": phase == "failed", "canRestartService": phase == "failed", "operationId": "fixture-update", "busyBots": [],
+          "canInstall": phase == "ready", "canRetry": phase == "failed", "canCancel": phase == "failed" || phase == "qualifying", "canRestartService": phase == "failed", "operationId": "fixture-update", "operation": Self.upgradeOperation, "busyBots": [],
         ]
         if status == 503 {
           object = ["error": "Fixture connection lost during update admission"]
@@ -438,7 +501,7 @@
             : ["available": false, "state": ["title": "", "activeCount": 0, "attentionCount": 0, "updatedAt": now, "rows": []] as [String: Any]]
         }
       } else if path == "/api/native/push/config" {
-        object = ["available": false, "environment": "sandbox"]
+        object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
       } else if path == "/api/bots", method == "POST" {
         var bot = body
         bot["id"] = "created"
@@ -471,5 +534,27 @@
       client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+    private func respond(raw data: Data, type: String) {
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": type])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: data)
+      client?.urlProtocolDidFinishLoading(self)
+    }
+    /// An 8 kHz, 8-bit mono WAV of silence.
+    static func silence(seconds: Int) -> Data {
+      let samples = 8_000 * seconds
+      var data = Data("RIFF".utf8)
+      func append(_ value: UInt32) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+      func append(_ value: UInt16) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+      append(UInt32(36 + samples))
+      data.append(Data("WAVEfmt ".utf8))
+      append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(8_000))
+      append(UInt16(1)); append(UInt16(8))
+      data.append(Data("data".utf8))
+      append(UInt32(samples))
+      data.append(Data(repeating: 128, count: samples))
+      return data
+    }
   }
 #endif

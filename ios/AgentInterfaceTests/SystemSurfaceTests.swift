@@ -175,4 +175,12 @@ import XCTest
       XCTAssertNil(DeepLink.relativePath(for: URL(string: rejected)!), rejected)
     }
   }
+  /// iOS ends the app when a feature asks for a device permission without a purpose string, and
+  /// the simulator hides the camera, so only this check catches a missing one.
+  func testEveryRequestedDevicePermissionHasAPurposeString() {
+    for key in ["NSCameraUsageDescription", "NSMicrophoneUsageDescription", "NSCalendarsFullAccessUsageDescription", "NSRemindersFullAccessUsageDescription"] {
+      let purpose = Bundle.main.object(forInfoDictionaryKey: key) as? String
+      XCTAssertFalse(purpose?.isEmpty ?? true, key)
+    }
+  }
 }

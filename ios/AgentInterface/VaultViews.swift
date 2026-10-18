@@ -12,6 +12,10 @@ struct VaultLogin: Codable, Identifiable {
   var backend: String
   var canRemove: Bool
 }
+extension VaultLogin {
+  /// Where the login lives, worded like the web panel.
+  var backendLabel: String { backend == "local" ? "Hermes vault" : backend == "onepassword" ? "1Password" : "Bitwarden" }
+}
 struct VaultSource: Codable, Identifiable {
   var name: String
   var displayName: String
@@ -23,6 +27,12 @@ struct VaultSource: Codable, Identifiable {
   var canUnlock: Bool
   var canLock: Bool
   var id: String { name }
+  var statusText: String {
+    if !installed { return "CLI is not installed" }
+    if name == "local" { return "Available to Hermes in this profile" }
+    if !enabled { return "Disabled" }
+    return unlocked ? "Unlocked for this profile" : "Locked"
+  }
 }
 struct ProfileVault: Codable {
   var botId: String
@@ -34,6 +44,8 @@ struct ProfileVault: Codable {
   var sources: [VaultSource]
 }
 struct AddVaultLogin: Encodable {
+  /// The web form starts on Email, the most common way to sign in.
+  static let defaultIdentifierType = "email"
   var label: String
   var origin: String
   var identifierType: String
@@ -101,6 +113,9 @@ enum VaultSafety {
     guard let status = (error as? APIError)?.status else { return true }
     return status == 0 || status >= 500
   }
+  static let invalidOriginMessage = "Enter the website address through the hostname, such as https://example.com."
+  /// Shown after a change whose outcome is unknown. Everything stays locked until a reload succeeds.
+  static let unconfirmedChange = "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared."
   static func validOrigin(_ text: String) -> Bool {
     guard let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false,
       url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, ["", "/"].contains(url.path) else { return false }
@@ -153,6 +168,8 @@ struct VaultView: View {
   @State private var showRemove = false
   @State private var unlocking: VaultSource?
   @State private var unlockPassword = ""
+  /// A failed change may or may not have reached Hermes, so actions stay locked until a reload succeeds.
+  @State private var uncertain = false
   @State private var generation = UUID()
   private var profileBot: String { botId ?? selectedBot }
   private var identity: String { (store.scope ?? "") + "|" + profileBot }
@@ -165,7 +182,7 @@ struct VaultView: View {
           }
         }
       }
-      if let error { Section { ErrorBanner(message: error, dismiss: { self.error = nil }); Button("Refresh status") { Task { await refresh() } } } }
+      if let error { Section { ErrorBanner(message: error, dismiss: { self.error = nil }) } }
       if let notice { Section { Text(notice).foregroundStyle(Palette.accent) } }
       if let catalog {
         Section {
@@ -174,13 +191,14 @@ struct VaultView: View {
           Text("Usernames and site details are visible metadata. Passwords are handled by Hermes outside the model's context.").font(.footnote).foregroundStyle(.secondary)
         }
         Section("Saved logins") {
-          if catalog.items.isEmpty { Text("No logins reported by Hermes.").foregroundStyle(.secondary) }
+          if catalog.items.isEmpty { Text("No saved logins in the enabled sources.").foregroundStyle(.secondary) }
           ForEach(catalog.items) { login in
             VStack(alignment: .leading, spacing: 6) {
               Text(login.label).font(.headline)
               Text(login.origin).font(.footnote).textSelection(.enabled)
               Text(login.identifier).font(.subheadline).textSelection(.enabled)
-              Text(sourceName(login.backend) + (login.hasOtp ? " · Authenticator configured" : "")).font(.caption).foregroundStyle(.secondary)
+              Text(login.backendLabel).font(.caption).foregroundStyle(.secondary)
+              if login.hasOtp { Text("Includes a saved authenticator secret.").font(.caption).foregroundStyle(.secondary) }
               if login.canRemove {
                 Button("Remove login", role: .destructive) { removing = login; showRemove = true }
                   .accessibilityIdentifier("vault.remove.\(login.id)")
@@ -188,36 +206,45 @@ struct VaultView: View {
             }.padding(.vertical, 5).buttonStyle(.borderless)
           }
           Button("Add login", systemImage: "plus") { adding = true }.accessibilityIdentifier("vault.add")
-        }
+        }.disabled(uncertain)
         Section {
           ForEach(catalog.sources) { source in
             VStack(alignment: .leading, spacing: 8) {
-              HStack { Text(source.displayName).font(.headline); Spacer(); Text(sourceStatus(source)).font(.caption).foregroundStyle(.secondary) }
-              if source.installed && source.canToggle { Button(source.enabled ? "Disable source" : "Enable source") { run { api, id in try await api.setVaultSource(botId: id, source: source.name, enabled: !source.enabled) } } }
+              HStack { Text(source.displayName).font(.headline); Spacer(); Text(source.statusText).font(.caption).foregroundStyle(.secondary) }
+              if source.installed && source.canToggle {
+                Button(source.enabled ? "Disable source" : "Enable source") {
+                  run(success: source.enabled ? "Vault source disabled." : "Vault source enabled.") { api, id in try await api.setVaultSource(botId: id, source: source.name, enabled: !source.enabled) }
+                }
+              }
               if source.installed && source.canUnlock { Button("Unlock \(source.displayName)") { unlockPassword = ""; unlocking = source } }
-              if source.installed && source.canLock { Button("Lock \(source.displayName)") { run { api, id in try await api.lockVaultSource(botId: id, source: source.name) } } }
+              if source.installed && source.canLock {
+                Button("Lock \(source.displayName)") { run(success: "Vault source locked.") { api, id in try await api.lockVaultSource(botId: id, source: source.name) } }
+              }
             }.buttonStyle(.borderless).padding(.vertical, 5)
           }
         } header: { Text("Password sources") } footer: { Text("Hermes owns encryption and password-source sessions. Local saved logins do not have a separate master unlock. External source unlocks expire with Hermes's session policy.") }
+          .disabled(uncertain)
       } else if busy { ProgressView("Loading logins…") }
       else if profileBot.isEmpty { Text("Create an assistant before managing its logins.") }
+      if !profileBot.isEmpty { Section { Button("Reload logins") { Task { await refresh() } }.disabled(busy).accessibilityIdentifier("vault.reload") } }
     }.navigationTitle("Passwords & logins").navigationBarTitleDisplayMode(.inline)
       .accessibilityIdentifier("vaultForm")
       .disabled(busy || store.sessionExpired || !store.connected)
       .refreshable { await refresh() }
       .task(id: identity) {
-        clear(); catalog = nil; error = nil; notice = nil
+        clear(); catalog = nil; error = nil; notice = nil; uncertain = false
         if profileBot.isEmpty { selectedBot = store.selectedBotId ?? store.bootstrap?.bots.first?.id ?? ""; return }
         await refresh()
       }
       .onChange(of: scenePhase) { _, phase in if phase != .active { clear() } }
       .onDisappear { clear() }
       .confirmationDialog("Remove \(removing?.label ?? "this login") from this Hermes profile? Assistants using this profile will lose access to it.", isPresented: $showRemove, titleVisibility: .visible) {
-        Button("Remove login", role: .destructive) { if let item = removing { run { api, id in try await api.removeVaultLogin(botId: id, itemId: item.id) } } }
+        Button("Remove login", role: .destructive) { if let item = removing { run(success: "Login removed from Hermes.") { api, id in try await api.removeVaultLogin(botId: id, itemId: item.id) } } }
       }
       .sheet(isPresented: $adding, onDismiss: { Task { await refresh() } }) {
         if let api = store.api {
-          AddVaultLoginView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Login saved in Hermes." }).environmentObject(store)
+          AddVaultLoginView(api: api, botId: profileBot, identity: identity, onSaved: { notice = "Login saved in Hermes." },
+            onUncertain: { uncertain = true; error = VaultSafety.unconfirmedChange }).appStore(store)
         }
       }
       .sheet(item: $unlocking, onDismiss: { unlockPassword = "" }) { source in
@@ -226,28 +253,26 @@ struct VaultView: View {
             Section {
               SecureField("Master password", text: $unlockPassword).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("vault.unlockPassword")
             } footer: { Text("Sent directly to Hermes to unlock \(source.displayName) for this profile. It is not sent as a chat message.") }
-            if let error { Text(error).foregroundStyle(.red) }
+            if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("vault.unlockError") }
           }.navigationTitle("Unlock \(source.displayName)").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-              ToolbarItem(placement: .cancellationAction) { Button("Cancel") { unlocking = nil; unlockPassword = "" } }
+              ToolbarItem(placement: .cancellationAction) { Button("Cancel") { unlocking = nil; unlockPassword = "" }.disabled(busy) }
               ToolbarItem(placement: .confirmationAction) {
-                Button("Unlock") {
-                  let password = unlockPassword; unlockPassword = ""
-                  run { api, id in try await api.unlockVaultSource(botId: id, source: source.name, password: password) }
-                  unlocking = nil
-                }.disabled(busy || unlockPassword.isEmpty).accessibilityIdentifier("vault.unlock")
+                Button("Unlock") { unlock(source) }.disabled(busy || uncertain || unlockPassword.isEmpty).accessibilityIdentifier("vault.unlock")
               }
-            }
+            }.interactiveDismissDisabled(busy)
         }
       }
   }
   private func clear() { generation = UUID(); unlockPassword = ""; unlocking = nil; adding = false; busy = false }
-  private func sourceName(_ name: String) -> String { catalog?.sources.first { $0.name == name }?.displayName ?? name }
-  private func sourceStatus(_ source: VaultSource) -> String {
-    if !source.installed { return "Unavailable on Hermes" }
-    if !source.enabled { return "Disabled" }
-    if source.needsUnlock && !source.unlocked { return "Locked" }
-    return "Ready"
+  /// The sheet stays open until Hermes answers, so a failure shows where the password was typed.
+  private func unlock(_ source: VaultSource) {
+    let password = unlockPassword; unlockPassword = ""
+    Task {
+      if await perform(success: "Vault source unlocked for this profile.", { api, id in try await api.unlockVaultSource(botId: id, source: source.name, password: password) }) {
+        unlocking = nil
+      }
+    }
   }
   private func refresh() async {
     guard let api = store.api, !profileBot.isEmpty else { return }
@@ -256,26 +281,36 @@ struct VaultView: View {
     do {
       let value = try await api.vault(botId: id)
       guard current == generation, scope == identity, store.api === api else { return }
-      catalog = value; error = nil
+      catalog = value; error = nil; uncertain = false
     } catch {
       guard current == generation, scope == identity, !(error is CancellationError) else { return }
       self.error = VaultSafety.error(error).localizedDescription
     }
   }
-  private func run(_ operation: @escaping (APIClient, String) async throws -> Void) {
-    guard let api = store.api, store.connected, !busy else { return }
+  private func run(success: String, _ operation: @escaping (APIClient, String) async throws -> Void) {
+    Task { _ = await perform(success: success, operation) }
+  }
+  /// Returns true only when the change succeeded and the reload that follows it ran.
+  private func perform(success: String, _ operation: @escaping (APIClient, String) async throws -> Void) async -> Bool {
+    guard let api = store.api, store.connected, !busy, !uncertain else { return false }
     let id = profileBot, scope = identity, current = generation
     busy = true; error = nil; notice = nil
-    Task {
-      defer { if current == generation { busy = false } }
-      do {
-        try await operation(api, id)
-        guard current == generation, scope == identity, store.api === api else { return }
-        await refresh()
-      } catch {
-        guard current == generation, scope == identity, !(error is CancellationError) else { return }
+    defer { if current == generation { busy = false } }
+    do {
+      try await operation(api, id)
+      guard current == generation, scope == identity, store.api === api else { return false }
+      notice = success
+      await refresh()
+      return true
+    } catch {
+      guard current == generation, scope == identity, !(error is CancellationError) else { return false }
+      if VaultSafety.uncertain(error) {
+        uncertain = true
+        self.error = VaultSafety.unconfirmedChange
+      } else {
         self.error = VaultSafety.error(error).localizedDescription
       }
+      return false
     }
   }
 }
@@ -285,12 +320,13 @@ private struct AddVaultLoginView: View {
   let botId: String
   let identity: String
   var onSaved: () -> Void
+  var onUncertain: () -> Void
   @EnvironmentObject private var store: AppStore
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @State private var label = ""
   @State private var origin = ""
-  @State private var identifierType = "username"
+  @State private var identifierType = AddVaultLogin.defaultIdentifierType
   @State private var identifier = ""
   @State private var password = ""
   @State private var busy = false
@@ -303,8 +339,11 @@ private struct AddVaultLoginView: View {
         Section {
           TextField("Login name", text: $label).accessibilityIdentifier("vault.loginLabel")
           TextField("https://site.example", text: $origin).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("vault.loginOrigin")
-          Text("Use only the site's address, such as https://example.com.").font(.caption).foregroundStyle(.secondary)
-          Picker("Identifier type", selection: $identifierType) { Text("Username").tag("username"); Text("Email").tag("email"); Text("Phone").tag("phone") }
+          if !origin.isEmpty && !VaultSafety.validOrigin(origin) {
+            Text(VaultSafety.invalidOriginMessage).font(.caption).foregroundStyle(.red).accessibilityIdentifier("vault.originError")
+          }
+          Text("Use the exact website, such as https://example.com, without a page path. Hermes checks the website before filling credentials.").font(.caption).foregroundStyle(.secondary)
+          Picker("Identifier type", selection: $identifierType) { Text("Email").tag("email"); Text("Username").tag("username"); Text("Phone").tag("phone") }
           TextField("Username, email or phone", text: $identifier).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("vault.loginIdentifier")
           SecureField("Password", text: $password).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("vault.loginPassword")
         } footer: { Text("Saved in the assistant's Hermes profile. The identifier is visible metadata; the password stays outside the model's context. Household access follows this Hermes profile.") }
@@ -333,6 +372,7 @@ private struct AddVaultLoginView: View {
       } catch {
         guard current == generation, store.api === api, identity == (store.scope ?? "") + "|" + botId else { return }
         uncertain = VaultSafety.uncertain(error)
+        if uncertain { onUncertain() }
         self.error = error is CancellationError ? "Could not confirm the result from Hermes. Review saved logins before adding again." : VaultSafety.error(error).localizedDescription
       }
     }

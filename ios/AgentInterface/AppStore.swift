@@ -1,4 +1,5 @@
 import AuthenticationServices
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -9,14 +10,31 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot() } }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
   var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
-  @Published var conversation: Conversation?
+  @Published var conversation: Conversation? {
+    didSet { if conversation != oldValue { turns = conversation?.presentationTurns ?? [] } }
+  }
+  /// The open conversation grouped into turns, computed once per change instead of on every render.
+  private(set) var turns: [ConversationTurn] = []
   @Published var selectedBotId: String?
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
   @Published var draft = Draft()
   @Published var draftReady = false
-  @Published var pending: PendingSubmission?
-  @Published var receipt: Receipt?
+  /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
+  @Published var pendings: [String: PendingSubmission] = [:]
+  /// The open assistant's unconfirmed send. Setting one files it under its own assistant.
+  var pending: PendingSubmission? {
+    get { selectedBotId.flatMap { pendings[$0] } }
+    set {
+      if let newValue { pendings[newValue.botId] = newValue } else if let id = selectedBotId { pendings[id] = nil }
+    }
+  }
+  /// The latest submission receipt per assistant.
+  @Published var receipts: [String: Receipt] = [:]
+  var receipt: Receipt? {
+    get { selectedBotId.flatMap { receipts[$0] } }
+    set { if let id = selectedBotId { receipts[id] = newValue } }
+  }
   @Published var error: String?
   /// A short message for home, such as an assistant that is no longer available.
   @Published var notice: String?
@@ -31,6 +49,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var sending = false
   @Published var uploading = false
   @Published var attachmentUploads: [AttachmentUpload] = []
+  /// Files from the last attempt to attach that could not be added, each with its reason.
+  @Published var attachNotice: [String] = []
+  private var uploadTasks: [UUID: Task<Void, Never>] = [:]
   @Published var appUnavailable = false
   @Published var interruptionReviewed = false
   @Published var authConfig: AuthConfig?
@@ -42,17 +63,43 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var preferencesDraft: Preferences?
   private var preferencesFailureMessage: String?
   private var queuedPreferences: Preferences?
-  @Published var notificationStatus = "Notification permission is managed by iOS"
+  /// This device's notification switch and onboarding card for the signed-in account.
+  @Published var deviceNotifications = DeviceNotificationState()
   @Published var openedFile: PreviewFile?
   @Published var upgradeStatus: UpgradeStatus?
   @Published var upgradeBusy = false
   @Published var upgradeError: String?
   @Published var upgradeInstallUncertain = false
+  /// True only while a check, install or recovery request is in flight, not for status polls.
+  @Published var upgradeSubmitting = false
+  /// The shared desktop's availability for the Settings row. Nil until the first read.
+  @Published var computerStatus: ComputerStatus?
   private var upgradeRequest: UpgradeInstallRequest?
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
   var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
+  /// The open conversation's change stream, as the web subscribes to it, and when it last spoke.
+  private var eventTask: Task<Void, Never>?
+  private var eventBotId: String?
+  private var streamHeardAt: ContinuousClock.Instant?
+  private var conversationRefreshedAt: ContinuousClock.Instant?
+  private var conversationRefreshing = false
+  /// Conversation reads overlap: polls, change notices, selection and pull to refresh each start
+  /// one. A response older than one already applied is dropped, so it cannot undo newer state.
+  private var conversationReads = 0
+  private var appliedConversationRead = 0
+  /// Replies already accounted for in the open conversation. As in the web's conversation hook,
+  /// the first successful read after opening is the baseline, even when it matches the cache.
+  private var replyWatch: ReplyWatch?
+  private var announcements = 0
+  /// The latest settled reply for VoiceOver, numbered so a repeat of the same words is read again.
+  @Published private(set) var replyAnnouncement: ReplyAnnouncement?
+  private var conversationRefreshAgain = false
+  /// While the stream is live, change notices drive updates and this slow poll covers a stream
+  /// that fails unnoticed, as on the web. Server pings arrive every 25 seconds.
+  static let streamFallbackInterval: Duration = .seconds(30)
+  static let streamSilence: Duration = .seconds(60)
   private var draftTask: Task<Void, Never>?
   /// Set while an edit waits for its save, so leaving can send it now instead of dropping it.
   private var scheduledDraftSave: UUID?
@@ -66,7 +113,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   static let historyPageTurns = 20
   /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
   /// it, a foreground return and pull to refresh all refresh it sooner.
-  static let bootstrapInterval: Duration = .seconds(60)
+  static let bootstrapInterval: Duration = .seconds(8)
   /// Tests substitute a clock they advance by hand.
   var now: () -> ContinuousClock.Instant = { .now }
   private var bootstrapRefreshedAt: ContinuousClock.Instant?
@@ -82,9 +129,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private struct EarlierFilePage {
     var sessionId: String?
     var before: String?
-    var files: [FileRef]
+    var messages: [EarlierFiles.Entry]
   }
   @Published var loadingEarlierFiles = false
+  /// The bot and session whose earlier files failed to load, shown as a notice in the file list
+  /// instead of an error banner. Opening the list again retries, as on the web.
+  @Published private var earlierFilesFailure: String?
   @Published var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
@@ -96,12 +146,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var active: Bool { activity.active }
   var canSend: Bool {
     draftReady && connected && !sending && !uploading && !attachmentUploads.contains { $0.botId == selectedBotId } && pending == nil
-      && (draft.text.count <= 50000)
+      && draft.text.utf16.count <= Self.maxMessageLength
       && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !draft.attachments.isEmpty)
       && supports(active ? "steering" : "chat")
       && (activity != .interrupted || interruptionReviewed)
   }
+  /// The server's limit, counted in UTF-16 code units as JavaScript counts string length.
+  static let maxMessageLength = 50_000
   func supports(_ key: String) -> Bool { bootstrap?.capabilities[key]?.supported == true }
   func reason(_ key: String) -> String {
     bootstrap?.capabilities[key]?.reason
@@ -250,7 +302,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       .first { $0.isKeyWindow } ?? ASPresentationAnchor()
   }
   func startPolling() {
-    pollTask?.cancel()
+    stopPolling()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
         guard let self, await self.pollOnce() else { return }
@@ -267,18 +319,91 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
     {
       sessionExpired = true
+      stopStream()
       error =
         "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
       return false
     }
+    watchConversation()
     await refreshBootstrap(ifDue: true)
-    await refreshConversation()
+    if conversationDue { await refreshConversation() }
     await reconcilePending()
+    // Files added while the connection was down start once it returns, as on the web.
+    if connected, !uploading, attachmentUploads.contains(where: { $0.status == .queued }) {
+      Task { await self.drainUploads() }
+    }
     return true
   }
-  func suspend() {
+  private func hearReplies(in value: Conversation, botId id: String) {
+    let (next, reply) = ReplyWatch.next(replyWatch ?? ReplyWatch(), value, baseline: replyWatch == nil)
+    replyWatch = next
+    guard let reply else { return }
+    announcements += 1
+    replyAnnouncement = ReplyAnnouncement(id: announcements, botId: id, text: ReplyWatch.snippet(reply.text))
+  }
+  /// Ends polling and the change stream together, so neither outlives the other.
+  private func stopPolling() {
     pollTask?.cancel()
     pollTask = nil
+    stopStream()
+  }
+  private func stopStream() {
+    eventTask?.cancel()
+    eventTask = nil
+    eventBotId = nil
+    streamHeardAt = nil
+  }
+  /// Without a live stream the conversation is polled every pass, as before streams existed.
+  private var conversationDue: Bool {
+    guard let heard = streamHeardAt, let refreshed = conversationRefreshedAt,
+      eventBotId == selectedBotId, now() - heard < Self.streamSilence
+    else { return true }
+    return now() - refreshed >= Self.streamFallbackInterval
+  }
+  /// Follows the selected assistant's change stream, reconnecting with a growing delay.
+  private func watchConversation() {
+    guard eventBotId != selectedBotId || eventTask == nil else { return }
+    eventTask?.cancel()
+    streamHeardAt = nil
+    eventBotId = selectedBotId
+    guard let id = selectedBotId, let api else { eventTask = nil; return }
+    eventTask = Task { [weak self] in
+      var failures = 0
+      while !Task.isCancelled {
+        do {
+          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events")
+          guard let self, !Task.isCancelled else { return }
+          failures = 0
+          self.streamHeardAt = self.now()
+          // Notices sent before the subscription are lost, so connecting counts as one.
+          self.requestConversationRefresh()
+          for try await line in lines {
+            guard !Task.isCancelled else { return }
+            self.streamHeardAt = self.now()
+            if line.hasPrefix("data:") && line != "data: ping" { self.requestConversationRefresh() }
+          }
+        } catch {}
+        guard let self, !Task.isCancelled, !self.sessionExpired else { return }
+        self.streamHeardAt = nil
+        failures += 1
+        try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
+      }
+    }
+  }
+  /// One refresh at a time; a notice during one asks for one more after it.
+  private func requestConversationRefresh() {
+    if conversationRefreshing { conversationRefreshAgain = true; return }
+    conversationRefreshing = true
+    Task {
+      repeat {
+        conversationRefreshAgain = false
+        await refreshConversation()
+      } while conversationRefreshAgain
+      conversationRefreshing = false
+    }
+  }
+  func suspend() {
+    stopPolling()
     // The next poll loop starts with a fresh bootstrap.
     bootstrapRefreshedAt = nil
     persistDraft()
@@ -316,8 +441,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         earlierFileCache.removeAll()
         draft = Draft()
         draftReady = false
-        pending = nil
-        receipt = nil
+        pendings = [:]
+        receipts = [:]
         sending = false
         uploading = false
         clearUploads()
@@ -330,7 +455,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       Task { await self.drainUploads() }
       appUnavailable = false
       failures = 0
-      if pending == nil { pending = read(key("pending")) }
+      loadPendings(value.bots)
       if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
       } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
@@ -355,7 +480,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
     error = nil
     stayHome = true
-    if pending?.botId != id { receipt = nil }
+    if pendings[id] == nil { receipts[id] = nil }
     await select(nil)
     leftBotId = id
   }
@@ -379,18 +504,23 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let cached: Draft? = read(key("draft", id))
     draft = cached ?? Draft()
     if cached?.dirty == true { draftReady = true }
+    // Like the web, a chat opens at its latest page; the window grows from there.
+    historyStarts[id] = nil
+    replyWatch = nil
     let selectedGeneration = selectionGeneration
     do {
+      // The draft is a quick local read. It settles first so the conversation's copy merges onto it.
       let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(id))/draft")
       guard selectionGeneration == selectedGeneration else { return }
       loadDraft(remote, botId: id)
-      await refreshConversation()
     } catch {
       guard selectionGeneration == selectedGeneration else { return }
       if Self.missing(error) { await leave(id); return }
       draftReady = cached != nil
-      report(error)
+      // The web's wording. Polls keep reading the draft with the conversation.
+      if cached?.dirty != true { report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
     }
+    await refreshConversation()
   }
   private func conversationPath(_ id: String, query: String) -> String {
     "/bots/\(APIClient.component(id))/conversation?\(query)"
@@ -401,27 +531,26 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let requestedWindow = windowGeneration
     let query = historyStarts[id].map { "start=\(APIClient.component($0))" }
       ?? "turns=\(Self.historyPageTurns)"
+    conversationReads += 1
+    let read = conversationReads
     do {
-      var value: Conversation = try await api.get(conversationPath(id, query: query))
-      // A saved reading position older than the latest page is opened by loading the page that
-      // ends at it, so it can be restored instead of falling back to the latest message. A
-      // failure here throws, so nothing is applied or pinned and the next poll tries again.
-      if historyStarts[id] == nil, (value.earlier ?? 0) > 0,
-        let saved = savedAnchor(value, botId: id),
-        !value.messages.contains(where: { $0.id == saved })
-      {
-        value = try await api.get(
-          conversationPath(id, query: "start=\(APIClient.component(saved))&turns=\(Self.historyPageTurns)"))
-      }
-      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration else {
-        return
-      }
+      let value: Conversation = try await api.get(conversationPath(id, query: query))
+      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
+        read > appliedConversationRead
+      else { return }
+      appliedConversationRead = read
+      hearReplies(in: value, botId: id)
       historyStarts[id] = value.messages.first?.id
+      conversationRefreshedAt = now()
       apply(value, botId: id)
     } catch is CancellationError {} catch {
-      if selectedGeneration == selectionGeneration && Self.missing(error) {
+      // A failure that a newer read or a wider window has already overtaken says nothing current.
+      guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
+        read > appliedConversationRead
+      else { return }
+      if Self.missing(error) {
         await leave(id)
-      } else if selectedGeneration == selectionGeneration {
+      } else {
         appUnavailable = true
         failures += 1
         report(error)
@@ -437,29 +566,37 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let selectedGeneration = selectionGeneration
     loadingEarlier = true
     defer { loadingEarlier = false }
+    conversationReads += 1
+    let read = conversationReads
     do {
       let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration else { return }
       windowGeneration += 1
       historyStarts[id] = value.messages.first?.id
+      guard read > appliedConversationRead else {
+        // A newer read landed while this page loaded. Keep the wider window, but read it fresh
+        // instead of showing this older snapshot of the recent turns.
+        await refreshConversation()
+        return
+      }
+      appliedConversationRead = read
+      hearReplies(in: value, botId: id)
       apply(value, botId: id)
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration { report(error) }
     }
   }
-  private func savedAnchor(_ value: Conversation, botId id: String) -> String? {
-    let local: ReadPosition? = read(key("read", id))
-    return value.readPosition?.messageId ?? local?.messageId
+  /// Every file the open conversation knows, oldest first, with where it came from.
+  var conversationArtifacts: [Artifact] {
+    Artifacts.list(conversation, earlier: currentEarlierFiles?.messages ?? [])
   }
-  /// Every file reference the open conversation knows, oldest first.
-  var conversationFiles: [FileRef] {
-    var seen = Set<String>()
-    var files: [FileRef] = []
-    for file in loadedEarlierFiles + (conversation?.files ?? []) where seen.insert(file.id).inserted {
-      files.append(file)
-    }
-    return files
+  var conversationFiles: [FileRef] { conversationArtifacts.map(\.file) }
+  var earlierFilesFailed: Bool {
+    earlierFilesFailure != nil && earlierFilesFailure == earlierFilesKey
+  }
+  private var earlierFilesKey: String? {
+    selectedBotId.map { "\($0):\(conversation?.sessionId ?? "")" }
   }
   /// Whether the file list has anything to show or fetch.
   var hasConversationFiles: Bool {
@@ -476,7 +613,6 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { return nil }
     return page
   }
-  private var loadedEarlierFiles: [FileRef] { currentEarlierFiles?.files ?? [] }
   /// Fetches the files of the history before the loaded window. Called when the file list opens.
   func loadEarlierFiles() async {
     guard let id = selectedBotId, let api, let current = conversation,
@@ -484,16 +620,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { return }
     let selectedGeneration = selectionGeneration
     let before = current.messages.first?.id
+    let key = earlierFilesKey
+    earlierFilesFailure = nil
     loadingEarlierFiles = true
     defer { loadingEarlierFiles = false }
     do {
       let suffix = before.map { "?before=\(APIClient.component($0))" } ?? ""
       let page: EarlierFiles = try await api.get("/bots/\(APIClient.component(id))/files\(suffix)")
       guard selectedGeneration == selectionGeneration else { return }
-      earlierFileCache[id] = EarlierFilePage(
-        sessionId: current.sessionId, before: before, files: page.messages.flatMap { $0.files ?? [] })
+      earlierFileCache[id] = EarlierFilePage(sessionId: current.sessionId, before: before, messages: page.messages)
     } catch is CancellationError {} catch {
-      if selectedGeneration == selectionGeneration { report(error) }
+      if selectedGeneration == selectionGeneration { earlierFilesFailure = key }
     }
   }
   private func apply(_ value: Conversation, botId id: String) {
@@ -502,8 +639,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     {
       interruptionReviewed = false
     }
-    conversation = value
+    // An unchanged poll leaves the transcript alone instead of rendering it again.
+    if conversation != value { conversation = value }
     conversationCache[id] = value
+    // The conversation carries the saved draft, so a draft that failed to load has now loaded.
+    clearDraftLoadFailure()
     // Polling also brings in a draft changed on another device, or a send made there, and
     // settles a copy kept unsaved while saves were in flight.
     if !draftReady || (value.draft?.revision ?? 0) != (draft.baseRevision ?? 0) || draft.dirty == true && settled(id) {
@@ -536,7 +676,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     scheduledDraftSave = nil
     if !force, !settled(botId) { return false }
     let snapshot = draft
-    guard pending?.botId != botId || pending?.text != snapshot.text || pending?.attachments != snapshot.attachments
+    let sent = pendings[botId]
+    guard sent == nil || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
     else { return false }
     let currentGeneration = generation
     Task {
@@ -666,7 +807,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func send(reviewedUncertain: Bool = false) async {
     guard let api, let id = selectedBotId, !sending else { return }
     let submission: PendingSubmission
-    if reviewedUncertain, var old = pending, old.botId == id {
+    if reviewedUncertain, var old = pendings[id] {
       old.reviewedUncertain = true
       submission = old
     } else {
@@ -676,8 +817,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         attachments: draft.attachments, reviewedInterruption: interruptionReviewed,
         draftBaseRevision: draft.baseRevision ?? 0)
     }
-    pending = submission
-    save(submission, key("pending"))
+    pendings[id] = submission
+    save(submission, key("pending", id))
     // Until the server shows the send, a save of the sent text from this copy is not new work.
     markSent(submission, true)
     sending = true
@@ -688,21 +829,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let value: Receipt = try await api.write(
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
-      await handleReceipt(value)
+      await handleReceipt(value, botId: id)
       if value.status == "accepted" { Task { await LiveActivityController.shared.sent(to: id) } }
     } catch {
       guard currentGeneration == generation else { return }
       report(error)
-      if let failure = error as? APIError, (400..<500).contains(failure.status),
-        failure.status != 408
-      {
-        pending = nil
-        save(Optional<PendingSubmission>.none, key("pending"))
+      // As on the web, any answer below 500 is the server refusing the message. That includes 408:
+      // the server stopped waiting for the request before handling it.
+      if let failure = error as? APIError, (400..<500).contains(failure.status) {
+        clearPending(id)
         markSent(submission, false)
-        receipt = Receipt(
+        receipts[id] = Receipt(
           requestId: submission.requestId, status: "rejected", message: failure.message)
       } else {
-        receipt = Receipt(
+        receipts[id] = Receipt(
           requestId: submission.requestId, status: "uncertain",
           message:
             "Checking whether Hermes accepted this message. The original request ID is preserved.")
@@ -710,19 +850,42 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     await refreshConversation()
   }
+  /// Asks the server about every assistant's unconfirmed send, not only the open one, so a
+  /// message that arrived clears that assistant's draft before it is opened again.
   func reconcilePending() async {
-    guard let pending, let api, !sending else { return }
+    guard let api, !sending else { return }
     let currentGeneration = generation
-    do {
-      let value: Receipt = try await api.get(
-        "/submissions/\(APIClient.component(pending.requestId))")
-      guard currentGeneration == generation else { return }
-      await handleReceipt(value)
-    } catch { if currentGeneration == generation { report(error) } }
+    for pending in pendings.values.sorted(by: { $0.botId < $1.botId }) {
+      do {
+        let value: Receipt = try await api.get(
+          "/submissions/\(APIClient.component(pending.requestId))")
+        guard currentGeneration == generation, !sending else { return }
+        await handleReceipt(value, botId: pending.botId)
+      } catch {
+        if currentGeneration == generation { report(error) }
+        return
+      }
+    }
   }
-  private func handleReceipt(_ value: Receipt) async {
-    receipt = value
-    guard let original = pending, value.requestId == original.requestId else { return }
+  private func clearPending(_ botId: String) {
+    pendings[botId] = nil
+    save(Optional<PendingSubmission>.none, key("pending", botId))
+  }
+  /// Reads each assistant's unconfirmed send. One saved by an older version, which held a single
+  /// send for every assistant, moves to its own assistant.
+  private func loadPendings(_ bots: [Bot]) {
+    if let legacy: PendingSubmission = read(key("pending")) {
+      let current: PendingSubmission? = read(key("pending", legacy.botId))
+      if current == nil { save(legacy, key("pending", legacy.botId)) }
+      save(Optional<PendingSubmission>.none, key("pending"))
+    }
+    for bot in bots where pendings[bot.id] == nil {
+      if let stored: PendingSubmission = read(key("pending", bot.id)) { pendings[bot.id] = stored }
+    }
+  }
+  private func handleReceipt(_ value: Receipt, botId: String) async {
+    receipts[botId] = value
+    guard let original = pendings[botId], value.requestId == original.requestId else { return }
     guard value.status != "uncertain" else { return }
     if value.status == "accepted" {
       // The server clears its copy for this send, which a later save here must not mistake
@@ -740,8 +903,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
     if value.status == "rejected" || value.status == "interrupted" { markSent(original, false) }
-    pending = nil
-    save(Optional<PendingSubmission>.none, key("pending"))
+    clearPending(botId)
   }
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
@@ -761,8 +923,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Gives up on a send the server never confirmed, for example one that was lost before it
   /// arrived. The message may still show up, so its text and attachments go back into the
   /// draft of the assistant it was written for, where the person decides whether to send again.
-  func discardUnconfirmedSubmission() {
-    guard let old = pending, !sending, let localKey = key("draft", old.botId) else { return }
+  /// Without an assistant, it is the open assistant's send.
+  func discardUnconfirmedSubmission(botId: String? = nil) {
+    guard let id = botId ?? selectedBotId, let old = pendings[id], !sending,
+      let localKey = key("draft", old.botId)
+    else { return }
     let open = selectedBotId == old.botId
     // While the open assistant's draft is still loading, the in-memory draft is not its draft.
     var target = Self.draft(
@@ -773,9 +938,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
     save(true, key("recovered", old.botId))
-    pending = nil
-    save(Optional<PendingSubmission>.none, key("pending"))
-    receipt = nil
+    clearPending(id)
+    receipts[id] = nil
     if open {
       if draftReady {
         draft.sentHash = nil
@@ -786,6 +950,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       Task { try? await self.saveDraft(target, botId: old.botId) }
     }
   }
+  static let draftLoadFailure = "Your saved draft could not be loaded."
+  /// The web drops its "could not be loaded" notice once a later read of the draft succeeds.
+  private func clearDraftLoadFailure() {
+    if error?.hasPrefix(Self.draftLoadFailure) == true { error = nil }
+  }
+  /// Adds a voice transcript to the open assistant's draft on its own line, as the web does.
+  @discardableResult func appendTranscript(_ text: String, botId: String) -> Bool {
+    guard selectedBotId == botId, draftReady else { return false }
+    var next = draft
+    next.text =
+      next.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : next.text + "\n" + text
+    updateDraft(next)
+    return true
+  }
   /// Shows the draft once a read returns, merged with this device's copy. Unsaved edits that
   /// survive the merge, such as a draft recovered by Discard, then save on their base revision,
   /// so the server refuses them if it moved on.
@@ -794,6 +972,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let changed = merged.draft != draft
     draft = merged.draft
     draftReady = true
+    clearDraftLoadFailure()
     if changed { persistDraft() }
     if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
     ensureDraftSaved(botId)
@@ -877,84 +1056,158 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func markRead(_ messageId: String?) {
     guard let id = selectedBotId, let api else { return }
     let position = ReadPosition(messageId: messageId)
-    let currentGeneration = generation
-    save(position, key("read", id))
+    // A reading position is a hint, so a failed save stays quiet, as on the web.
     Task {
-      do {
-        let _: ReadPosition = try await api.write(
-          "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
-      } catch { if currentGeneration == self.generation { self.report(error) } }
+      let _: ReadPosition? = try? await api.write(
+        "/bots/\(APIClient.component(id))/read-position", position, method: "PUT")
     }
   }
-  func readMessageId() -> String? {
-    let local: ReadPosition? = read(key("read", selectedBotId))
-    return conversation?.readPosition?.messageId ?? local?.messageId
+  /// Why files cannot be attached to this assistant's draft right now, in the web's words.
+  func attachUnavailable(_ botId: String) -> String? {
+    if !supports("uploads") {
+      let reason = bootstrap?.capabilities["uploads"]?.reason ?? ""
+      return reason.isEmpty ? "Hermes can't receive files right now." : reason
+    }
+    if !draftReady || selectedBotId != botId { return "Your draft is still loading." }
+    if attachmentSlots(botId) <= 0 { return "A message can carry up to \(UploadRules.maxAttachments) attachments." }
+    return nil
   }
-  func attach(urls: [URL]) async {
-    guard let id = selectedBotId, draftReady else { return }
-    var slots = max(0, 10 - draft.attachments.count - attachmentUploads.filter({ $0.botId == id }).count)
-    var overflow = 0
-    var staged: [UUID] = []
+  private func attachmentSlots(_ botId: String) -> Int {
+    UploadRules.maxAttachments - draft.attachments.count - attachmentUploads.filter { $0.botId == botId }.count
+  }
+  /// Adds files to the open assistant's draft as the web composer does: every file that can't be
+  /// attached is named in one notice, with its size and the limit, and the rest upload in order.
+  func attach(urls: [URL], problems earlier: [String] = []) async {
+    guard !urls.isEmpty || !earlier.isEmpty, let id = selectedBotId else { return }
+    if let reason = attachUnavailable(id) { attachNotice = [reason]; return }
+    let slots = attachmentSlots(id)
+    var problems = earlier
+    var accepted = 0
+    var staged = false
     for url in urls {
       let accessed = url.startAccessingSecurityScopedResource()
       defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+      let name = url.lastPathComponent
       do {
         let resource = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-        guard (resource.fileSize ?? 0) <= 20 * 1024 * 1024 else { throw APIError(message: "Files must be no larger than 20 MB.", status: 400) }
-        let mime = ["md", "markdown", "csv"].contains(url.pathExtension.lowercased()) ? "text/plain" :
-          resource.contentType?.preferredMIMEType ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        guard ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"].contains(mime) else {
-          throw APIError(message: "Choose a PNG, JPEG, WebP, GIF, PDF, or text file.", status: 400)
+        let size = resource.fileSize ?? 0
+        let mime: String
+        switch UploadRules.prepare(name: name, mime: UploadRules.mime(of: url, contentType: resource.contentType), size: size) {
+        case .failure(let problem): problems.append(problem.message); continue
+        case .success(let value): mime = value
         }
-        guard slots > 0 else { overflow += 1; continue }
+        accepted += 1
+        guard accepted <= slots else { continue }
+        // The picked file may be gone once the picker closes, so upload a private copy.
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("upload-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let copy = directory.appendingPathComponent(url.lastPathComponent)
+        let copy = directory.appendingPathComponent(name)
         do { try FileManager.default.copyItem(at: url, to: copy) }
         catch { try? FileManager.default.removeItem(at: directory); throw error }
-        let upload = AttachmentUpload(botId: id, url: copy, name: url.lastPathComponent, mime: mime)
-        attachmentUploads.append(upload); staged.append(upload.id); slots -= 1
-      } catch { report(error) }
+        attachmentUploads.append(AttachmentUpload(botId: id, url: copy, name: name, mime: mime, size: size))
+        staged = true
+      } catch {
+        problems.append("\(name) can't be attached. \(error.localizedDescription)")
+      }
     }
-    if overflow > 0 { error = "A message can carry up to 10 attachments, so \(overflow) \(overflow == 1 ? "wasn't" : "weren't") added." }
-    if !staged.isEmpty { await drainUploads() }
+    if accepted > slots {
+      let left = accepted - slots
+      problems.append("A message can carry up to \(UploadRules.maxAttachments) attachments, so \(left) of these \(left == 1 ? "wasn't" : "weren't") added.")
+    }
+    attachNotice = problems
+    if staged { await drainUploads() }
   }
+  /// Attaches images that exist only in memory: a paste, a new photo or a library pick. Each gets
+  /// a readable name, such as "Pasted image 14.03.22.png", and formats the server cannot take,
+  /// such as HEIC, are converted.
+  func attach(images: [Data], named prefix: String) async {
+    guard !images.isEmpty else { return }
+    let now = Date()
+    var urls: [URL] = []
+    var problems: [String] = []
+    for (index, data) in images.enumerated() {
+      do {
+        let image = try Self.uploadableImage(data)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("image-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(UploadRules.imageName(prefix, at: now, index: index, ext: image.ext))
+        try image.data.write(to: url, options: .atomic)
+        urls.append(url)
+      } catch {
+        let name = UploadRules.imageName(prefix, at: now, index: index, ext: "png")
+        problems.append(data.count > UploadRules.maxBytes
+          ? "\(name) is \(UploadRules.formatBytes(data.count)). Each attachment can be up to \(UploadRules.formatBytes(UploadRules.maxBytes))."
+          : "\(name) can't be attached. Use \(UploadRules.kinds).")
+      }
+    }
+    await attach(urls: urls, problems: problems)
+    for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+  }
+  /// GIFs keep their animation; other images go through the share extension's conversion.
+  private static func uploadableImage(_ data: Data) throws -> (data: Data, ext: String) {
+    if let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let type = CGImageSourceGetType(source).flatMap({ UTType($0 as String) }), type == .gif,
+      data.count <= UploadRules.maxBytes
+    { return (data, "gif") }
+    return try ShareImage.prepare(data)
+  }
+  /// Cancels a file still uploading, or removes one that failed.
   func removeUpload(_ id: UUID) {
+    uploadTasks.removeValue(forKey: id)?.cancel()
+    forgetUpload(id)
+  }
+  /// Drops a file's entry and private copy without touching its upload, which may be the caller.
+  private func forgetUpload(_ id: UUID) {
     guard let upload = attachmentUploads.first(where: { $0.id == id }) else { return }
     try? FileManager.default.removeItem(at: upload.url.deletingLastPathComponent())
     attachmentUploads.removeAll { $0.id == id }
   }
   private func clearUploads() { for id in attachmentUploads.map(\.id) { removeUpload(id) } }
   func retryUpload(_ uploadId: UUID) async {
-    guard let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }), !attachmentUploads[index].uploading else { return }
+    guard let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }),
+      attachmentUploads[index].status == .failed
+    else { return }
+    attachmentUploads[index].status = .queued
+    attachmentUploads[index].progress = 0
     attachmentUploads[index].error = nil
     await drainUploads()
   }
-  /// Only queued files start automatically. A failed attempt always waits for explicit Retry.
+  /// Uploads queued files one at a time, in the order they were added. A failed attempt always
+  /// waits for explicit Retry; a file queued while disconnected starts once the connection returns.
   func drainUploads() async {
     guard !uploading, connected, api != nil else { return }
     let currentGeneration = generation
     uploading = true
     defer { if currentGeneration == generation { uploading = false } }
     while currentGeneration == generation, connected,
-      let next = attachmentUploads.first(where: { !$0.uploading && $0.error == nil }) {
-      await uploadAttachment(next.id)
+      let next = attachmentUploads.first(where: { $0.status == .queued }) {
+      let task = Task { await self.uploadAttachment(next.id) }
+      uploadTasks[next.id] = task
+      await task.value
+      uploadTasks[next.id] = nil
     }
   }
   private func uploadAttachment(_ uploadId: UUID) async {
     guard let api, let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) else { return }
     let upload = attachmentUploads[index]
-    attachmentUploads[index].uploading = true; attachmentUploads[index].error = nil
+    attachmentUploads[index].status = .uploading
+    attachmentUploads[index].progress = 0
+    attachmentUploads[index].error = nil
     let currentGeneration = generation
     do {
       let data = try Data(contentsOf: upload.url)
-      guard data.count <= 20 * 1024 * 1024 else { throw APIError(message: "Files must be no larger than 20 MB.", status: 400) }
-      let file = try await api.upload(botId: upload.botId, name: upload.name, mime: upload.mime, data: data)
+      var file = try await api.upload(botId: upload.botId, name: upload.name, mime: upload.mime, data: data) { [weak self] sent in
+        guard let self, currentGeneration == self.generation,
+          let index = self.attachmentUploads.firstIndex(where: { $0.id == uploadId })
+        else { return }
+        self.attachmentUploads[index].record(sent: sent)
+      }
       guard currentGeneration == generation, attachmentUploads.contains(where: { $0.id == uploadId }) else { return }
+      if file.size == nil { file.size = upload.size }
       // No network replay: Retry uploads only this file and never sends the message.
       if selectedBotId == upload.botId && draftReady {
         var next = draft; next.attachments.append(file); updateDraft(next)
-        removeUpload(uploadId)
+        forgetUpload(uploadId)
       } else {
         let localKey = key("draft", upload.botId)
         var target: Draft = read(localKey) ?? Draft()
@@ -962,18 +1215,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         save(target, localKey)
         // A draft read already in flight must merge this cached attachment, not replace it.
         if selectedBotId == upload.botId { draft = target }
-        removeUpload(uploadId)
+        forgetUpload(uploadId)
         try await saveDraft(target, botId: upload.botId)
       }
+    } catch is CancellationError {
     } catch {
       guard currentGeneration == generation else { return }
       if let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) {
-        attachmentUploads[index].uploading = false; attachmentUploads[index].error = error.localizedDescription
+        attachmentUploads[index].status = .failed
+        attachmentUploads[index].error = error.localizedDescription
       } else { report(error) }
     }
   }
   func attachAppleSnapshot(_ data: Data, botId: String) async throws {
-    guard let api, connected, supports("uploads"), !uploading, !sending, pending == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
+    guard let api, connected, supports("uploads"), !uploading, !sending, pendings[botId] == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
       throw APIError(message: "Reconnect to this assistant before sharing a snapshot.", status: 409)
     }
     let currentGeneration = generation
@@ -1050,7 +1305,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           "Signed out on this device only. The server could not be reached, so this device's session stays valid there until it expires, and notifications may still be delivered. Sign in on that server again to revoke it."
       }
     }
-    pollTask?.cancel()
+    stopPolling()
     draftTask?.cancel()
     scheduledDraftSave = nil
     fileTask?.cancel()
@@ -1067,11 +1322,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     notice = nil
     draft = Draft()
     draftReady = false
-    pending = nil
-    receipt = nil
+    pendings = [:]
+    receipts = [:]
     sending = false
     uploading = false
     clearUploads()
+    attachNotice = []
     appUnavailable = false
     sessionExpired = false
     resetUpgrade()
@@ -1083,7 +1339,16 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     upgradeBusy = false
     upgradeError = nil
     upgradeInstallUncertain = false
+    upgradeSubmitting = false
+    computerStatus = nil
     upgradeRequest = nil
+  }
+  /// A failed read keeps the last known status, like the web panel, which only notes it can't reach the computer.
+  func refreshComputer() async {
+    guard let api, api.token != nil, !sessionExpired else { return }
+    let currentGeneration = generation
+    guard let value: ComputerStatus = try? await api.get("/computer"), currentGeneration == generation else { return }
+    computerStatus = value
   }
   func refreshUpgrade() async {
     await upgradeOperation(nil)
@@ -1110,7 +1375,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     guard let api, api.token != nil, !sessionExpired, !upgradeBusy else { return }
     let currentGeneration = generation
     upgradeBusy = true
-    defer { if currentGeneration == generation { upgradeBusy = false } }
+    upgradeSubmitting = action != nil
+    defer { if currentGeneration == generation { upgradeBusy = false; upgradeSubmitting = false } }
     do {
       let value: UpgradeStatus
       if action == "install", let upgradeRequest {
@@ -1156,7 +1422,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if let apiError = error as? APIError, apiError.isSessionExpired {
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
-      pollTask?.cancel()
+      stopPolling()
       sessionExpired = true
     }
   }
@@ -1164,4 +1430,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
 struct PreviewFile: Identifiable {
   let id = UUID()
   var url: URL
+}
+/// A reply for VoiceOver to read, worded as the web's status region.
+struct ReplyAnnouncement: Equatable {
+  var id: Int
+  var botId: String
+  var text: String
 }

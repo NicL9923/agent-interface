@@ -36,6 +36,10 @@ struct IntegrationConnection: Codable, Identifiable {
   var setup: [IntegrationField]
   var capabilities: [String]
   var botIds: [String]
+  /// Where the connection is used, worded like the web card.
+  func assistantsLabel(name: (String) -> String?) -> String {
+    botIds.isEmpty ? "This assistant" : botIds.map { name($0) ?? $0 }.joined(separator: ", ")
+  }
   var statusLabel: String {
     switch status {
     case "connected": "Connected"
@@ -52,6 +56,7 @@ struct IntegrationCatalog: Codable {
   var profile: String
   var canManage: Bool
   var connections: [IntegrationConnection]
+  var connectedSummary: String { "\(connections.filter { $0.status == "connected" }.count) connected" }
 }
 struct IntegrationFlow: Codable {
   var kind: String
@@ -62,6 +67,18 @@ struct IntegrationFlow: Codable {
   var message: String
   var expiresAt: String?
   var callbackInput: Bool?
+  var heading: String {
+    status == "approved" || kind == "connected" ? "Connection ready" : status == "pending" ? "Finish connecting your account" : "Sign-in status"
+  }
+}
+enum IntegrationInput {
+  static let intro = "Connect the accounts and services your assistants use. A saved connection is checked separately from its permissions."
+  /// Servers are reached over the network, so only a full web address can work.
+  static func validServerURL(_ text: String) -> Bool {
+    guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+      ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false else { return false }
+    return true
+  }
 }
 struct IntegrationConnectInput: Encodable {
   var profile: String
@@ -97,6 +114,7 @@ struct IntegrationsView: View {
   @State private var catalog: IntegrationCatalog?
   @State private var error: String?
   @State private var busy = false
+  @State private var loading = false
   @State private var editing: IntegrationConnection?
   @State private var fields: [String: String] = [:]
   @State private var flow: IntegrationFlow?
@@ -115,15 +133,19 @@ struct IntegrationsView: View {
     Form {
       if botId == nil {
         Section {
-          Picker("Connections for", selection: $selectedProfile) {
-            ForEach(store.bootstrap?.bots ?? []) { Text($0.name).tag($0.id) }
+          Text(IntegrationInput.intro).foregroundStyle(.secondary)
+          if (store.bootstrap?.bots.count ?? 0) > 1 {
+            Picker("Connections for", selection: $selectedProfile) {
+              ForEach(store.bootstrap?.bots ?? []) { Text($0.name).tag($0.id) }
+            }
           }
-        } footer: { Text("Connections belong to the selected assistant's Hermes profile. Their permissions are checked separately.") }
+        }
       }
+      if !profile.isEmpty { statusSection }
       if let error {
         Section {
           Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-          Button("Refresh status") { Task { await refresh() } }
+          if catalog == nil && !loading { Button("Try again") { Task { await refresh() } } }
         }
       }
       if let flow { flowSection(flow) }
@@ -172,7 +194,12 @@ struct IntegrationsView: View {
           Form {
             Section {
               ForEach(connection.setup) { field in
-                if let options = field.options { Picker(field.label, selection: fieldBinding(field.key)) { ForEach(options, id: \.value) { Text($0.label).tag($0.value) } } }
+                if let options = field.options {
+                  Picker(field.label, selection: fieldBinding(field.key)) {
+                    if (fields[field.key] ?? "").isEmpty { Text("Choose a sign-in method").tag("") }
+                    ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
+                  }
+                }
                 else if field.kind == "secret" { SecureField(field.label, text: fieldBinding(field.key)) }
                 else { TextField(field.label, text: fieldBinding(field.key)).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(field.kind == "url" ? .URL : .default) }
               }
@@ -190,6 +217,16 @@ struct IntegrationsView: View {
         Button("Disconnect", role: .destructive) { if let connection = disconnecting { Task { await operate(connection, "disconnect") } } }
       }
   }
+  private var statusSection: some View {
+    Section {
+      HStack {
+        Text(catalog?.connectedSummary ?? "Checking connections…").foregroundStyle(.secondary)
+        Spacer()
+        Button(loading ? "Refreshing…" : "Refresh status") { Task { await refresh() } }
+          .disabled(loading || busy).accessibilityIdentifier("refreshIntegrations")
+      }
+    }
+  }
   @ViewBuilder private func connectionRow(_ connection: IntegrationConnection, canManage: Bool) -> some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .top) {
@@ -200,7 +237,7 @@ struct IntegrationsView: View {
       if let account = connection.account { Text(account).font(.subheadline).textSelection(.enabled) }
       Text(connection.detail).font(.footnote).foregroundStyle(.secondary)
       Text("Managed by \(connection.owner)").font(.caption).foregroundStyle(.secondary)
-      if !connection.botIds.isEmpty { Text("Assistants: \(connection.botIds.map { id in store.bootstrap?.bots.first { $0.id == id }?.name ?? id }.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary) }
+      Text("Assistants: \(connection.assistantsLabel { id in store.bootstrap?.bots.first { $0.id == id }?.name })").font(.caption).foregroundStyle(.secondary)
       if let date = connection.checkedAt.flatMap(ServerDate.parse) { Text("Last checked \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
       else { Text("Not checked yet").font(.caption).foregroundStyle(.secondary) }
       if !connection.permissions.isEmpty {
@@ -223,7 +260,7 @@ struct IntegrationsView: View {
     }.padding(.vertical, 8).buttonStyle(.borderless)
   }
   @ViewBuilder private func flowSection(_ value: IntegrationFlow) -> some View {
-    Section(value.status == "pending" ? "Finish connecting your account" : "Sign-in status") {
+    Section(value.heading) {
       Text(value.message)
       if let code = value.userCode { LabeledContent("Sign-in code", value: code).textSelection(.enabled) }
       if value.status == "pending" {
@@ -242,12 +279,15 @@ struct IntegrationsView: View {
         TextField("Connection name", text: $mcpName).textInputAutocapitalization(.never).autocorrectionDisabled()
         Text("Use letters, numbers, underscores, or hyphens, up to 80 characters.").font(.caption).foregroundStyle(.secondary)
         TextField("https://server-address", text: $mcpURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+        if !mcpURL.isEmpty && !IntegrationInput.validServerURL(mcpURL) {
+          Text("Enter the full server address, starting with https://.").font(.caption).foregroundStyle(.red).accessibilityIdentifier("mcpURLError")
+        }
         Picker("Sign-in method", selection: $mcpAuth) {
           Text("No sign-in").tag("none"); Text("Sign in with browser").tag("oauth"); Text("Access token").tag("bearer")
         }.onChange(of: mcpAuth) { _, _ in mcpToken = "" }
         if mcpAuth == "bearer" { SecureField("Access token", text: $mcpToken) }
         if let error { Text(error).foregroundStyle(.red) }
-        Button("Add connection") { Task { await addCustom() } }.disabled(busy || mcpName.range(of: "^[A-Za-z0-9_-]{1,80}$", options: .regularExpression) == nil || mcpURL.isEmpty || mcpAuth == "bearer" && mcpToken.isEmpty)
+        Button("Add connection") { Task { await addCustom() } }.disabled(busy || mcpName.range(of: "^[A-Za-z0-9_-]{1,80}$", options: .regularExpression) == nil || !IntegrationInput.validServerURL(mcpURL) || mcpAuth == "bearer" && mcpToken.isEmpty)
       }.navigationTitle("Custom connection").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { custom = false }.disabled(busy) } }
     }
   }
@@ -262,7 +302,7 @@ struct IntegrationsView: View {
   private func refresh() async {
     guard let api = store.api, !profile.isEmpty, !busy else { return }
     let currentProfile = profile
-    busy = true; defer { busy = false }
+    busy = true; loading = true; defer { busy = false; loading = false }
     do { let value: IntegrationCatalog = try await api.get("/integrations?profile=\(APIClient.component(currentProfile))"); guard profile == currentProfile, store.api === api else { return }; catalog = value; error = nil }
     catch { self.error = error.localizedDescription; if (error as? APIError)?.status == 401 { store.report(error) } }
   }
@@ -310,7 +350,7 @@ struct IntegrationsView: View {
     guard let api = store.api, !busy else { return }
     busy = true; error = nil
     do {
-      let response: CustomMcpResponse = try await api.write("/integrations/mcp", CustomMcpRequest(profile: profile, name: mcpName, url: mcpURL, auth: mcpAuth, token: mcpAuth == "bearer" ? mcpToken : nil))
+      let response: CustomMcpResponse = try await api.write("/integrations/mcp", CustomMcpRequest(profile: profile, name: mcpName, url: mcpURL.trimmingCharacters(in: .whitespacesAndNewlines), auth: mcpAuth, token: mcpAuth == "bearer" ? mcpToken : nil))
       if let value = response.flow { flow = value; if let id = value.flowId, value.status == "pending" { UserDefaults.standard.set(id, forKey: flowKey) } }
       mcpToken = ""; custom = false; mcpName = ""; mcpURL = ""
     } catch { self.error = actionError(error) }

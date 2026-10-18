@@ -20,13 +20,13 @@ final class TabletPresentationTests: XCTestCase {
       throw XCTSkip("Tablet visual acceptance requires an iPad simulator.")
     }
     let app = fixture()
-    XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
     XCUIDevice.shared.orientation = .landscapeLeft
     if !app.buttons["bot.kitchen"].exists, app.buttons["Show Sidebar"].exists {
       app.buttons["Show Sidebar"].tap()
     }
     XCTAssertTrue(app.buttons["bot.kitchen"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.textFields["messageComposer"].exists)
+    XCTAssertTrue(app.textViews["messageComposer"].exists)
     screenshot(app, "Fixture iPad landscape split view")
     app.buttons["bot.kitchen"].tap()
     XCTAssertTrue(app.buttons["Configure Kitchen companion"].waitForExistence(timeout: 5))

@@ -151,7 +151,7 @@ private typealias Check = @MainActor (Data) throws -> Void
     },
     "today-seen": check([String: Bool].self) { XCTAssertEqual($0["ok"], true) },
     "upgrade": check(UpgradeStatus.self) {
-      XCTAssertEqual($0.title, "Update ready"); XCTAssertEqual($0.candidate?.displayVersion, "0.9.5")
+      XCTAssertEqual($0.title, "Update tested and ready"); XCTAssertEqual($0.candidate?.displayVersion, "0.9.5")
       XCTAssertEqual($0.checks.first?.status, "passed"); XCTAssertEqual($0.busyBots, ["Household"])
     },
     "vault": check(ProfileVault.self) { XCTAssertEqual($0.items.first?.hasOtp, true); XCTAssertEqual($0.sources.map(\.name), ["local", "bitwarden"]) },

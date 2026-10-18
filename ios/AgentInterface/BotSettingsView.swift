@@ -37,19 +37,20 @@ struct BotSettingsView: View {
   @State private var catalogReady: Set<String> = []
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
+  @State private var progress = SaveProgress()
   let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Logins"]
   // Split out of body so the type checker stays fast on slower CI machines.
   private var tabBar: some View {
     HStack(spacing: 8) {
       ForEach(tabs.prefix(2), id: \.self) { title in
-        Button(title) { tab = title }.buttonStyle(.bordered).tint(
+        Button(title) { selectTab(title) }.buttonStyle(.bordered).tint(
           tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
       }
       Spacer(minLength: 0)
       Menu {
         ForEach(tabs.dropFirst(2), id: \.self) { title in
           Button {
-            tab = title
+            selectTab(title)
           } label: {
             if tab == title { Label(title, systemImage: "checkmark") }
             else { Text(title) }
@@ -88,6 +89,12 @@ struct BotSettingsView: View {
   }
   var body: some View {
     NavigationStack { routinePresentations(editor) }
+  }
+  /// A message belongs to the screen that produced it, so it does not follow you to another tab.
+  private func selectTab(_ title: String) {
+    tab = title
+    error = nil
+    notice = nil
   }
   private var editor: some View {
     VStack(spacing: 0) {
@@ -172,13 +179,13 @@ struct BotSettingsView: View {
         }
       }
       .sheet(item: $editingRoutine) { routine in
-        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).environmentObject(
+        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).appStore(
           store)
       }
       .sheet(isPresented: $addingRoutine) {
         if let bot {
           RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
-            .environmentObject(store)
+            .appStore(store)
         }
       }
   }
@@ -186,16 +193,7 @@ struct BotSettingsView: View {
     Section {
       unavailable("botConfiguration")
     }
-    Section("Name") { TextField("Name", text: $form.name) }
-    Section("Description") { TextField("Description", text: $form.description, axis: .vertical).lineLimit(1...4) }
-    Section("Instructions") {
-      TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel("Assistant instructions")
-        .overlay(alignment: .topLeading) {
-          if form.instructions.isEmpty {
-            Text("How should this assistant help?").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
-          }
-        }
-    }
+    nameAndInstructions
     Section {
       Button(interactiveEnabled ? "Interactive replies enabled" : "Enable interactive replies") {
         form.instructions = (form.instructions.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + NativeInteractiveReplyInstructions)
@@ -228,14 +226,37 @@ struct BotSettingsView: View {
       Text("Only existing Hermes connections can be configured here.")
     }
     Section {
-      Button(bot == nil ? "Create assistant" : "Save changes") { saveBot() }.disabled(
+      Button(progress.label("details", idle: bot == nil ? "Create assistant" : "Save changes")) { saveBot() }.disabled(
         !store.supports("botConfiguration") || !store.connected
           || form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           || form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || form.instructions.count > 50000 || form.name.count > 100)
+          || form.instructions.count > SettingsLimits.instructions)
       if bot != nil {
         Button("Delete assistant", role: .destructive) { deleteConfirm = true }.disabled(
           !store.supports("botConfiguration") || !store.connected)
+      }
+    }
+  }
+  /// Split out of `details` so the type checker stays fast on slower CI machines.
+  @ViewBuilder private var nameAndInstructions: some View {
+    Section("Name") {
+      TextField("Name", text: $form.name)
+        .onChange(of: form.name) { _, value in
+          if value.count > SettingsLimits.name { form.name = String(value.prefix(SettingsLimits.name)) }
+        }
+    }
+    Section("Description") { TextField("Description", text: $form.description, axis: .vertical).lineLimit(1...4) }
+    Section {
+      TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel("Assistant instructions")
+        .overlay(alignment: .topLeading) {
+          if form.instructions.isEmpty {
+            Text("How should this assistant help?").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
+          }
+        }
+    } header: { Text("Instructions") } footer: {
+      if let limit = SettingsLimits.message("Instructions are", count: form.instructions.count, limit: SettingsLimits.instructions) {
+        Text(limit).foregroundStyle(form.instructions.count > SettingsLimits.instructions ? Color.red : Color.secondary)
+          .accessibilityIdentifier("instructionsLimit")
       }
     }
   }
@@ -260,10 +281,14 @@ struct BotSettingsView: View {
             bot == nil || !store.supports("uploads") || !store.connected)
           unavailable("uploads")
           TextField("Describe a portrait", text: $portraitPrompt, axis: .vertical).lineLimit(2...5)
+          if let limit = SettingsLimits.message("The description is", count: portraitPrompt.count, limit: SettingsLimits.portraitPrompt) {
+            Text(limit).font(.caption).foregroundStyle(portraitPrompt.count > SettingsLimits.portraitPrompt ? Color.red : Color.secondary)
+              .accessibilityIdentifier("portraitPromptLimit")
+          }
           Button("Generate portrait") { generatePortrait() }.disabled(
             bot == nil || !store.supports("portraitGeneration") || !store.connected
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              || portraitPrompt.count > 2000)
+              || portraitPrompt.count > SettingsLimits.portraitPrompt)
           unavailable("portraitGeneration")
           Text("Use a PNG, JPEG, or WebP image up to 2 MB.").font(.caption).foregroundStyle(
             .secondary)
@@ -278,13 +303,8 @@ struct BotSettingsView: View {
               select: { avatar.shape = $0 })
           }
         } else {
-          Section("Character") {
-            AvatarTiles(
-              group: "family", options: AvatarConfig.families.map { ($0.id, $0.label) },
-              selected: avatar.family ?? "sprout",
-              preview: { var a = avatar.selectingFamily($0); a.accessory = "none"; return a },
-              select: { avatar = avatar.selectingFamily($0) })
-          }
+          Section("Character") { characterTiles(AvatarConfig.everydayFamilies) }
+          Section("Seasonal") { characterTiles(AvatarConfig.seasonalFamilies) }
         }
         Section("Color") { colorSwatches }
         Section("Eyes") {
@@ -316,11 +336,18 @@ struct BotSettingsView: View {
         }
       }
       Section {
-        Button("Save avatar") { saveAvatar() }.disabled(
+        Button(progress.label("avatar", idle: "Save avatar")) { saveAvatar() }.disabled(
           bot == nil || !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
         if bot == nil { Text("Create the assistant before saving an avatar.").font(.footnote).foregroundStyle(.secondary) }
       }
     }
+  }
+  private func characterTiles(_ families: [(id: String, label: String)]) -> some View {
+    AvatarTiles(
+      group: "family", options: families.map { ($0.id, $0.label) },
+      selected: avatar.family ?? "sprout",
+      preview: { var a = avatar.selectingFamily($0); a.accessory = "none"; return a },
+      select: { avatar = avatar.selectingFamily($0) })
   }
   private var colorSwatches: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 8) {
@@ -416,8 +443,8 @@ struct BotSettingsView: View {
         if items.isEmpty && catalogReady.contains(kind) {
           Text("No \(kind) were reported by Hermes.").foregroundStyle(.secondary)
         }
-        Button("Save \(kind)") {
-          action {
+        Button(progress.label(kind, idle: "Save \(kind)")) {
+          action(progressKey: kind) {
             guard let bot, catalogReady.contains(kind) else { return }
             let ids = (kind == "tools" ? tools : skills).filter {
               $0.enabled || $0.required == true
@@ -425,7 +452,7 @@ struct BotSettingsView: View {
             try await store.perform(
               "/bots/\(APIClient.component(bot.id))/\(kind)", ["ids": ids], method: "PUT")
             savedCapabilities[kind] = Set(ids)
-            notice = "Saved \(kind)."
+            notice = "Saved"
           }
         }.disabled(!store.supports(kind) || !store.connected || !catalogReady.contains(kind))
       }
@@ -500,14 +527,19 @@ struct BotSettingsView: View {
       ).accessibilityLabel(title)
     }
   }
-  private func action(_ operation: @escaping () async throws -> Void) {
+  private func action(progressKey: String? = nil, _ operation: @escaping () async throws -> Void) {
     guard !busy else { return }
     busy = true
     error = nil
     notice = nil
+    if let progressKey { progress.begin(progressKey) }
     Task {
       defer { busy = false }
-      do { try await operation() } catch {
+      do {
+        try await operation()
+        if let progressKey { confirmSaved(progressKey) }
+      } catch {
+        if let progressKey { progress.fail(progressKey) }
         self.error = error.localizedDescription
         if let e = error as? APIError, e.confirmRequired { confirmModel = true }
         if let e = error as? APIError, e.code == "private_confirmation_required" {
@@ -517,6 +549,13 @@ struct BotSettingsView: View {
       }
     }
   }
+  private func confirmSaved(_ key: String) {
+    progress.succeed(key)
+    Task {
+      try? await Task.sleep(for: .seconds(2.5))
+      progress.expire(key)
+    }
+  }
   private func saveBot(confirmed: Bool = false, personal: Bool? = nil) {
     let personal = personal ?? personalConfirmed
     if form.hidesFromHousehold(bot) && !personal {
@@ -524,7 +563,7 @@ struct BotSettingsView: View {
       return
     }
     personalConfirmed = personal
-    action {
+    action(progressKey: "details") {
       guard let api = store.api else { return }
       var value = form
       value.confirmModel = confirmed
@@ -534,12 +573,12 @@ struct BotSettingsView: View {
         method: bot == nil ? "POST" : "PATCH")
       await store.refreshBootstrap()
       savedForm = form
-      notice = bot?.shared == true ? "Changes saved for the household." : "Assistant saved."
+      notice = bot?.shared == true ? "Changes saved for both household members." : "Assistant saved."
       if bot == nil { closeSheet() }
     }
   }
   private func saveAvatar() {
-    action {
+    action(progressKey: "avatar") {
       guard let bot, let api = store.api else { return }
       var value = avatar
       if value.mode == "mascot" { value.family = value.family ?? "sprout" }
@@ -547,7 +586,7 @@ struct BotSettingsView: View {
         "/bots/\(APIClient.component(bot.id))/avatar", value, method: "PUT")
       await store.refreshBootstrap()
       savedAvatar = avatar
-      notice = "Avatar saved."
+      notice = "Avatar saved"
     }
   }
   private func generatePortrait() {
@@ -845,5 +884,38 @@ extension BotInput {
   /// The web field's comma-separated list of existing MCP server ids.
   static func serverIds(_ text: String) -> [String] {
     text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+  }
+}
+
+/// Which save button is working or just finished, like the web's per-button Saving… and Saved.
+struct SaveProgress: Equatable {
+  enum Phase { case saving, saved }
+  private var key: String?
+  private var phase: Phase?
+  mutating func begin(_ key: String) { self.key = key; phase = .saving }
+  mutating func succeed(_ key: String) { if self.key == key { phase = .saved } }
+  /// A failed save returns the button to its normal label so the error can speak.
+  mutating func fail(_ key: String) { if self.key == key { self.key = nil; phase = nil } }
+  /// The Saved confirmation fades on its own, unless a newer save has already replaced it.
+  mutating func expire(_ key: String) { if self.key == key && phase == .saved { self.key = nil; phase = nil } }
+  func label(_ key: String, idle: String) -> String {
+    guard self.key == key else { return idle }
+    switch phase {
+    case .saving: return "Saving…"
+    case .saved: return "Saved"
+    case nil: return idle
+    }
+  }
+}
+
+enum SettingsLimits {
+  static let name = 100
+  static let instructions = 50_000
+  static let portraitPrompt = 2_000
+  /// Quiet until a field nears its limit, then a counter, then a plain instruction once it is over.
+  static func message(_ subject: String, count: Int, limit: Int) -> String? {
+    if count > limit { return "\(subject) \((count - limit).formatted()) character\(count - limit == 1 ? "" : "s") over the \(limit.formatted()) limit. Shorten the text to save." }
+    if count * 10 >= limit * 9 { return "\(count.formatted()) of \(limit.formatted()) characters" }
+    return nil
   }
 }

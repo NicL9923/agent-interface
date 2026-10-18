@@ -58,7 +58,7 @@ final class NativeFlowTests: XCTestCase {
   }
   func testPhoneListConversationSendAndConfiguration() {
     let app = app()
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     composer.tap()
     composer.typeText("Remember the fence inspection")
@@ -122,7 +122,7 @@ final class NativeFlowTests: XCTestCase {
       screenshot(app, "Seasonal native \(family)")
       scrollTo(app.buttons["Save avatar"], up: true)
       app.buttons["Save avatar"].tap()
-      XCTAssertTrue(app.staticTexts["Avatar saved."].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 5))
       app.buttons["Close"].tap()
       app.buttons["Configure Ranch hand"].tap()
       app.buttons["Avatar"].tap()
@@ -161,18 +161,22 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertTrue(app.buttons["checkHermesUpdate"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["installHermesUpdate"].exists)
     app.buttons["checkHermesUpdate"].tap()
-    XCTAssertTrue(app.staticTexts["Checking compatibility"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Testing the update"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Test in a copy"].label, "Test in a copy: in progress")
+    XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Install"].label, "Install: not started")
+    XCTAssertTrue(app.buttons["stopHermesCheck"].exists, "A running check can be stopped without confirmation")
+    XCTAssertFalse(app.buttons["cancelHermesUpdate"].exists, "Cancel and retry belong to installs")
     screenshot(app, "Fixture native Hermes qualification")
     XCTAssertTrue(app.buttons["installHermesUpdate"].waitForExistence(timeout: 10))
     screenshot(app, "Fixture native Hermes update ready")
     app.buttons["installHermesUpdate"].tap()
     XCTAssertTrue(app.staticTexts["Update the household's Hermes installation?"].waitForExistence(timeout: 5))
-    app.buttons.matching(identifier: "Update Hermes").allElementsBoundByIndex.last?.tap()
+    app.buttons.matching(identifier: "Install update").allElementsBoundByIndex.last?.tap()
     XCTAssertTrue(app.buttons["refreshHermesUpdate"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["installHermesUpdate"].isEnabled)
     screenshot(app, "Fixture native uncertain Hermes update")
     app.buttons["refreshHermesUpdate"].tap()
-    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Updating Hermes", "Verifying Hermes"])).firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Installing the update", "Making sure everything works"])).firstMatch.waitForExistence(timeout: 5))
     screenshot(app, "Fixture native Hermes install progress")
     XCTAssertTrue(app.staticTexts["Hermes is up to date"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.buttons["installHermesUpdate"].exists)
@@ -180,7 +184,7 @@ final class NativeFlowTests: XCTestCase {
   }
   func testComposerAttachMenuAndAdvancedModelSwitch() {
     var app = app()
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
     app.buttons["composerAttach"].tap()
@@ -247,10 +251,15 @@ final class NativeFlowTests: XCTestCase {
     for _ in 0..<6 { if app.buttons["Hermes updates"].isHittable { break }; app.swipeUp() }
     app.buttons["Hermes updates"].tap()
     XCTAssertTrue(app.buttons["restartHermesService"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["The update couldn't finish"].exists)
+    XCTAssertTrue(app.buttons["retryHermesUpdate"].exists, "Retry is offered for a failed install")
+    XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Install"].label, "Install: stopped")
+    for _ in 0..<5 { if app.staticTexts["App compatibility"].exists { break }; app.swipeUp() }
+    XCTAssertTrue(app.staticTexts["App compatibility"].exists, "Test details open on their own after a failure")
     screenshot(app, "Native failed update recovery fixture")
     app.buttons["restartHermesService"].tap()
-    XCTAssertTrue(app.staticTexts["Restart Hermes and check the connection?"].waitForExistence(timeout: 5))
-    app.buttons.matching(identifier: "Restart Hermes").allElementsBoundByIndex.last?.tap()
+    XCTAssertTrue(app.staticTexts["Restart the Hermes service and check the connection? This may briefly disconnect everyone."].waitForExistence(timeout: 5))
+    app.buttons["Yes, restart Hermes"].tap()
     XCTAssertTrue(app.staticTexts["Restoring the connection"].waitForExistence(timeout: 5))
     screenshot(app, "Native service recovery progress fixture")
   }

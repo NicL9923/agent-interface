@@ -12,7 +12,7 @@ final class AppUpdateFlowTests: XCTestCase {
   }
   func testBannerOffersTheUpdateOnHomeAndInPreferences() {
     let app = launch(update: true)
-    XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
     XCTAssertTrue(app.staticTexts["A new version of WildBots is available"].exists)
     XCTAssertTrue(app.buttons["appUpdateButton"].isHittable)
     // Home keeps the banner too.
@@ -31,7 +31,7 @@ final class AppUpdateFlowTests: XCTestCase {
   }
   func testNoBannerWithoutANewerBuild() {
     let app = launch(update: false)
-    XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.buttons["appUpdateButton"].exists)
   }
 }

@@ -1,34 +1,34 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import PhotosUI
 
 struct ConversationView: View {
   var bot: Bot
   var edit: () -> Void
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
-  @State private var importFiles = false
-  @State private var importPhotos = false
-  @State private var photos: [PhotosPickerItem] = []
-  @State private var voiceOpen = false
-  @State private var discardConfirm = false
   @State private var checkingConnection = false
+  @ObservedObject private var reachability = NetworkReachability.shared
   @State private var earlierFailed = false
-  @State private var actionBusy = false
   @State private var visibleMessage: String?
-  @State private var restoredBot: String?
+  @State private var openedBot: String?
   @State private var readSaveTask: Task<Void, Never>?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
-  @State private var nearBottom = true
+  @State private var content = TranscriptMetrics()
+  /// Following keeps the latest message in view as replies and cards grow, as on the web.
+  @State private var following = true
+  /// Set once the opened chat sits at its latest message, so history only pages in after that.
+  @State private var placed = false
+  /// A smooth jump reports positions short of the end until it lands.
+  @State private var jumpingUntil = Date.distantPast
   @State private var earlierEdgeVisible = false
   @State private var unseen = 0
-  @State private var modelOpen = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
   var body: some View {
     VStack(spacing: 0) {
-      if !store.connected && !store.sessionExpired && store.bootstrap != nil { connectionCard }
+      if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
       if let error = store.error {
         ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(
           .bottom, 8)
@@ -74,48 +74,14 @@ struct ConversationView: View {
       }
     }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
-    .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).environmentObject(store) }
-    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().environmentObject(store) }
-    .sheet(isPresented: $voiceOpen) { VoiceMessageSheet(botId: bot.id).environmentObject(store) }
-    .photosPicker(isPresented: $importPhotos, selection: $photos, maxSelectionCount: 10, matching: .images)
-    .onChange(of: photos) { _, selection in
-      guard !selection.isEmpty else { return }
-      let scope = store.scope; let botId = bot.id
-      Task {
-        for item in selection {
-          do {
-            guard let data = try await item.loadTransferable(type: Data.self), scope == store.scope, store.selectedBotId == botId else { continue }
-            let image = try ShareImage.prepare(data)
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("Photo-\(UUID().uuidString).\(image.ext)")
-            try image.data.write(to: url, options: .atomic)
-            await store.attach(urls: [url]); try? FileManager.default.removeItem(at: url)
-          } catch { if scope == store.scope { store.report(error) } }
-        }
-        photos = []
-      }
-    }
-    .fileImporter(
-      isPresented: $importFiles, allowedContentTypes: [.png, .jpeg, .webP, .gif, .pdf, .plainText, .commaSeparatedText, UTType(filenameExtension: "md") ?? .plainText],
-      allowsMultipleSelection: true
-    ) { result in
-      switch result {
-      case .success(let urls): Task { await store.attach(urls: urls) }
-      case .failure(let error): store.report(error)
-      }
-    }
-    .confirmationDialog(
-      "The message may still arrive. Its text goes back into the draft, so sending it again could deliver it twice.",
-      isPresented: $discardConfirm, titleVisibility: .visible
-    ) {
-      Button("Discard and keep my text in the draft", role: .destructive) {
-        store.discardUnconfirmedSubmission()
-      }
-    }
+    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store) }
   }
   private var transcript: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 18) {
+        // Not lazy: like the web's page, every loaded turn has a real height, so the latest
+        // message and a held place can be scrolled to exactly.
+        VStack(alignment: .leading, spacing: 18) {
           if (store.conversation?.earlier ?? 0) > 0 {
             Button { loadEarlier(proxy) } label: {
               HStack(spacing: 7) {
@@ -124,9 +90,9 @@ struct ConversationView: View {
               }
             }.buttonStyle(.bordered).disabled(store.loadingEarlier || !store.connected).frame(maxWidth: .infinity)
               .onGeometryChange(for: Bool.self) { geometry in geometry.frame(in: .named("transcript")).maxY >= -600 } action: { earlierEdgeVisible = $0 }
-              .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(nearBottom)") {
+              .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(placed)") {
                 // A failed page waits for the button, as on the web, instead of retrying on every scroll.
-                guard earlierEdgeVisible, !nearBottom, !earlierFailed, restoredBot == bot.id, store.connected, !store.loadingEarlier else { return }
+                guard earlierEdgeVisible, placed, !earlierFailed, store.connected, !store.loadingEarlier else { return }
                 loadEarlier(proxy)
               }
           }
@@ -148,9 +114,7 @@ struct ConversationView: View {
               if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
             }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
-          ForEach(store.conversation?.presentationTurns ?? []) { turn in
-            ConversationTurnView(turn: turn, advanced: advanced)
-          }
+          TranscriptTurns(turns: store.turns, advanced: advanced)
           if ![.idle, .done].contains(store.activity) { liveActivity }
           // Questions and secure requests come before approvals, as on the web.
           ForEach(store.conversation?.attention ?? []) { request in
@@ -159,14 +123,14 @@ struct ConversationView: View {
           ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
             approval in approvalCard(approval)
           }
-          Color.clear.frame(height: 1).id("latest").onGeometryChange(for: CGFloat.self) {
-            $0.frame(in: .named("transcript")).maxY
-          } action: { bottom in
-            nearBottom = bottom <= viewportHeight + 120
-            if nearBottom { unseen = 0 }
-          }
+          Color.clear.frame(height: 1).id("latest")
         }.scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(
           maxWidth: .infinity)
+          .environment(\.transcriptConnected, store.connected)
+          .onGeometryChange(for: TranscriptMetrics.self) { geometry in
+            let frame = geometry.frame(in: .named("transcript"))
+            return TranscriptMetrics(top: frame.minY, height: frame.height)
+          } action: { contentMoved(to: $0, proxy) }
       }
       .scrollPosition(id: $visibleMessage, anchor: .top)
       .coordinateSpace(name: "transcript")
@@ -174,71 +138,97 @@ struct ConversationView: View {
         $0.size.height
       } action: {
         viewportHeight = $0
+        // The keyboard or a rotation resizes the view; a follower stays at the end.
+        if following { scrollToLatest(proxy) }
       }
       .scrollDismissesKeyboard(.interactively)
       .onChange(of: store.conversation?.botId, initial: true) { _, id in
-        guard let id, id != restoredBot else { return }
-        restoredBot = id
-        nearBottom = true
+        guard let id, id != openedBot else { return }
+        // Like the web, a chat always opens at its latest message.
+        openedBot = id
+        following = true
+        placed = false
+        unseen = 0
         visibleMessage = nil
-        if let message = store.conversation?.restorableReadAnchor(store.readMessageId()) {
-          // The lazy bottom sentinel may never load here, so assume the user is away
-          // from the latest message until it appears.
-          nearBottom = message == store.conversation?.messages.last?.id
-          visibleMessage = message
-          proxy.scrollTo(message, anchor: .top)
-        } else if store.conversation?.messages.isEmpty == true {
-          proxy.scrollTo("welcome", anchor: .top)
-        } else {
-          proxy.scrollTo("latest", anchor: .bottom)
-        }
+        earlierFailed = false
+        scrollToLatest(proxy)
       }
       .overlay(alignment: .bottom) {
-        if !nearBottom {
-          Button {
-            proxy.scrollTo("latest", anchor: .bottom)
-            store.markRead(store.conversation?.messages.last?.id)
-          } label: {
+        if !following && store.conversation != nil {
+          Button { jumpToLatest(proxy) } label: {
             Label(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")", systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
           }.accessibilityLabel(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages"), jump to latest").padding(12).transition(.opacity)
         }
       }
-      .animation(.easeOut(duration: 0.15), value: nearBottom)
+      .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
         await store.reconcilePending()
       }
-      .onChange(of: visibleMessage) { _, id in
-        readSaveTask?.cancel()
-        guard let id, store.conversation?.messages.contains(where: { $0.id == id }) == true else {
-          return
-        }
-        readSaveTask = Task {
-          try? await Task.sleep(for: .milliseconds(350))
-          guard !Task.isCancelled else { return }
-          store.markRead(id)
-        }
-      }
+      .onChange(of: visibleMessage) { _, _ in saveReadPosition() }
       .onChange(of: store.conversation?.visibleMessages.last?.id) { old, new in
-        if let old, old != new, !nearBottom {
+        if let old, old != new, !following {
           let messages = store.conversation?.visibleMessages ?? []
           unseen += messages.firstIndex { $0.id == old }.map { messages.count - $0 - 1 } ?? 1
         }
       }
-      .onChange(of: latestTrigger) { _, _ in proxy.scrollTo("latest", anchor: .bottom) }
-      .onChange(of: store.conversation?.messages.last?.text) { _, _ in
-        if nearBottom && store.conversation?.messages.isEmpty == false {
-          proxy.scrollTo("latest", anchor: .bottom)
-        }
+      .onChange(of: latestTrigger) { _, _ in following = true; scrollToLatest(proxy) }
+      // VoiceOver reads each settled reply once, as the web's live region does.
+      .onChange(of: store.replyAnnouncement) { _, reply in
+        if let reply, reply.botId == bot.id { AccessibilityNotification.Announcement("\(bot.name) replied: \(reply.text)").post() }
       }
       .onDisappear {
         readSaveTask?.cancel()
-        if let id = visibleMessage,
-          store.conversation?.messages.contains(where: { $0.id == id }) == true
-        {
-          store.markRead(id)
-        }
+        if let id = readPosition { store.markRead(id) }
       }
+    }
+  }
+  /// Content grew or the reader scrolled. Growth keeps a follower at the end; a scroll decides
+  /// whether the reader is following, as the web's scroll handler does.
+  private func contentMoved(to next: TranscriptMetrics, _ proxy: ScrollViewProxy) {
+    let previous = content
+    content = next
+    let atLatest = next.top + next.height - viewportHeight < 100
+    // History pages in only once the opened chat is seen at its end, not while it is still at
+    // the top waiting for the first scroll.
+    if atLatest && following && store.conversation != nil { placed = true }
+    if next.height != previous.height {
+      if following { scrollToLatest(proxy) }
+      return
+    }
+    if atLatest || Date() >= jumpingUntil { following = atLatest }
+    if atLatest { unseen = 0; jumpingUntil = .distantPast }
+  }
+  /// Waits for the layout pass that changed the content, then shows its end.
+  private func scrollToLatest(_ proxy: ScrollViewProxy) {
+    Task { @MainActor in proxy.scrollTo("latest", anchor: .bottom) }
+  }
+  private func jumpToLatest(_ proxy: ScrollViewProxy) {
+    following = true
+    unseen = 0
+    // A short trip glides; a long one jumps rather than scrolling through pages of history.
+    let distance = content.top + content.height - viewportHeight
+    if distance < viewportHeight * 3 && !reduceMotion {
+      jumpingUntil = Date().addingTimeInterval(1)
+      withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("latest", anchor: .bottom) }
+    } else {
+      proxy.scrollTo("latest", anchor: .bottom)
+    }
+    saveReadPosition()
+  }
+  /// The web's reading position: the latest message while following, otherwise the top one in view.
+  private var readPosition: String? {
+    let messages = store.conversation?.messages ?? []
+    if following { return messages.last?.id }
+    return visibleMessage.flatMap { id in messages.contains { $0.id == id } ? id : nil }
+  }
+  private func saveReadPosition() {
+    readSaveTask?.cancel()
+    guard placed, let id = readPosition else { return }
+    readSaveTask = Task {
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      store.markRead(id)
     }
   }
   /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
@@ -255,14 +245,14 @@ struct ConversationView: View {
   /// The compact connection card the web shows above the transcript while Hermes is unreachable.
   private var connectionCard: some View {
     let connection = store.bootstrap?.connection
-    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable)
+    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable, offline: reachability.offline)
     return VStack(alignment: .leading, spacing: 6) {
       Text(copy.title).font(.subheadline.bold())
       Text(copy.detail).font(.caption).foregroundStyle(.secondary)
       Button(checkingConnection ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now") {
         checkingConnection = true
         Task { await store.reconnect(); checkingConnection = false }
-      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection).padding(.vertical, 2)
+      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection || reachability.offline).padding(.vertical, 2)
       DisclosureGroup(copy.setup ? "Set up this installation" : "Connection details") {
         VStack(alignment: .leading, spacing: 8) {
           if let address = connection?.address { Text("Hermes address: \(address)").textSelection(.enabled) }
@@ -279,194 +269,30 @@ struct ConversationView: View {
       .accessibilityElement(children: .contain).accessibilityIdentifier("connectionCard")
   }
   private var composer: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      composerNotices
-      composerCard
-    }.padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
-      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
-  }
-  /// The web composer's notices, above the message box.
-  @ViewBuilder private var composerNotices: some View {
-    if store.activity == .interrupted {
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: $store.interruptionReviewed)
-        .toggleStyle(CheckboxStyle()).font(.footnote)
-    }
-    // A normal send only spins the send button. This appears once the request ended without a receipt.
-    if let pending = store.pending, !store.sending {
-      VStack(alignment: .leading, spacing: 8) {
-        if pending.botId == bot.id {
-          Text("Checking whether your last message arrived…").font(.footnote)
-          Button("Retry this saved message") { Task { await store.send(reviewedUncertain: true) } }
-            .font(.footnote).disabled(store.sending || !store.supports("idempotency") || !store.connected)
-        } else {
-          // This app holds one unconfirmed send at a time, so another assistant's blocks this one.
-          Text("Another assistant's message is awaiting an admission check.").font(.footnote)
-          Button("Open assistant") { Task { await store.select(pending.botId) } }.font(.footnote)
-        }
-        // A send that never resolves would otherwise block every assistant on this device.
-        Button("Discard and keep my text in the draft", role: .destructive) {
-          discardConfirm = true
-        }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
-      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .contain)
-    }
-    if let receipt = store.receipt, receipt.status == "rejected" {
-      Text(receipt.message?.isEmpty == false ? receipt.message! : "Hermes did not accept this message. Your draft is saved.")
-        .font(.footnote).foregroundStyle(Palette.attention)
-    }
-    if store.receipt?.status == "interrupted" {
-      Text("This submission was interrupted. Review its last actions before trying again.")
-        .font(.footnote).foregroundStyle(Palette.attention)
-    }
-  }
-  private var composerCard: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      ForEach(store.attachmentUploads.filter { $0.botId == bot.id }) { upload in
-        HStack(spacing: 8) {
-          if upload.uploading { ProgressView() } else { Image(systemName: upload.error == nil ? "clock" : "exclamationmark.circle").foregroundStyle(upload.error == nil ? Palette.muted : Palette.danger) }
-          VStack(alignment: .leading, spacing: 3) {
-            Text(upload.name).lineLimit(1)
-            Text(upload.error ?? "Waiting to upload…").font(.caption).foregroundStyle(.secondary).lineLimit(2)
-          }
-          Spacer(minLength: 0)
-          if !upload.uploading { Button("Retry") { Task { await store.retryUpload(upload.id) } }.accessibilityLabel("Retry \(upload.name)").disabled(!store.connected || store.uploading) }
-          Button { store.removeUpload(upload.id) } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("Remove \(upload.name)")
-        }.font(.subheadline).padding(8).background(Palette.user(scheme), in: RoundedRectangle(cornerRadius: 10))
-      }
-      if !store.draft.attachments.isEmpty {
-        ScrollView(.horizontal) {
-          HStack {
-            ForEach(store.draft.attachments) { file in
-              HStack {
-                Button { store.open(file) } label: {
-                  if file.mime.hasPrefix("image/") {
-                    AuthenticatedImage(path: "/api/files/\(APIClient.component(file.id))").scaledToFill().frame(width: 40, height: 40).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
-                  } else { Image(systemName: "doc").frame(width: 32, height: 40) }
-                }.accessibilityLabel("Preview \(file.name)")
-                Text(file.name).lineLimit(1)
-                Button {
-                  var next = store.draft
-                  next.attachments.removeAll { $0.id == file.id }
-                  store.updateDraft(next)
-                } label: {
-                  Image(systemName: "xmark.circle.fill")
-                }.accessibilityLabel("Remove \(file.name)")
-              }.font(.caption).padding(8).background(Palette.user(scheme), in: Capsule())
-            }
-          }
-        }
-      }
-      TextField(
-          store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…",
-          text: Binding(
-            get: { store.draft.text },
-            set: {
-              var value = store.draft
-              value.text = $0
-              store.updateDraft(value)
-            }), axis: .vertical
-        ).lineLimit(2...6).focused($composerFocused).padding(12).background(
-          Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16)
-        ).disabled(!store.draftReady).accessibilityIdentifier("messageComposer")
-      HStack(alignment: .center, spacing: 8) {
-        Menu {
-          Button("Photo Library", systemImage: "photo.on.rectangle") { importPhotos = true }
-          Button("Choose Files", systemImage: "folder") { importFiles = true }
-        } label: {
-          Image(systemName: "paperclip").font(.body).frame(width: 44, height: 44)
-        }.accessibilityLabel("Attach images, PDFs, or text").accessibilityIdentifier("composerAttach")
-          .disabled(attachUnavailable)
-        if advanced { modelButton }
-        Button { voiceOpen = true } label: { Image(systemName: "mic").frame(width: 44, height: 44) }
-          .accessibilityLabel("Record voice message").disabled(!store.draftReady || !store.connected || store.sending || store.pending != nil)
-        // The web offers the latest reply aloud only while the assistant is idle.
-        if !store.active, let reply = latestReply {
-          SpokenReplyButton(text: ReplyCards.spokenText(reply.text)).id(reply.id)
-        }
-        Spacer(minLength: 0)
-        Button {
-          if stopVisible {
-            run { try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]()) }
-          } else {
-            Task { await store.send(); composerFocused = false; latestTrigger += 1 }
-          }
-        } label: {
-          let enabled = stopVisible ? !stopDisabled : store.canSend
-          Group {
-            if store.sending || (stopVisible && actionBusy) { ProgressView().tint(Palette.muted) }
-            else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.headline) }
-          }.frame(width: 44, height: 44)
-            .foregroundStyle(enabled ? Palette.raised(scheme) : Palette.muted)
-            .background(enabled ? Palette.accent : Palette.line, in: Circle())
-            .contentShape(Circle())
-        }.buttonStyle(.plain).disabled(stopVisible ? stopDisabled : !store.canSend)
-          .accessibilityLabel(stopVisible ? "Stop response" : store.active ? "Send guidance" : "Send message")
-          .accessibilityIdentifier("sendMessage")
-      }
-      if store.uploading {
-        ProgressView("Uploading…").font(.caption)
-      } else if store.draft.text.count > 50000 {
-        Text("Messages can contain up to 50,000 characters.").font(.caption).foregroundStyle(.red)
-      }
-      if !store.supports("chat") {
-        Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
-      }
-    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 20))
-      .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
-  }
-  // An in-flight send keeps its spinning send button even if the draft is cleared meanwhile.
-  private var stopVisible: Bool { store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.draft.attachments.isEmpty }
-  private var stopDisabled: Bool { actionBusy || !store.connected || !store.supports("stop") }
-  private var attachUnavailable: Bool {
-    !store.supports("uploads") || !store.draftReady
-      || store.draft.attachments.count + store.attachmentUploads.filter { $0.botId == bot.id }.count >= 10
-  }
-  /// The newest reply in the conversation, the one the web's Listen to reply reads.
-  private var latestReply: Message? {
-    store.conversation?.messages.last { $0.role == "assistant" && !$0.isInternalActivity && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty) }
-      .flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }
   }
   private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
-  /// Icon only, like the web at phone width; the label still names the model.
-  private var modelButton: some View {
-    Button { modelOpen = true } label: {
-      RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
-    }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(bot.instructions == nil || !store.supports("botConfiguration") || !store.connected || store.sending)
-  }
   private func loadEarlier(_ proxy: ScrollViewProxy) {
-    // Prepending would otherwise move the view; keep the oldest message in place.
-    let anchor = store.conversation?.messages.first?.id
+    let first = store.conversation?.messages.first?.id
+    // The scroll position holds the turn in view while history is added above it. Before the
+    // reader has scrolled there is none, so the oldest loaded turn is held instead.
+    let anchor = visibleMessage == nil ? store.turns.first?.id : nil
     Task {
       await store.loadEarlier()
       // The store reports a failed page as an error and leaves the window as it was.
-      earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == anchor
-      if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+      earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == first
+      if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
   private func approvalCard(_ approval: Approval) -> some View {
     ApprovalDecisionView(approval: approval, botId: bot.id)
   }
-  private func run(_ action: @escaping () async throws -> Void) {
-    guard !actionBusy else { return }
-    actionBusy = true
-    Task {
-      defer { actionBusy = false }
-      do {
-        try await action()
-        await store.refreshConversation()
-      } catch { store.report(error) }
-    }
-  }
 }
+/// A conversation row. Tool calls and reasoning render in the turn's groups, not here.
 struct MessageView: View {
   var message: Message
-  var advanced: Bool
   var continued = false
-  var groupedReasoning = false
-  var groupedActivity = false
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -477,20 +303,9 @@ struct MessageView: View {
         }.foregroundStyle(.secondary)
       }
       if message.isAgentExchange {
-        AgentExchangeView(message: message, recipient: store.bot?.name ?? "Assistant")
-      } else if message.isToolActivity {
-        if !groupedActivity {
-          if !advanced,let call=message.toolCall { ActionReceiptView(call:call) } else { ToolActivityView(message:message) }
-        }
-      } else {
+        AgentExchangeView(message: message, recipient: store?.bot?.name ?? "Assistant")
+      } else if !message.isToolActivity {
         ReplyContentView(message: message)
-        if !groupedActivity && advanced && message.toolCall != nil { ToolActivityView(message: message) }
-        if !groupedActivity && !advanced,let call=message.toolCall { ActionReceiptView(call:call) }
-      }
-      if advanced && !groupedReasoning, let reasoning = message.reasoning, !reasoning.isEmpty {
-        DisclosureGroup("Reasoning") {
-          MarkdownView(text: reasoning).font(.footnote).foregroundStyle(.secondary)
-        }
       }
       ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
     }.padding(message.role == "user" && !message.isAgentExchange ? 14 : 0).background(
@@ -532,36 +347,56 @@ struct AgentExchangeView: View {
       .overlay(alignment: .leading) { Rectangle().fill(Palette.accent).frame(width: 3) }
   }
 }
+/// A tool call's detail, as the web's ToolCallDetail: identifiers and times, then the call's
+/// arguments, result and error as preformatted text.
 struct ToolActivityView: View {
   var message: Message
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.transcriptConnected) private var connected
   var body: some View {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 8) {
-        if let call = message.toolCall {
-          LabeledContent("Call", value: call.id).font(.caption).textSelection(.enabled)
-          if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
-          if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
+        if let call = message.toolCall { times(call) }
+        if let arguments = message.toolCall?.arguments { section("Arguments", arguments) }
+        if let result { section("Result", result) }
+        if let error = message.toolCall?.error, !error.isEmpty { section("Error", error, danger: true) }
+        if let waiting = Self.waiting(message.toolCall, result: result, connected: connected) {
+          Text(waiting).font(.footnote).foregroundStyle(.secondary)
         }
-        if let arguments = message.toolCall?.arguments, !arguments.isEmpty {
-          Text("Arguments").font(.caption.bold())
-          Text(arguments).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-        }
-        if let error = message.toolCall?.error, !error.isEmpty {
-          Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
-        }
-        let result = message.toolResult
-        if !result.isEmpty { MarkdownView(text: result).font(.footnote) }
-      }.padding(.vertical, 4)
+      }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
     } label: {
       HStack {
         Label(message.displayToolName, systemImage: "wrench.and.screwdriver").font(.caption.bold())
         Spacer()
-        if let status = message.toolCall?.status {
-          Text(status == "running" && !store.connected ? "Last seen running" : status.capitalized).font(.caption).foregroundStyle(.secondary)
+        if let call = message.toolCall {
+          Text(Self.status(call.status, connected: connected)).font(.caption)
+            .foregroundStyle(call.status == "failed" ? Palette.danger : .secondary)
         }
       }
     }
+  }
+  /// The call's own result, or the text of a tool row that carries it.
+  private var result: String? {
+    message.toolCall?.result ?? (message.toolResult.isEmpty ? nil : message.toolResult)
+  }
+  @ViewBuilder private func times(_ call: ToolCall) -> some View {
+    LabeledContent("Call") { Text(call.id).font(.system(.caption, design: .monospaced)) }.font(.caption).textSelection(.enabled)
+    if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
+    if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
+  }
+  private func section(_ title: String, _ text: String, danger: Bool = false) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.caption.bold()).accessibilityAddTraits(.isHeader)
+      Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }.foregroundStyle(danger ? Palette.danger : Color.primary)
+  }
+  static func status(_ status: String, connected: Bool) -> String {
+    status == "running" ? connected ? "Running" : "Last seen running" : status == "failed" ? "Failed" : "Completed"
+  }
+  /// What a running call with no result yet is waiting for.
+  static func waiting(_ call: ToolCall?, result: String?, connected: Bool) -> String? {
+    guard call?.status == "running", result == nil else { return nil }
+    return connected ? "Waiting for the result from Hermes." : "The current tool status will be checked when Hermes reconnects."
   }
 }
 struct AttentionView: View {
@@ -577,7 +412,7 @@ struct AttentionView: View {
       Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : "Continue in Hermes")
         .font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       Text(request.title).font(.headline)
-      MarkdownView(text: request.detail)
+      Text(request.detail).textSelection(.enabled)
       if request.kind == "clarify" {
         ForEach(request.questions ?? []) { question in
           VStack(alignment: .leading, spacing: 6) {
@@ -678,7 +513,8 @@ struct ConnectionCopy: Equatable {
   var title: String
   var detail: String
   var setup = false
-  static func compact(code: String?, appUnavailable: Bool) -> ConnectionCopy {
+  static func compact(code: String?, appUnavailable: Bool, offline: Bool = false) -> ConnectionCopy {
+    if offline { return ConnectionCopy(title: "You're offline", detail: "Your draft is kept on this device. We'll reconnect when you're back online.") }
     if appUnavailable { return ConnectionCopy(title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically.") }
     switch code ?? "unreachable" {
     case "not_configured": return ConnectionCopy(title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true)
@@ -754,4 +590,73 @@ struct CheckboxStyle: ToggleStyle {
       }
     }.buttonStyle(.plain).accessibilityAddTraits(.isToggle).accessibilityValue(configuration.isOn ? "1" : "0")
   }
+}
+
+/// Where the transcript's content sits in its scroll view, for following and holding a place.
+struct TranscriptMetrics: Equatable {
+  var top: CGFloat = 0
+  var height: CGFloat = 0
+}
+
+/// Which reply to read out after a refresh, ported from the web's src/app/reply-announcement.ts.
+/// Only a message after the last one seen counts, so history, the first load and a switch stay
+/// quiet, and a reply waits until the assistant stops working, so it is read once.
+struct ReplyWatch: Equatable {
+  struct Heard: Equatable { var text: String; var turn: String? }
+  /// The newest saved message already accounted for. Pages of older history never move it.
+  var lastId: String?
+  /// A reply that arrived while the assistant was still working.
+  var waiting: Message?
+  /// An unsaved reply already read, or already there on load, until its saved rows arrive.
+  var heard: Heard?
+  // Hermes shows the unsaved tail of a reply as a message replaced by saved rows with new IDs.
+  private static func saved(_ message: Message) -> Bool { !message.id.hasSuffix("-inflight") }
+  private static func speakable(_ message: Message) -> Bool {
+    message.role == "assistant" && !message.isInternalActivity && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+  static func next(_ watch: ReplyWatch, _ conversation: Conversation, baseline: Bool) -> (ReplyWatch, Message?) {
+    let messages = conversation.messages
+    // A turn is named by the prompt that opened it, so the same words in a later turn are new.
+    func turn(at index: Int) -> String? { messages[...index].last { $0.role == "user" }?.id }
+    let unsaved = messages.last.flatMap { !saved($0) && speakable($0) ? $0 : nil }
+    let unsavedHeard = unsaved.map { Heard(text: $0.text, turn: turn(at: messages.count - 1)) }
+    let lastId = messages.last(where: saved)?.id
+    let known = watch.lastId.flatMap { id in messages.firstIndex { $0.id == id } }
+    // A conversation that no longer holds the last message seen was replaced, not extended.
+    if baseline || watch.lastId != nil && known == nil { return (ReplyWatch(lastId: lastId, heard: unsavedHeard), nil) }
+    let start = (known ?? -1) + 1
+    let arrivedAt = start < messages.count ? messages[start...].lastIndex { saved($0) && speakable($0) } : nil
+    let arrived = arrivedAt.map { messages[$0] }
+    let heard = watch.heard
+    func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    // The saved rows of a reply that was already read replace it silently.
+    if unsaved == nil, let arrived, let arrivedAt, let heard, trimmed(arrived.text) == trimmed(heard.text), turn(at: arrivedAt) == heard.turn {
+      return (ReplyWatch(lastId: lastId), nil)
+    }
+    let unread = unsaved != nil && (unsaved?.text != heard?.text || unsavedHeard?.turn != heard?.turn) ? unsaved : nil
+    let latest = unsaved != nil ? unread : arrived
+    let reply = latest ?? (unsaved != nil ? nil : watch.waiting.map { waiting in messages.first { $0.id == waiting.id } ?? waiting })
+    if let reply, ![.thinking, .working].contains(conversation.activity.state) {
+      return (ReplyWatch(lastId: lastId, heard: reply.id == unsaved?.id ? unsavedHeard : heard), reply)
+    }
+    return (ReplyWatch(lastId: lastId, waiting: reply, heard: heard), nil)
+  }
+  /// Markdown read aloud as written would spell out its symbols, so keep only the words.
+  static func snippet(_ text: String) -> String {
+    var plain = text
+    for (pattern, template) in snippetRules {
+      plain = pattern.stringByReplacingMatches(in: plain, range: NSRange(plain.startIndex..., in: plain), withTemplate: template)
+    }
+    plain = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard plain.count > 200 else { return plain }
+    return String(plain.prefix(200)).trimmingCharacters(in: .whitespaces) + "…"
+  }
+  private static let snippetRules: [(NSRegularExpression, String)] = [
+    (#"^(```|~~~)[^\n]*\n[\s\S]*?^\1\s*$"#, " "),
+    (#"!?\[([^\]]*)\]\([^)]*\)"#, "$1"),
+    (#"^\s{0,3}(?:#{1,6}|>|[-*+]|\d+[.)])\s+"#, ""),
+    (#"^\s*\|?[\s:|-]+\|[\s:|-]*$"#, " "),
+    (#"[`*_~|]"#, ""),
+    (#"\s+"#, " "),
+  ].map { (try! NSRegularExpression(pattern: $0.0, options: .anchorsMatchLines), $0.1) }
 }

@@ -64,7 +64,7 @@ final class ExperienceFlowTests: XCTestCase {
     app.collectionViews["routineEditorForm"].swipeUp()
     capture(app, name: "Native routine timezone preview")
   }
-  func testTodayOpensCanonicalAssistantAndVoiceReviewSheet() {
+  func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
     XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
     if !app.buttons["openToday"].isHittable {
@@ -78,10 +78,16 @@ final class ExperienceFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Your assistants, at a glance"].exists)
     capture(app, name: "Native Today overview")
     app.buttons["today.event.fixture-completed"].tap()
-    XCTAssertTrue(app.buttons["Record voice message"].waitForExistence(timeout: 5)); app.buttons["Record voice message"].tap()
-    XCTAssertTrue(app.navigationBars["Voice message"].waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["Add text to draft"].exists)
-    capture(app, name: "Native explicit voice recording")
+    XCTAssertTrue(app.buttons["Record voice"].waitForExistence(timeout: 5)); app.buttons["Record voice"].tap()
+    let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+    XCTAssertTrue(stop.waitForExistence(timeout: 5)); XCTAssertTrue(app.buttons["Cancel voice"].exists)
+    capture(app, name: "Native voice recording")
+    stop.tap()
+    // As on the web, stopping transcribes at once and the text joins the draft, with no review step.
+    XCTAssertTrue(app.staticTexts["Added to your draft. Review it before sending."].waitForExistence(timeout: 5))
+    let composer = app.textViews["messageComposer"]
+    XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
+    XCTAssertTrue(app.buttons["Record voice"].exists)
   }
   func testUncertainRoutineTrialChecksReceiptBeforeFreshRun() {
     let app = launch()
@@ -89,17 +95,17 @@ final class ExperienceFlowTests: XCTestCase {
     app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
     let message = { (text: String) in app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
     for _ in 0..<5 { if app.buttons["Try once"].isHittable { break }; app.collectionViews.firstMatch.swipeUp() }
-    app.buttons["Try once"].tap(); app.buttons["Run once now"].tap()
+    app.buttons["Try once"].tap()
     XCTAssertTrue(app.buttons["Check run status"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Try once"].exists)
     app.buttons["Check run status"].tap()
     XCTAssertTrue(message("Trial run completed. Fixture first run completed").waitForExistence(timeout: 5))
-    app.buttons["Try once"].tap(); app.buttons["Run once now"].tap()
+    app.buttons["Try once"].tap()
     XCTAssertTrue(message("Fixture second run uses a fresh request ID").waitForExistence(timeout: 5))
     capture(app, name: "Native routine trial recovery")
   }
 
-  func testDeviceReadAloudOffersExplicitStop() {
+  func testListenToReplyPlaysServerAudioWithAnExplicitStop() {
     let app = launch()
     XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 10))
     app.buttons["Listen to reply"].tap()
@@ -129,10 +135,9 @@ final class ExperienceFlowTests: XCTestCase {
     XCTAssertEqual(app.switches["Kitchen companion"].value as? String, "1")
     XCTAssertTrue(app.buttons["Create group"].isEnabled)
     app.buttons["Create group"].tap()
-    let room = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Gate planning")).firstMatch
-    XCTAssertTrue(room.waitForExistence(timeout: 5), app.debugDescription); room.tap()
+    // The new room opens by itself, as on the web.
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
-    XCTAssertTrue(composer.waitForExistence(timeout: 5)); composer.tap(); composer.typeText("Check the gate together")
+    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.tap(); composer.typeText("Check the gate together")
     app.buttons["Send to group"].tap()
     XCTAssertTrue(app.staticTexts["Check the gate together"].waitForExistence(timeout: 5))
     capture(app, name: "Native group discussion")

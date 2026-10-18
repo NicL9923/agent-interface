@@ -30,14 +30,16 @@ struct ShareCaptureView: View {
     busy=true;defer { busy=false }
     await store.select(botId)
     guard scope==store.scope,store.selectedBotId==botId,store.draftReady else { error="Reconnect before importing this draft.";return }
-    guard store.draft.attachments.count + capture.files.count <= 10,store.draft.text.count + capture.text.count + 2 <= 50000 else { error="The combined draft is too large. Keep up to 10 attachments and 50,000 characters.";return }
+    guard store.draft.attachments.count + capture.files.count <= 10,store.draft.text.utf16.count + capture.text.utf16.count + 2 <= AppStore.maxMessageLength else { error="The combined draft is too large. Keep up to 10 attachments and 50,000 characters.";return }
     do {
       if !capture.text.isEmpty { var next=store.draft;next.text += (next.text.isEmpty ? "" : "\n\n") + capture.text;store.updateDraft(next);capture.text="";try persist() }
       while let name=capture.files.first {
         guard scope==store.scope,store.selectedBotId==botId else { throw APIError(message:"Return to this assistant to finish importing.",status:409) }
         guard let url=ShareInbox.fileURLs(capture).first,(try url.resourceValues(forKeys:[.fileSizeKey])).fileSize ?? 0 <= 20 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-        let mime = UTType(filenameExtension:url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        let file=try await api.upload(botId:botId,name:name,mime:mime,data:Data(contentsOf:url))
+        let data=try Data(contentsOf:url)
+        // The same rules as the composer: any text format goes as plain text.
+        let mime=try UploadRules.prepare(name:name,mime:UploadRules.mime(of:url,contentType:nil),size:data.count).mapError { APIError(message:$0.message,status:400) }.get()
+        let file=try await api.upload(botId:botId,name:name,mime:mime,data:data)
         guard scope==store.scope,store.selectedBotId==botId else { throw APIError(message:"The selected account or assistant changed. Review this draft again.",status:409) }
         var next=store.draft;next.attachments.append(file);store.updateDraft(next)
         capture.files.removeFirst();try persist()

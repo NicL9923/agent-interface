@@ -46,11 +46,15 @@ struct AvatarConfig: Codable, Equatable {
     "diamond", "sparkle", "clover", "heart", "cookie", "pentagon", "burst", "alien", "ghost",
     "flower", "sun",
   ]
-  static let families: [(id: String, label: String)] = [
+  static let everydayFamilies: [(id: String, label: String)] = [
     ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"),
+  ]
+  /// Listed under their own "Seasonal" heading, like the web editor.
+  static let seasonalFamilies: [(id: String, label: String)] = [
     ("pumpkin", "Pumpkin"), ("santa", "Santa"), ("rudolph", "Rudolph"),
     ("turkey", "Turkey"), ("bunny", "Easter Bunny"),
   ]
+  static var families: [(id: String, label: String)] { everydayFamilies + seasonalFamilies }
   static let seasonalColors = [
     "pumpkin": "#FF9800", "santa": "#F2B08B", "rudolph": "#97683D",
     "turkey": "#97683D", "bunny": "#F5E9D8",
@@ -167,8 +171,26 @@ struct AttachmentUpload: Identifiable {
   var url: URL
   var name: String
   var mime: String
+  var size = 0
+  var status = UploadStatus.queued
+  /// The share of the file sent so far, from 0 to 1.
+  var progress = 0.0
   var error: String?
-  var uploading = false
+  var uploading: Bool { status == .uploading || status == .processing }
+  /// Records how much was sent. Once all of it is, the server is still storing the file.
+  mutating func record(sent fraction: Double) {
+    guard uploading else { return }
+    if fraction >= 1 { progress = 1; status = .processing } else { progress = max(0, fraction) }
+  }
+  /// The web's chip caption for a file still on its way.
+  var caption: String {
+    switch status {
+    case .failed: return "Didn't upload"
+    case .queued: return "Waiting…"
+    case .processing: return "Finishing…"
+    case .uploading: return "Uploading \(Int((progress * 100).rounded()))%"
+    }
+  }
 }
 struct FileRef: Codable, Identifiable, Equatable {
   var id: String
@@ -177,7 +199,7 @@ struct FileRef: Codable, Identifiable, Equatable {
   var size: Int?
   var url: String?
 }
-struct Sender: Codable {
+struct Sender: Codable, Equatable {
   var id: String
   var name: String
 }
@@ -188,7 +210,7 @@ struct MessageOrigin: Codable, Equatable {
   var name: String?
   var handle: String?
 }
-struct Message: Codable, Identifiable {
+struct Message: Codable, Identifiable, Equatable {
   var id: String
   var role: String
   var text: String
@@ -204,17 +226,8 @@ struct Message: Codable, Identifiable {
     if let origin { return origin }
     if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name) }
     if role == "user" {
-      if text.range(of: #"^\[Cronjob "[^\n]+" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "scheduled", visibility: "activity")
-      }
-      if text.range(of: #"^\[Cron delivery: [^\n\]]+\]"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "scheduled", visibility: "conversation")
-      }
-      if text.range(of: #"^(Subagent Tasks? (Completed|Failed|Interrupted|Incomplete):|\[IMPORTANT: (Background )?[Ss]ubagent|\[ASYNC (DELEGATION )?(BATCH )?COMPLETE\b|A background (subagent|fan-out of \d+ subagent\(s\)) you dispatched earlier has finished\.)"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "subagent", visibility: "activity")
-      }
-      if text.range(of: #"^(Background Process (Completed|Failed|Output|Interrupted)|\[IMPORTANT: Background process |\[Background process \S+ heartbeat #)"#, options: .regularExpression) != nil {
-        return MessageOrigin(kind: "process", visibility: "activity")
+      if let kind = Self.originPatterns.first(where: { Self.matches($0.pattern, text) }) {
+        return MessageOrigin(kind: kind.kind, visibility: kind.visibility)
       }
     }
     let names = displayToolName.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -240,22 +253,38 @@ struct Message: Codable, Identifiable {
   }
   var agentEnvelope: (name: String, body: String)? {
     guard role == "user", sender == nil else { return nil }
-    let pattern = #"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#
-    guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+    guard text.hasPrefix("Message from ") || text.hasPrefix("[Message from agent "),
+      let match = Self.envelopePattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
       let bodyRange = Range(match.range(at: 4), in: text),
       let nameRange = Range(match.range(at: 1).location == NSNotFound ? match.range(at: 3) : match.range(at: 1), in: text)
     else { return nil }
     return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]))
   }
-  var isAgentExchange: Bool { agentEnvelope != nil || toolCall?.name == "message_agent" || toolName == "message_agent" }
+  /// As the web's `isAgentExchange`: any message whose origin is another assistant, including an
+  /// incoming "Message from" envelope and an outgoing `message_agent` call.
+  var isAgentExchange: Bool { presentationOrigin?.kind == "agent" }
+  /// A reply renders as Markdown: the assistant's, and a scheduled delivery.
+  var isReply: Bool { role == "assistant" || presentationOrigin?.kind == "scheduled" }
   var isToolActivity: Bool { role == "tool" || (toolCall != nil && text.isEmpty) }
   var displayToolName: String { toolCall?.name ?? toolName ?? "Tool" }
   var toolResult: String {
     let canonical = role == "tool" || toolCall == nil ? text : ""
     return toolCall?.result ?? canonical
   }
+  // Compiled once. Rows read a message's origin on every render, so per-call compilation added up.
+  private static func regex(_ pattern: String) -> NSRegularExpression { try! NSRegularExpression(pattern: pattern) }
+  private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+    regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+  }
+  private static let originPatterns: [(pattern: NSRegularExpression, kind: String, visibility: String)] = [
+    (regex(#"^\[Cronjob "[^\n]+" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]"#), "scheduled", "activity"),
+    (regex(#"^\[Cron delivery: [^\n\]]+\]"#), "scheduled", "conversation"),
+    (regex(#"^(Subagent Tasks? (Completed|Failed|Interrupted|Incomplete):|\[IMPORTANT: (Background )?[Ss]ubagent|\[ASYNC (DELEGATION )?(BATCH )?COMPLETE\b|A background (subagent|fan-out of \d+ subagent\(s\)) you dispatched earlier has finished\.)"#), "subagent", "activity"),
+    (regex(#"^(Background Process (Completed|Failed|Output|Interrupted)|\[IMPORTANT: Background process |\[Background process \S+ heartbeat #)"#), "process", "activity"),
+  ]
+  private static let envelopePattern = regex(#"^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$"#)
 }
-struct ToolCall: Codable, Identifiable {
+struct ToolCall: Codable, Identifiable, Equatable {
   var id: String
   var name: String
   var arguments: String?
@@ -265,25 +294,25 @@ struct ToolCall: Codable, Identifiable {
   var startedAt: String?
   var completedAt: String?
 }
-struct Approval: Codable, Identifiable {
+struct Approval: Codable, Identifiable, Equatable {
   var id: String
   var title: String
   var detail: String
   var status: String
   var expiresAt: String?
 }
-struct Activity: Codable {
+struct Activity: Codable, Equatable {
   var state: ActivityState
   var detail: String?
   var runId: String?
   var updatedAt: String?
 }
-struct Question: Codable, Identifiable {
+struct Question: Codable, Identifiable, Equatable {
   var id: String
   var prompt: String
   var options: [String]?
 }
-struct Attention: Codable, Identifiable {
+struct Attention: Codable, Identifiable, Equatable {
   var id: String
   var kind: String
   var title: String
@@ -291,7 +320,7 @@ struct Attention: Codable, Identifiable {
   var questions: [Question]?
   var secure: SecureRequest? = nil
 }
-struct ReadPosition: Codable {
+struct ReadPosition: Codable, Equatable {
   var messageId: String?
   var scrollTop: Double? = nil
 }
@@ -402,15 +431,16 @@ struct DraftConflict: Decodable {
 struct EarlierFiles: Decodable {
   struct Entry: Decodable {
     var id: String
+    var role: String?
     var files: [FileRef]?
   }
   var messages: [Entry]
 }
-struct CoordinationGroup: Identifiable {
+struct CoordinationGroup: Identifiable, Equatable {
   var id: String
   var messages: [Message]
 }
-struct ConversationTurn: Identifiable {
+struct ConversationTurn: Identifiable, Equatable {
   var id: String
   var messages: [Message]
   var visibleMessages: [Message] { messages.filter(\.isConversationVisible) }
@@ -436,7 +466,7 @@ struct ConversationTurn: Identifiable {
     return groups
   }
 }
-struct Conversation: Codable {
+struct Conversation: Codable, Equatable {
   var attention: [Attention]?
   var botId: String
   var sessionId: String?
@@ -489,14 +519,6 @@ struct Conversation: Codable {
   var visibleMessages: [Message] {
     messages.filter { $0.isConversationVisible }
   }
-  func restorableReadAnchor(_ saved: String?) -> String? {
-    guard let saved else { return nil }
-    if visibleMessages.contains(where: { $0.id == saved }) { return saved }
-    guard let index = messages.firstIndex(where: { $0.id == saved }) else { return nil }
-    return messages.dropFirst(index + 1).first {
-      $0.isConversationVisible
-    }?.id
-  }
 }
 struct UpgradeRevision: Codable {
   var revision: String
@@ -509,6 +531,11 @@ struct UpgradeCheck: Codable, Identifiable {
   var label: String
   var status: String
   var detail: String?
+  /// "Passed · detail", as the web's test details read.
+  var summary: String {
+    let word = status == "passed" ? "Passed" : status == "failed" ? "Failed" : status == "running" ? "Running" : "Waiting"
+    return detail.map { "\(word) · \($0)" } ?? word
+  }
 }
 struct UpgradeStatus: Codable {
   var available: Bool
@@ -523,26 +550,97 @@ struct UpgradeStatus: Codable {
   var canCancel: Bool?
   var canRestartService: Bool?
   var operationId: String?
+  /// "check" only finds and tests an update in a copy; "install" changes Hermes. Older servers omit it.
+  var operation: String?
   var error: String?
   var checkedAt: String?
   var updatedAt: String?
   var busyBots: [String]
   var inProgress: Bool { ["checking", "qualifying", "installing", "verifying", "recovering"].contains(phase) }
   var installing: Bool { ["installing", "verifying"].contains(phase) }
+}
+/// How the Hermes updates screen reads a status, ported from the web panel so both clients agree.
+extension UpgradeStatus {
+  enum StepState: String { case waiting, active, done, failed }
+  private static let installPhases: Set = ["installing", "verifying", "recovering", "rolled_back"]
+  /// A status without `operation` is an install only once it reaches an install phase.
+  var isInstall: Bool { (operation ?? (Self.installPhases.contains(phase) ? "install" : "check")) == "install" }
+  var stopped: Bool { ["blocked", "failed", "cancelled"].contains(phase) }
+  var upToDate: Bool { phase == "idle" && !(checkedAt ?? "").isEmpty && candidate == nil }
   var title: String {
     switch phase {
-    case "checking": "Checking for an update"
-    case "qualifying": "Checking compatibility"
-    case "ready": "Update ready"
-    case "installing": "Updating Hermes"
-    case "verifying": "Verifying Hermes"
+    case "idle": upToDate ? "Hermes is up to date" : "Hermes updates"
+    case "checking": "Looking for an update"
+    case "qualifying": "Testing the update"
+    case "ready": "Update tested and ready"
+    case "installing": "Installing the update"
+    case "verifying": "Making sure everything works"
+    case "succeeded": isInstall ? "Hermes is up to date" : "Hermes is ready"
+    case "blocked": isInstall ? "The update was stopped safely" : "This update needs a look"
+    case "failed": isInstall ? "The update couldn't finish" : "The check didn't finish"
+    case "rolled_back": "The previous version is restored"
     case "recovering": "Restoring the connection"
-    case "cancelled": "Update cancelled"
-    case "succeeded": "Hermes is up to date"
-    case "rolled_back": "Previous version restored"
-    case "blocked": "Update needs attention"
-    case "failed": "Update could not finish"
-    default: available ? "Keep Hermes up to date" : "Updates aren't available"
+    case "cancelled": isInstall ? "The update was cancelled" : "Check stopped"
+    default: "Hermes updates"
+    }
+  }
+  /// The sentence under the title: the server's message unless a check just found nothing to install.
+  func description(loading: Bool) -> String {
+    if upToDate { return "You're running the newest Hermes." }
+    if !message.isEmpty { return message }
+    return loading ? "Getting the current version and update status…" : "Find the newest Hermes and test it before installing it."
+  }
+  /// Find, test in a copy, then install. Only the last changes Hermes.
+  var steps: [(name: String, state: StepState)] {
+    let install = isInstall
+    let find: StepState = phase == "checking" && candidate == nil ? .active
+      : candidate != nil ? .done : stopped && !install ? .failed : .waiting
+    let tested = ["ready", "installing", "verifying", "recovering", "rolled_back"].contains(phase)
+    let test: StepState = phase == "qualifying" || phase == "checking" && candidate != nil ? .active
+      : tested || install ? .done : stopped && candidate != nil ? .failed : .waiting
+    let last: StepState = ["installing", "verifying", "recovering"].contains(phase) ? .active
+      : phase == "succeeded" && install ? .done
+      : install && (stopped || phase == "rolled_back") ? .failed : .waiting
+    return [("Find", find), ("Test in a copy", test), ("Install", last)]
+  }
+  /// A check's own retry is just "Check again", so retry and cancel belong to installs.
+  var showsRecovery: Bool { isInstall && (canRetry == true || canCancel == true) || canRestartService == true }
+  /// Stopping a check needs no confirmation because nothing has changed yet.
+  var canStopCheck: Bool { inProgress && !isInstall && canCancel == true }
+  var checksPassed: Int { checks.filter { $0.status == "passed" }.count }
+  /// The primary button reads Install once a tested update is waiting, otherwise it runs a check.
+  var installsNext: Bool { canInstall && candidate != nil }
+  func actionLabel(submitting: Bool, uncertain: Bool) -> String {
+    if submitting { return installsNext ? "Starting the install…" : "Starting the check…" }
+    if uncertain { return "Checking update status…" }
+    if inProgress { return isInstall ? "Installing…" : "Testing…" }
+    return installsNext ? "Install update" : stopped && !isInstall ? "Check again" : "Check for an update"
+  }
+  func actionHint(uncertain: Bool) -> String {
+    if inProgress || uncertain { return "You can close this. Progress continues on the server." }
+    return installsNext ? "Installing briefly reconnects Hermes. Conversations and drafts stay saved."
+      : "A check finds the newest Hermes and tests it in a separate copy. Nothing is installed until you choose Install."
+  }
+}
+/// The shared desktop's availability and who is driving it, from GET /api/computer.
+struct ComputerStatus: Decodable, Equatable {
+  struct Control: Decodable, Equatable {
+    var kind: String
+    var name: String?
+    var mine: Bool?
+  }
+  var available: Bool
+  var reason: String?
+  var control: Control
+  /// What the Settings row says under "Computer", worded like the web panel.
+  var detail: String {
+    guard available else { return reason?.isEmpty == false ? reason! : "Desktop unavailable" }
+    switch control.kind {
+    case "human":
+      return control.mine == true ? "Watching. Take over to control the desktop."
+        : "\(control.name ?? "A household member") has control"
+    case "bot": return "\(control.name ?? "An assistant") is using the computer"
+    default: return "Watching. Assistants can use this computer."
     }
   }
 }

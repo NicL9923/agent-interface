@@ -2,7 +2,7 @@ import XCTest
 @testable import AgentInterface
 
 /// Conversation copy that must read the same as the web client (src/app/Conversation.tsx and friends).
-final class ConversationParityTests: XCTestCase {
+@MainActor final class ConversationParityTests: XCTestCase {
   private func sentence(_ state: ActivityState, _ detail: String? = nil, lost: Bool = false) -> String {
     ActivitySentence.text(name: "Ranch hand", state: state, detail: detail, connectionLost: lost)
   }
@@ -60,6 +60,52 @@ final class ConversationParityTests: XCTestCase {
     let received = AgentHandoff(message: Message(id: "g", role: "user", text: "Message from Kitchen companion: Dinner is planned"))
     XCTAssertEqual(received.incoming?.name, "Kitchen companion")
     XCTAssertEqual(received.incoming?.body, "Dinner is planned")
+  }
+
+  func testAgentExchangesFollowTheMessageOriginLikeTheWeb() {
+    let incoming = Message(id: "in", role: "user", text: "Message from Kitchen companion: Dinner is planned")
+    XCTAssertTrue(incoming.isAgentExchange)
+    XCTAssertTrue(incoming.isInternalActivity, "An incoming envelope lands in Bot messages")
+    let outgoing = Message(id: "out", role: "assistant", text: "", toolCall: ToolCall(id: "c", name: "message_agent", status: "completed"))
+    XCTAssertTrue(outgoing.isAgentExchange)
+    var reported = Message(id: "server", role: "user", text: "Dinner is planned")
+    reported.origin = MessageOrigin(kind: "agent", visibility: "conversation", name: "Kitchen companion")
+    XCTAssertTrue(reported.isAgentExchange)
+    XCTAssertEqual(AgentHandoff(message: reported).incoming?.name, "Kitchen companion")
+    // A reply that also called message_agent is a reply; its call shows with the turn's tools.
+    let reply = Message(id: "r", role: "assistant", text: "I let the kitchen know.", toolCall: ToolCall(id: "d", name: "message_agent", status: "completed"))
+    XCTAssertFalse(reply.isAgentExchange)
+    XCTAssertFalse(Message(id: "u", role: "user", text: "Hello", sender: Sender(id: "p", name: "Pat")).isAgentExchange)
+  }
+
+  func testOnlyRepliesRenderAsMarkdown() {
+    XCTAssertTrue(Message(id: "a", role: "assistant", text: "**Done**").isReply)
+    XCTAssertTrue(Message(id: "s", role: "user", text: "[Cron delivery: Morning]\n**Weather**").isReply)
+    XCTAssertFalse(Message(id: "u", role: "user", text: "**literal** asterisks").isReply)
+    XCTAssertFalse(Message(id: "t", role: "tool", text: "output").isReply)
+  }
+
+  func testInlineUiStaysAssistantOnlyWhileCardsParseForEveryReply() {
+    let html = "```wildbots-html\n" + #"{"version":1,"title":"Planner","html":"<b>Hi</b>"}"# + "\n```"
+    let cards = "```agent-ui\n" + #"{"version":1,"cards":[{"id":"list","type":"checklist","title":"Feed","items":[{"id":"hay","text":"Hay"}]}]}"# + "\n```"
+    let text = "Intro\n" + html + "\n" + cards
+    XCTAssertEqual(ReplyCards.parse(text).compactMap(\.inline).count, 1)
+    let scheduled = ReplyCards.parse(text, inlineUi: false)
+    XCTAssertTrue(scheduled.allSatisfy { $0.inline == nil })
+    XCTAssertEqual(scheduled.compactMap(\.cards).flatMap { $0 }.map(\.id), ["list"])
+    XCTAssertTrue(scheduled.first?.markdown?.contains("```wildbots-html") == true, "The fence stays a code block")
+  }
+
+  func testToolCallStatusAndWaitingCopyMatchTheWeb() {
+    XCTAssertEqual(ToolActivityView.status("running", connected: true), "Running")
+    XCTAssertEqual(ToolActivityView.status("running", connected: false), "Last seen running")
+    XCTAssertEqual(ToolActivityView.status("failed", connected: true), "Failed")
+    XCTAssertEqual(ToolActivityView.status("completed", connected: false), "Completed")
+    let running = ToolCall(id: "c", name: "search", status: "running")
+    XCTAssertEqual(ToolActivityView.waiting(running, result: nil, connected: true), "Waiting for the result from Hermes.")
+    XCTAssertEqual(ToolActivityView.waiting(running, result: nil, connected: false), "The current tool status will be checked when Hermes reconnects.")
+    XCTAssertNil(ToolActivityView.waiting(running, result: "partial", connected: true))
+    XCTAssertNil(ToolActivityView.waiting(ToolCall(id: "d", name: "search", status: "completed"), result: nil, connected: true))
   }
 
   func testConnectionCardCopyFollowsTheConnectionCode() {

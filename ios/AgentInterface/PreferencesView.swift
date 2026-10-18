@@ -37,13 +37,13 @@ struct PreferencesView: View {
           }.accessibilityIdentifier("Hermes updates")
           if let url = try? store.api?.url("/?computer=1") {
             Link(destination: url) {
-              settingsRow("Computer", icon: "desktopcomputer", detail: "Shared desktop and terminal")
-            }.accessibilityIdentifier("sharedComputer")
+              settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
+            }.disabled(store.computerStatus?.available == false).accessibilityIdentifier("sharedComputer")
           }
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
           }.accessibilityIdentifier("Integrations")
-        }
+        }.task { await watchComputer() }
         if let error = store.error {
           Section {
             ErrorBanner(message: error, dismiss: { store.error = nil })
@@ -69,6 +69,7 @@ struct PreferencesView: View {
           defaultPicker
         }.disabled(store.sessionExpired)
         Section {
+          DeviceNotificationSettings()
           Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
             var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
           })) {
@@ -86,8 +87,6 @@ struct PreferencesView: View {
           if preferences.notifications?.quietStart != nil {
             Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
           }
-          Text(store.notificationStatus).font(.footnote).foregroundStyle(Palette.muted)
-          if let url = URL(string: UIApplication.openSettingsURLString) { Link("Manage device permissions in iOS Settings", destination: url) }
         }.disabled(store.sessionExpired)
         if !(store.bootstrap?.bots.isEmpty ?? true) {
           Section {
@@ -156,6 +155,13 @@ struct PreferencesView: View {
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
+    }
+  }
+  /// The web panel polls the shared computer every few seconds while open; Settings checks while it is shown.
+  private func watchComputer() async {
+    while !Task.isCancelled {
+      await store.refreshComputer()
+      do { try await Task.sleep(for: .seconds(10)) } catch { return }
     }
   }
   private var notificationPreferences: NotificationPreferences {

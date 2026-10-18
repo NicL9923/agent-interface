@@ -38,20 +38,6 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(turn.activityGroups[0].messages[0].toolCall?.result, "Fresh result")
     XCTAssertEqual(turn.activityGroups[0].messages[0].toolCall?.status, "completed")
   }
-  func testReadAnchorSkipsCanonicalToolsWithoutVisibleRows() {
-    let conversation = Conversation(
-      botId: "bot",
-      messages: [
-        Message(id: "before", role: "user", text: "a"),
-        Message(id: "tool", role: "tool", text: "b"),
-        Message(id: "after", role: "assistant", text: "c"),
-        Message(id: "last-tool", role: "tool", text: "d"),
-      ], activity: Activity(state: .idle), approvals: [], files: [])
-    XCTAssertEqual(conversation.restorableReadAnchor("before"), "before")
-    XCTAssertEqual(conversation.restorableReadAnchor("tool"), "after")
-    XCTAssertNil(conversation.restorableReadAnchor("last-tool"))
-    XCTAssertNil(conversation.restorableReadAnchor("missing"))
-  }
   func testCurrentToolCallsMergeWithCanonicalResultsByTheirActualID() throws {
     let json = """
       {"botId":"bot","messages":[{"id":"assistant","role":"assistant","text":"","toolCall":{"id":"call-one","name":"read_file","arguments":"{\\"path\\":\\"note.txt\\"}","status":"completed","result":"Saved note"}}],"activity":{"state":"working"},"approvals":[],"files":[],"toolCalls":[{"id":"call-one","name":"read_file","status":"running"},{"id":"call-two","name":"web_search","status":"running"}]}
@@ -61,7 +47,6 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(conversation.activityMessages.first?.toolCall?.result, "Saved note")
     XCTAssertEqual(conversation.activityMessages.first?.toolCall?.arguments, "{\"path\":\"note.txt\"}")
     XCTAssertTrue(conversation.visibleMessages.isEmpty)
-    XCTAssertNil(conversation.restorableReadAnchor("assistant"))
     var mixed = conversation
     mixed.messages[0].text = "Here is the answer."
     XCTAssertEqual(mixed.visibleMessages.map(\.id), ["assistant"])
@@ -69,17 +54,6 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(tool.toolResult, "Actual canonical result")
     tool.role = "assistant"
     XCTAssertEqual(tool.toolResult, "", "Assistant answer text is not a tool result")
-  }
-  func testTaskListsAreReadOnlyCompletionIndicatorsAndOrdinaryListsKeepMarkers() throws {
-    let done = try XCTUnwrap(MarkdownView.listRow("- [x] Finished **work**"))
-    XCTAssertEqual(done.completed, true)
-    XCTAssertEqual(done.text, "Finished **work**")
-    let pending = try XCTUnwrap(MarkdownView.listRow("* [ ] Pending work"))
-    XCTAssertEqual(pending.completed, false)
-    XCTAssertEqual(pending.text, "Pending work")
-    XCTAssertEqual(MarkdownView.listRow("2. Next step")?.marker, "2.")
-    XCTAssertEqual(
-      MarkdownView.blocks("- [x] Done\n- [ ] Waiting\n\nParagraph").map(\.kind), ["list", "text"])
   }
   func testNativeReadAnchorDoesNotClaimABrowserPixelOffset() throws {
     let encoded = try JSONEncoder().encode(ReadPosition(messageId: "visible-message"))
@@ -91,15 +65,6 @@ final class PresentationTests: XCTestCase {
     XCTAssertNotNil(ServerDate.parse("2026-10-07T09:08:21.125Z"))
     XCTAssertNotNil(ServerDate.parse("2026-10-07T09:08:21Z"))
     XCTAssertNil(ServerDate.parse("not a date"))
-  }
-  func testMarkdownKeepsBlankTableCellsAndEscapedPipes() {
-    XCTAssertEqual(MarkdownView.tableCells("| First | | Last |"), ["First", "", "Last"])
-    XCTAssertEqual(MarkdownView.tableCells("| A\\|B | C |"), ["A|B", "C"])
-    XCTAssertEqual(MarkdownView.tableCells("A | B"), ["A", "B"])
-    let blocks = MarkdownView.blocks(
-      "# Title\n\n| A | B |\n| --- | --- |\n| Hello | |\n\n```swift\nlet n = 1\n```")
-    XCTAssertEqual(blocks.map(\.kind), ["heading", "table", "code"])
-    XCTAssertEqual(blocks.last?.text, "let n = 1")
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
     for shape in AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted() {
@@ -147,13 +112,11 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(conversation.activityMessages.map(\.id), ["in", "out"])
     XCTAssertEqual(incoming.activityGroup, "Bot messages")
   }
-  func testScheduledAnswersAndUnknownMessagesRemainVisibleAndAnchorsSkipCoordination() throws {
+  func testScheduledAnswersAndUnknownMessagesRemainVisible() throws {
     let json = #"{"botId":"kimberly","messages":[{"id":"cron","role":"user","text":"Native scheduled input","origin":{"kind":"scheduled","visibility":"activity","title":"Bunny care"}},{"id":"answer","role":"assistant","text":"Hay and water.","origin":{"kind":"scheduled","visibility":"conversation"}},{"id":"desktop","role":"user","text":"Desktop question"},{"id":"diagnostic","role":"assistant","text":"Internal failure","origin":{"kind":"diagnostic","visibility":"activity"}}],"activity":{"state":"idle"},"approvals":[],"files":[]}"#
     let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
     XCTAssertEqual(conversation.visibleMessages.map(\.id), ["answer", "desktop"])
     XCTAssertEqual(conversation.activityMessages.map(\.id), ["cron", "diagnostic"])
-    XCTAssertEqual(conversation.restorableReadAnchor("cron"), "answer")
-    XCTAssertNil(conversation.restorableReadAnchor("diagnostic"))
     var human = conversation.messages[0]
     human.sender = Sender(id: "one", name: "Nicolas")
     XCTAssertTrue(human.isConversationVisible)

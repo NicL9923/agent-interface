@@ -38,14 +38,16 @@ enum ReplyCards {
       }.joined(separator: "\n")
     }.joined(separator: "\n")
   }
-  static func parse(_ text: String) -> [ReplyContentPart] {
+  /// Splits a reply into prose, cards and, when `inlineUi` allows it, inline UI. Without it a
+  /// wildbots-html fence stays a code block, as the web shows it outside assistant replies.
+  static func parse(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
     guard text.utf16.count <= 200_000 else { return [.init(id: 0, markdown: text)] }
     var parts: [ReplyContentPart] = []
     var cursor = text.startIndex
     for block in fencedBlocks(text) {
       let whole = block.whole, payload = block.payload
       if block.language == "wildbots-html" {
-        guard let doc = InlineDocument.parse(String(text[payload])) else { continue }
+        guard inlineUi, let doc = InlineDocument.parse(String(text[payload])) else { continue }
         if cursor < whole.lowerBound { parts.append(.init(id: parts.count, markdown: String(text[cursor..<whole.lowerBound]))) }
         parts.append(.init(id: parts.count, inline: doc)); cursor = whole.upperBound
         continue
@@ -129,23 +131,29 @@ enum ReplyCards {
   static func safeLink(_ value: String) -> Bool { guard let url = URL(string: value), let host = url.host, !host.isEmpty else { return false }; return ["http", "https"].contains(url.scheme?.lowercased() ?? "") }
 }
 
+/// A message's text as the web's conversation shows it: replies, meaning the assistant's and
+/// scheduled deliveries, are Markdown with reply cards, and only the assistant's may carry inline
+/// UI. Everything else, such as a person's message, is plain text.
 struct ReplyContentView: View {
   var message: Message
   var body: some View {
-    if message.role == "assistant" && !message.isInternalActivity {
-      ForEach(ReplyCards.parse(message.text)) { part in
+    if message.isReply {
+      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant")) { part in
         if let markdown = part.markdown { MarkdownView(text: markdown) }
         if let inline = part.inline { InlineUiView(document: inline) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
       }
-    } else { MarkdownView(text: message.text) }
+    } else {
+      Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+    }
   }
 }
 
 struct InteractiveReplyCard: View {
   var card: ReplyCard
   var messageId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(\.unobservedStore) private var store
+  @Environment(\.transcriptConnected) private var connected
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()
   @State private var draft = ReplyCardState()
@@ -154,7 +162,7 @@ struct InteractiveReplyCard: View {
   @State private var editing: String?
   @State private var eventOpen = false
   enum Status { case loading, ready, saving, failed }
-  private var busy: Bool { status == .loading || status == .saving || !store.connected }
+  private var busy: Bool { status == .loading || status == .saving || !connected }
   private var typeLabel: String { card.type == "event" ? "Calendar proposal" : card.type == "itinerary" ? "Itinerary" : "Checklist" }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -189,11 +197,11 @@ struct InteractiveReplyCard: View {
       }
       if let error {
         ErrorBanner(message: error)
-        if status == .failed && saved != draft { Button("Retry saving") { save(draft) }.buttonStyle(.bordered).disabled(!store.connected) }
-        else { Button("Reload saved state") { Task { await load() } }.buttonStyle(.bordered).disabled(!store.connected) }
+        if status == .failed && saved != draft { Button("Retry saving") { save(draft) }.buttonStyle(.bordered).disabled(!connected) }
+        else { Button("Reload saved state") { Task { await load() } }.buttonStyle(.bordered).disabled(!connected) }
       }
     }.padding(14).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
-      .task(id: "\(store.scope ?? ""):\(messageId):\(card.id)") { await load() }
+      .task(id: "\(store?.scope ?? ""):\(messageId):\(card.id)") { await load() }
       .sheet(isPresented: $eventOpen) { CalendarProposalEditor(card: card) }
   }
   private func itineraryItem(_ item: ReplyCardItem) -> some View {
@@ -216,19 +224,19 @@ struct InteractiveReplyCard: View {
       }
     }
   }
-  private var path: String { "/bots/\(APIClient.component(store.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
+  private var path: String { "/bots/\(APIClient.component(store?.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
   private func load() async {
-    guard card.type != "event", let api = store.api else { return }
-    let scope = store.scope; status = .loading; error = nil
-    do { let value: ReplyCardState = try await api.get(path); guard store.scope == scope, store.api === api else { return }; saved = value; draft = value; status = .ready }
-    catch { if store.scope == scope { self.error = error.localizedDescription; status = .failed } }
+    guard card.type != "event", let api = store?.api else { return }
+    let scope = store?.scope; status = .loading; error = nil
+    do { let value: ReplyCardState = try await api.get(path); guard store?.scope == scope, store?.api === api else { return }; saved = value; draft = value; status = .ready }
+    catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
   }
   private func save(_ value: ReplyCardState) {
-    guard let api = store.api, !busy else { return }
-    let scope = store.scope; let route = path; draft = value; status = .saving; error = nil
+    guard let api = store?.api, !busy else { return }
+    let scope = store?.scope; let route = path; draft = value; status = .saving; error = nil
     Task {
-      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store.scope == scope, store.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
-      catch { if store.scope == scope { self.error = error.localizedDescription; status = .failed } }
+      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store?.scope == scope, store?.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
+      catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
     }
   }
 }

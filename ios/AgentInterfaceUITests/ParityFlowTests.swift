@@ -92,7 +92,7 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tap()
     XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["composerModel"].label, "Model: fixture-fast")
-    let composer = app.textFields["messageComposer"]
+    let composer = app.textViews["messageComposer"]
     composer.tap(); composer.typeText("Check the fence")
     XCTAssertTrue(app.buttons["sendMessage"].isEnabled)
     XCTAssertGreaterThan(composer.frame.width, 240, "Advanced tools must not squeeze the input")
@@ -120,6 +120,24 @@ final class ParityFlowTests: XCTestCase {
     search.tap(); search.typeText("Fixture fast")
     XCTAssertTrue(app.buttons["Fixture fast model"].waitForExistence(timeout: 5))
     try capture("assistant-model-catalog")
+  }
+  func testComputerRowReportsWhoHasControlAndDisablesWhenUnavailable() throws {
+    for unavailable in [false, true] {
+      let app = XCUIApplication()
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      if unavailable { app.launchEnvironment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] = "1" }
+      app.launch()
+      XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.buttons["openSettings"].tap()
+      let row = app.descendants(matching: .any)["sharedComputer"]
+      XCTAssertTrue(row.waitForExistence(timeout: 10))
+      let detail = unavailable ? "The fixture desktop is stopped." : "Ranch hand is using the computer"
+      expectation(for: NSPredicate(format: "label CONTAINS %@", detail), evaluatedWith: row); waitForExpectations(timeout: 10)
+      XCTAssertEqual(row.isEnabled, !unavailable)
+      app.terminate()
+    }
   }
   func testSettingsFailureCanRetryAfterDismissingTheError() throws {
     let app = XCUIApplication()
@@ -161,6 +179,34 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts.matching(identifier: "Fixture single visible reply").count, 1)
   }
+  /// Like the web, a chat opens at its latest message, pages in earlier turns near the top, and
+  /// the jump control returns to the end.
+  func testLongChatOpensAtLatestPagesEarlierAndJumpsBack() {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launchEnvironment["AGENT_INTERFACE_UI_LONG_HISTORY"] = "1"
+    app.launch()
+    let latest = app.staticTexts["Fixture answer 60."]
+    expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: latest)
+    waitForExpectations(timeout: 10)
+    let jump = app.buttons["Jump to latest"]
+    XCTAssertFalse(jump.exists)
+    // The first page holds turns 41 to 60. Opening at the end must not page in more.
+    let earlier = app.staticTexts["Fixture question 35"]
+    XCTAssertFalse(earlier.exists, "Opening at the latest message loaded earlier history")
+    // Reading back pages in turns 21 to 40, then 1 to 20, until the conversation's start.
+    let start = app.staticTexts["This is the start of your conversation with Ranch hand."]
+    for _ in 0..<30 where !start.exists { app.swipeDown(velocity: .fast) }
+    XCTAssertTrue(start.exists, "Earlier history did not load while scrolling up")
+    XCTAssertTrue(earlier.exists)
+    XCTAssertTrue(jump.waitForExistence(timeout: 5))
+    jump.tap()
+    expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: latest)
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: jump)
+    waitForExpectations(timeout: 10)
+  }
   func testTodayAndTabletLayout() throws {
     let app = launch(home: true)
     XCTAssertTrue(app.buttons["openToday"].waitForExistence(timeout: 10))
@@ -170,7 +216,7 @@ final class ParityFlowTests: XCTestCase {
     try capture("today")
     home(app)
     app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.textFields["messageComposer"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
     try capture("conversation-light")
     app.buttons["conversationFiles"].tap()
     XCTAssertTrue(app.staticTexts["No artifacts yet"].waitForExistence(timeout: 5))
@@ -179,5 +225,61 @@ final class ParityFlowTests: XCTestCase {
     XCUIDevice.shared.orientation = .landscapeLeft
     try capture("landscape")
     XCUIDevice.shared.orientation = .portrait
+  }
+
+  /// A launch with extra fixture switches, always on the home list.
+  private func launch(_ switches: [String]) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    for name in switches { app.launchEnvironment["AGENT_INTERFACE_UI_" + name] = "1" }
+    app.launch()
+    return app
+  }
+  func testSavedSignInShowsOutageStateInsteadOfSignInControls() {
+    let app = launch(["OUTAGE"])
+    XCTAssertTrue(app.staticTexts["Can't reach the app right now. We'll keep trying."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.buttons["Try again"].exists)
+    XCTAssertTrue(app.buttons["Change server"].waitForExistence(timeout: 5), "A wrong address must not strand anyone: " + app.debugDescription)
+    XCTAssertFalse(app.buttons["householdSignIn"].exists)
+  }
+  func testHomeWithoutHermesShowsSetupPanelAndExplainsBlockedCreate() {
+    let app = launch(["DISCONNECTED"])
+    XCTAssertTrue(app.staticTexts["Connect your household to Hermes"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Pick up with your assistants"].exists)
+    XCTAssertTrue(app.buttons["Check connection"].exists)
+    app.buttons["New assistant"].tap()
+    XCTAssertTrue(app.staticTexts["Assistant setup is unavailable while Hermes is disconnected."].waitForExistence(timeout: 5))
+  }
+  func testNotificationPromptAsksIosOnlyAfterEnableAndSettingsSwitchFollows() {
+    let app = launch(["PUSH"])
+    XCTAssertTrue(app.staticTexts["Enable notifications on this device?"].waitForExistence(timeout: 10), app.debugDescription)
+    app.buttons["enableNotifications"].tap()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Enable notifications on this device?"]); waitForExpectations(timeout: 5)
+    app.buttons["openSettings"].tap()
+    let toggle = app.switches["deviceNotifications"]
+    // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.
+    if !toggle.waitForExistence(timeout: 3) { scroll(app, to: toggle) }
+    XCTAssertTrue(toggle.exists)
+    expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: toggle); waitForExpectations(timeout: 5)
+    // A labelled row switch holds the real control; tapping the row's centre can miss it.
+    (toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle).tap()
+    expectation(for: NSPredicate(format: "value == %@", "0"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
+    // The explanatory text sits below the fold in a lazy list, so the switch's own label is the check.
+    expectation(for: NSPredicate(format: "label CONTAINS %@", "Disabled"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
+  }
+  func testNotNowHidesNotificationPromptAndSettingsCanStillEnable() {
+    let app = launch(["PUSH"])
+    XCTAssertTrue(app.buttons["notNowNotifications"].waitForExistence(timeout: 10))
+    app.buttons["notNowNotifications"].tap()
+    XCTAssertFalse(app.staticTexts["Enable notifications on this device?"].exists)
+    app.buttons["openSettings"].tap()
+    let toggle = app.switches["deviceNotifications"]
+    // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.
+    if !toggle.waitForExistence(timeout: 3) { scroll(app, to: toggle) }
+    XCTAssertTrue(toggle.exists)
+    XCTAssertEqual(toggle.value as? String, "0"); XCTAssertTrue(toggle.isEnabled)
   }
 }
