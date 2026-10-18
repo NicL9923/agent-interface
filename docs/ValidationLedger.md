@@ -130,6 +130,60 @@ result output uses the requested `.private` paths on the SSD worktree.
 No live Hermes probe or production receipt was collected. Independent review,
 a PR, release qualification and deployment remain with the orchestrator.
 
+Round 2, after Claude Opus 5.5's independent review, starts at the remote merge
+`f1aa063`. GPT-6.1 Sol made the fixes in `61e69c7`, `0ca53c2` and `8c05fe4`.
+The shared computer authorization files and their ledger entry were left untouched.
+
+Default bootstrap and bot lists again include full configuration for build 5
+and cached web clients. New clients request `roster=lean`; settings wait for
+detail and retain one dialog, header and Close control through loading and
+retry. A retry moves focus to the stable heading. Lean native fixtures
+now exercise the enabled composer model picker. Roster events compare each
+viewer's visible rows after one shared evaluation per second, so unchanged
+frames and another member's private activity produce no notice. Clients own
+the initial fetch. Live patches require an active matching run, and structural
+frames prevent stale history reads from replacing tools or live snapshots.
+
+Admission now checks stopped terminal events and inflight interruptions as well
+as restart records, including cold sessions. A reviewed admission remains
+idempotent. Discovery checks per-profile execution DB/WAL stamps, retains the
+60-second safety scan, and schedules full scans on the next tick after routine
+mutations. A mutation during an outstanding scan preserves the next full scan.
+The history cache prunes noncanonical sessions and caps itself at 32 entries.
+The API docs and misplaced Swift comments were corrected, and the dead
+`request.answer` result check was removed.
+
+Round 2 checks on the Mac mini, Node 26.10.0 and Python 3.14.7:
+
+- `npm run typecheck`, `ruff check .`, `npm run build` and `git diff --check`
+  passed.
+- `npm test` passed all 798 tests in 69 files. All 798 also passed with
+  `PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/vitest/vitest.mjs run`
+  on Node 24.21.0.
+- `TMPDIR=/Volumes/DevSSD/scratch/agent-interface-efficiency/tmp python3 scripts/run-python-tests.py`
+  passed 21 files, skipped the tmux-dependent terminal file and failed none.
+  Two tests in passing files skipped for optional prepared environments. The
+  full runner passed again after the final admission adjustment. A focused run
+  of `tests/hermes_extension_journal_test.py` also passed all 19 add-on tests.
+
+- `IOS_DERIVED_DATA=.private/ios-build-efficiency-r2 bash .agents/tools/validate-ios.sh
+  B80F29A1-2C7A-4F0A-A801-4F498ABC9037 test` exited 0 with `TEST SUCCEEDED`.
+  Xcode 27.1 used the iPhone 17 simulator named AgentInterfaceValidation on
+  iOS 27.0. The result bundle reports 293 tests: 289 passed, four skipped,
+  zero failed. The unit suite had 250 tests with two evidence-output skips;
+  the UI suite had 43 tests with the screenshot tour and iPad-only test skipped.
+  The task booted this one simulator and shut it down afterward. After all
+  assertions passed, the optional `simctl diagnose` collector stayed idle.
+  Stopping that specific collector let Xcode finalize the successful result.
+  Evidence is `.private/ios-test-20261018T205300Z-86309.xcresult`; check logs
+  are under `/Volumes/DevSSD/scratch/agent-interface-efficiency/round2-*`.
+
+The first round 2 JavaScript run found obsolete bootstrap URL mocks, a default
+roster detail test double and a roster cache invalidation race during connection.
+Those were corrected before the final passing runs. No production probe, PR,
+merge or deployment was performed. The orchestrator owns the next independent
+review.
+
 ## October 18 app release 0fa04ff
 
 PR #147 merged at `0fa04ffbfdfcb7f7442735e9b0d8b9f2602d8a44`. The release is live at `https://agentui.wildflowersranch.com`,
