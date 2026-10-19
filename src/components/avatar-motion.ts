@@ -8,6 +8,8 @@ export const TAU = Math.PI * 2;
 export const CELEBRATION = 1.8;
 export const WORK_CYCLE = 3.8;
 export const WORK_SPIN = 0.95;
+/** One thinking loop: ponder one way, glance the other, then a beat (an idea or a tumble). */
+export const THINK_CYCLE = 6.4;
 /** Radius of the imaginary sphere the face is painted on, in body units. */
 export const FACE_RADIUS = 42;
 
@@ -40,10 +42,19 @@ export interface Pose {
   trails: number;
   sweep: number;
   symbolTilt: number;
+  /** Vertical turn of the face, in radians; a full turn rolls the eyes over the top and back. */
+  pitch: number;
+  /** Momentary eye size, for a pop of surprise. */
+  eyeScale: number;
+  /** Emphasis marks beside the head, from 0 (none) to 1. */
+  ticks: number;
+  /** Which side the marks appear on: -1 left, 1 right. */
+  tickSide: number;
 }
 export const restingPose: Pose = {
   yaw: 0, lift: 0, shiftX: 0, roll: 0, scaleX: 1, scaleY: 1,
   gazeX: 0, gazeY: 0, blink: 1, trails: 0, sweep: 0, symbolTilt: 0,
+  pitch: 0, eyeScale: 1, ticks: 0, tickSide: 1,
 };
 
 /** States whose meaning is "nothing is happening right now" never move. */
@@ -78,6 +89,124 @@ function wander(t: number, span = 2.8) {
   const from = target(segment - 1);
   const to = target(segment);
   return [from[0] + (to[0] - from[0]) * blend, from[1] + (to[1] - from[1]) * blend];
+}
+
+/** Rises from 0 past 1 and settles, for marks and eyes that pop into place. */
+export function popIn(t: number) {
+  const x = clamp(t);
+  return 1 + 2.2 * (x - 1) ** 3 + 1.2 * (x - 1) ** 2;
+}
+/** 0 to 1 over [start, end], eased. */
+const span = (t: number, start: number, end: number) => smoothstep((t - start) / (end - start));
+/** Up then back down over [start, end]: 0 at both ends, 1 in the middle. */
+const hump = (t: number, start: number, end: number) => t <= start || t >= end ? 0 : Math.sin((Math.PI * (t - start)) / (end - start));
+
+/**
+ * Thinking: eyes shrink to dots and look up to one side, then dart to the other with the body
+ * following a beat later. Each loop ends in a beat: a squash and pop of wide eyes with emphasis
+ * marks (an idea), or every other loop a hop that rolls the face over the top (a tumble).
+ */
+function thinkPose(pose: Pose, t: number) {
+  const k = Math.floor(t / THINK_CYCLE);
+  const u = t - k * THINK_CYCLE;
+  // Sides alternate, so each loop starts where the last one looked.
+  const first = k % 2 === 0 ? 1 : -1;
+  // The eyes switch sides in 0.14 s; the head follows over 0.4 s.
+  const eyes = first * (1 - 2 * span(u, 3.2, 3.34));
+  const head = first * (1 - 2 * span(u, 3.26, 3.66));
+  const drift = Math.sin(t * 1.1);
+  pose.gazeX = eyes * (0.5 + 0.12 * drift);
+  pose.gazeY = -0.8 + 0.08 * Math.sin(t * 0.9);
+  pose.yaw = head * 0.2;
+  pose.roll = head * 5 + drift * 1.2;
+  const b = Math.sin(t * 2.1);
+  pose.scaleY *= 1 + 0.016 * b;
+  pose.scaleX *= 1 - 0.01 * b;
+  pose.lift = -1.5 - b;
+  // Both beats start from a squash that gathers the body.
+  const squash = hump(u, 5.0, 5.42);
+  pose.scaleY *= 1 - 0.08 * squash;
+  pose.scaleX *= 1 + 0.05 * squash;
+  if (k % 2 === 0) {
+    const pop = hump(u, 5.3, 5.85);
+    pose.scaleY *= 1 + 0.07 * pop;
+    pose.scaleX *= 1 - 0.035 * pop;
+    pose.lift -= 4 * pop;
+    // The idea lands facing forward with wide eyes, marks on the side it was looking.
+    const forward = span(u, 5.25, 5.5) * (1 - span(u, 6.05, 6.4));
+    pose.gazeX *= 1 - 0.8 * forward;
+    pose.gazeY += 0.55 * forward;
+    pose.yaw *= 1 - forward;
+    pose.roll *= 1 - 0.7 * forward;
+    pose.eyeScale = u < 5.3 ? 1 : 1 + 0.22 * hump(u, 5.3, 6.3) ** 0.6;
+    pose.ticks = u < 5.32 ? 0 : popIn((u - 5.32) / 0.3) * (1 - span(u, 5.95, 6.3));
+    pose.tickSide = -first;
+  } else {
+    const s = clamp((u - 5.3) / 0.8);
+    pose.pitch = TAU * easeInOut(s);
+    pose.lift -= 3.5 * Math.sin(Math.PI * s);
+    pose.gazeY *= 1 - hump(u, 5.3, 6.1);
+  }
+  return pose;
+}
+
+/** Seconds between idle gestures, on average. */
+export const IDLE_GESTURE = 9;
+/** A per-avatar offset, so avatars that settle together do not gesture in step. */
+export function motionSeed(name: string) {
+  let seed = 0;
+  for (let i = 0; i < name.length; i++) seed = (seed * 31 + name.charCodeAt(i)) % 997;
+  return seed;
+}
+/**
+ * Now and then an idle avatar does something small: a curious head tilt, a peek to one side,
+ * a hop, or a double take with emphasis marks. Each lasts about 1.4 s.
+ */
+function idleGesture(pose: Pose, t: number, seed: number) {
+  const clock = t + seed;
+  const j = Math.floor(clock / IDLE_GESTURE);
+  const start = j * IDLE_GESTURE + 3 + hash(j + 5) * 3;
+  const g = clock - start;
+  // Nothing while the arrival settles, and nothing outside the gesture.
+  if (t < 2 || g < 0 || g > 1.4) return pose;
+  const side = hash(j + 11) < 0.5 ? -1 : 1;
+  const e = span(g, 0, 0.25) * (1 - span(g, 1.05, 1.4));
+  switch (Math.floor(hash(j + 17) * 4)) {
+    case 0: // A curious tilt toward one side, eyes a little wider.
+      pose.roll += side * 13 * e;
+      pose.gazeX += (side * 0.6 - pose.gazeX) * e;
+      pose.gazeY += (-0.3 - pose.gazeY) * e;
+      pose.eyeScale = 1 + 0.12 * e;
+      break;
+    case 1: // A peek: the head turns a quarter so the far eye shrinks.
+      pose.yaw += (side * 0.55 - pose.yaw) * e;
+      pose.gazeX += (side * 0.9 - pose.gazeX) * e;
+      pose.shiftX += side * 1.5 * e;
+      break;
+    case 2: { // A hop: gather, spring up, land.
+      const gather = hump(g, 0, 0.22) + hump(g, 0.62, 0.86);
+      const air = hump(g, 0.18, 0.66);
+      pose.scaleY *= 1 - 0.09 * gather + 0.06 * air;
+      pose.scaleX *= 1 + 0.06 * gather - 0.03 * air;
+      pose.lift -= 7 * air;
+      pose.eyeScale = 1 + 0.1 * air;
+      pose.blink = 1;
+      break;
+    }
+    default: { // A double take: a glance, back, then wide eyes and marks.
+      const glance = hump(g, 0, 0.3);
+      pose.gazeX += (side * 0.9 - pose.gazeX) * glance;
+      pose.yaw += side * 0.25 * glance;
+      const take = span(g, 0.32, 0.42) * (1 - span(g, 1.05, 1.4));
+      pose.eyeScale = g < 0.32 ? 1 : 1 + 0.26 * popIn((g - 0.32) / 0.25) * (1 - span(g, 1.05, 1.4));
+      pose.gazeX *= 1 - take;
+      pose.lift -= 2.5 * hump(g, 0.32, 0.6);
+      pose.ticks = g < 0.36 ? 0 : popIn((g - 0.36) / 0.3) * (1 - span(g, 0.95, 1.3));
+      pose.tickSide = side;
+      pose.blink = 1;
+    }
+  }
+  return pose;
 }
 
 /** A short damped "boop" that acknowledges every state change. */
@@ -138,7 +267,7 @@ function propPose(pose: Pose, prop: AvatarProp, t: number) {
   return pose;
 }
 
-export function avatarPose(state: ActivityState, t: number, reduce: boolean, prop?: AvatarProp): Pose {
+export function avatarPose(state: ActivityState, t: number, reduce: boolean, prop?: AvatarProp, seed = 0): Pose {
   if (reduce || frozenStates.includes(state)) return restingPose;
   const pop = arrival(t);
   const pose: Pose = { ...restingPose, blink: blinkAt(t), scaleX: pop, scaleY: pop };
@@ -152,22 +281,17 @@ export function avatarPose(state: ActivityState, t: number, reduce: boolean, pro
     case "idle": {
       const b = breathe(1.7, 0.012);
       const [x, y] = wander(t);
+      // The eyes lead; the head turns and leans after them.
+      const [hx] = wander(t - 0.18);
       pose.lift = -0.6 * b;
-      pose.roll = Math.sin(t * 0.55) * 1.6;
+      pose.roll = Math.sin(t * 0.55) * 1.6 + hx * 2.5;
       pose.gazeX = x;
       pose.gazeY = y;
-      pose.yaw = x * 0.16;
-      break;
+      pose.yaw = hx * 0.2;
+      return idleGesture(pose, t, seed);
     }
-    case "thinking": {
-      const b = breathe(2.1, 0.018);
-      pose.gazeX = Math.sin(t * 1.3) * 0.5;
-      pose.gazeY = -0.8;
-      pose.yaw = Math.sin(t * 1.3) * 0.18;
-      pose.roll = -5 + Math.sin(t * 1.3) * 2;
-      pose.lift = -1.5 - b;
-      break;
-    }
+    case "thinking":
+      return thinkPose(pose, t);
     case "working": {
       if (prop) return propPose(pose, prop, t);
       const u = t % WORK_CYCLE;
@@ -211,7 +335,9 @@ export function avatarPose(state: ActivityState, t: number, reduce: boolean, pro
         pose.roll = 14 * Math.sin(s * TAU * 1.5) * (1 - s);
         pose.scaleY *= 1 - 0.06 * Math.sin(TAU * 2 * s) * (1 - s);
         pose.blink = 1;
+        pose.ticks = s < 0.82 ? 0 : popIn((t - CELEBRATION * 0.82) / 0.3);
       } else {
+        pose.ticks = 1 - span(t, CELEBRATION + 0.3, CELEBRATION + 0.7);
         const b = breathe(1.5, 0.012);
         pose.lift = -0.5 * b;
         pose.roll = Math.sin(t * 0.7) * 2;
@@ -237,19 +363,27 @@ export interface Expression {
   happy: number;
   /** Mascot mouth curve: -1 frown, 0 flat, 1 smile. */
   mouth: number;
+  /** 0 = the style's own eyes, 1 = small round dots, as when concentrating. */
+  dot: number;
 }
 export function expressionFor(state: ActivityState, t: number): Expression {
   switch (state) {
-    case "working": return { open: 0.82, tilt: 0, happy: 0, mouth: 0.3 };
-    case "waiting": return { open: 0.36, tilt: 0, happy: 0, mouth: 0 };
-    case "blocked": return { open: 1.1, tilt: 0, happy: 0, mouth: -0.2 };
+    case "thinking": {
+      // Dots while pondering; the idea beat opens them wide again.
+      const u = t % THINK_CYCLE;
+      const idea = Math.floor(t / THINK_CYCLE) % 2 === 0 && u > 5.2 && u < 6.1;
+      return { open: idea ? 1.1 : 1, tilt: 0, happy: 0, mouth: idea ? 0.9 : 0.1, dot: idea ? 0 : 1 };
+    }
+    case "working": return { open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0 };
+    case "waiting": return { open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+    case "blocked": return { open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0 };
     case "done": return t < CELEBRATION * 0.75
-      ? { open: 1.1, tilt: 0, happy: 0, mouth: 1 }
-      : { open: 1, tilt: 0, happy: 1, mouth: 1 };
-    case "failed": return { open: 0.62, tilt: 14, happy: 0, mouth: -1 };
-    case "disconnected": return { open: 0.7, tilt: 0, happy: 0, mouth: 0 };
-    case "interrupted": return { open: 0.5, tilt: 0, happy: 0, mouth: 0 };
-    default: return { open: 1, tilt: 0, happy: 0, mouth: 0.6 };
+      ? { open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0 }
+      : { open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0 };
+    case "failed": return { open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0 };
+    case "disconnected": return { open: 0.7, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+    case "interrupted": return { open: 0.5, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+    default: return { open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0 };
   }
 }
 /** Frame-rate independent approach toward a target expression. */
@@ -260,6 +394,7 @@ export function approach(current: Expression, target: Expression, dt: number): E
     tilt: current.tilt + (target.tilt - current.tilt) * k,
     happy: current.happy + (target.happy - current.happy) * k,
     mouth: current.mouth + (target.mouth - current.mouth) * k,
+    dot: current.dot + (target.dot - current.dot) * k,
   };
 }
 
@@ -271,6 +406,34 @@ export function project(dx: number, yaw: number, radius = FACE_RADIUS) {
   const angle = yaw + Math.asin(clamp(dx / radius, -1, 1));
   const depth = Math.cos(angle);
   return { x: radius * Math.sin(angle), scale: Math.max(depth, 0.02), visible: depth > 0.02 };
+}
+/**
+ * The eyes' height on the face sphere turned by `pitch`: `y` from the face center, the vertical
+ * squash, and whether they face the viewer. A full turn rolls them over the top and back from below.
+ */
+export function pitchEyes(pitch: number, radius = FACE_RADIUS) {
+  const depth = Math.cos(pitch);
+  return { y: -radius * Math.sin(pitch), scale: Math.max(depth, 0.02), visible: depth > 0.02 };
+}
+/** Near features look a little larger than far ones as the face turns. */
+export const perspective = (depth: number) => 0.86 + 0.14 * depth;
+/**
+ * Emphasis marks: three short strokes fanning out from beside the top of the head on `side`,
+ * growing with `level`. Returned as path data in avatar units.
+ */
+export function tickMarks(level: number, side: number, top: number) {
+  if (level <= 0.01) return [];
+  const cx = 50 + side * 34;
+  const cy = Math.max(top, 4) + 8;
+  return [-84, -52, -20].map((degrees) => {
+    const a = (degrees * Math.PI) / 180;
+    const dx = Math.cos(a) * side;
+    const dy = Math.sin(a);
+    const r0 = 6 + 3 * level;
+    const r1 = r0 + 9 * level;
+    const f = (v: number) => v.toFixed(2);
+    return `M${f(cx + dx * r0)} ${f(cy + dy * r0)} L${f(cx + dx * r1)} ${f(cy + dy * r1)}`;
+  });
 }
 
 /**
