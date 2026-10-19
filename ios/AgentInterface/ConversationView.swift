@@ -1,6 +1,20 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Reports the chat as read while it is on screen and the app is in use.
+private struct ReadingChat: ViewModifier {
+  var botId: String
+  @EnvironmentObject private var store: AppStore
+  @Environment(\.scenePhase) private var scenePhase
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: scenePhase, initial: true) { _, phase in
+        if phase == .active { store.viewing(botId) } else { store.leave(botId) }
+      }
+      .onDisappear { store.leave(botId) }
+  }
+}
+
 struct ConversationView: View {
   var bot: Bot
   var edit: () -> Void
@@ -40,7 +54,7 @@ struct ConversationView: View {
       }
       transcript
       composer
-    }.background(Palette.surface(scheme)).navigationTitle(bot.name).navigationBarTitleDisplayMode(
+    }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name).navigationBarTitleDisplayMode(
       .inline
     )
     .toolbar {

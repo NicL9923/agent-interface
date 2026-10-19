@@ -283,6 +283,30 @@ Notification taps receive the existing relative `url` field such as `/?bot=ID`
 and the event `tag`. Resolve links against the configured application origin;
 reject external URLs. Oversized links are omitted instead of truncated.
 
+### Chat presence
+
+| Route | Body |
+| --- | --- |
+| `PUT /api/bots/:id/presence` | `{ "client": "DEVICE_OR_TAB_ID", "state": "active" }`; returns `{ "ok": true }` |
+
+While a chat is on screen and the app is active, send `active` every 15 seconds
+with the push `deviceId` as `client`. Send `left` when the chat leaves the screen
+or the app leaves the foreground. `idle` ends presence without marking the chat
+read; the web sends it after five minutes without input. The server treats a
+client as gone 45 seconds after its last beat.
+
+No device gets a notification for a chat its person has open on any client, or
+read on any client after the event happened. That includes retries to an endpoint
+that failed earlier. Routine results and security alerts always notify. After a
+chat is read, the worker sends each other iOS device that received its
+notifications one background push, `apns-push-type: background` at priority 5:
+`{ "aps": { "content-available": 1 }, "clear": { "bots": ["ID"] } }`. The app
+removes its delivered notifications whose `url` opens one of those chats. iOS
+throttles background pushes and drops them for an app the person force-quit, so
+the app also clears a chat's notifications when it opens. Browsers get no clearing
+push: Safari revokes a Web Push subscription after three pushes that show no
+notification. A browser closes its own notifications for a chat when it opens.
+
 Configure `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY_FILE`, and
 `APNS_ENVIRONMENT` together. `APNS_TOPIC` is the app's actual bundle ID.
 `APNS_PRIVATE_KEY_FILE` points to a private server file containing the Apple

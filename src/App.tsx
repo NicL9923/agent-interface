@@ -10,6 +10,7 @@ import type { Panel, View } from "./app/view";
 import { useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
+import { useChatPresence } from "./app/use-chat-presence";
 import { useSubmission } from "./app/use-submission";
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { UpdateNotice } from "./app/UpdateNotice";
@@ -54,6 +55,8 @@ export function App() {
     setBotId("");
     void session.refresh();
   });
+  // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
+  useChatPresence(view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined, userId);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,

@@ -320,6 +320,11 @@ struct Attention: Codable, Identifiable, Equatable {
   var questions: [Question]?
   var secure: SecureRequest? = nil
 }
+/// What this device reports about the chat on screen: reading it, or gone after reading it.
+struct ChatPresenceReport: Codable, Equatable {
+  var client: String
+  var state: String
+}
 struct ReadPosition: Codable, Equatable {
   var messageId: String?
   var scrollTop: Double? = nil

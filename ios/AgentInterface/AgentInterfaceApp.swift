@@ -87,7 +87,24 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    completionHandler([.banner, .sound, .badge])
+    let botId = NotificationController.chatBotId(notification.request.content.userInfo["url"] as? String)
+    Task { @MainActor in
+      // The chat on screen already shows this news.
+      let reading = botId != nil && botId == NotificationController.shared.store?.viewingBotId
+      completionHandler(reading ? [] : [.banner, .sound, .badge])
+    }
+  }
+  /// A silent push after the person read chats on another device or in the browser.
+  func application(
+    _ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    let bots = (userInfo["clear"] as? [String: Any])?["bots"] as? [String] ?? []
+    guard !bots.isEmpty else { completionHandler(.noData); return }
+    Task { @MainActor in
+      await NotificationController.shared.removeDelivered(bots: Set(bots))
+      completionHandler(.newData)
+    }
   }
   func userNotificationCenter(
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -139,6 +156,21 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     else { return nil }
     return components.queryItems?.first { $0.name == "bot" }?.value
+  }
+  /// The chat a notification belongs to. Digests and routine results open elsewhere, so they have none.
+  nonisolated static func chatBotId(_ url: String?) -> String? {
+    guard let url, let components = URLComponents(string: url), components.path == "/",
+      components.queryItems?.contains(where: { $0.name == "routine" }) != true
+    else { return nil }
+    return components.queryItems?.first { $0.name == "bot" }?.value
+  }
+  /// Removes delivered notifications for chats read here or on another device.
+  func removeDelivered(bots: Set<String>) async {
+    let center = UNUserNotificationCenter.current()
+    let ids = await center.deliveredNotifications()
+      .filter { Self.chatBotId($0.request.content.userInfo["url"] as? String).map(bots.contains) == true }
+      .map(\.request.identifier)
+    if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
   }
   var deviceId: String {
     if let value = UserDefaults.standard.string(forKey: "push.deviceId") { return value }

@@ -3,7 +3,7 @@ import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
-import { createApnsSender, type ApnsSender } from "./apns.js";
+import { createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 export type PushSender = (
@@ -27,6 +27,7 @@ export class BackgroundWorker {
   readonly loop: FailureTracker;
   readonly discovery: FailureTracker;
   readonly push: FailureTracker;
+  readonly clears: FailureTracker;
   readonly live: LiveActivities;
   constructor(
     private store: Store,
@@ -36,14 +37,17 @@ export class BackgroundWorker {
     private sendApns?: ApnsSender,
     private log: Log = quietLog,
     sendLiveActivity?: LiveActivitySender,
+    private sendClear?: ApnsClearSender,
   ) {
     this.loop = new FailureTracker(log, "Background worker");
     this.discovery = new FailureTracker(log, "Hermes event discovery");
     this.push = new FailureTracker(log, "Push delivery");
+    this.clears = new FailureTracker(log, "Notification clearing");
     if (!sendApns && config.apns) {
       const sender = createApnsSender(config.apns)!;
       this.sendApns = sender;
       sendLiveActivity ??= sender.liveActivity;
+      this.sendClear ??= sender.clear;
       this.closeApns = () => sender.close();
     }
     this.live = new LiveActivities(store, runtime, config, sendLiveActivity, log);
@@ -87,6 +91,8 @@ export class BackgroundWorker {
         if (removed.sessions || removed.notifications) this.log.info(removed, "Removed expired sessions and old notifications");
       }
       await this.deliver();
+      // Clearing is a courtesy; its failures never hold up delivery.
+      try { await this.clearRead(); } catch (error) { this.clears.failure(error); }
       // Live Activity pushes never hold up notifications; their failures are tracked separately.
       try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
       this.loop.success();
@@ -138,10 +144,11 @@ export class BackgroundWorker {
         const security = JSON.parse(item.payload).kind === "security";
         if (!security && inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
         // An assistant made private after this was queued, held by quiet hours or a digest, stays with its owner.
+        // News the person is reading in the chat, or already read there on any device, needs no alert.
         if (!security) item.items = item.items.filter(row => {
-          const visible = visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id);
-          if (!visible) this.store.finishDelivery(row.id);
-          return visible;
+          const due = visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) && !this.store.seenInChat(row.id);
+          if (!due) this.store.finishDelivery(row.id);
+          return due;
         });
         if (!item.items.length) continue;
         // Rebuild the frozen membership's display after revocation, preserving its
@@ -155,7 +162,8 @@ export class BackgroundWorker {
         let failed: string | undefined;
         // A send can take a while; an assistant made private meanwhile stops the rest of this
         // delivery before its frozen payload reaches another endpoint. The next pass drops it.
-        const stillVisible = () => item.items.every(row => security || visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id));
+        // Reading the chat on one device meanwhile likewise stops the alert reaching the others.
+        const stillVisible = () => item.items.every(row => security || visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) && !this.store.seenInChat(row.id));
         let revoked = false;
         for (const subscription of subscriptions) {
           if (item.items.every(row => this.store.delivered(row.id, subscription.endpoint))) continue;
@@ -208,6 +216,29 @@ export class BackgroundWorker {
         for (const row of item.items) if (this.store.retryDelivery(row.id, row.attempts + 1, message)) abandoned++;
         this.log.error({ error: safeError(error), notifications: item.items.length, abandoned }, "Could not deliver a notification");
       }
+    }
+  }
+  /** Removes notifications read in one place from the person's other iPhones and iPads. */
+  private async clearRead() {
+    if (!this.sendClear || !this.config.apns) return;
+    const environment = this.config.apns.environment;
+    const byEndpoint = new Map<string, { device?: NativeDevice; botIds: Set<string>; rows: string[] }>();
+    for (const row of this.store.readOnDevices()) {
+      const device = this.store.nativeDevices(row.user_id, environment).find(device => `apns:${device.environment}:${device.token}` === row.endpoint);
+      const entry = byEndpoint.get(row.endpoint) ?? { device, botIds: new Set(), rows: [] };
+      byEndpoint.set(row.endpoint, entry);
+      entry.rows.push(row.outbox_id);
+      // The device that read the chat already cleared its own notifications.
+      if (device && device.deviceId !== row.reader) entry.botIds.add(row.bot_id);
+    }
+    for (const [endpoint, entry] of byEndpoint) {
+      // iOS throttles background pushes and drops them for a closed app, so a failed clear is
+      // not retried. Opening the chat on that device clears the rest.
+      if (entry.device && entry.botIds.size) try {
+        await this.sendClear(entry.device, [...entry.botIds]);
+        this.clears.success();
+      } catch (error) { this.clears.failure(error); }
+      for (const id of entry.rows) this.store.markCleared(id, endpoint);
     }
   }
 }

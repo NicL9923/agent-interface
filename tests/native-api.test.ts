@@ -215,6 +215,9 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
     expect(JSON.parse(Buffer.from(jwt[0], "base64url").toString()).alg).toBe("ES256");
     expect(verify("sha256", Buffer.from(jwt.slice(0, 2).join(".")), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(jwt[2], "base64url"))).toBe(true);
     expect(JSON.parse(seen[0].body)).toMatchObject({ aps: { alert: { title: "Done" } }, url: "/?bot=bot" });
+    await sender.clear(device, ["bot"]);
+    expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
+    expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, clear: { bots: ["bot"] } });
     const long = apnsPayload(JSON.stringify({ title: "😀".repeat(1000), body: "😀".repeat(1000), url: "😀".repeat(1000), tag: "😀".repeat(1000) }));
     expect(Buffer.byteLength(long)).toBeLessThan(4096);
     const escaped = apnsPayload(JSON.stringify({ title: "\u0000".repeat(1000), body: "\n\\\"".repeat(1000), url: "/?bot=" + "a".repeat(2300), tag: "\t".repeat(1000) }));

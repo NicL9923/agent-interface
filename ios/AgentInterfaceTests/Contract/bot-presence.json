@@ -1,0 +1,6 @@
+{
+  "request": "PUT /api/bots/household/presence",
+  "response": {
+    "ok": true
+  }
+}

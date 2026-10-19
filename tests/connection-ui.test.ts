@@ -9,6 +9,8 @@ import { defaultPreferences, type Bootstrap, type Conversation } from '../src/sh
 import { FakeEventSource } from './fake-event-source';
 
 vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
+// Presence heartbeats would interleave with the writes these tests count; they have their own tests.
+vi.mock('../src/app/use-chat-presence',()=>({useChatPresence:()=>{}}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 let root:Root,container:HTMLDivElement,boot:Bootstrap,conversation:Conversation;
 let authConfig:{localDevAuth:boolean;googleClientId?:string};

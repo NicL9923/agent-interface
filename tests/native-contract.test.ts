@@ -283,6 +283,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     expect(conflict.statusCode).toBe(409);
     fixtures.set("bot-draft-conflict", { request: "PUT /api/bots/household/draft", response: conflict.json() });
     await record("bot-read-position", "PUT", "/api/bots/household/read-position", { messageId: "message-assistant", scrollTop: 240.5 });
+    await record("bot-presence", "PUT", "/api/bots/household/presence", { client: "8F0C2F6E-1D7A-4D35-9B53-3C1E6E2F9A10", state: "active" });
     await record("conversation", "GET", "/api/bots/household/conversation");
     const card = "/api/bots/household/messages/message-assistant/cards/groceries/state";
     await record("card-state-save", "PUT", card, { checkedIds: ["milk"], notes: {} });
