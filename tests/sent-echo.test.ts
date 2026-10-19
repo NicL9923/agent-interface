@@ -90,4 +90,18 @@ describe("sent message echo", () => {
     const untouched = { text: "Hello there", attachments: [file] };
     expect(restoreSent(untouched, sent)).toBe(untouched);
   });
+
+  it("leaves when another person signs in", () => {
+    const kept = step(sending, { receipt: accepted })!;
+    expect(step(kept, { receipt: null, sender: { id: "two", name: "Two" } })).toBeNull();
+    expect(step(kept, { receipt: null, sender: undefined })).toBeNull();
+  });
+
+  it("anchors on a saved message, and never matches words once its anchor is gone", () => {
+    const live = conversation([{ id: "u0", role: "user", text: "continue", sender }, { id: "s-inflight", role: "assistant", text: "Working" }], "working");
+    const echo = step(null, { pending: { ...request, text: "continue" }, sending: true, conversation: live })!;
+    expect(echo.after).toBe("u0");
+    const unanchored = { ...echo, after: "gone", status: "accepted" as const };
+    expect(step(unanchored, { receipt: { requestId: "req", status: "accepted" }, conversation: conversation([{ id: "u0", role: "user", text: "continue", sender }], "working") })).not.toBeNull();
+  });
 });

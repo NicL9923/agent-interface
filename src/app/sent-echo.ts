@@ -31,7 +31,9 @@ export function echoShown(echo: SentEcho, conversation: SavedConversation) {
   // matched by their words once it accepted them, after the message that was last when it was sent.
   const text = echo.request.text.trim();
   if (echo.status !== "accepted" || !text) return false;
+  // Without its anchor, an older message with the same words could pass for this one.
   const start = echo.after ? messages.findIndex(message => message.id === echo.after) + 1 : 0;
+  if (echo.after && !start) return false;
   return messages.slice(start).some(message => message.role === "user" && message.text.trim() === text
     && (!message.sender || message.sender.id === echo.sender.id));
 }
@@ -44,12 +46,15 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
   sender?: Pick<User, "id" | "name">;
   now: number;
 }): SentEcho | null {
-  let next = echo;
+  // Another person signed in: nothing of the last one's stays on screen.
+  let next = echo && echo.sender.id === sender?.id ? echo : null;
   if (pending && pending.requestId !== next?.request.requestId) {
     if (!sender) return null;
     next = {
       request: pending, sender, sentAt: new Date(now).toISOString(), status: "sending",
-      after: conversation?.botId === pending.botId ? conversation.messages.at(-1)?.id : undefined,
+      // A live reply's row is replaced as it is saved, so it cannot anchor anything.
+      after: conversation?.botId === pending.botId
+        ? conversation.messages.findLast(message => !message.id.endsWith("-inflight"))?.id : undefined,
     };
   }
   if (!next) return null;
@@ -83,7 +88,8 @@ export function withEcho(conversation: SavedConversation | null, echo: SentEcho 
 }
 /**
  * Whether the composer is showing a draft that is on its way. The echo carries it in the
- * transcript, so the composer starts empty; typing there begins a new draft.
+ * transcript, so the composer starts empty; typing there begins a new draft. The composer also
+ * remembers being typed in, so new words that pass through the sent text never blank it again.
  */
 export function sendingDraft(draft: Draft, pending: Pending | null, sending: boolean) {
   return sending && !!pending && draft.botId === pending.botId && sameDraft(draft, pending);

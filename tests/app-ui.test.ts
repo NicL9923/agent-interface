@@ -356,6 +356,24 @@ describe("conversation state", () => {
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
+  it("keeps a new message on screen even when its words pass through the sent text", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(() => {}) : {} as T);
+    try {
+      await render();
+      await act(async () => sendButton().click());
+      const textarea = container.querySelector("textarea")!;
+      for (const text of ["My", "My saved server draft", "My saved server draft, again"]) {
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
+          textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        expect(textarea.value).toBe(text);
+      }
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
   it("puts a refused message back in front of what was typed while it sent", async () => {
     conversation = { ...conversation, activity: { state: "idle" } };
     let refuse!: () => void;

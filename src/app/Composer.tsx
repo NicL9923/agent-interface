@@ -137,7 +137,8 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
   // The transcript shows a message on its way, so the composer is free for the next one.
   // The draft itself keeps the message until Hermes accepts it.
-  const handedOff = sendingDraft(draft, pending, sending);
+  const [typedOver, setTypedOver] = useState<string>();
+  const handedOff = sendingDraft(draft, pending, sending) && typedOver !== pending?.requestId;
   const shown = draft.botId === botId && !handedOff ? draft : { text: "", attachments: [] };
   const input = useComposerInput(shown.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
@@ -233,15 +234,16 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               ? `Guide ${selected.name} while they work…`
               : `Message ${selected.name}…`
           }
-          onChange={(event) =>
+          onChange={(event) => {
+            if (sending && pending) setTypedOver(pending.requestId);
             setDraft((previous) => ({
               ...previous,
               // Typing over a message on its way starts a new draft without its files.
-              ...(sendingDraft(previous, pending, sending) ? { attachments: [] } : {}),
+              ...(handedOff ? { attachments: [] } : {}),
               dirty: true,
               text: event.target.value,
-            }))
-          }
+            }));
+          }}
           onPaste={(event) => {
             const files = event.clipboardData ? pastedFiles(event.clipboardData) : [];
             if (!files.length) return;
