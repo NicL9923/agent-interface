@@ -246,9 +246,9 @@ final class AvatarMotionTests: XCTestCase {
     XCTAssertEqual(after.trailLevel, before.trailLevel, accuracy: 0.0001)
     XCTAssertEqual(after.expression, before.expression)
     XCTAssertEqual(M.frame(waiting, at: midSpin.addingTimeInterval(0.7), still: false).trailLevel, 0)
-    // Thinking dots settle in with the morph time constant.
-    let thinking = M.next(M.Snapshot.entering(.idle, at: now), to: .thinking, at: now, still: false)
-    XCTAssertEqual(M.frame(thinking, at: now, still: false).morph.dots, 0)
-    XCTAssertGreaterThan(M.frame(thinking, at: now.addingTimeInterval(0.6), still: false).morph.dots, 0.98)
+    // The blocked exclamation settles in with the morph time constant.
+    let blocked = M.next(M.Snapshot.entering(.idle, at: now), to: .blocked, at: now, still: false)
+    XCTAssertEqual(M.frame(blocked, at: now, still: false).morph.bang, 0)
+    XCTAssertGreaterThan(M.frame(blocked, at: now.addingTimeInterval(0.6), still: false).morph.bang, 0.98)
   }
 }
