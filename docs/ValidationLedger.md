@@ -1,5 +1,39 @@
 # Validation ledger
 
+## October 19 app release f5aba15
+
+PR #154 merged at `f5aba15f2c1e80b1e18d6ebc7c3cad21e6e7219f`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `0184994d2cdd199f`, from the archive with SHA256
+`4f73ceee5a02b42a6e0b2563d6724abb6a7aa5db7302ca08b8a96a237865dcaf`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-f5aba15f-20261019T020849Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+Nicolas authorized Patch's `browser.agent_interface.allow_local_network=true`.
+The supported config command changed only that leaf; other profile files stayed
+unchanged. The computer supervisor adopted the release at idle and published a
+browser registration that passed the gateway runtime's separate-process check.
+One fresh Patch gateway turn invoked `browser_exec` once and reached the KVM's
+`net::ERR_CERT_AUTHORITY_INVALID`. No credentials were submitted and TLS checks
+were preserved. KVM login, video and input remain unverified.
+
+A separate process using the gateway executable and environment read all seven
+live profile policies. Only Patch admitted the KVM URL. Default's actual
+`browser_exec` dispatch refused it, and Patch refused metadata URL literals.
+Two default-profile model turns did not produce a policy verdict, so the negative
+policy evidence comes from that separate process. Computed JavaScript URLs and
+current-page paths retain the qualified native metadata limitations.
+
+Before preparation, a brief reversible native drain refreshed a persisted count
+of one to a measured zero. The gateway PID stayed unchanged, the operation
+cleared its own marker, and the unchanged release preflight then passed.
+
 ## October 18 short Chrome socket namespace in native qualification
 
 Full qualification of `763c4ecf` passed the earlier gateway, credential and
