@@ -1188,12 +1188,14 @@ private final class NativeMockServer: @unchecked Sendable {
             server.sendStatus = 503; await value.send()
             XCTAssertNotNil(value.pending)
             if let edit { value.draft.text = edit }
+            let path = "/api/bots/bot/draft"
+            server.hold(path); defer { server.release(path) }
             value.discardUnconfirmedSubmission()
             XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
             XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
             XCTAssertEqual(value.draft.text, edit == "Send this and more" ? "Send this and more" : "Send this")
-            try await Task.sleep(for: .milliseconds(800))
-            let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }
+            try await server.waitForHeld(path)
+            let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == path }
             XCTAssertEqual(saved.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, value.draft.text)
         }
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
