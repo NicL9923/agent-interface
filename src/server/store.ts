@@ -113,11 +113,11 @@ export const maxDeliveryAttempts = 12;
 export const presenceTtl = 45000;
 /** What a client reports about a chat: reading it, gone after reading it, or still open but unattended. */
 export type ChatPresence = "active" | "left" | "idle";
-// Discovery polls every few seconds, so Hermes's own timestamp is the better one. A Hermes
-// clock that disagrees by more than a few polls falls back to when this server learned of it.
+// Discovery lags Hermes by a poll, or longer after an outage, so Hermes's own timestamp says
+// when the reply could first be read. One from a clock running ahead falls back to discovery.
 function eventTime(occurredAt: string | undefined, discovered: number) {
   const occurred = Date.parse(occurredAt ?? "");
-  return Number.isFinite(occurred) && occurred <= discovered && occurred >= discovered - 15000 ? occurred : discovered;
+  return Number.isFinite(occurred) && occurred <= discovered ? occurred : discovered;
 }
 // A cleared notification is recorded as a delivery to a derived endpoint, so every path that
 // forgets a notification's deliveries forgets its clears too.
@@ -804,10 +804,10 @@ export class Store {
   /** iOS deliveries of notifications their recipient has since read, with who read them, that no clear was sent for. */
   readOnDevices(now = Date.now()) {
     // A week covers what a lock screen plausibly still shows.
-    return (this.db.prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.botId') AS bot_id,r.client_id AS reader FROM delivered d
+    return (this.db.prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.tag') AS tag,r.client_id AS reader FROM delivered d
       JOIN outbox o ON o.id=d.outbox_id JOIN chat_reads r ON r.user_id=o.user_id AND r.bot_id=json_extract(o.payload,'$.botId')
-      WHERE d.endpoint LIKE 'apns:%' AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint)`)
-      .all(now - 7 * 86400000) as { outbox_id: string; endpoint: string; user_id: string; bot_id: string; reader: string }[])
+      WHERE d.endpoint LIKE 'apns:%' AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint) ORDER BY o.created_at`)
+      .all(now - 7 * 86400000) as { outbox_id: string; endpoint: string; user_id: string; tag: string; reader: string }[])
       .filter(row => this.seenInChat(row.outbox_id, now));
   }
   markCleared(id: string, endpoint: string) {

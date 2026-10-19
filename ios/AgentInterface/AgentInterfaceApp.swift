@@ -99,10 +99,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     _ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
-    let bots = (userInfo["clear"] as? [String: Any])?["bots"] as? [String] ?? []
-    guard !bots.isEmpty else { completionHandler(.noData); return }
+    let tags = (userInfo["clear"] as? [String: Any])?["tags"] as? [String] ?? []
+    guard !tags.isEmpty else { completionHandler(.noData); return }
     Task { @MainActor in
-      await NotificationController.shared.removeDelivered(bots: Set(bots))
+      await NotificationController.shared.removeDelivered(tags: Set(tags))
       completionHandler(.newData)
     }
   }
@@ -164,11 +164,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     else { return nil }
     return components.queryItems?.first { $0.name == "bot" }?.value
   }
-  /// Removes delivered notifications for chats read here or on another device.
+  /// Removes every delivered notification for chats opened here.
   func removeDelivered(bots: Set<String>) async {
+    await removeDelivered { Self.chatBotId($0["url"] as? String).map(bots.contains) == true }
+  }
+  /// Removes the delivered notifications another device read. Newer ones for the same chat stay.
+  func removeDelivered(tags: Set<String>) async {
+    await removeDelivered { ($0["tag"] as? String).map(tags.contains) == true }
+  }
+  private func removeDelivered(where matches: ([AnyHashable: Any]) -> Bool) async {
     let center = UNUserNotificationCenter.current()
     let ids = await center.deliveredNotifications()
-      .filter { Self.chatBotId($0.request.content.userInfo["url"] as? String).map(bots.contains) == true }
+      .filter { matches($0.request.content.userInfo) }
       .map(\.request.identifier)
     if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
   }

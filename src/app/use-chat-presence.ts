@@ -8,6 +8,11 @@ export const IDLE_MS = 5 * 60_000;
 // lack randomUUID, and this module loads with the app shell.
 const client = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+// One report at a time, so leaving one chat can never land after arriving in the next.
+let reports = Promise.resolve();
+function report(botId: string, state: "active" | "left" | "idle") {
+  reports = reports.then(() => write(`/bots/${encodeURIComponent(botId)}/presence`, { client, state }, "PUT")).then(() => {}, () => {});
+}
 
 /** Closes this browser's notifications for a chat now on screen. Routine results open elsewhere. */
 async function closeNotifications(botId: string) {
@@ -27,16 +32,14 @@ export function useChatPresence(botId: string | undefined, userId: string | unde
   useEffect(() => {
     if (!botId || !userId) return;
     let reading = false, lastInput = Date.now();
-    const report = (state: "active" | "left" | "idle") =>
-      void write(`/bots/${encodeURIComponent(botId)}/presence`, { client, state }, "PUT").catch(() => {});
     const attended = () => document.visibilityState === "visible" && document.hasFocus();
     const update = () => {
       const now = attended() && Date.now() - lastInput < IDLE_MS;
       if (now) {
         if (!reading) void closeNotifications(botId).catch(() => {});
-        report("active");
+        report(botId, "active");
       // Leaving after reading marks the chat read until now. Walking away from it does not.
-      } else if (reading) report(attended() ? "idle" : "left");
+      } else if (reading) report(botId, attended() ? "idle" : "left");
       reading = now;
     };
     const input = () => {
@@ -55,7 +58,7 @@ export function useChatPresence(botId: string | undefined, userId: string | unde
       window.removeEventListener("focus", update);
       window.removeEventListener("blur", update);
       document.removeEventListener("visibilitychange", update);
-      if (reading) report("left");
+      if (reading) report(botId, "left");
     };
   }, [botId, userId]);
 }

@@ -289,9 +289,10 @@ reject external URLs. Oversized links are omitted instead of truncated.
 | --- | --- |
 | `PUT /api/bots/:id/presence` | `{ "client": "DEVICE_OR_TAB_ID", "state": "active" }`; returns `{ "ok": true }` |
 
-While a chat is on screen and the app is active, send `active` every 15 seconds
-with the push `deviceId` as `client`. Send `left` when the chat leaves the screen
-or the app leaves the foreground. `idle` ends presence without marking the chat
+While a chat is on screen, uncovered by a sheet, and the app is active, send
+`active` every 15 seconds with the push `deviceId` as `client`. Send `left` when
+the chat leaves the screen, a sheet covers it, or the app leaves the foreground.
+Send one report at a time so they arrive in order. `idle` ends presence without marking the chat
 read; the web sends it after five minutes without input. The server treats a
 client as gone 45 seconds after its last beat.
 
@@ -300,8 +301,9 @@ read on any client after the event happened. That includes retries to an endpoin
 that failed earlier. Routine results and security alerts always notify. After a
 chat is read, the worker sends each other iOS device that received its
 notifications one background push, `apns-push-type: background` at priority 5:
-`{ "aps": { "content-available": 1 }, "clear": { "bots": ["ID"] } }`. The app
-removes its delivered notifications whose `url` opens one of those chats. iOS
+`{ "aps": { "content-available": 1 }, "clear": { "tags": ["TAG"] } }`. It names
+the read notifications by their `tag`, newest first and within 4KB, so a clear
+that arrives late never removes a newer unread one. The app removes those. iOS
 throttles background pushes and drops them for an app the person force-quit, so
 the app also clears a chat's notifications when it opens. Browsers get no clearing
 push: Safari revokes a Web Push subscription after three pushes that show no

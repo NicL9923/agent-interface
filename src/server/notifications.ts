@@ -222,20 +222,21 @@ export class BackgroundWorker {
   private async clearRead() {
     if (!this.sendClear || !this.config.apns) return;
     const environment = this.config.apns.environment;
-    const byEndpoint = new Map<string, { device?: NativeDevice; botIds: Set<string>; rows: string[] }>();
+    const byEndpoint = new Map<string, { device?: NativeDevice; tags: string[]; rows: string[] }>();
     for (const row of this.store.readOnDevices()) {
       const device = this.store.nativeDevices(row.user_id, environment).find(device => `apns:${device.environment}:${device.token}` === row.endpoint);
-      const entry = byEndpoint.get(row.endpoint) ?? { device, botIds: new Set(), rows: [] };
+      const entry = byEndpoint.get(row.endpoint) ?? { device, tags: [], rows: [] };
       byEndpoint.set(row.endpoint, entry);
       entry.rows.push(row.outbox_id);
       // The device that read the chat already cleared its own notifications.
-      if (device && device.deviceId !== row.reader) entry.botIds.add(row.bot_id);
+      if (device && device.deviceId !== row.reader) entry.tags.push(row.tag);
     }
     for (const [endpoint, entry] of byEndpoint) {
       // iOS throttles background pushes and drops them for a closed app, so a failed clear is
       // not retried. Opening the chat on that device clears the rest.
-      if (entry.device && entry.botIds.size) try {
-        await this.sendClear(entry.device, [...entry.botIds]);
+      if (entry.device && entry.tags.length) try {
+        // Newest first, so the ones most likely still on screen fit.
+        await this.sendClear(entry.device, entry.tags.reverse());
         this.clears.success();
       } catch (error) { this.clears.failure(error); }
       for (const id of entry.rows) this.store.markCleared(id, endpoint);

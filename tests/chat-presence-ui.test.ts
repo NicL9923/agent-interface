@@ -68,3 +68,13 @@ it("goes idle without marking read when nobody touches an open chat", async () =
   expect(states().at(-1)).toBe("/bots/ranch/presence left");
   expect(states().filter(state => state.endsWith("left"))).toHaveLength(1);
 });
+
+it("sends one report at a time, so leaving a chat never lands after arriving in the next", async () => {
+  let finish = () => {};
+  vi.mocked(write).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ok: true }); }));
+  await render("ranch");
+  await render("barn");
+  expect(states()).toEqual(["/bots/ranch/presence active"]);
+  await act(async () => finish());
+  expect(states()).toEqual(["/bots/ranch/presence active", "/bots/ranch/presence left", "/bots/barn/presence active"]);
+});
