@@ -1,0 +1,60 @@
+{
+  "webBuild": "0184994d2cdd199f",
+  "hermesRevision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "hermesVersionUnchanged": true,
+  "repairPreserved": true,
+  "profileSettingsPreserved": true,
+  "originalGoogleHttpAndFreshWebsocket": true,
+  "gatewayGuardVerified": true,
+  "bothDiscordConnected": true,
+  "actualInstallerMaintenanceRpc": true,
+  "sourceCommit": "f5aba15f2c1e80b1e18d6ebc7c3cad21e6e7219f",
+  "archiveSha256": "4f73ceee5a02b42a6e0b2563d6724abb6a7aa5db7302ca08b8a96a237865dcaf",
+  "release": "release-f5aba15f-20261019T020849Z",
+  "qualification": "new",
+  "preflightCheckPassed": true,
+  "publicServiceWorkerBuild": true,
+  "apiRequiresSignIn": true,
+  "releaseIsCurrent": true,
+  "servicesActive": true,
+  "maintenanceCleared": true,
+  "browserAcceptance": {
+    "authorizedProfile": "patch",
+    "setting": "browser.agent_interface.allow_local_network",
+    "value": true,
+    "onlyRequestedSettingChanged": true,
+    "otherProfilesUnchanged": true,
+    "supervisorAdoptedRelease": true,
+    "verifiedCrossProcessProvenance": true,
+    "freshPatchGatewayTurn": {
+      "tool": "browser_exec",
+      "invocations": 1,
+      "result": "net::ERR_CERT_AUTHORITY_INVALID",
+      "tlsBypassed": false,
+      "credentialsSubmitted": false
+    },
+    "profilePolicyCheck": {
+      "separateProcessUsingGatewayRuntime": true,
+      "verifiedLocalBrowser": true,
+      "profileCount": 7,
+      "authorizedProfiles": [
+        "patch"
+      ],
+      "otherProfileCount": 6,
+      "allOtherProfilesDeniedByPreflight": true,
+      "defaultBrowserExecDispatchRefused": true,
+      "patchLiteralMetadataRefused": true
+    },
+    "negativeGatewayModelChecks": "Inconclusive: one default-profile turn did not invoke a tool; another misrouted the deferred-tool bridge. The separate runtime check exercised browser_exec refusal directly.",
+    "kvmLoginVideoAndInputVerified": false,
+    "knownNativeMetadataLimitation": "Computed JavaScript URLs and current-page paths retain the qualified native local-backend limitations."
+  },
+  "idleRecount": {
+    "measuredActiveAgents": 0,
+    "afterActiveAgents": 0,
+    "gatewayPidUnchanged": true,
+    "serviceRestartedForRecount": false,
+    "ownDrainCleared": true,
+    "beforePersistedActiveAgents": 1
+  }
+}
