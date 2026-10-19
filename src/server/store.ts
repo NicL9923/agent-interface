@@ -100,11 +100,28 @@ const additions = `
   -- Draft revisions: a draft without a row here is at revision 0.
   -- One aggregate Live Activity push token per native installation, removed with its session.
   CREATE TABLE IF NOT EXISTS live_activities(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL REFERENCES native_sessions(hash) ON DELETE CASCADE,token TEXT NOT NULL,environment TEXT NOT NULL,armed TEXT NOT NULL,armed_at INTEGER NOT NULL,last_state TEXT,sent_state TEXT,sent_at INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,UNIQUE(token,environment));
+  -- Which chat each signed-in client is reading now, refreshed by heartbeats, and when each
+  -- person last read each chat. Notifications skip what was already seen.
+  CREATE TABLE IF NOT EXISTS chat_presence(user_id TEXT NOT NULL REFERENCES users(id),client_id TEXT NOT NULL,bot_id TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(user_id,client_id));
+  CREATE TABLE IF NOT EXISTS chat_reads(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,read_at INTEGER NOT NULL,client_id TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
+// Clients report an open chat every 15 seconds, so a missed beat or two never counts as leaving.
+export const presenceTtl = 45000;
+/** What a client reports about a chat: reading it, gone after reading it, or still open but unattended. */
+export type ChatPresence = "active" | "left" | "idle";
+// Discovery lags Hermes by a poll, or longer after an outage, so Hermes's own timestamp says
+// when the reply could first be read. One from a clock running ahead falls back to discovery.
+function eventTime(occurredAt: string | undefined, discovered: number) {
+  const occurred = Date.parse(occurredAt ?? "");
+  return Number.isFinite(occurred) && occurred <= discovered ? occurred : discovered;
+}
+// A cleared notification is recorded as a delivery to a derived endpoint, so every path that
+// forgets a notification's deliveries forgets its clears too.
+const clearedEndpoint = (endpoint: string) => `cleared:${endpoint}`;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (!columns.some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -608,7 +625,7 @@ export class Store {
       this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
       for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
-      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "card_state", "submissions", "approval_attribution", "routine_trials"])
+      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "routine_trials"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.users()) {
@@ -756,6 +773,45 @@ export class Store {
         ids.add(user.id);
     // A private assistant's news goes only to its owner, whoever else followed or joined in.
     return [...ids].filter(userId => this.mayReceive(event, userId));
+  }
+  /** Records what one client reports about one chat. Reading and leaving after reading both mark it read until now. */
+  chatPresence(userId: string, botId: string, clientId: string, state: ChatPresence, now = Date.now()) {
+    this.transaction(() => {
+      if (state === "active")
+        this.db.prepare("INSERT INTO chat_presence VALUES(?,?,?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET bot_id=excluded.bot_id,updated_at=excluded.updated_at")
+          .run(userId, clientId, botId, now);
+      else this.db.prepare("DELETE FROM chat_presence WHERE user_id=? AND client_id=? AND bot_id=?").run(userId, clientId, botId);
+      if (state !== "idle")
+        this.db.prepare("INSERT INTO chat_reads VALUES(?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET read_at=max(chat_reads.read_at,excluded.read_at),client_id=excluded.client_id")
+          .run(userId, botId, now, clientId);
+    });
+  }
+  /**
+   * Whether the recipient has a notification's chat open now, or read it after the event.
+   * Security alerts and routine results are not part of a chat, so they never count as seen.
+   */
+  seenInChat(outboxId: string, now = Date.now()) {
+    const row = this.db.prepare("SELECT o.user_id,o.payload,o.created_at,e.value,e.created_at AS discovered FROM outbox o LEFT JOIN notification_events e ON e.id=o.event_id WHERE o.id=?")
+      .get(outboxId) as { user_id: string; payload: string; created_at: number; value: string | null; discovered: number | null } | undefined;
+    if (!row) return false;
+    const payload = JSON.parse(row.payload) as { botId?: string; kind?: string; url?: string };
+    if (!payload.botId || payload.kind === "security" || new URL(payload.url ?? "/", "http://app").searchParams.has("routine")) return false;
+    if (this.db.prepare("SELECT 1 FROM chat_presence WHERE user_id=? AND bot_id=? AND updated_at>?").get(row.user_id, payload.botId, now - presenceTtl)) return true;
+    const read = this.db.prepare("SELECT read_at FROM chat_reads WHERE user_id=? AND bot_id=?").get(row.user_id, payload.botId) as { read_at: number } | undefined;
+    const event = row.value ? JSON.parse(row.value) as RuntimeEvent : undefined;
+    return !!read && read.read_at >= eventTime(event?.occurredAt, row.discovered ?? row.created_at);
+  }
+  /** iOS deliveries of notifications their recipient has since read, with who read them, that no clear was sent for. */
+  readOnDevices(now = Date.now()) {
+    // A week covers what a lock screen plausibly still shows.
+    return (this.db.prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.tag') AS tag,r.client_id AS reader FROM delivered d
+      JOIN outbox o ON o.id=d.outbox_id JOIN chat_reads r ON r.user_id=o.user_id AND r.bot_id=json_extract(o.payload,'$.botId')
+      WHERE d.endpoint LIKE 'apns:%' AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint) ORDER BY o.created_at`)
+      .all(now - 7 * 86400000) as { outbox_id: string; endpoint: string; user_id: string; tag: string; reader: string }[])
+      .filter(row => this.seenInChat(row.outbox_id, now));
+  }
+  markCleared(id: string, endpoint: string) {
+    this.markDelivered(id, clearedEndpoint(endpoint));
   }
   queueNotification(eventId: string, userId: string, payload: object) {
     return this.db
@@ -937,6 +993,7 @@ export class Store {
     const cutoff = now - 30 * 86400000;
     return this.transaction(() => {
       const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
+      this.db.prepare("DELETE FROM chat_presence WHERE updated_at<?").run(now - presenceTtl);
       this.db.prepare(`DELETE FROM delivered WHERE outbox_id IN (${stale})`).run(cutoff);
       this.db.prepare(`DELETE FROM notification_batch_items WHERE outbox_id IN (${stale})`).run(cutoff);
       const notifications = this.db.prepare(`DELETE FROM outbox WHERE id IN (${stale})`).run(cutoff).changes;

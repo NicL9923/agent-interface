@@ -100,6 +100,13 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(NotificationController.botId(from: "//evil.example/?bot=a", origin: origin))
     XCTAssertNil(NotificationController.botId(from: "/api/files/a?bot=b", origin: origin))
   }
+  func testOnlyChatNotificationsBelongToAChat() {
+    XCTAssertEqual(NotificationController.chatBotId("/?bot=a%2Fb"), "a/b")
+    XCTAssertNil(NotificationController.chatBotId("/?bot=a&routine=morning"))
+    XCTAssertNil(NotificationController.chatBotId("/?view=today"))
+    XCTAssertNil(NotificationController.chatBotId("/?computer=1"))
+    XCTAssertNil(NotificationController.chatBotId(nil))
+  }
   func testAgentMessagesAndHandoffsMoveToActivityInSimplePresentation() {
     let incoming = Message(id: "in", role: "user", text: "Message from 🤖 Ledger (@ledger): Check the gate battery.")
     XCTAssertEqual(incoming.agentEnvelope?.name, "Ledger")

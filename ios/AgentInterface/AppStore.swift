@@ -1103,6 +1103,44 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     else { preferences.favorites.append(id) }
     queuePreferences(preferences)
   }
+  /// The chat on screen while the app is active. Reporting it keeps this person's other devices
+  /// quiet about it and marks it read there, as the web does.
+  private(set) var viewingBotId: String?
+  private var presenceBeat: Task<Void, Never>?
+  private var presenceReports: Task<Void, Never>?
+  /// Sheets over the chat, such as settings or files. A covered chat is not being read, as on the web.
+  @Published private(set) var chatCovers = 0
+  func cover(_ shown: Bool) { chatCovers = max(0, chatCovers + (shown ? 1 : -1)) }
+  func viewing(_ botId: String?) {
+    guard botId != viewingBotId else { return }
+    if let previous = viewingBotId { reportPresence(previous, "left") }
+    viewingBotId = botId
+    presenceBeat?.cancel()
+    guard let botId else { return }
+    Task { await NotificationController.shared.removeDelivered(bots: [botId]) }
+    // The server forgets a device 45 seconds after its last beat.
+    presenceBeat = Task { [weak self] in
+      while !Task.isCancelled {
+        self?.reportPresence(botId, "active")
+        try? await Task.sleep(for: .seconds(15))
+      }
+    }
+  }
+  /// The next chat can appear before this one disappears, so only the chat still on screen stops.
+  func leave(_ botId: String) {
+    if viewingBotId == botId { viewing(nil) }
+  }
+  private func reportPresence(_ botId: String, _ state: String) {
+    guard let api, !sessionExpired else { return }
+    let report = ChatPresenceReport(client: NotificationController.shared.deviceId, state: state)
+    // Presence is a hint, so a failed report stays quiet, as on the web. One goes at a time, so
+    // leaving one chat can never land after arriving in the next.
+    let previous = presenceReports
+    presenceReports = Task {
+      await previous?.value
+      let _: EmptyResponse? = try? await api.write("/bots/\(APIClient.component(botId))/presence", report, method: "PUT")
+    }
+  }
   func markRead(_ messageId: String?) {
     guard let id = selectedBotId, let api else { return }
     let position = ReadPosition(messageId: messageId)

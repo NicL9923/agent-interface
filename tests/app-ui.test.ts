@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
+import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
@@ -18,6 +19,8 @@ vi.mock("../src/client-api", async (original) => ({
 }));
 const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
+// Presence heartbeats would interleave with the writes these tests count; they have their own tests.
+vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: (props: { state?: string; size?: number; prop?: string; reducedMotion?: boolean }) => (renders.avatar++, createElement("span", {
@@ -537,13 +540,17 @@ describe("conversation state", () => {
     const rail = () => container.querySelector(".bot-rail")!;
     expect(rail().classList.contains("open")).toBe(true);
     expect(container.querySelector("main")!.hasAttribute("inert")).toBe(true);
+    // Only the chat on screen counts as being read.
+    expect(useChatPresence).toHaveBeenLastCalledWith(undefined, bootstrap.user.id);
     await act(async () => container.querySelector<HTMLButtonElement>(".bot-row")!.click());
     expect(rail().classList.contains("open")).toBe(false);
     expect(container.querySelector("main")!.hasAttribute("inert")).toBe(false);
+    expect(useChatPresence).toHaveBeenLastCalledWith("shared", bootstrap.user.id);
     const back = container.querySelector<HTMLButtonElement>('[aria-label="Back to assistants"]')!;
     expect(document.activeElement).toBe(back);
     await act(async () => back.click());
     expect(rail().classList.contains("open")).toBe(true);
+    expect(useChatPresence).toHaveBeenLastCalledWith(undefined, bootstrap.user.id);
     expect(document.activeElement).toBe(container.querySelector(".bot-rail [aria-current='page']"));
   });
 

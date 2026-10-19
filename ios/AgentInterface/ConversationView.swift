@@ -1,6 +1,32 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Reports the chat as read while it is on screen, uncovered, and the app is in use.
+private struct ReadingChat: ViewModifier {
+  var botId: String
+  @EnvironmentObject private var store: AppStore
+  @Environment(\.scenePhase) private var scenePhase
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: scenePhase, initial: true) { _, phase in update(phase, store.chatCovers) }
+      .onChange(of: store.chatCovers) { _, covers in update(scenePhase, covers) }
+      .onDisappear { store.leave(botId) }
+  }
+  private func update(_ phase: ScenePhase, _ covers: Int) {
+    if phase == .active && covers == 0 { store.viewing(botId) } else { store.leave(botId) }
+  }
+}
+/// Marks a sheet as covering the chat underneath for as long as it shows.
+private struct CoveringChat: ViewModifier {
+  let store: AppStore
+  func body(content: Content) -> some View {
+    content.onAppear { store.cover(true) }.onDisappear { store.cover(false) }
+  }
+}
+extension View {
+  func coveringChat(_ store: AppStore) -> some View { modifier(CoveringChat(store: store)) }
+}
+
 struct ConversationView: View {
   var bot: Bot
   var edit: () -> Void
@@ -40,7 +66,7 @@ struct ConversationView: View {
       }
       transcript
       composer
-    }.background(Palette.surface(scheme)).navigationTitle(bot.name).navigationBarTitleDisplayMode(
+    }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name).navigationBarTitleDisplayMode(
       .inline
     )
     .toolbar {
@@ -74,7 +100,7 @@ struct ConversationView: View {
       }
     }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
-    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store) }
+    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
   }
   private var transcript: some View {
     ScrollViewReader { proxy in

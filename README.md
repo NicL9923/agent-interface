@@ -43,6 +43,11 @@ whether to enable notifications and explains where to change the setting later.
 On iPhone or iPad, add the app to the Home Screen and open it before enabling
 notifications.
 
+A chat you have open and are using sends no notifications to any of your devices.
+Reading a chat on one device stops its pending notifications to the others and
+removes its delivered ones from your iPhone and iPad. A browser tab counts while
+it is focused and has had input in the last five minutes.
+
 ## Run locally
 
 Use Node 24.21 or 26.10 and npm. `.node-version` selects the tested Node 24 LTS

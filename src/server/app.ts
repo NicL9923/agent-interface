@@ -156,7 +156,7 @@ export async function createApp(
   app.addHook("onRequest", async (req, reply) => {
     if (!upgrades.maintenance() || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
     const path = routePattern(req);
-    if ((path.startsWith("/api/bots") && !/\/(draft|read-position)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
+    if ((path.startsWith("/api/bots") && !/\/(draft|read-position|presence)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations"))
       return reply.code(409).send({ error: path.startsWith("/api/integrations")
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
@@ -523,7 +523,7 @@ export async function createApp(
   app.addHook("onResponse", async (req, reply) => {
     const path = routePattern(req);
     if (req.method !== "GET" && reply.statusCode < 400 && path.startsWith("/api/bots")
-      && !/\/(draft|read-position|uploads)$/.test(path)) evaluateRoster();
+      && !/\/(draft|read-position|presence|uploads)$/.test(path)) evaluateRoster();
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${path}`))
       for (const changed of watchers.get(params(req).id) ?? []) changed();
   });
@@ -826,6 +826,12 @@ export async function createApp(
       .parse(req.body);
     store.savePersonal("read_positions", signedIn(req).id, params(req).id, value);
     return value;
+  });
+  // Heartbeats from the chat on screen. Notifications skip chats the person is reading or has read.
+  app.put("/api/bots/:id/presence", async (req) => {
+    const { client, state } = z.object({ client: z.string().min(1).max(100), state: z.enum(["active", "left", "idle"]) }).parse(req.body);
+    store.chatPresence(signedIn(req).id, params(req).id, client, state);
+    return { ok: true };
   });
   app.post("/api/bots/:id/uploads", async (req) => {
     await requireCapability("uploads");

@@ -52,6 +52,7 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
     "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },
     "bot-portrait": check(FileRef.self) { XCTAssertEqual($0.url, "/api/files/portrait.signature") },
+    "bot-presence": check(EmptyResponse.self) { XCTAssertEqual($0.ok, true) },
     "bot-read-position": check(ReadPosition.self) { XCTAssertEqual($0.messageId, "message-assistant"); XCTAssertEqual($0.scrollTop, 240.5) },
     "bot-skills": check([CapabilityItem].self) { XCTAssertEqual($0.first?.required, true) },
     "bot-starters": check([Starter].self) { XCTAssertEqual($0.first?.id, "meals") },

@@ -6,6 +6,8 @@ import type { LiveActivitySender } from "./live-activity.js";
 
 export interface NativeDevice { deviceId: string; token: string; environment: "sandbox" | "production" }
 export type ApnsSender = (device: NativeDevice, payload: string) => Promise<unknown>;
+/** Asks a device to remove these delivered notifications, named by tag. */
+export type ApnsClearSender = (device: NativeDevice, tags: string[]) => Promise<unknown>;
 export type ApnsTransport = (origin: string, headers: Record<string, string>, body: string) => Promise<{ statusCode: number; reason?: string }>;
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const fit = (value: string, limit: number) => {
@@ -27,7 +29,21 @@ export function apnsPayload(payload: string) {
   return JSON.stringify({ aps: { alert: { title: fit(value.title, 160), body: fit(value.body, 1000) }, sound: "default" }, url, tag: fit(value.tag, 160) });
 }
 
-export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender }) | undefined {
+/**
+ * A background push the app handles silently; it carries no alert and never wakes the screen.
+ * It names notifications, not chats, so a late clear never removes a newer unread one. Tags
+ * that would push it past APNs' 4KB limit are left on the device until its chat opens there.
+ */
+export function apnsClearPayload(tags: string[]) {
+  const kept: string[] = [];
+  for (const tag of tags) {
+    if (Buffer.byteLength(JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: [...kept, tag] } })) > 4000) break;
+    kept.push(tag);
+  }
+  return JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: kept } });
+}
+
+export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender; clear: ApnsClearSender }) | undefined {
   if (!config) return undefined;
   const key = createPrivateKey(readFileSync(config.privateKeyFile));
   if (key.asymmetricKeyType !== "ec" || key.asymmetricKeyDetails?.namedCurve !== "prime256v1")
@@ -83,5 +99,12 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
       "apns-expiration": String(Math.floor(Date.now() / 1000) + 900), "content-type": "application/json" }, body);
     if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected Live Activity update (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
   };
-  return Object.assign(send, { close() { session?.destroy(); }, liveActivity });
+  // Background pushes must use priority 5; iOS budgets them, so the worker sends one per device per pass.
+  const clear: ApnsClearSender = async (device, tags) => {
+    if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
+    const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
+      "apns-push-type": "background", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsClearPayload(tags));
+    if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected notification clear (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
+  };
+  return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear });
 }
