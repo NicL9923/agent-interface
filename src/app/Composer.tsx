@@ -12,6 +12,7 @@ import { write } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
 import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
+import { sendingDraft } from "./sent-echo";
 
 function ModelPickerPlaceholder({ model, failed = false }: { model: string; failed?: boolean }) {
   const description = failed ? "Model controls unavailable. Reload to try again." : "Loading model controls";
@@ -134,13 +135,18 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const [stopping, setStopping] = useState(false);
   // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
   const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
-  const input = useComposerInput(draft.text, botId);
+  // The transcript shows a message on its way, so the composer is free for the next one.
+  // The draft itself keeps the message until Hermes accepts it.
+  const handedOff = sendingDraft(draft, pending, sending);
+  const shown = draft.botId === botId && !handedOff ? draft : { text: "", attachments: [] };
+  const input = useComposerInput(shown.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
   const fileInput = useRef<HTMLInputElement>(null);
   const slots = MAX_ATTACHMENTS - draft.attachments.length - uploads.length;
   const attachUnavailable = !boot.capabilities.uploads.supported
     ? boot.capabilities.uploads.reason || "Hermes can't receive files right now."
     : !draftReady || draft.botId !== botId ? "Your draft is still loading."
+    : sending ? "Wait a moment for your message to send."
     : slots <= 0 ? `A message can carry up to ${MAX_ATTACHMENTS} attachments.` : undefined;
   const submitting = sending || pending !== null;
   const [attachNotice, setAttachNotice] = useState<string[]>([]);
@@ -211,7 +217,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
           <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setAttachNotice([])}><Icon name="close" size={14} /></button>
         </div>}
-        <AttachmentTray attachments={draft.botId === botId ? draft.attachments : []} uploads={uploads} previews={previews}
+        <AttachmentTray attachments={shown.attachments} uploads={uploads} previews={previews}
           canOpen={boot.capabilities.generatedFiles.supported}
           onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
           onCancel={cancelUpload} onRetry={retryUpload} />
@@ -221,7 +227,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
         <textarea
           ref={input.ref}
           id="message"
-          value={draft.botId === botId ? draft.text : ""}
+          value={shown.text}
           placeholder={
             active
               ? `Guide ${selected.name} while they work…`
@@ -230,6 +236,8 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           onChange={(event) =>
             setDraft((previous) => ({
               ...previous,
+              // Typing over a message on its way starts a new draft without its files.
+              ...(sendingDraft(previous, pending, sending) ? { attachments: [] } : {}),
               dirty: true,
               text: event.target.value,
             }))

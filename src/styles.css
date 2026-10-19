@@ -514,6 +514,35 @@ a {
   font-size: 10px;
   font-weight: 400;
 }
+/* A sent message rises into the transcript at once, faint until Hermes accepts it. */
+.message-user {
+  transition: opacity 240ms ease;
+}
+.message-outgoing {
+  transform-origin: 100% 100%;
+  animation: message-send 380ms cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
+}
+.message-sending {
+  opacity: 0.66;
+}
+.message-delivery {
+  font-size: 10px;
+  font-weight: 400;
+}
+.message-unconfirmed .message-delivery {
+  color: var(--attention);
+}
+@keyframes message-send {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-outgoing {
+    animation: none;
+  }
+}
 .message-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

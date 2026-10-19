@@ -15,12 +15,15 @@ import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import { activityLabels, isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
 import type { SavedConversation } from "./storage";
+import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
-export function Conversation({ boot, selected, botId, conversation, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
+export function Conversation({ boot, selected, botId, conversation, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
+  /** Includes the echo of a message still on its way, which is drawn as sending. */
   conversation: SavedConversation | null;
+  echo: SentEcho | null;
   state: ActivityState;
   showActivity: boolean;
   avatarState: ActivityState;
@@ -116,7 +119,8 @@ export function Conversation({ boot, selected, botId, conversation, state, showA
         ) : blocks.length ? (
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
-            <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id} />
+            <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id}
+              outgoingId={echo?.request.requestId} outgoing={echo?.status} />
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -243,8 +247,10 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
   return blocks;
 }
 // Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId, userId }: {
+const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId, userId, outgoingId, outgoing }: {
   blocks: Turn[]; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
+  /** The person's sent message still shown from this device, and how far it got. */
+  outgoingId?: string; outgoing?: SentEcho["status"];
 }) {
   return <>
     {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
@@ -258,14 +264,18 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
           : reply ? "" : message.toolName || message.role;
         // Reasoning follows the prompt and precedes the reply.
         const opensReply = !!block.reasoning.length && message.role !== "user" && block.messages.slice(0, position).every(item => item.role === "user");
+        // Accepted, it reads as any other message until Hermes's own copy takes its place.
+        const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
         const article = <article
-          className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}`}
+          className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
           key={message.id}
           data-message-id={message.id}
+          aria-busy={delivery === "sending" || undefined}
         >
           {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
             {label}
-            {message.createdAt && <When value={message.createdAt} />}
+            {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span>
+              : message.createdAt && <When value={message.createdAt} />}
           </div>}
           {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
             <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />

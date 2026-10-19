@@ -328,6 +328,54 @@ describe("conversation state", () => {
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
+  it("shows a sent message at once and hands its place to Hermes's copy", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    let finish!: (receipt: { requestId: string; status: "accepted" }) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = receipt => resolve(receipt as T); }) : {} as T);
+    const sent = () => [...container.querySelectorAll<HTMLElement>(".message-user")];
+    try {
+      await render();
+      await act(async () => sendButton().click());
+      expect(sent()).toHaveLength(1);
+      expect(sent()[0].textContent).toContain("My saved server draft");
+      expect(sent()[0].classList.contains("message-sending")).toBe(true);
+      expect(sent()[0].querySelector(".message-delivery")?.textContent).toBe("Sending…");
+      expect(container.querySelector("textarea")!.value).toBe("");
+      expect(sendButton().getAttribute("aria-busy")).toBe("true");
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      // Accepted before the transcript has it: the echo stays, as an ordinary message.
+      await act(async () => finish({ requestId, status: "accepted" }));
+      expect(sent()).toHaveLength(1);
+      expect(sent()[0].classList.contains("message-outgoing")).toBe(false);
+      expect(sendButton().getAttribute("aria-busy")).toBe("false");
+      conversation = { ...conversation, activity: { state: "thinking", runId: "run" },
+        messages: [{ id: requestId, role: "user", text: "My saved server draft", sender: { id: "one", name: "One" } }] };
+      await changed();
+      expect(sent()).toHaveLength(1);
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("puts a refused message back in front of what was typed while it sent", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    let refuse!: () => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>((_, reject) => { refuse = () => reject(new ApiError("Too large", 413)); }) : {} as T);
+    try {
+      await render();
+      await act(async () => sendButton().click());
+      const textarea = container.querySelector("textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "And another thing");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(textarea.value).toBe("And another thing");
+      await act(async () => refuse());
+      expect(textarea.value).toBe("My saved server draft\n\nAnd another thing");
+      expect(container.querySelector(".message-user")).toBeNull();
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
   it("keeps guidance submission feedback when the draft is cleared mid-send", async () => {
     conversation = { ...conversation, activity: { state: "working" } };
     let finish!: (receipt: { requestId: string; status: "accepted" }) => void;

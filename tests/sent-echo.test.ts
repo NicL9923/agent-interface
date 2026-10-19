@@ -1,0 +1,93 @@
+import { describe, expect, it } from "vitest";
+import { ECHO_PATIENCE, nextEcho, restoreSent, sendingDraft, withEcho } from "../src/app/sent-echo";
+import type { SentEcho } from "../src/app/sent-echo";
+import type { Pending, SavedConversation } from "../src/app/storage";
+import type { Message, SubmissionReceipt } from "../src/shared/types";
+
+const sender = { id: "one", name: "One" };
+const request: Pending = { requestId: "req", botId: "bot", text: "Hello there", attachments: [], reviewedInterruption: false };
+const conversation = (messages: Message[] = [{ id: "a", role: "assistant", text: "Hi" }], state: SavedConversation["activity"]["state"] = "idle"): SavedConversation =>
+  ({ botId: "bot", messages, approvals: [], files: [], activity: { state } });
+const step = (echo: SentEcho | null, input: Partial<Parameters<typeof nextEcho>[1]>) =>
+  nextEcho(echo, { pending: null, receipt: null, sending: false, conversation: conversation(), sender, now: 1000, ...input });
+const accepted: SubmissionReceipt = { requestId: "req", status: "accepted", messageId: "row-9" };
+const sending = step(null, { pending: request, sending: true })!;
+
+describe("sent message echo", () => {
+  it("appears for a new send after the last message shown", () => {
+    expect(sending).toMatchObject({ status: "sending", after: "a", sentAt: new Date(1000).toISOString() });
+    const shown = withEcho(conversation(), sending)!;
+    expect(shown.messages.at(-1)).toMatchObject({ id: "req", role: "user", text: "Hello there", sender });
+  });
+
+  it("waits unconfirmed when the request ends without a receipt", () => {
+    expect(step(sending, { pending: request })?.status).toBe("unconfirmed");
+  });
+
+  it.each<SubmissionReceipt | null>([
+    { requestId: "req", status: "rejected" },
+    { requestId: "req", status: "interrupted" },
+    { requestId: "older", status: "accepted" },
+    null,
+  ])("leaves with a send that did not go through: %j", (receipt) => {
+    expect(step(sending, { receipt })).toBeNull();
+  });
+
+  it("stays after acceptance until Hermes's copy arrives by request or row ID", () => {
+    const kept = step(sending, { receipt: accepted })!;
+    expect(kept).toMatchObject({ status: "accepted", messageId: "row-9", acceptedAt: 1000 });
+    for (const id of ["req", "row-9"]) {
+      const arrived = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id, role: "user", text: "Hello there" }], "thinking");
+      expect(step(kept, { receipt: accepted, conversation: arrived })).toBeNull();
+      expect(withEcho(arrived, kept)).toBe(arrived);
+    }
+  });
+
+  it("matches an accepted copy by its words only after the message last shown", () => {
+    const earlier = { id: "u0", role: "user" as const, text: "Hello there", sender };
+    const kept = step(null, { pending: request, sending: true, conversation: conversation([earlier]) })!;
+    const acceptedEcho = step(kept, { receipt: accepted, conversation: conversation([earlier]) })!;
+    expect(acceptedEcho).not.toBeNull();
+    const saved = conversation([earlier, { id: "u1", role: "user", text: " Hello there ", sender }], "thinking");
+    expect(step(acceptedEcho, { receipt: accepted, conversation: saved })).toBeNull();
+    const someoneElse = conversation([earlier, { id: "u1", role: "user", text: "Hello there", sender: { id: "two", name: "Two" } }], "thinking");
+    expect(step(acceptedEcho, { receipt: accepted, conversation: someoneElse })).not.toBeNull();
+  });
+
+  it("stands in for a prompt saved only when its run ends", () => {
+    let echo = step(sending, { receipt: accepted })!;
+    echo = step(echo, { receipt: accepted, conversation: conversation(undefined, "working"), now: 90_000 })!;
+    expect(echo.ran).toBe(true);
+    expect(step(echo, { receipt: accepted, conversation: conversation(undefined, "done"), now: 120_000 })).toBeNull();
+  });
+
+  it("gives up on an accepted message whose run never shows", () => {
+    const echo = step(sending, { receipt: accepted })!;
+    expect(step(echo, { receipt: accepted, now: 1000 + ECHO_PATIENCE })).not.toBeNull();
+    expect(step(echo, { receipt: accepted, now: 1001 + ECHO_PATIENCE })).toBeNull();
+  });
+
+  it("is drawn only in its own assistant's conversation", () => {
+    const other = { ...conversation(), botId: "other" };
+    expect(withEcho(other, sending)).toBe(other);
+    expect(step(sending, { pending: request, sending: true, conversation: other })).toBe(sending);
+  });
+
+  it("hands the composer back only while the sent copy is the draft", () => {
+    const draft = { text: "Hello there", attachments: [], botId: "bot", userId: "one" };
+    expect(sendingDraft(draft, request, true)).toBe(true);
+    expect(sendingDraft(draft, request, false)).toBe(false);
+    expect(sendingDraft({ ...draft, text: "Something new" }, request, true)).toBe(false);
+  });
+
+  it("restores a refused message in front of newer text, once", () => {
+    const file = { id: "f1", name: "a.png", mime: "image/png" };
+    const sent = { text: "Hello there", attachments: [file] };
+    const typed = { text: "Next", attachments: [], botId: "bot", seq: 3 };
+    const restored = restoreSent(typed, sent);
+    expect(restored).toMatchObject({ text: "Hello there\n\nNext", attachments: [file], dirty: true, seq: 3 });
+    expect(restoreSent(restored, sent)).toBe(restored);
+    const untouched = { text: "Hello there", attachments: [file] };
+    expect(restoreSent(untouched, sent)).toBe(untouched);
+  });
+});
