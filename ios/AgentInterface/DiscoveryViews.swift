@@ -217,7 +217,7 @@ struct ActionReceiptView:View {
   var body:some View {
     DisclosureGroup("\(label) · \(call.name)") {
       Text("Outcome reported by the tool. Review its result to confirm what changed.").font(.caption).foregroundStyle(.secondary)
-      ToolOutputView(text: call.error ?? call.result ?? "Hermes did not report an outcome.").font(.footnote)
+      ToolOutputView(text: call.error ?? call.result ?? "Hermes did not report an outcome.", label: "Result from \(call.name)").font(.footnote)
       ForEach(["url", "html_url", "web_url", "link"], id: \.self) { key in
         if let value = result[key] as? String, let url = URL(string: value), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
           Link("Open reported result", destination: url)

@@ -445,7 +445,7 @@ struct ToolActivityView: View {
   private func section(_ title: String, _ text: String, danger: Bool = false) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title).font(.caption.bold()).accessibilityAddTraits(.isHeader)
-      ToolOutputView(text: text).font(.system(.caption, design: .monospaced))
+      ToolOutputView(text: text, label: "\(title) for \(message.displayToolName)").font(.system(.caption, design: .monospaced))
     }.foregroundStyle(danger ? Palette.danger : Color.primary)
   }
   static func status(_ status: String, connected: Bool) -> String {
@@ -460,6 +460,7 @@ struct ToolActivityView: View {
 /// Short results keep their natural height; long results scroll inside the receipt.
 struct ToolOutputView: View {
   var text: String
+  var label: String = "Tool output"
   @State private var contentHeight: CGFloat = 1
   var body: some View {
     ScrollView(.vertical) {
@@ -474,7 +475,7 @@ struct ToolOutputView: View {
     .scrollDisabled(contentHeight <= 280)
     .scrollBounceBehavior(.basedOnSize)
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("Tool output")
+    .accessibilityLabel(label)
     .onPreferenceChange(ToolOutputHeight.self) { contentHeight = $0 }
   }
 }

@@ -198,7 +198,7 @@ final class ParityFlowTests: XCTestCase {
       long.tap()
       let beforeScroll = XCTAttachment(screenshot: app.screenshot())
       beforeScroll.name = "Before scrolling \(presentation) tool output"; beforeScroll.lifetime = .keepAlways; add(beforeScroll)
-      let outputs = app.scrollViews.matching(NSPredicate(format: "label == %@", "Tool output"))
+      let outputs = app.scrollViews.matching(NSPredicate(format: "label BEGINSWITH %@", "Result"))
       XCTAssertTrue(outputs.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
       let output = try XCTUnwrap(outputs.allElementsBoundByIndex.last)
       XCTAssertLessThanOrEqual(output.frame.height, 281)

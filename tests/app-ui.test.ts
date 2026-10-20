@@ -799,6 +799,29 @@ describe("conversation state", () => {
     expect(container.querySelector('[data-message-id="answer"] a')?.textContent).toContain("report.txt");
   });
 
+  it("keeps expanded tool details and scroll position when completion moves them above the reply", async () => {
+    const running = { id: "lookup", name: "terminal", status: "running" as const, result: "Partial result" };
+    conversation = { ...conversation, activity: { state: "working" }, messages: [
+      { id: "question", role: "user", text: "Check it" },
+      { id: "tool-row", role: "tool", text: "", toolCall: running },
+      { id: "answer", role: "assistant", text: "Checking." },
+    ] };
+    await render();
+    const group = container.querySelector<HTMLDetailsElement>(".tool-calls")!;
+    const receipt = group.querySelector<HTMLDetailsElement>(".action-receipt")!;
+    const output = receipt.querySelector("pre")!;
+    group.open = receipt.open = true; output.scrollTop = 120;
+    conversation = { ...conversation, activity: { state: "done" }, messages: conversation.messages.map(message =>
+      message.toolCall ? { ...message, toolCall: { ...running, status: "completed" as const } } : message) };
+    await changed();
+    expect(container.querySelector(".tool-calls")).toBe(group);
+    expect(group.open).toBe(true); expect(receipt.open).toBe(true);
+    expect(output.scrollTop).toBe(120);
+    expect(output.getAttribute("role")).toBe("region");
+    expect(output.getAttribute("aria-label")).toBe("Result from terminal");
+    expect(group.compareDocumentPosition(container.querySelector('[data-message-id="answer"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("counts history and live tools once and groups delegated work separately", async () => {
     const call = { id: "lookup", name: "web", status: "completed" as const, result: "Found it" };
     conversation = { ...conversation, activity: { state: "working" }, messages: [

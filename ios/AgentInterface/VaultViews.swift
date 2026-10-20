@@ -478,7 +478,7 @@ struct SecureAttentionView: View {
           }
         }
       }
-    }.disabled(!store.connected || scenePhase != .active)
+    }.disabled(!store.connected || scenePhase == .background)
       .onAppear { input.bind(key) }
       .onChange(of: key) { _, new in input.bind(new) }
       .onChange(of: request.secure) { _, _ in input.bind(key) }

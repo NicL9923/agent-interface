@@ -262,7 +262,7 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
 }) {
   return <>
     {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
-      {block.messages.flatMap((message, position) => {
+      {[...block.messages.flatMap((message, position) => {
         // The conversation is with one assistant, so its replies need no name, and
         // consecutive reply parts in a turn share the first part's timestamp.
         const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
@@ -299,9 +299,9 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
           ...(message.id === block.replyAt ? [<ToolCalls key="tool-activity" messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />] : []),
           article,
         ];
-      })}
-      {!!block.reasoning.length && block.messages.every(message => message.role === "user") && <Reasoning parts={block.reasoning} />}
-      {block.replyAt === undefined && <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />}
+      }),
+      ...(block.reasoning.length && block.messages.every(message => message.role === "user") ? [<Reasoning key="reasoning" parts={block.reasoning} />] : []),
+      ...(block.replyAt === undefined ? [<ToolCalls key="tool-activity" messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />] : [])]}
     </div>)}
   </>;
 });
@@ -350,7 +350,7 @@ function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: 
     <div className="tool-calls-content">{group.items.map(message => <div key={message.id}>
       {isAgentExchange(message) ? <AgentExchange message={message} recipient={recipient} /> : message.toolCall
         ? advanced ? <ToolCallDetail call={message.toolCall} disconnected={disconnected} /> : <ActionReceipt call={message.toolCall} />
-        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || label(message)}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre tabIndex={0} aria-label="Activity output">{message.text || "No result was exposed by Hermes."}</pre></details>}
+        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || label(message)}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre role="region" tabIndex={0} aria-label="Activity output">{message.text || "No result was exposed by Hermes."}</pre></details>}
       {message.files?.map(file => <FileLink key={file.id} file={file} />)}
     </div>)}</div>
   </details>);
@@ -363,9 +363,9 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
       {call.startedAt && <div><dt>Started</dt><dd><When value={call.startedAt} /></dd></div>}
       {call.completedAt && <div><dt>Finished</dt><dd><When value={call.completedAt} /></dd></div>}
     </dl>
-    {call.arguments !== undefined && <><h3>Arguments</h3><pre tabIndex={0} aria-label={`Arguments for ${call.name}`}>{call.arguments}</pre></>}
-    {call.result !== undefined && <><h3>Result</h3><pre tabIndex={0} aria-label={`Result from ${call.name}`}>{call.result}</pre></>}
-    {call.error && <><h3 className="danger">Error</h3><pre className="danger" tabIndex={0} aria-label={`Error from ${call.name}`}>{call.error}</pre></>}
+    {call.arguments !== undefined && <><h3>Arguments</h3><pre role="region" tabIndex={0} aria-label={`Arguments for ${call.name}`}>{call.arguments}</pre></>}
+    {call.result !== undefined && <><h3>Result</h3><pre role="region" tabIndex={0} aria-label={`Result from ${call.name}`}>{call.result}</pre></>}
+    {call.error && <><h3 className="danger">Error</h3><pre className="danger" role="region" tabIndex={0} aria-label={`Error from ${call.name}`}>{call.error}</pre></>}
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }

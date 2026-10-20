@@ -255,7 +255,7 @@ def explicit_metadata(request_id):
 
 
 def bind_prompt_waits(server, journal):
-    """Keep app-owned login entry open until native answer/cancel/interrupt.
+    """Keep a person's app login entry open until native answer/cancel/interrupt.
 
     Native login prompts expire after 180 seconds, even while the person is
     finding their password. The app shows no deadline. Other chats and prompt
@@ -270,7 +270,10 @@ def bind_prompt_waits(server, journal):
         if method == "vault.save_login":
             profile = journal.live_profile_for_session(sid)
             if profile is not None and journal.canonical_session(profile) == sid:
-                timeout = None
+                with journal.lock:
+                    receipt = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 LIMIT 1", (sid,)).fetchone()
+                if receipt:
+                    timeout = None
         return original(method, sid, params, timeout=timeout)
 
     ask._agent_interface_login_wait = True

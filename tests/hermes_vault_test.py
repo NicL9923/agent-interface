@@ -1,5 +1,6 @@
 """Scoped settlement races with the native immutable request-ID contract."""
 import importlib.util
+import sqlite3
 from pathlib import Path
 import sys
 import threading
@@ -53,11 +54,16 @@ class VaultTests(unittest.TestCase):
 class PromptWaitTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
+        self.db = sqlite3.connect(':memory:')
+        self.addCleanup(self.db.close)
+        self.db.execute('CREATE TABLE receipts(session_id TEXT, terminal INTEGER, steering INTEGER)')
+        self.db.executemany('INSERT INTO receipts VALUES (?,0,0)', [('canonical',), ('default-chat',)])
         def ask(method, sid, params, timeout=300):
             self.calls.append((method, sid, params, timeout))
             return 'native result'
         self.server = types.SimpleNamespace(_ask=ask)
         self.journal = types.SimpleNamespace(
+            db=self.db, lock=threading.Lock(),
             live_profile_for_session=lambda sid: {'canonical': 'one', 'other-chat': 'one', 'default-chat': 'default'}.get(sid),
             canonical_session=lambda profile: {'one': 'canonical', 'default': 'default-chat'}.get(profile),
         )
@@ -87,6 +93,16 @@ class PromptWaitTests(unittest.TestCase):
         self.journal.canonical_session = lambda profile: 'replacement'
         self.server._ask('vault.save_login', 'canonical', {}, timeout=180)
         self.assertEqual(self.calls[-1][3], 180)
+
+    def test_unattended_or_settled_turns_keep_the_native_deadline(self):
+        vault.bind_prompt_waits(self.server, self.journal)
+        for terminal, steering in [(None, None), (1, 0), (0, 1)]:
+            with self.subTest(terminal=terminal, steering=steering):
+                self.db.execute('DELETE FROM receipts')
+                if terminal is not None:
+                    self.db.execute('INSERT INTO receipts VALUES (?,?,?)', ('canonical', terminal, steering))
+                self.server._ask('vault.save_login', 'canonical', {}, timeout=180)
+                self.assertEqual(self.calls[-1][3], 180)
 
 
 if __name__=='__main__': unittest.main()
