@@ -127,3 +127,129 @@ import XCTest
     XCTAssertEqual(ConnectionCopy.compact(code: "reconnecting", appUnavailable: true).title, "Reconnecting to the app")
   }
 }
+
+/// The sent-message echo, ported from the web's src/app/sent-echo.ts and its tests.
+@MainActor final class SentEchoTests: XCTestCase {
+  private let sender = Sender(id: "one", name: "One")
+  private let request = PendingSubmission(requestId: "req", botId: "bot", text: "Hello there", attachments: [], reviewedInterruption: false)
+  private let accepted = Receipt(requestId: "req", status: "accepted", messageId: "row-9")
+  private let start = Date(timeIntervalSince1970: 1)
+  private func conversation(_ messages: [Message] = [Message(id: "a", role: "assistant", text: "Hi")], _ state: ActivityState = .idle) -> Conversation {
+    Conversation(botId: "bot", messages: messages, activity: Activity(state: state), approvals: [], files: [])
+  }
+  private func step(_ echo: SentEcho?, pending: PendingSubmission? = nil, receipt: Receipt? = nil, sending: Bool = false,
+    conversation: Conversation? = nil, sender: Sender?? = nil, now: Date? = nil) -> SentEcho?
+  {
+    SentEcho.next(echo, pending: pending, receipt: receipt, sending: sending, conversation: conversation ?? self.conversation(),
+      sender: sender ?? self.sender, now: now ?? start)
+  }
+  private var sending: SentEcho { step(nil, pending: request, sending: true)! }
+  private func user(_ id: String, _ text: String, from sender: Sender? = nil) -> Message {
+    Message(id: id, role: "user", text: text, sender: sender)
+  }
+
+  func testAppearsForANewSendAfterTheLastMessageShown() {
+    XCTAssertEqual(sending.status, .sending)
+    XCTAssertEqual(sending.after, "a")
+    XCTAssertEqual(sending.sentAt, "1970-01-01T00:00:01.000Z")
+    let shown = SentEcho.transcript(conversation(), sending)?.messages.last
+    XCTAssertEqual(shown, Message(id: "req", role: "user", text: "Hello there", createdAt: sending.sentAt, sender: sender))
+    XCTAssertEqual(sending.delivery, SentEcho.Delivery(id: "req", status: .sending))
+  }
+
+  func testWaitsUnconfirmedWhenTheRequestEndsWithoutAReceipt() {
+    let echo = step(sending, pending: request)
+    XCTAssertEqual(echo?.status, .unconfirmed)
+    XCTAssertEqual(echo?.delivery?.status, .unconfirmed)
+  }
+
+  func testLeavesWithASendThatDidNotGoThrough() {
+    let receipts: [Receipt?] = [Receipt(requestId: "req", status: "rejected"), Receipt(requestId: "req", status: "interrupted"),
+      Receipt(requestId: "older", status: "accepted"), nil]
+    for receipt in receipts {
+      XCTAssertNil(step(sending, receipt: receipt), String(describing: receipt))
+    }
+  }
+
+  func testStaysAfterAcceptanceUntilHermessCopyArrivesByRequestOrRowID() throws {
+    let kept = try XCTUnwrap(step(sending, receipt: accepted))
+    XCTAssertEqual(kept.status, .accepted)
+    XCTAssertEqual(kept.messageId, "row-9")
+    XCTAssertEqual(kept.acceptedAt, start)
+    XCTAssertNil(kept.delivery, "Accepted, it reads as an ordinary message")
+    for id in ["req", "row-9"] {
+      let arrived = conversation([Message(id: "a", role: "assistant", text: "Hi"), user(id, "Hello there")], .thinking)
+      XCTAssertNil(step(kept, receipt: accepted, conversation: arrived))
+      XCTAssertEqual(SentEcho.transcript(arrived, kept), arrived)
+    }
+  }
+
+  func testMatchesAnAcceptedCopyByItsWordsOnlyAfterTheMessageLastShown() throws {
+    let earlier = user("u0", "Hello there", from: sender)
+    let kept = try XCTUnwrap(step(nil, pending: request, sending: true, conversation: conversation([earlier])))
+    let acceptedEcho = try XCTUnwrap(step(kept, receipt: accepted, conversation: conversation([earlier])))
+    let saved = conversation([earlier, user("u1", " Hello there ", from: sender)], .thinking)
+    XCTAssertNil(step(acceptedEcho, receipt: accepted, conversation: saved))
+    let someoneElse = conversation([earlier, user("u1", "Hello there", from: Sender(id: "two", name: "Two"))], .thinking)
+    XCTAssertNotNil(step(acceptedEcho, receipt: accepted, conversation: someoneElse))
+  }
+
+  func testStandsInForAPromptSavedOnlyWhenItsRunEnds() throws {
+    var echo = try XCTUnwrap(step(sending, receipt: accepted))
+    echo = try XCTUnwrap(step(echo, receipt: accepted, conversation: conversation([], .working), now: start + 90))
+    XCTAssertTrue(echo.ran)
+    XCTAssertNil(step(echo, receipt: accepted, conversation: conversation([], .done), now: start + 120))
+  }
+
+  func testGivesUpOnAnAcceptedMessageWhoseRunNeverShows() throws {
+    let echo = try XCTUnwrap(step(sending, receipt: accepted))
+    XCTAssertNotNil(step(echo, receipt: accepted, now: start + SentEcho.patience))
+    XCTAssertNil(step(echo, receipt: accepted, now: start + SentEcho.patience + 0.001))
+  }
+
+  func testIsDrawnOnlyInItsOwnAssistantsConversation() {
+    var other = conversation()
+    other.botId = "other"
+    XCTAssertEqual(SentEcho.transcript(other, sending), other)
+    XCTAssertEqual(step(sending, pending: request, sending: true, conversation: other), sending)
+  }
+
+  func testHandsTheComposerBackOnlyWhileTheSentCopyIsTheDraft() {
+    let draft = Draft(text: "Hello there")
+    XCTAssertTrue(SentEcho.sendingDraft(draft, pending: request, sending: true))
+    XCTAssertFalse(SentEcho.sendingDraft(draft, pending: request, sending: false))
+    XCTAssertFalse(SentEcho.sendingDraft(Draft(text: "Something new"), pending: request, sending: true))
+  }
+
+  func testRestoresARefusedMessageInFrontOfNewerTextOnce() {
+    let file = FileRef(id: "f1", name: "a.png", mime: "image/png")
+    var sent = request
+    sent.attachments = [file]
+    let typed = Draft(text: "Next", seq: 3)
+    let restored = AppStore.draft(restoring: sent, into: typed)
+    XCTAssertEqual(restored.text, "Hello there\n\nNext")
+    XCTAssertEqual(restored.attachments, [file])
+    XCTAssertEqual(restored.seq, 3)
+    XCTAssertEqual(AppStore.draft(restoring: sent, into: restored), restored)
+    let untouched = Draft(text: "Hello there", attachments: [file])
+    XCTAssertEqual(AppStore.draft(restoring: sent, into: untouched), untouched)
+  }
+
+  func testLeavesWhenAnotherPersonSignsIn() throws {
+    let kept = try XCTUnwrap(step(sending, receipt: accepted))
+    XCTAssertNil(step(kept, sender: Sender(id: "two", name: "Two")))
+    XCTAssertNil(step(kept, sender: .some(nil)))
+  }
+
+  func testAnchorsOnASavedMessageAndNeverMatchesWordsOnceItsAnchorIsGone() throws {
+    let live = conversation([user("u0", "continue", from: sender), Message(id: "s-inflight", role: "assistant", text: "Working")], .working)
+    var continued = request
+    continued.text = "continue"
+    var echo = try XCTUnwrap(step(nil, pending: continued, sending: true, conversation: live))
+    XCTAssertEqual(echo.after, "u0", "A live reply's row is replaced as it is saved")
+    echo.after = "gone"
+    echo.status = .accepted
+    XCTAssertNotNil(step(echo, receipt: Receipt(requestId: "req", status: "accepted"),
+      conversation: conversation([user("u0", "continue", from: sender)], .working)))
+  }
+}

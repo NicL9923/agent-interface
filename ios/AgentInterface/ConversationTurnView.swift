@@ -26,17 +26,24 @@ extension View {
 struct TranscriptTurns: View, Equatable {
   var turns: [ConversationTurn]
   var advanced: Bool
+  /// The person's sent message still shown from this device, and how far it got.
+  var delivery: SentEcho.Delivery?
   var body: some View {
-    ForEach(turns) { ConversationTurnView(turn: $0, advanced: advanced) }
+    // Only the turn holding the message on its way renders again as it goes.
+    ForEach(turns) { turn in
+      ConversationTurnView(turn: turn, advanced: advanced,
+        delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil)
+    }
   }
 }
 
 struct ConversationTurnView: View, Equatable {
   var turn: ConversationTurn
   var advanced: Bool
+  var delivery: SentEcho.Delivery? = nil
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.unobservedStore) private var store
-  static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced }
+  static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery }
   var body: some View {
     let visible = turn.visibleMessages
     VStack(alignment: .leading, spacing: 18) {
@@ -45,7 +52,8 @@ struct ConversationTurnView: View, Equatable {
           reasoning
         }
         MessageView(message: message,
-          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant").id(message.id)
+          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant",
+          delivery: delivery?.id == message.id ? delivery?.status : nil).id(message.id)
       }
       if advanced && !turn.reasoning.isEmpty && visible.allSatisfy({ $0.role == "user" }) { reasoning }
       ForEach(turn.activityGroups) { activityGroup($0) }

@@ -117,7 +117,8 @@ struct AttachmentTrayView: View {
   @EnvironmentObject private var store: AppStore
   var body: some View {
     let uploads = store.attachmentUploads.filter { $0.botId == botId }
-    let files = store.selectedBotId == botId ? store.draft.attachments : []
+    // A message on its way carries its files in the transcript.
+    let files = store.selectedBotId == botId ? store.composerDraft.attachments : []
     if !uploads.isEmpty || !files.isEmpty {
       VStack(alignment: .leading, spacing: 6) {
         ScrollView(.horizontal, showsIndicators: false) {
