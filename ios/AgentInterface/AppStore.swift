@@ -994,8 +994,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       transcript = SentEcho.transcript(conversation, echoes)
       turns = transcript?.presentationTurns ?? []
     }
-    // An accepted message that never shows is checked again once its patience runs out.
-    let deadline = next.filter { $0.status == .accepted && !$0.ran }
+    // An accepted message that never shows is checked again once its patience runs out. Only the
+    // open conversation can retire one, so another assistant's echo waits for its return.
+    let deadline = next.filter { $0.status == .accepted && !$0.ran && $0.request.botId == conversation?.botId }
       .compactMap { $0.acceptedAt?.addingTimeInterval(SentEcho.patience + 0.1) }.min()
     guard deadline != echoDeadline else { return }
     echoTimer?.cancel()

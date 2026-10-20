@@ -821,8 +821,10 @@ struct SentEcho: Equatable {
   /// The conversation with the echo at its end, as the person's own message. Its ID is the
   /// request ID, so Hermes's copy, which carries the same ID, takes its place without a flicker.
   static func transcript(_ conversation: Conversation?, _ echoes: [SentEcho]) -> Conversation? {
-    guard var conversation else { return nil }
-    for echo in echoes where echo.request.botId == conversation.botId && !echo.shown(in: conversation) {
+    guard let saved = conversation else { return nil }
+    var conversation = saved
+    // Checked against Hermes's messages only, so one echo never passes for another's copy.
+    for echo in echoes where echo.request.botId == saved.botId && !echo.shown(in: saved) {
       conversation.messages.append(Message(
         id: echo.request.requestId, role: "user", text: echo.request.text, createdAt: echo.sentAt,
         sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments))

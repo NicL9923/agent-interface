@@ -122,4 +122,10 @@ describe("sent message echo", () => {
     expect(echoes.map(echo => echo.request.requestId)).toEqual(["photo"]);
     expect(steps(echoes, { conversation: conversation(undefined, "done") })).toEqual([]);
   });
+
+  it("shows the same words sent twice until Hermes has each", () => {
+    const first = { ...sending, status: "accepted" as const };
+    const second = { ...first, request: { ...first.request, requestId: "req-2" } };
+    expect(withEchoes(conversation(undefined, "working"), [first, second])!.messages.map(message => message.id)).toEqual(["a", "req", "req-2"]);
+  });
 });

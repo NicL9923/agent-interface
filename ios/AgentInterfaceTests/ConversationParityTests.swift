@@ -267,6 +267,16 @@ import XCTest
     XCTAssertEqual(steps(echoes, state: .done), [])
   }
 
+  func testShowsTheSameWordsSentTwiceUntilHermesHasEach() throws {
+    var first = try XCTUnwrap(step(nil, pending: request, sending: true))
+    first.status = .accepted
+    var second = first
+    second.request.requestId = "req-2"
+    let echoes = [first, second]
+    let live = conversation([Message(id: "a", role: "assistant", text: "Hi")], .working)
+    XCTAssertEqual(SentEcho.transcript(live, echoes)?.messages.map(\.id), ["a", "req", "req-2"])
+  }
+
   func testAnchorsOnASavedMessageAndNeverMatchesWordsOnceItsAnchorIsGone() throws {
     let live = conversation([user("u0", "continue", from: sender), Message(id: "s-inflight", role: "assistant", text: "Working")], .working)
     var continued = request
