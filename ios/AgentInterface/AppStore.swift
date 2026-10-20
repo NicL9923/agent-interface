@@ -962,9 +962,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if value.status == "rejected" || value.status == "interrupted" { refused(original) }
     clearPending(botId)
   }
-  /// The composer empties while a message sends, so text typed meanwhile may have replaced it.
-  /// A refused message goes back into its draft in front of that text, unless the draft still
-  /// holds it, as on the web.
+  /// A refused message goes back into its draft, in front of anything that replaced it meanwhile,
+  /// such as an edit from another device or the Share inbox, unless the draft still holds it, as
+  /// on the web.
   private func refused(_ submission: PendingSubmission) {
     markSent(submission, false)
     let open = selectedBotId == submission.botId
@@ -1005,15 +1005,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
   }
-  /// Whether the composer is showing the draft that is on its way. The transcript shows it, so
-  /// the composer is free for the next message; the draft itself keeps it until Hermes accepts it.
-  /// Once the composer is edited during a send, it never hides the draft again for that send, so
-  /// new words that pass through the sent text cannot blank it.
-  var sendingDraft: Bool {
-    SentEcho.sendingDraft(draft, pending: pending, sending: sending) && typedOver != pending?.requestId
-  }
-  /// The send the composer was edited during.
-  private var typedOver: String?
+  /// Whether the open draft is the message on its way. The transcript shows it, so the composer
+  /// reads empty, and read-only: until Hermes answers, a draft and its send are told apart only by
+  /// their content, so the draft must stay the sent copy.
+  var sendingDraft: Bool { SentEcho.sendingDraft(draft, pending: pending, sending: sending) }
   /// The draft as the composer shows it: empty while its message is on its way.
   var composerDraft: Draft {
     guard sendingDraft else { return draft }
@@ -1022,12 +1017,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     shown.attachments = []
     return shown
   }
-  /// An edit in the composer, made to what it shows: over a message on its way, it starts a new
-  /// draft without the sent files.
+  /// An edit in the composer. One made while its draft is on its way is ignored: the composer is
+  /// read-only then, and this keeps any other path from changing the sent copy.
   func editComposer(_ edit: (inout Draft) -> Void) {
-    var next = composerDraft
+    guard !sendingDraft else { return }
+    var next = draft
     edit(&next)
-    if sending, let pending { typedOver = pending.requestId }
     updateDraft(next)
   }
   /// Records or forgets, on the copy it came from, the text this device sent.

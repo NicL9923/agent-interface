@@ -59,23 +59,26 @@ struct ComposerView: View {
       .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
   }
   private var input: some View {
-    // While a message is on its way the transcript shows it, so the box is free for the next one.
+    // While a message is on its way the transcript shows it, so the box reads empty and is
+    // read-only until Hermes answers. It keeps focus, so the next message can start at once.
     ComposerTextView(
       text: Binding(
         get: { store.composerDraft.text },
         set: { text in store.editComposer { $0.text = text } }),
-      label: "Message \(bot.name)", editable: store.draftReady, focused: $focused,
+      label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
       onPasteImages: { images in Task { await store.attach(images: images, named: "Pasted image") } }
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
-        Text(store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…")
-          .foregroundStyle(.tertiary).allowsHitTesting(false).accessibilityHidden(true)
+        Text(placeholder).foregroundStyle(.tertiary).allowsHitTesting(false).accessibilityHidden(true)
       }
     }
     .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16))
     .opacity(store.draftReady ? 1 : 0.6)
+  }
+  private var placeholder: String {
+    store.sendingDraft ? "Sending…" : store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…"
   }
   private var tools: some View {
     HStack(alignment: .center, spacing: 8) {
@@ -155,12 +158,10 @@ struct ComposerView: View {
     }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
   }
   private func send() {
-    // The message shows in the transcript at once, so the transcript follows it now.
+    // The message shows in the transcript at once, so the transcript follows it now. The box keeps
+    // focus, as on the web, so the next message can start as soon as this one settles.
     onSent()
-    Task {
-      await store.send()
-      focused = false
-    }
+    Task { await store.send() }
   }
   private func stop() {
     guard !stopping else { return }

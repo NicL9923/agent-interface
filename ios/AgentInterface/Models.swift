@@ -829,8 +829,8 @@ struct SentEcho: Equatable {
     return conversation
   }
   /// Whether the composer is showing a draft that is on its way. The echo carries it in the
-  /// transcript, so the composer starts empty; typing there begins a new draft. The store also
-  /// remembers being typed in, so new words that pass through the sent text never blank it again.
+  /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
+  /// because a draft and its send are told apart by content until Hermes answers.
   static func sendingDraft(_ draft: Draft, pending: PendingSubmission?, sending: Bool) -> Bool {
     guard sending, let pending else { return false }
     return draft.text == pending.text && draft.attachments == pending.attachments

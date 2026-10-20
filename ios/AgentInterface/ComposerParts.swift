@@ -8,6 +8,9 @@ struct ComposerTextView: UIViewRepresentable {
   @Binding var text: String
   var label: String
   var editable: Bool
+  /// Refuses every change but keeps focus and the keyboard, so the next message can start the
+  /// moment this ends. `isEditable = false` would take the keyboard away.
+  var readOnly = false
   @Binding var focused: Bool
   /// Return on a hardware keyboard. Shift-Return and the on-screen Return start a new line.
   var onReturn: () -> Void
@@ -30,7 +33,9 @@ struct ComposerTextView: UIViewRepresentable {
     // Replacing the text mid-composition would drop the characters being composed.
     if view.text != text && view.markedTextRange == nil { view.text = text }
     view.isEditable = editable
+    view.readOnly = readOnly
     view.accessibilityLabel = label
+    view.accessibilityHint = readOnly ? "Sending your message…" : nil
     view.onReturn = onReturn
     view.onPasteImages = onPasteImages
     // Only a change asked for here moves focus. An update still carrying the value from before
@@ -56,7 +61,17 @@ struct ComposerTextView: UIViewRepresentable {
     /// The focus last applied or reported.
     var focused = false
     init(_ parent: ComposerTextView) { self.parent = parent }
-    func textViewDidChange(_ view: UITextView) { parent.text = view.text }
+    func textView(_ view: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+      !parent.readOnly
+    }
+    func textViewDidChange(_ view: UITextView) {
+      // A change that got past the refusal, such as committed composition, is put back.
+      guard !parent.readOnly else {
+        if view.markedTextRange == nil, view.text != parent.text { view.text = parent.text }
+        return
+      }
+      parent.text = view.text
+    }
     func textViewDidBeginEditing(_ view: UITextView) {
       focused = true
       if !parent.focused { parent.focused = true }
@@ -71,6 +86,7 @@ struct ComposerTextView: UIViewRepresentable {
 final class ComposerUITextView: UITextView {
   var onReturn: (() -> Void)?
   var onPasteImages: (([Data]) -> Void)?
+  var readOnly = false
   /// Presses come only from hardware keyboards, so the on-screen Return still starts a line.
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     guard presses.count == 1, let key = presses.first?.key,
@@ -90,6 +106,7 @@ final class ComposerUITextView: UITextView {
       && modifiers.intersection([.shift, .alternate, .command, .control]).isEmpty
   }
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+    if action == #selector(paste(_:)) && readOnly { return false }
     if action == #selector(paste(_:)), Self.pastedImagesOnly { return isEditable }
     return super.canPerformAction(action, withSender: sender)
   }
