@@ -37,6 +37,29 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(turn.activityGroups[0].messages.count, 1)
     XCTAssertEqual(turn.activityGroups[0].messages[0].toolCall?.result, "Fresh result")
     XCTAssertEqual(turn.activityGroups[0].messages[0].toolCall?.status, "completed")
+    XCTAssertEqual(turn.replyStart, "answer1")
+  }
+  func testToolActivityPrecedesSplitFinalReplyAndLiveDuplicatesDoNotMoveIt() {
+    for status in ["completed", "running"] {
+      let call = ToolCall(id: "reused", name: "terminal", status: status, result: "Result")
+      let conversation = Conversation(botId: "b", messages: [
+        Message(id: "prompt", role: "user", text: "Check both"),
+        Message(id: "commentary", role: "assistant", text: "Checking both reports."),
+        Message(id: "first-tool", role: "tool", text: "First result", toolCall: call),
+        Message(id: "second-tool", role: "tool", text: "Second result", toolCall: call),
+        Message(id: "answer", role: "assistant", text: "Both reports are ready."),
+        Message(id: "answer-part-two", role: "assistant", text: "The figures match."),
+      ], activity: Activity(state: .idle), approvals: [], files: [], toolCalls: [call])
+      let turn = conversation.presentationTurns[0]
+      XCTAssertEqual(turn.replyStart, status == "completed" ? "answer" : nil)
+      XCTAssertEqual(turn.activityGroups[0].messages.count, 3)
+    }
+  }
+  func testToolCallCommentaryStaysBeforeAnAttachmentOnlyFinalReply() throws {
+    let json = #"{"botId":"b","messages":[{"id":"commentary","role":"assistant","text":"Preparing the report.","toolCall":{"id":"call","name":"terminal","status":"completed","result":"Ready"}},{"id":"answer","role":"assistant","text":"","files":[{"id":"report","name":"report.txt","mime":"text/plain"}]}],"activity":{"state":"idle"},"approvals":[],"files":[]}"#
+    let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
+    XCTAssertEqual(conversation.presentationTurns[0].replyStart, "answer")
+    XCTAssertEqual(conversation.presentationTurns[0].visibleMessages.map(\.id), ["commentary", "answer"])
   }
   func testCurrentToolCallsMergeWithCanonicalResultsByTheirActualID() throws {
     let json = """

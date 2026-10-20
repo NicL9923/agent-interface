@@ -123,6 +123,16 @@ const fixtureCards = { version: 1, cards: [
 ranchMessages.push({ id: 'fixture-cards', role: 'assistant', createdAt: at(23), text: 'These are explicit preview fixtures for groceries, trip notes and a calendar proposal. No purchases, bookings or calendar events were created.\n\n```agent-ui\n' + JSON.stringify(fixtureCards) + '\n```' });
 ranchMessages.push({ id: 'fixture-agent-message', role: 'user', text: 'Message from 🤖 Ledger (@ledger): The gate battery purchase is accounted for. You can go ahead with the replacement.', createdAt: at(24) });
 ranchMessages.push({ id: 'fixture-agent-handoff', role: 'tool', text: 'Planner will review the weekend schedule.', toolCall: { id: 'handoff', name: 'message_agent', arguments: JSON.stringify({ target: 'planner', message: 'Check the weekend plans against the weather.' }), status: 'completed', result: 'Planner will review the weekend schedule.' }, createdAt: at(25) });
+if (process.env.PREVIEW_LONG_TOOL === '1') {
+  const output = Array.from({ length: 120 }, (_, i) => `Fixture output line ${i + 1}: synthetic tool details stay readable and scroll inside this receipt.`).join('\n') + '\nEND OF FIXTURE OUTPUT';
+  ranchMessages.splice(0, ranchMessages.length,
+    { id: 'fixture-intro', role: 'assistant', text: 'Fixture tools have finished.' },
+    { id: 'fixture-short-tool', role: 'tool', text: 'Short fixture tool result', toolCall: { id: 'fixture-short', name: 'fixture_short', status: 'completed', result: 'Short fixture tool result' } },
+    { id: 'fixture-long-tool', role: 'tool', text: output, toolCall: { id: 'fixture-long', name: 'fixture_long', status: 'completed', arguments: '{"fixture":true}', result: output } },
+    { id: 'fixture-raw-tool', role: 'tool', toolName: 'fixture_activity', text: output },
+    { id: 'fixture-final', role: 'assistant', text: 'Fixture final answer follows the tool results.' });
+  Object.assign(conversations.ranch, { activity: { state: 'done' }, toolCalls: [], approvals: [] });
+}
 const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'planner'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
 const groupRooms = [previewRoom];
 const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];

@@ -53,6 +53,16 @@
           ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
         ]
       }
+      if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
+        FixtureProtocol.preferences["presentation"] = presentation
+        let output = (1...120).map { "Fixture output line \($0): synthetic tool details stay readable and scroll inside this receipt." }.joined(separator: "\n") + "\nEND OF FIXTURE OUTPUT"
+        FixtureProtocol.messages = [
+          ["id": "intro", "role": "assistant", "text": "Fixture tools have finished."],
+          ["id": "short-tool", "role": "tool", "text": "Short fixture tool result", "toolCall": ["id": "short-call", "name": "fixture_short", "status": "completed", "result": "Short fixture tool result"]],
+          ["id": "long-tool", "role": "tool", "text": output, "toolCall": ["id": "long-call", "name": "fixture_long", "status": "completed", "result": output]],
+          ["id": "final", "role": "assistant", "text": "Fixture final answer follows the tool results."],
+        ]
+      }
       if environment["AGENT_INTERFACE_UI_PUSH"] == "1" {
         // iOS permission starts undecided; Enable grants it, as tapping Allow would.
         var status = UNAuthorizationStatus.notDetermined

@@ -24,7 +24,7 @@
 .history-message a { display: block; }
 .action-receipt { margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
 .action-receipt.failed { border-color: var(--danger); }
-.action-receipt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+.action-receipt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; overscroll-behavior: contain; }
 .action-receipt a { display: block; }
 .quiet-hours { display: flex; flex-wrap: wrap; gap: 12px; }
 .quiet-hours label { flex: 1; min-width: 120px; }

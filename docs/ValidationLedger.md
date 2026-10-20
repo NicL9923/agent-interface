@@ -1,5 +1,65 @@
 # Validation ledger
 
+## October 19 secure input and tool receipts
+
+Base `2141b24`; final source fingerprint
+`1c264eca8ddc65aa37c2a3bd33f9bb243a65cb867ac09c9e7aa40ca1e842df51`.
+The vault implementation and regression-test fingerprint is
+`36da00ecf5e7cf67154d9ed7584f8a3d0634e16c945a605e7693a017358479b4`.
+Read-only production inspection found repeated Patch login requests ending after
+180 seconds, matching the installed Hermes login callback's timeout. WildBots
+does not show that deadline. App-owned canonical login prompts now wait for an
+answer, cancellation or native interruption. Other chats and prompt kinds retain
+their native deadlines.
+
+iOS keeps secure entry during temporary inactivity, including password-manager
+overlays, while clearing it on submission, backgrounding and dismissal. A 404 or
+409 answer now refreshes the conversation, as an expired response already did.
+Native tool arguments, results, errors and activity text use a measured scroll
+container capped at 280 points; short text keeps its natural height. Simple
+receipts on both clients retain the full exposed output instead of silently
+cutting it at 4,000 characters. Web keeps its existing height caps and adds
+keyboard focus and scroll containment.
+
+Both turn renderers place grouped activity before the reply that follows the
+last saved activity row. Earlier commentary stays above the group, split replies
+stay together, and attachment-only replies work. Live updates preserve that
+history position; running calls stay after the current commentary. Claude Opus
+5.5 pressure-tested this design; it was not an independent review of the diff.
+
+- All 848 web tests passed, including ordering, repeated tool IDs and full-result
+  regressions. The production web build passed.
+- Xcode 27.1 on iOS 27.0 simulator `DB70DBE8-5F8D-40DA-8DFA-B724FE2CD03A`
+  ran 284 native unit tests, with two skips and no failures. The native secure
+  login/code/unlock/secret background flow passed. The final UI check passed in
+  simple and advanced presentation: short output stays compact, long output is
+  complete and capped at 280 points, swiping scrolls its content while its
+  container stays in place, and the final reply follows the tool group.
+- Browser checks at 390 and 1280 CSS pixels confirmed bounded output, complete
+  result text, keyboard scrolling to the end and the corrected message order.
+  Native before/after screenshots were inspected together; web phone and desktop
+  screenshots were inspected separately. Local native evidence is retained at
+  `/Volumes/DevSSD/scratch/browser-vault-expiry/ios-tool-output-review.png`.
+- Initial layout/UI-selector checks failed. The final native container uses
+  measured height, and the test locates it by its accessible label because the
+  disclosure group's identifier overrides descendant identifiers. The first
+  failed run stalled collecting diagnostics and was stopped; subsequent runs
+  used `-collect-test-diagnostics never` and completed normally.
+- Four Python suites passed: vault settlement, explicit-origin logins, shared
+  computer and extension journal. Ruff and `git diff --check` passed.
+- An offline disposable harness used the exact native `_ask` helper and request
+  registry from installed revision `acc3cada`, with a zero-second deadline to
+  reproduce expiry without waiting three minutes. The scoped fix kept the prompt
+  open; submission, cancellation, interruption and duplicate-answer refusal passed.
+  The harness replaced redaction registration and canonical-owner lookup with
+  fixtures. It did not exercise the browser or authenticated HTTP transport.
+- Production was inspected only. Full release qualification and deployment have
+  not run, and the user's exact submission timing remains unverified.
+- Claude Opus 5.5's diagnostic pass ruled out separate request registries,
+  transport retries and owner mismatches as explanations for this expiry text.
+  It identified stale cards after failed refreshes as another possible contributor;
+  the available evidence does not distinguish that from the hidden timeout.
+
 ## October 19 sent-message echo and avatar motion
 
 Validated on `ee3988b` (branch `nic/optimistic-send-avatar-motion`, base

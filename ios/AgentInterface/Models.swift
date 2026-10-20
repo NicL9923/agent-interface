@@ -472,6 +472,7 @@ struct CoordinationGroup: Identifiable, Equatable {
 struct ConversationTurn: Identifiable, Equatable {
   var id: String
   var messages: [Message]
+  var replyStart: String? = nil
   var visibleMessages: [Message] { messages.filter(\.isConversationVisible) }
   var reasoning: [String] { messages.filter { !$0.isInternalActivity && $0.role == "assistant" }.compactMap {
     let text = $0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -537,8 +538,19 @@ struct Conversation: Codable, Equatable {
   }
   var presentationTurns: [ConversationTurn] {
     var turns: [ConversationTurn] = []
+    var sawActivity = false
     for message in messages {
-      if turns.isEmpty || message.role == "user" { turns.append(ConversationTurn(id: message.id, messages: [])) }
+      if turns.isEmpty || message.role == "user" {
+        turns.append(ConversationTurn(id: message.id, messages: []))
+        sawActivity = false
+      }
+      if message.isConversationVisible && message.role != "user" && sawActivity && turns[turns.count - 1].replyStart == nil {
+        turns[turns.count - 1].replyStart = message.id
+      }
+      if message.isInternalActivity || message.isToolActivity || message.toolCall != nil {
+        sawActivity = true
+        turns[turns.count - 1].replyStart = nil
+      }
       turns[turns.count - 1].messages.append(message)
     }
     for call in toolCalls ?? [] {
@@ -560,6 +572,10 @@ struct Conversation: Codable, Equatable {
         if turns.isEmpty { turns.append(ConversationTurn(id: "live-activity", messages: [])) }
         turns[turns.count - 1].messages.append(Message(id: "live-" + call.id, role: "tool", text: "", toolCall: call))
       }
+    }
+    // Appended live calls must not become a new history position for the reply.
+    for index in turns.indices where turns[index].activityGroups.contains(where: { $0.messages.contains(where: { $0.toolCall?.status == "running" }) }) {
+      turns[index].replyStart = nil
     }
     return turns
   }

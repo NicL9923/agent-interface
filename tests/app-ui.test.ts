@@ -726,7 +726,9 @@ describe("conversation state", () => {
     expect(accordions[0].querySelector(".tool-count")?.textContent).toBe("2");
     expect([...accordions[0].querySelectorAll(".reasoning-part")].map(part => part.textContent)).toEqual(["Plan the SSH steps.", "Check the status."]);
     expect(accordions[0].previousElementSibling?.getAttribute("data-message-id")).toBe("question");
-    expect(accordions[0].nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
+    const tools = accordions[0].nextElementSibling;
+    expect(tools?.classList.contains("tool-calls")).toBe(true);
+    expect(tools?.nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
   });
 
   it("switches Stop back to Send while drafting guidance", async () => {
@@ -763,6 +765,38 @@ describe("conversation state", () => {
     expect(container.querySelector(".approval-card")?.textContent).toContain("Open the gate?");
     await act(async () => { groups[0].setAttribute("open", ""); });
     expect(groups[0].textContent).toContain("Hay and water.");
+  });
+
+  it.each(["completed", "running"] as const)("orders saved tool activity before the final reply after calls are %s", async status => {
+    const call = { id: "reused", name: "terminal", status, result: "Result" };
+    conversation = { ...conversation, activity: { state: status === "running" ? "working" : "done" }, messages: [
+      { id: "question", role: "user", text: "Check both" },
+      { id: "commentary", role: "assistant", text: "Checking both reports." },
+      { id: "first-tool", role: "tool", text: "First result", toolCall: call },
+      { id: "second-tool", role: "tool", text: "Second result", toolCall: call },
+      { id: "answer", role: "assistant", text: "Both reports are ready." },
+      { id: "answer-part-two", role: "assistant", text: "The figures match." },
+    ], toolCalls: [call] };
+    await render();
+    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .tool-calls')]
+      .map(row => row.getAttribute("data-message-id") ?? "tools");
+    expect(order).toEqual(status === "running"
+      ? ["question", "commentary", "answer", "answer-part-two", "tools"]
+      : ["question", "commentary", "tools", "answer", "answer-part-two"]);
+  });
+
+  it("keeps tool-call commentary above activity and puts an attachment-only final reply below it", async () => {
+    const call = { id: "lookup", name: "terminal", status: "completed" as const, result: "Report ready" };
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "question", role: "user", text: "Make a report" },
+      { id: "commentary", role: "assistant", text: "Preparing the report.", toolCall: call },
+      { id: "answer", role: "assistant", text: "", files: [{ id: "report", name: "report.txt", mime: "text/plain" }] },
+    ] };
+    await render();
+    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .tool-calls')]
+      .map(row => row.getAttribute("data-message-id") ?? "tools");
+    expect(order).toEqual(["question", "commentary", "tools", "answer"]);
+    expect(container.querySelector('[data-message-id="answer"] a')?.textContent).toContain("report.txt");
   });
 
   it("counts history and live tools once and groups delegated work separately", async () => {

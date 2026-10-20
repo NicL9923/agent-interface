@@ -214,5 +214,15 @@ struct ActionReceiptView:View {
     if call.status=="running" { return "Action in progress" }
     return result["success"] as? Bool == true || result["ok"] as? Bool == true ? "Tool reported success" : "Tool finished"
   }
-  var body:some View { DisclosureGroup("\(label) · \(call.name)") { Text("Outcome reported by the tool. Review its result to confirm what changed.").font(.caption).foregroundStyle(.secondary);Text(String((call.error ?? call.result ?? "Hermes did not report an outcome.").prefix(4000))).font(.footnote).textSelection(.enabled);ForEach(["url","html_url","web_url","link"],id:\.self) { key in if let value=result[key] as? String,let url=URL(string:value),["https","http"].contains(url.scheme?.lowercased() ?? "") { Link("Open reported result",destination:url) } } }.padding(12).background(.quaternary,in:RoundedRectangle(cornerRadius:12)) }
+  var body:some View {
+    DisclosureGroup("\(label) · \(call.name)") {
+      Text("Outcome reported by the tool. Review its result to confirm what changed.").font(.caption).foregroundStyle(.secondary)
+      ToolOutputView(text: call.error ?? call.result ?? "Hermes did not report an outcome.").font(.footnote)
+      ForEach(["url", "html_url", "web_url", "link"], id: \.self) { key in
+        if let value = result[key] as? String, let url = URL(string: value), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
+          Link("Open reported result", destination: url)
+        }
+      }
+    }.padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+  }
 }

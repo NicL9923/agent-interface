@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import AgentInterface
 
 private final class VaultProtocol: URLProtocol, @unchecked Sendable {
@@ -101,6 +102,31 @@ private final class VaultProtocol: URLProtocol, @unchecked Sendable {
     let reopened = SecureRequestInput(); reopened.bind(key); XCTAssertTrue(reopened.blocked)
     reopened.bind(key + "new-epoch"); XCTAssertFalse(reopened.blocked)
     input.value = "fixture-password"; input.teardown(); XCTAssertEqual(input.value, "")
+  }
+  func testTemporaryInactivityPreservesSecureEntryUntilBackground() {
+    let input = SecureRequestInput()
+    input.identifier = "fixture-parent"; input.value = "fixture-password"
+    for phase in [ScenePhase.inactive, .active] {
+      input.sceneChanged(to: phase)
+      XCTAssertEqual(input.identifier, "fixture-parent"); XCTAssertEqual(input.value, "fixture-password")
+    }
+    input.sceneChanged(to: .background)
+    XCTAssertEqual(input.identifier, ""); XCTAssertEqual(input.value, "")
+  }
+  func testExpiredAndChangedRequestsRefreshWithoutReusingTheAnswer() async {
+    for status in [200, 404, 409] {
+      VaultProtocol.status = status
+      VaultProtocol.payload = status == 200 ? #"{"status":"expired"}"# : #"{"error":"Request changed"}"#
+      let input = SecureRequestInput(), key = UUID().uuidString
+      var refreshes = 0
+      input.bind(key); input.identifier = "fixture-parent"; input.value = "fixture-password"
+      input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: { refreshes += 1 })
+      for _ in 0..<100 { if refreshes > 0 { break }; try? await Task.sleep(for: .milliseconds(10)) }
+      XCTAssertEqual(refreshes, 1); XCTAssertTrue(input.blocked)
+      XCTAssertEqual(input.identifier, ""); XCTAssertEqual(input.value, "")
+      input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: { refreshes += 1 })
+      XCTAssertEqual(refreshes, 1)
+    }
   }
   func testDefiniteBadFieldsAllowReentryWhileExpiredRequestRequiresRefresh() async {
     for status in [400, 409] {

@@ -1352,7 +1352,7 @@ dialog[open]::backdrop {
 .tool-calls[open] > summary > .icon:last-child { transform: rotate(90deg); }
 .tool-count { padding: 2px 7px; border-radius: 6px; background: var(--rail); font-variant-numeric: tabular-nums; }
 .tool-calls-content { display: grid; gap: 8px; }
-.tool-calls-content pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.tool-calls-content pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
 .approval-card .actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .spin { animation: control-spin 1s linear infinite; }
 @keyframes control-spin { to { transform: rotate(360deg); } }

@@ -406,6 +406,7 @@ private struct AddVaultLoginView: View {
   @Published var blocked = false
   private var generation = UUID()
   func clear() { identifier = ""; value = "" }
+  func sceneChanged(to phase: ScenePhase) { if phase == .background { clear() } }
   func teardown() { clear(); generation = UUID(); busy = false }
   func bind(_ key: String) { clear(); generation = UUID(); busy = false; blocked = SecureRequestOutcomes.uncertain.contains(key); message = blocked ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : nil }
   func submit(api: APIClient, botId: String, requestId: String, request: SecureRequest, key: String, cancel: Bool, current: @escaping () -> Bool, refresh: @escaping () async -> Void) {
@@ -429,6 +430,7 @@ private struct AddVaultLoginView: View {
         busy = false
         blocked = uncertain || [404, 409].contains((error as? APIError)?.status ?? 0)
         message = error is CancellationError ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : VaultSafety.error(error).localizedDescription
+        if [404, 409].contains((error as? APIError)?.status ?? 0) { await refresh() }
       }
     }
   }
@@ -480,7 +482,7 @@ struct SecureAttentionView: View {
       .onAppear { input.bind(key) }
       .onChange(of: key) { _, new in input.bind(new) }
       .onChange(of: request.secure) { _, _ in input.bind(key) }
-      .onChange(of: scenePhase) { _, phase in if phase != .active { input.clear() } }
+      .onChange(of: scenePhase) { _, phase in input.sceneChanged(to: phase) }
       .onDisappear { input.teardown() }
   }
   private var assistantName: String? { store.bootstrap?.bots.first { $0.id == botId }?.name }

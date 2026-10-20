@@ -51,12 +51,13 @@ struct ConversationTurnView: View, Equatable {
         if advanced && !turn.reasoning.isEmpty && message.role != "user" && visible.prefix(index).allSatisfy({ $0.role == "user" }) {
           reasoning
         }
+        if message.id == turn.replyStart { ForEach(turn.activityGroups) { activityGroup($0) } }
         MessageView(message: message,
-          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant",
+          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant" && message.id != turn.replyStart,
           delivery: delivery?.id == message.id ? delivery?.status : nil).id(message.id)
       }
       if advanced && !turn.reasoning.isEmpty && visible.allSatisfy({ $0.role == "user" }) { reasoning }
-      ForEach(turn.activityGroups) { activityGroup($0) }
+      if turn.replyStart == nil { ForEach(turn.activityGroups) { activityGroup($0) } }
     }
   }
   private var recipient: String { store?.bot?.name ?? "Assistant" }
@@ -84,9 +85,8 @@ struct ConversationTurnView: View, Equatable {
       if advanced { ToolActivityView(message: message) } else { ActionReceiptView(call: call) }
     } else {
       DisclosureGroup(activityTitle(message)) {
-        Text(message.text.isEmpty ? "No result was exposed by Hermes." : message.text)
-          .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
+        ToolOutputView(text: message.text.isEmpty ? "No result was exposed by Hermes." : message.text)
+          .font(.system(.footnote, design: .monospaced))
       }
     }
   }
