@@ -741,6 +741,107 @@ struct PendingSubmission: Codable, Equatable {
   var draftBaseRevision: Int? = nil
   var draft: Draft { Draft(text: text, attachments: attachments) }
 }
+/// A sent message shown in the transcript at once, until Hermes's own copy arrives. It never
+/// changes what was sent or saved: it is drawn only from the pending submission and its receipt.
+/// Ported from the web's src/app/sent-echo.ts.
+struct SentEcho: Equatable {
+  /// Sending: the request is in flight. Unconfirmed: it ended without a receipt.
+  enum Status: Equatable { case sending, unconfirmed, accepted }
+  /// How long an accepted message may stay missing from a conversation that never shows its run.
+  static let patience: TimeInterval = 30
+  var request: PendingSubmission
+  var sender: Sender
+  var sentAt: String
+  /// The last message shown when it was sent. A copy of the same words counts only after it.
+  var after: String?
+  var status: Status
+  var messageId: String?
+  var acceptedAt: Date?
+  /// The conversation has shown activity since Hermes accepted it.
+  var ran = false
+  /// The message drawn from an echo and how far it got.
+  struct Delivery: Equatable {
+    var id: String
+    var status: Status
+  }
+  /// Accepted, it reads as any other message until Hermes's own copy takes its place.
+  var delivery: Delivery? { status == .accepted ? nil : Delivery(id: request.requestId, status: status) }
+
+  /// Whether Hermes's own copy of the message is in the conversation.
+  func shown(in conversation: Conversation) -> Bool {
+    let messages = conversation.messages
+    if messages.contains(where: { $0.id == request.requestId || $0.id == messageId }) { return true }
+    // Hermes names a staged prompt by its request ID. Other rows, such as image-only prompts, are
+    // matched by their words once it accepted them, after the message that was last when it was sent.
+    let text = Self.trimmed(request.text)
+    guard status == .accepted, !text.isEmpty else { return false }
+    var start = 0
+    if let after {
+      // Without its anchor, an older message with the same words could pass for this one.
+      guard let anchor = messages.firstIndex(where: { $0.id == after }) else { return false }
+      start = anchor + 1
+    }
+    return messages[start...].contains {
+      $0.role == "user" && Self.trimmed($0.text) == text && ($0.sender == nil || $0.sender?.id == sender.id)
+    }
+  }
+  /// The echo after the submission, its receipt or the conversation changed. Nil removes it.
+  static func next(_ echo: SentEcho?, pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
+    conversation: Conversation?, sender: Sender?, now: Date) -> SentEcho?
+  {
+    // Another person signed in, or nobody is: nothing of the last one's stays on screen.
+    var next = echo?.sender.id == sender?.id ? echo : nil
+    if let pending, pending.requestId != next?.request.requestId {
+      guard let sender else { return nil }
+      // A live reply's row is replaced as it is saved, so it cannot anchor anything.
+      let anchor: String? = conversation?.botId == pending.botId
+        ? conversation?.messages.last(where: { !$0.id.hasSuffix("-inflight") })?.id : nil
+      next = SentEcho(request: pending, sender: sender, sentAt: Self.timestamp(now), after: anchor, status: .sending)
+    }
+    guard var next else { return nil }
+    if pending?.requestId == next.request.requestId {
+      next.status = sending ? .sending : .unconfirmed
+    } else if next.status != .accepted {
+      // A refused, interrupted or abandoned send leaves only the draft it came from.
+      guard let receipt, receipt.requestId == next.request.requestId, receipt.status == "accepted" else { return nil }
+      next.status = .accepted
+      next.messageId = receipt.messageId
+      next.acceptedAt = now
+    }
+    guard let conversation, conversation.botId == next.request.botId else { return next }
+    if next.shown(in: conversation) { return nil }
+    if next.status != .accepted { return next }
+    // Some prompts are saved only when their run finishes, so the echo stands in until then.
+    if conversation.activity.state.active {
+      next.ran = true
+      return next
+    }
+    return next.ran || now.timeIntervalSince(next.acceptedAt ?? now) > patience ? nil : next
+  }
+  /// The conversation with the echo at its end, as the person's own message. Its ID is the
+  /// request ID, so Hermes's copy, which carries the same ID, takes its place without a flicker.
+  static func transcript(_ conversation: Conversation?, _ echo: SentEcho?) -> Conversation? {
+    guard var conversation, let echo, conversation.botId == echo.request.botId, !echo.shown(in: conversation)
+    else { return conversation }
+    conversation.messages.append(Message(
+      id: echo.request.requestId, role: "user", text: echo.request.text, createdAt: echo.sentAt,
+      sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments))
+    return conversation
+  }
+  /// Whether the composer is showing a draft that is on its way. The echo carries it in the
+  /// transcript, so the composer starts empty; typing there begins a new draft. The store also
+  /// remembers being typed in, so new words that pass through the sent text never blank it again.
+  static func sendingDraft(_ draft: Draft, pending: PendingSubmission?, sending: Bool) -> Bool {
+    guard sending, let pending else { return false }
+    return draft.text == pending.text && draft.attachments == pending.attachments
+  }
+  private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private static func timestamp(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+  }
+}
 struct AuthConfig: Codable {
   var googleClientId: String?
   var localDevAuth: Bool

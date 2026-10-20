@@ -617,9 +617,12 @@ private final class NativeMockServer: @unchecked Sendable {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-upload-\(UUID().uuidString).txt")
         try Data("Attachment to keep".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
         server.failUploads(true)
+        // As on the web, a message on its way must finish sending before files can be attached.
         value.sending = true
         await value.attach(urls: [file])
+        XCTAssertEqual(value.attachNotice, [AppStore.attachWhileSending]); XCTAssertTrue(value.attachmentUploads.isEmpty)
         value.sending = false
+        await value.attach(urls: [file])
         XCTAssertEqual(value.attachmentUploads.count, 1); XCTAssertNotNil(value.attachmentUploads.first?.error)
         XCTAssertFalse(value.canSend); XCTAssertTrue(value.draft.attachments.isEmpty)
         server.failUploads(false)
@@ -797,6 +800,50 @@ private final class NativeMockServer: @unchecked Sendable {
             if status < 500 { XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "rejected") }
             else { XCTAssertNotNil(value.pending); XCTAssertEqual(value.receipt?.status, "uncertain") }
         }
+    }
+
+    func testASentMessageShowsAtOnceAndHandsItsPlaceToHermessCopy() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/messages"; server.hold(path)
+        let operation = Task { await value.send() }
+        try await server.waitForHeld(path)
+        let requestId = try XCTUnwrap(value.pending?.requestId)
+        XCTAssertTrue(value.sending, "Send keeps spinning until Hermes answers")
+        XCTAssertEqual(value.echo?.delivery, SentEcho.Delivery(id: requestId, status: .sending))
+        XCTAssertEqual(value.transcript?.messages.last?.text, "Send this")
+        XCTAssertEqual(value.turns.last?.id, requestId)
+        XCTAssertEqual(value.composerDraft.text, "", "The composer is free for the next message")
+        XCTAssertEqual(value.draft.text, "Send this", "The draft keeps the message until Hermes accepts it")
+        XCTAssertEqual(value.attachUnavailable("bot"), AppStore.attachWhileSending)
+        // New words that pass through the sent text never blank the composer again.
+        value.editComposer { $0.text = "Send this" }
+        XCTAssertEqual(value.composerDraft.text, "Send this")
+        value.editComposer { $0.text = "Send this too" }
+        server.release(path); await operation.value
+        XCTAssertEqual(value.echo?.status, .accepted)
+        XCTAssertNil(value.echo?.delivery)
+        XCTAssertEqual(value.transcript?.messages.map(\.id), [requestId], "Accepted, it stands in until Hermes's copy arrives")
+        XCTAssertEqual(value.draft.text, "Send this too")
+        server.serveHistory([requestId]); await value.refreshConversation()
+        XCTAssertNil(value.echo)
+        XCTAssertEqual(value.transcript, value.conversation)
+        XCTAssertEqual(value.turns.map(\.id), [requestId])
+    }
+
+    func testARefusedMessageGoesBackInFrontOfWhatWasTypedWhileItSent() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/messages"; server.hold(path)
+        server.sendStatus = 413
+        let operation = Task { await value.send() }
+        try await server.waitForHeld(path)
+        value.editComposer { $0.text = "And another thing" }
+        XCTAssertEqual(value.composerDraft.text, "And another thing")
+        server.release(path); await operation.value
+        XCTAssertEqual(value.draft.text, "Send this\n\nAnd another thing")
+        XCTAssertEqual(value.draft.dirty, true)
+        XCTAssertNil(value.echo); XCTAssertNil(value.pending)
+        XCTAssertEqual(value.transcript?.messages.isEmpty, true)
+        XCTAssertEqual(value.receipt?.status, "rejected")
     }
 
     func testInterruptionReviewCannotCarryIntoAnotherRun() async throws {
