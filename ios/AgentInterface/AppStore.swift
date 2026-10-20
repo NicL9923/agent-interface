@@ -17,11 +17,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private(set) var transcript: Conversation?
   /// The transcript grouped into turns, computed once per change instead of on every render.
   private(set) var turns: [ConversationTurn] = []
-  /// The open assistant's sent message, shown in the transcript at once while Send keeps spinning
-  /// until Hermes answers, as on the web.
-  @Published private(set) var echo: SentEcho?
+  /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
+  /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
+  @Published private(set) var echoes: [SentEcho] = []
   private var echoTimer: Task<Void, Never>?
-  private var echoTimerRequest: String?
+  /// When the earliest accepted echo whose run never showed runs out of patience.
+  private var echoDeadline: Date?
   @Published var selectedBotId: String? { didSet { updateEcho() } }
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
@@ -980,31 +981,36 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if open { draft = target }
     }
   }
-  /// Follows the open assistant's submission and keeps its echo until Hermes's copy replaces it.
+  /// Follows the open assistant's submissions and keeps each echo until Hermes's copy replaces it.
   /// Every input it reads calls it when it changes.
   private func updateEcho(conversationChanged: Bool = false) {
-    let next = SentEcho.next(
-      echo, pending: pending, receipt: receipt, sending: sending, conversation: conversation,
-      sender: bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }, now: Date())
-    let changed = next != echo
-    if changed { echo = next }
+    let now = Date()
+    let next = SentEcho.nextEchoes(
+      echoes, pending: pending, receipt: receipt, sending: sending, conversation: conversation,
+      sender: bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }, now: now)
+    let changed = next != echoes
+    if changed { echoes = next }
     if changed || conversationChanged {
-      transcript = SentEcho.transcript(conversation, echo)
+      transcript = SentEcho.transcript(conversation, echoes)
       turns = transcript?.presentationTurns ?? []
     }
     // An accepted message that never shows is checked again once its patience runs out.
-    let waiting = next.flatMap { $0.status == .accepted && !$0.ran ? $0.request.requestId : nil }
-    guard waiting != echoTimerRequest else { return }
+    let deadline = next.filter { $0.status == .accepted && !$0.ran }
+      .compactMap { $0.acceptedAt?.addingTimeInterval(SentEcho.patience + 0.1) }.min()
+    guard deadline != echoDeadline else { return }
     echoTimer?.cancel()
-    echoTimerRequest = waiting
-    echoTimer = waiting.map { _ in
+    echoDeadline = deadline
+    echoTimer = deadline.map { deadline in
       Task { [weak self] in
-        try? await Task.sleep(for: .seconds(SentEcho.patience + 0.1))
+        try? await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSince(now))))
         guard !Task.isCancelled else { return }
+        self?.echoDeadline = nil
         self?.updateEcho()
       }
     }
   }
+  /// The one message on its way, if any. Accepted ones read as ordinary messages.
+  var outgoing: SentEcho.Delivery? { echoes.lazy.compactMap(\.delivery).first }
   /// Whether the open draft is the message on its way. The transcript shows it, so the composer
   /// reads empty, and read-only: until Hermes answers, a draft and its send are told apart only by
   /// their content, so the draft must stay the sent copy.
@@ -1024,6 +1030,21 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     var next = draft
     edit(&next)
     updateDraft(next)
+  }
+  /// Whether shared items wait in the inbox for this assistant: while a send for it is unsettled,
+  /// its draft is told apart from that send by content, so an addition could be mistaken for it
+  /// or keep it alive to be sent again. Added once the send settles, they land in the cleared or
+  /// given-back draft.
+  func holdsShared(_ botId: String) -> Bool { pendings[botId] != nil }
+  /// Adds shared text or an uploaded shared file to the open assistant's draft, unless it holds
+  /// shared items for now.
+  @discardableResult func addShared(text: String = "", file: FileRef? = nil, botId: String) -> Bool {
+    guard selectedBotId == botId, draftReady, !holdsShared(botId) else { return false }
+    var next = draft
+    if !text.isEmpty { next.text += (next.text.isEmpty ? "" : "\n\n") + text }
+    if let file { next.attachments.append(file) }
+    updateDraft(next)
+    return true
   }
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {

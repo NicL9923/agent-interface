@@ -140,7 +140,7 @@ struct ConversationView: View {
               if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
             }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
-          TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.echo?.delivery)
+          TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing)
           if ![.idle, .done].contains(store.activity) { liveActivity }
           // Questions and secure requests come before approvals, as on the web.
           ForEach(store.conversation?.attention ?? []) { request in

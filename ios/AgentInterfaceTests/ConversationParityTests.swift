@@ -152,7 +152,7 @@ import XCTest
     XCTAssertEqual(sending.status, .sending)
     XCTAssertEqual(sending.after, "a")
     XCTAssertEqual(sending.sentAt, "1970-01-01T00:00:01.000Z")
-    let shown = SentEcho.transcript(conversation(), sending)?.messages.last
+    let shown = SentEcho.transcript(conversation(), [sending])?.messages.last
     XCTAssertEqual(shown, Message(id: "req", role: "user", text: "Hello there", createdAt: sending.sentAt, sender: sender))
     XCTAssertEqual(sending.delivery, SentEcho.Delivery(id: "req", status: .sending))
   }
@@ -180,7 +180,7 @@ import XCTest
     for id in ["req", "row-9"] {
       let arrived = conversation([Message(id: "a", role: "assistant", text: "Hi"), user(id, "Hello there")], .thinking)
       XCTAssertNil(step(kept, receipt: accepted, conversation: arrived))
-      XCTAssertEqual(SentEcho.transcript(arrived, kept), arrived)
+      XCTAssertEqual(SentEcho.transcript(arrived, [kept]), arrived)
     }
   }
 
@@ -210,7 +210,7 @@ import XCTest
   func testIsDrawnOnlyInItsOwnAssistantsConversation() {
     var other = conversation()
     other.botId = "other"
-    XCTAssertEqual(SentEcho.transcript(other, sending), other)
+    XCTAssertEqual(SentEcho.transcript(other, [sending]), other)
     XCTAssertEqual(step(sending, pending: request, sending: true, conversation: other), sending)
   }
 
@@ -239,6 +239,32 @@ import XCTest
     let kept = try XCTUnwrap(step(sending, receipt: accepted))
     XCTAssertNil(step(kept, sender: Sender(id: "two", name: "Two")))
     XCTAssertNil(step(kept, sender: .some(nil)))
+  }
+
+  func testKeepsAnAcceptedMessageThatIsNotSavedYetWhileAnotherIsSent() {
+    var photo = request
+    photo.requestId = "photo"; photo.text = ""; photo.attachments = [FileRef(id: "f1", name: "a.png", mime: "image/png")]
+    var guidance = request
+    guidance.requestId = "guide"; guidance.text = "Also check the gate"
+    func accept(_ id: String) -> Receipt { Receipt(requestId: id, status: "accepted") }
+    func steps(_ echoes: [SentEcho], pending: PendingSubmission? = nil, receipt: Receipt? = nil, sending: Bool = false,
+      state: ActivityState = .working) -> [SentEcho]
+    {
+      SentEcho.nextEchoes(echoes, pending: pending, receipt: receipt, sending: sending,
+        conversation: conversation([Message(id: "a", role: "assistant", text: "Hi")], state), sender: sender, now: start)
+    }
+    var echoes = steps([], pending: photo, sending: true)
+    echoes = steps(echoes, receipt: accept("photo"))
+    XCTAssertEqual(steps(echoes, receipt: accept("photo")), echoes)
+    echoes = steps(echoes, pending: guidance, receipt: accept("photo"), sending: true)
+    XCTAssertEqual(echoes.map(\.request.requestId), ["photo", "guide"])
+    XCTAssertEqual(echoes.map(\.status), [.accepted, .sending])
+    XCTAssertEqual(SentEcho.transcript(conversation([Message(id: "a", role: "assistant", text: "Hi")], .working), echoes)?.messages.map(\.id),
+      ["a", "photo", "guide"])
+    // Guidance refused: the photo stays; its run ends and its row is saved.
+    echoes = steps(echoes, receipt: Receipt(requestId: "guide", status: "rejected"))
+    XCTAssertEqual(echoes.map(\.request.requestId), ["photo"])
+    XCTAssertEqual(steps(echoes, state: .done), [])
   }
 
   func testAnchorsOnASavedMessageAndNeverMatchesWordsOnceItsAnchorIsGone() throws {

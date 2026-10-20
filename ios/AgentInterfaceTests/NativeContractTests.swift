@@ -809,7 +809,7 @@ private final class NativeMockServer: @unchecked Sendable {
         try await server.waitForHeld(path)
         let requestId = try XCTUnwrap(value.pending?.requestId)
         XCTAssertTrue(value.sending, "Send keeps spinning until Hermes answers")
-        XCTAssertEqual(value.echo?.delivery, SentEcho.Delivery(id: requestId, status: .sending))
+        XCTAssertEqual(value.outgoing, SentEcho.Delivery(id: requestId, status: .sending))
         XCTAssertEqual(value.transcript?.messages.last?.text, "Send this")
         XCTAssertEqual(value.turns.last?.id, requestId)
         XCTAssertTrue(value.sendingDraft, "The composer is read-only while its draft is on its way")
@@ -820,16 +820,33 @@ private final class NativeMockServer: @unchecked Sendable {
         value.editComposer { $0.text = "Typed over" }
         XCTAssertEqual(value.draft.text, "Send this"); XCTAssertEqual(value.composerDraft.text, "")
         server.release(path); await operation.value
-        XCTAssertEqual(value.echo?.status, .accepted)
-        XCTAssertNil(value.echo?.delivery)
+        XCTAssertEqual(value.echoes.map(\.status), [.accepted])
+        XCTAssertNil(value.outgoing)
         XCTAssertEqual(value.transcript?.messages.map(\.id), [requestId], "Accepted, it stands in until Hermes's copy arrives")
         XCTAssertEqual(value.draft.text, ""); XCTAssertFalse(value.sendingDraft)
         value.editComposer { $0.text = "Next message" }
         XCTAssertEqual(value.draft.text, "Next message", "Once the send settles, the composer takes typing again")
         server.serveHistory([requestId]); await value.refreshConversation()
-        XCTAssertNil(value.echo)
+        XCTAssertEqual(value.echoes, [])
         XCTAssertEqual(value.transcript, value.conversation)
         XCTAssertEqual(value.turns.map(\.id), [requestId])
+    }
+
+    func testSharedItemsWaitInTheInboxUntilASendForThatAssistantSettles() async throws {
+        for refused in [false, true] {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            if refused { server.sendStatus = 413 }
+            let path = "/api/bots/bot/messages"; server.hold(path)
+            let operation = Task { await value.send() }
+            try await server.waitForHeld(path)
+            XCTAssertTrue(value.holdsShared("bot"))
+            XCTAssertFalse(value.addShared(text: "Shared note", botId: "bot"))
+            XCTAssertEqual(value.draft.text, "Send this", "The sent copy is left exactly as sent")
+            server.release(path); await operation.value
+            XCTAssertFalse(value.holdsShared("bot"))
+            XCTAssertTrue(value.addShared(text: "Shared note", botId: "bot"))
+            XCTAssertEqual(value.draft.text, refused ? "Send this\n\nShared note" : "Shared note")
+        }
     }
 
     func testARefusedMessageGivesItsDraftBack() async throws {
@@ -843,7 +860,7 @@ private final class NativeMockServer: @unchecked Sendable {
         server.release(path); await operation.value
         XCTAssertFalse(value.sendingDraft)
         XCTAssertEqual(value.composerDraft.text, "Send this", "The refused message is back in the composer")
-        XCTAssertNil(value.echo); XCTAssertNil(value.pending)
+        XCTAssertEqual(value.echoes, []); XCTAssertNil(value.pending)
         XCTAssertEqual(value.transcript?.messages.isEmpty, true)
         XCTAssertEqual(value.receipt?.status, "rejected")
     }

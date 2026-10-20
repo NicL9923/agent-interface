@@ -820,13 +820,32 @@ struct SentEcho: Equatable {
   }
   /// The conversation with the echo at its end, as the person's own message. Its ID is the
   /// request ID, so Hermes's copy, which carries the same ID, takes its place without a flicker.
-  static func transcript(_ conversation: Conversation?, _ echo: SentEcho?) -> Conversation? {
-    guard var conversation, let echo, conversation.botId == echo.request.botId, !echo.shown(in: conversation)
-    else { return conversation }
-    conversation.messages.append(Message(
-      id: echo.request.requestId, role: "user", text: echo.request.text, createdAt: echo.sentAt,
-      sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments))
+  static func transcript(_ conversation: Conversation?, _ echoes: [SentEcho]) -> Conversation? {
+    guard var conversation else { return nil }
+    for echo in echoes where echo.request.botId == conversation.botId && !echo.shown(in: conversation) {
+      conversation.messages.append(Message(
+        id: echo.request.requestId, role: "user", text: echo.request.text, createdAt: echo.sentAt,
+        sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments))
+    }
     return conversation
+  }
+  /// Every echo after a change. A message Hermes accepted stays until its own copy arrives, even
+  /// when another is sent meanwhile, such as guidance after a photo whose row is saved only when
+  /// its run ends.
+  static func nextEchoes(_ echoes: [SentEcho], pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
+    conversation: Conversation?, sender: Sender?, now: Date) -> [SentEcho]
+  {
+    var next = echoes.compactMap { echo in
+      Self.next(echo, pending: pending?.requestId == echo.request.requestId ? pending : nil, receipt: receipt,
+        sending: sending, conversation: conversation, sender: sender, now: now)
+    }
+    // A send gets one echo; once it leaves, the same pending submission never brings it back.
+    if let pending, !echoes.contains(where: { $0.request.requestId == pending.requestId }),
+      let created = Self.next(nil, pending: pending, receipt: receipt, sending: sending, conversation: conversation, sender: sender, now: now)
+    {
+      next.append(created)
+    }
+    return next
   }
   /// Whether the composer is showing a draft that is on its way. The echo carries it in the
   /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
