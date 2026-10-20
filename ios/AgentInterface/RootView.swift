@@ -195,18 +195,19 @@ struct ErrorBanner: View {
     ).accessibilityElement(children: .contain)
   }
 }
-/// A small household of assistants, so the first screen shows who is waiting.
+/// A small household of assistants, so the first screen shows who is waiting. Distinct names give
+/// each its own idle gesture timing.
 struct AvatarTrio: View {
   var body: some View {
     HStack(alignment: .bottom, spacing: 6) {
       AvatarView(
-        avatar: AvatarConfig(shape: "blob", color: "#1084FE", eyes: "oval"), size: 64
+        avatar: AvatarConfig(shape: "blob", color: "#1084FE", eyes: "oval"), size: 64, name: "Welcome 1"
       ).rotationEffect(.degrees(-6))
       AvatarView(
         avatar: AvatarConfig(mode: "mascot", shape: nil, family: "bear", color: "#FF9800", eyes: "round"),
-        size: 84)
+        size: 84, name: "Welcome 2")
       AvatarView(
-        avatar: AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "oval"), size: 64
+        avatar: AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "oval"), size: 64, name: "Welcome 3"
       ).rotationEffect(.degrees(5))
     }.accessibilityHidden(true)
   }
