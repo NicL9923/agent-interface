@@ -3,6 +3,7 @@
 Secret-bearing input goes only to native vault handlers or a verified live
 server request. No payload is written to the application/add-on journal.
 """
+import functools
 import ipaddress
 import json
 import re
@@ -253,6 +254,32 @@ def explicit_metadata(request_id):
     return dict(label=value["label"], purpose=value["purpose"], profile=value["profile"], requesterId=value["actor"])
 
 
+def bind_prompt_waits(server, journal):
+    """Keep a person's app login entry open until native answer/cancel/interrupt.
+
+    Native login prompts expire after 180 seconds, even while the person is
+    finding their password. The app shows no deadline. Other chats and prompt
+    kinds retain their native timeouts.
+    """
+    original = server._ask
+    if getattr(original, "_agent_interface_login_wait", False):
+        return
+
+    @functools.wraps(original)
+    def ask(method, sid, params, timeout=300):
+        if method == "vault.save_login":
+            profile = journal.live_profile_for_session(sid)
+            if profile is not None and journal.canonical_session(profile) == sid:
+                with journal.lock:
+                    receipt = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 LIMIT 1", (sid,)).fetchone()
+                if receipt:
+                    timeout = None
+        return original(method, sid, params, timeout=timeout)
+
+    ask._agent_interface_login_wait = True
+    server._ask = ask
+
+
 def bind_requests(server_requests, journal):
     """Records each explicit-origin request's context under its native request ID as it is sent.
 
@@ -406,5 +433,6 @@ def install(web, journal):
     web.app.add_api_route("/api/agent-interface/credentials", endpoint, methods=["POST"])
     from tui_gateway import server_requests
     bind_requests(server_requests, journal)
+    bind_prompt_waits(server, journal)
     journal.explicit_credential = explicit_metadata
     register_tool()

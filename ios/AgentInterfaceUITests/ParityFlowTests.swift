@@ -179,6 +179,40 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts.matching(identifier: "Fixture single visible reply").count, 1)
   }
+  func testLongToolOutputsScrollInsideCompactReceipts() throws {
+    for presentation in ["simple", "advanced"] {
+      let app = XCUIApplication()
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      app.launchEnvironment["AGENT_INTERFACE_UI_LONG_TOOL"] = presentation
+      app.launch()
+      let tools = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch
+      XCTAssertTrue(tools.waitForExistence(timeout: 10)); tools.tap()
+      XCTAssertLessThan(tools.frame.minY, app.staticTexts["Fixture final answer follows the tool results."].frame.minY)
+      app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_short")).firstMatch.tap()
+      let short = app.staticTexts["Short fixture tool result"]
+      XCTAssertTrue(short.waitForExistence(timeout: 5))
+      let long = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_long")).firstMatch
+      XCTAssertLessThan(long.frame.minY - short.frame.maxY, 100, "Short output must not reserve a full-height empty box")
+      long.tap()
+      let beforeScroll = XCTAttachment(screenshot: app.screenshot())
+      beforeScroll.name = "Before scrolling \(presentation) tool output"; beforeScroll.lifetime = .keepAlways; add(beforeScroll)
+      let outputs = app.scrollViews.matching(NSPredicate(format: "label BEGINSWITH %@", "Result"))
+      XCTAssertTrue(outputs.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+      let output = try XCTUnwrap(outputs.allElementsBoundByIndex.last)
+      XCTAssertLessThanOrEqual(output.frame.height, 281)
+      let text = output.staticTexts.firstMatch
+      XCTAssertTrue(text.label.hasSuffix("END OF FIXTURE OUTPUT"), "Long output must remain complete beyond 4,000 characters")
+      let before = text.frame.minY, outer = output.frame
+      output.swipeUp()
+      XCTAssertLessThan(text.frame.minY, before, "The output itself must scroll")
+      XCTAssertEqual(output.frame.minY, outer.minY, accuracy: 2, "Scrolling output must keep the receipt in place")
+      let capture = XCTAttachment(screenshot: app.screenshot())
+      capture.name = "Bounded \(presentation) tool output"; capture.lifetime = .keepAlways; add(capture)
+      app.terminate()
+    }
+  }
   /// Like the web, a chat opens at its latest message, pages in earlier turns near the top, and
   /// the jump control returns to the end.
   func testLongChatOpensAtLatestPagesEarlierAndJumpsBack() {

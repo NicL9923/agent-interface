@@ -1,5 +1,79 @@
 # Validation ledger
 
+## October 19 secure input and tool receipts
+
+Base `2141b24`; final source fingerprint
+`ff6166021e149b009da45740f5ae9eda353732419d4d751a0f370407772320ed`.
+The vault implementation and regression-test fingerprint is
+`0ab887973ce11375e33848b0db05e5b8cc5f7cd48b8c4b5f226ee0116639134e`.
+Read-only production inspection found repeated Patch login requests ending after
+180 seconds, matching the installed Hermes login callback's timeout. WildBots
+does not show that deadline. App-owned canonical login prompts now wait for an
+answer, cancellation or native interruption only while an unsettled, non-steering
+app receipt proves a person started the turn. Unattended routine/bot turns, other
+chats and other prompt kinds retain their native deadlines.
+
+iOS preserves secure entry and leaves fields enabled during temporary inactivity,
+while clearing entry on submission, backgrounding and dismissal. Real password-manager
+AutoFill on a physical phone remains unverified. A 404 or
+409 answer now refreshes the conversation, as an expired response already did.
+Native tool arguments, results, errors and activity text use a measured scroll
+container capped at 280 points; short text keeps its natural height. Simple
+receipts on both clients retain the full exposed output instead of silently
+cutting it at 4,000 characters. Web keeps its existing height caps and adds
+keyboard focus and scroll containment.
+
+Both turn renderers place grouped activity before the reply that follows the
+last saved activity row. Earlier commentary stays above the group, split replies
+stay together, and attachment-only replies work. Live updates preserve that
+history position; running calls stay after the current commentary. Claude Opus
+5.5 pressure-tested this design. A subsequent independent full-diff review found
+that unattended turns could wait indefinitely, moving groups could lose disclosure
+state, and output regions needed clearer accessibility semantics. The fixes scope
+the wait to an open app receipt, keep each activity group in one keyed sibling
+collection on both clients, and name web/native output regions. Fields now stay
+enabled during temporary inactivity. Backgrounding still clears both fields, as
+the existing security behavior requires. Round two confirmed those fixes and
+found an iOS reasoning/tool ordering regression. Reasoning now has its own stable
+row before tools, with a model-level parity regression matching the web fixture.
+Claude Opus 5.5 round three found no remaining actionable issues. All 16
+native presentation tests passed after the reasoning-row fix.
+
+- The initial full web suite passed all 848 tests. After review fixes, 71 focused
+  web tests passed, including receipt identity/expansion/scroll preservation during
+  completion, and the production build passed with web build `b688581988af98c7`.
+- Xcode 27.1 on iOS 27.0 simulator `DB70DBE8-5F8D-40DA-8DFA-B724FE2CD03A`
+  reran 284 native unit tests after round-one fixes, with two skips and no failures. The native secure
+  login/code/unlock/secret background flow passed. The final UI check passed in
+  simple and advanced presentation: short output stays compact, long output is
+  complete and capped at 280 points, swiping scrolls its content while its
+  container stays in place, and the final reply follows the tool group.
+- Browser checks at 390 and 1280 CSS pixels confirmed bounded output, complete
+  result text, keyboard scrolling to the end and the corrected message order.
+  Native before/after screenshots were inspected together; web phone and desktop
+  screenshots were inspected separately. Local native evidence is retained at
+  `/Volumes/DevSSD/scratch/browser-vault-expiry/ios-tool-output-final.png`.
+  A baseline/current web comparison also confirms the message ordering change.
+- Initial layout/UI-selector checks failed. The final native container uses
+  measured height, and the test locates it by its accessible label because the
+  disclosure group's identifier overrides descendant identifiers. The first
+  failed run stalled collecting diagnostics and was stopped; subsequent runs
+  used `-collect-test-diagnostics never` and completed normally.
+- Four Python suites passed: vault settlement, explicit-origin logins, shared
+  computer and extension journal. Ruff and `git diff --check` passed.
+- An offline disposable harness used the exact native `_ask` helper and request
+  registry from installed revision `acc3cada`, with a zero-second deadline to
+  reproduce expiry without waiting three minutes. The scoped fix kept the prompt
+  open; submission, cancellation, interruption and duplicate-answer refusal passed.
+  The harness replaced redaction registration and canonical-owner lookup with
+  fixtures. It did not exercise the browser or authenticated HTTP transport.
+- Production was inspected only. Full release qualification and deployment have
+  not run, and the user's exact submission timing remains unverified.
+- Claude Opus 5.5's diagnostic pass ruled out separate request registries,
+  transport retries and owner mismatches as explanations for this expiry text.
+  It identified stale cards after failed refreshes as another possible contributor;
+  the available evidence does not distinguish that from the hidden timeout.
+
 ## October 19 sent-message echo and avatar motion
 
 Validated on `ee3988b` (branch `nic/optimistic-send-avatar-motion`, base

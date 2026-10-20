@@ -220,7 +220,7 @@ function HistoryEdge({ history, scroll, name, disabled }: {
     </button>
   </div>;
 }
-type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[] };
+type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; replyAt?: string };
 function turns(conversation: SavedConversation | null, advanced: boolean) {
   const blocks: Turn[] = [];
   for (const message of withMessageOrigins(conversation?.messages || [])) {
@@ -228,9 +228,15 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
     const block = blocks.at(-1)!;
     // A turn's reasoning parts share one accordion instead of a block per reply row.
     if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
-    if (isActivityMessage(message) || message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
     // A tool-call row with no reply text would render as an empty bubble.
-    if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) block.messages.push(message);
+    if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) {
+      if (message.role !== "user" && block.tools.size && block.replyAt === undefined) block.replyAt = message.id;
+      block.messages.push(message);
+    }
+    if (isActivityMessage(message) || message.role === "tool" || message.toolCall) {
+      block.tools.set(message.id, message);
+      block.replyAt = undefined;
+    }
   }
   for (const call of conversation?.toolCalls || []) {
     // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
@@ -244,6 +250,8 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
       blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
     }
   }
+  // Live calls update receipts, but only saved row order establishes where the reply starts.
+  for (const block of blocks) if ([...block.tools.values()].some(message => message.toolCall?.status === "running")) block.replyAt = undefined;
   return blocks;
 }
 // Memoized so typing in the composer does not re-render the whole transcript.
@@ -254,11 +262,11 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
 }) {
   return <>
     {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
-      {block.messages.flatMap((message, position) => {
+      {[...block.messages.flatMap((message, position) => {
         // The conversation is with one assistant, so its replies need no name, and
         // consecutive reply parts in a turn share the first part's timestamp.
         const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-        const continued = reply && block.messages[position - 1]?.role === "assistant";
+        const continued = reply && block.messages[position - 1]?.role === "assistant" && message.id !== block.replyAt;
         const scheduled = messageOrigin(message)?.kind === "scheduled";
         const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
           : reply ? "" : message.toolName || message.role;
@@ -286,10 +294,14 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
             <FileLink file={file} key={file.id} />
           ))}
         </article>;
-        return opensReply ? [<Reasoning key="reasoning" parts={block.reasoning} />, article] : [article];
-      })}
-      {!!block.reasoning.length && block.messages.every(message => message.role === "user") && <Reasoning parts={block.reasoning} />}
-      <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />
+        return [
+          ...(opensReply ? [<Reasoning key="reasoning" parts={block.reasoning} />] : []),
+          ...(message.id === block.replyAt ? [<ToolCalls key="tool-activity" messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />] : []),
+          article,
+        ];
+      }),
+      ...(block.reasoning.length && block.messages.every(message => message.role === "user") ? [<Reasoning key="reasoning" parts={block.reasoning} />] : []),
+      ...(block.replyAt === undefined ? [<ToolCalls key="tool-activity" messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />] : [])]}
     </div>)}
   </>;
 });
@@ -338,7 +350,7 @@ function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: 
     <div className="tool-calls-content">{group.items.map(message => <div key={message.id}>
       {isAgentExchange(message) ? <AgentExchange message={message} recipient={recipient} /> : message.toolCall
         ? advanced ? <ToolCallDetail call={message.toolCall} disconnected={disconnected} /> : <ActionReceipt call={message.toolCall} />
-        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || label(message)}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre>{message.text || "No result was exposed by Hermes."}</pre></details>}
+        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || label(message)}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre role="region" tabIndex={0} aria-label="Activity output">{message.text || "No result was exposed by Hermes."}</pre></details>}
       {message.files?.map(file => <FileLink key={file.id} file={file} />)}
     </div>)}</div>
   </details>);
@@ -351,9 +363,9 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
       {call.startedAt && <div><dt>Started</dt><dd><When value={call.startedAt} /></dd></div>}
       {call.completedAt && <div><dt>Finished</dt><dd><When value={call.completedAt} /></dd></div>}
     </dl>
-    {call.arguments !== undefined && <><h3>Arguments</h3><pre>{call.arguments}</pre></>}
-    {call.result !== undefined && <><h3>Result</h3><pre>{call.result}</pre></>}
-    {call.error && <><h3 className="danger">Error</h3><pre className="danger">{call.error}</pre></>}
+    {call.arguments !== undefined && <><h3>Arguments</h3><pre role="region" tabIndex={0} aria-label={`Arguments for ${call.name}`}>{call.arguments}</pre></>}
+    {call.result !== undefined && <><h3>Result</h3><pre role="region" tabIndex={0} aria-label={`Result from ${call.name}`}>{call.result}</pre></>}
+    {call.error && <><h3 className="danger">Error</h3><pre className="danger" role="region" tabIndex={0} aria-label={`Error from ${call.name}`}>{call.error}</pre></>}
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }

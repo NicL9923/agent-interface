@@ -1,5 +1,6 @@
 """Scoped settlement races with the native immutable request-ID contract."""
 import importlib.util
+import sqlite3
 from pathlib import Path
 import sys
 import threading
@@ -49,5 +50,59 @@ class VaultTests(unittest.TestCase):
         self.data['answer']={k:self.data['answer'][k] for k in ('epoch','sessionId','method')};self.data['answer']['cancel']=True
         self.assertEqual(vault.answer_request(None,self.journal,self.data),{'status':'ok'})
         self.assertEqual(self.frames[0]['result'],{'value':''})
+
+class PromptWaitTests(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.db = sqlite3.connect(':memory:')
+        self.addCleanup(self.db.close)
+        self.db.execute('CREATE TABLE receipts(session_id TEXT, terminal INTEGER, steering INTEGER)')
+        self.db.executemany('INSERT INTO receipts VALUES (?,0,0)', [('canonical',), ('default-chat',)])
+        def ask(method, sid, params, timeout=300):
+            self.calls.append((method, sid, params, timeout))
+            return 'native result'
+        self.server = types.SimpleNamespace(_ask=ask)
+        self.journal = types.SimpleNamespace(
+            db=self.db, lock=threading.Lock(),
+            live_profile_for_session=lambda sid: {'canonical': 'one', 'other-chat': 'one', 'default-chat': 'default'}.get(sid),
+            canonical_session=lambda profile: {'one': 'canonical', 'default': 'default-chat'}.get(profile),
+        )
+
+    def test_canonical_login_waits_for_the_person_instead_of_the_native_deadline(self):
+        vault.bind_prompt_waits(self.server, self.journal)
+        params = {'origin': 'https://site.invalid', 'site': 'site.invalid'}
+        self.assertEqual(self.server._ask('vault.save_login', 'canonical', params, timeout=180), 'native result')
+        self.assertEqual(self.calls, [('vault.save_login', 'canonical', params, None)])
+        self.server._ask('vault.save_login', 'default-chat', params, timeout=180)
+        self.assertIsNone(self.calls[-1][3])
+
+    def test_other_chats_and_prompt_kinds_keep_their_native_deadlines(self):
+        vault.bind_prompt_waits(self.server, self.journal)
+        for method, sid in [('vault.save_login', 'other-chat'), ('vault.save_login', 'closed-chat'),
+                            ('vault.code', 'canonical'), ('vault.unlock_prompt', 'canonical'),
+                            ('secret', 'canonical'), ('sudo', 'canonical')]:
+            with self.subTest(method=method, sid=sid):
+                self.server._ask(method, sid, {}, timeout=120)
+                self.assertEqual(self.calls[-1], (method, sid, {}, 120))
+
+    def test_checks_current_session_ownership_on_each_prompt_and_installs_once(self):
+        vault.bind_prompt_waits(self.server, self.journal)
+        wrapped = self.server._ask
+        vault.bind_prompt_waits(self.server, self.journal)
+        self.assertIs(self.server._ask, wrapped)
+        self.journal.canonical_session = lambda profile: 'replacement'
+        self.server._ask('vault.save_login', 'canonical', {}, timeout=180)
+        self.assertEqual(self.calls[-1][3], 180)
+
+    def test_unattended_or_settled_turns_keep_the_native_deadline(self):
+        vault.bind_prompt_waits(self.server, self.journal)
+        for terminal, steering in [(None, None), (1, 0), (0, 1)]:
+            with self.subTest(terminal=terminal, steering=steering):
+                self.db.execute('DELETE FROM receipts')
+                if terminal is not None:
+                    self.db.execute('INSERT INTO receipts VALUES (?,?,?)', ('canonical', terminal, steering))
+                self.server._ask('vault.save_login', 'canonical', {}, timeout=180)
+                self.assertEqual(self.calls[-1][3], 180)
+
 
 if __name__=='__main__': unittest.main()

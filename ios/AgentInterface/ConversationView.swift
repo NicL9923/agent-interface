@@ -445,8 +445,7 @@ struct ToolActivityView: View {
   private func section(_ title: String, _ text: String, danger: Bool = false) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title).font(.caption.bold()).accessibilityAddTraits(.isHeader)
-      Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      ToolOutputView(text: text, label: "\(title) for \(message.displayToolName)").font(.system(.caption, design: .monospaced))
     }.foregroundStyle(danger ? Palette.danger : Color.primary)
   }
   static func status(_ status: String, connected: Bool) -> String {
@@ -457,6 +456,32 @@ struct ToolActivityView: View {
     guard call?.status == "running", result == nil else { return nil }
     return connected ? "Waiting for the result from Hermes." : "The current tool status will be checked when Hermes reconnects."
   }
+}
+/// Short results keep their natural height; long results scroll inside the receipt.
+struct ToolOutputView: View {
+  var text: String
+  var label: String = "Tool output"
+  @State private var contentHeight: CGFloat = 1
+  var body: some View {
+    ScrollView(.vertical) {
+      Text(text).textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(GeometryReader { geometry in
+          Color.clear.preference(key: ToolOutputHeight.self, value: geometry.size.height)
+        })
+    }
+    .frame(height: min(contentHeight, 280))
+    .scrollDisabled(contentHeight <= 280)
+    .scrollBounceBehavior(.basedOnSize)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(label)
+    .onPreferenceChange(ToolOutputHeight.self) { contentHeight = $0 }
+  }
+}
+private struct ToolOutputHeight: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 struct AttentionView: View {
   var request: Attention

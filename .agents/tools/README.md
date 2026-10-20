@@ -1,5 +1,6 @@
 # Repository tools
 
+- `PREVIEW_LONG_TOOL=1 node .agents/tools/preview-app.mjs` shows short, long and unstructured tool-output fixtures for scrolling checks; combine with `PREVIEW_PRESENTATION=advanced` for raw tool details.
 - `capture-ui-comparison.js` is a Playwright CLI run-code function that captures six desktop/phone states from the synthetic loopback preview. A wrapper can pass `{ outputDir, prefix }` as its second argument; defaults write to ignored `.private/ui-comparison`.
 - `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that text and voice controls remain uncovered at desktop and phone widths.
 

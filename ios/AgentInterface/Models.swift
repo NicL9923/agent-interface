@@ -469,14 +469,43 @@ struct CoordinationGroup: Identifiable, Equatable {
   var id: String
   var messages: [Message]
 }
+enum ConversationTurnRow: Identifiable {
+  case message(Int, Message)
+  case activity(CoordinationGroup)
+  case reasoning
+  var id: String {
+    switch self {
+    case .message(_, let message): return "message-" + message.id
+    case .activity(let group): return "activity-" + group.id
+    case .reasoning: return "reasoning"
+    }
+  }
+}
 struct ConversationTurn: Identifiable, Equatable {
   var id: String
   var messages: [Message]
+  var replyStart: String? = nil
   var visibleMessages: [Message] { messages.filter(\.isConversationVisible) }
   var reasoning: [String] { messages.filter { !$0.isInternalActivity && $0.role == "assistant" }.compactMap {
     let text = $0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return text.isEmpty ? nil : text
   } }
+  /// One identity scope preserves disclosure state when activity moves above the final reply.
+  func rows(advanced: Bool) -> [ConversationTurnRow] {
+    var rows: [ConversationTurnRow] = []
+    var needsReasoning = advanced && !reasoning.isEmpty
+    let groups = activityGroups.map(ConversationTurnRow.activity)
+    for (index, message) in visibleMessages.enumerated() {
+      if needsReasoning && message.role != "user" {
+        rows.append(.reasoning); needsReasoning = false
+      }
+      if message.id == replyStart { rows += groups }
+      rows.append(.message(index, message))
+    }
+    if needsReasoning { rows.append(.reasoning) }
+    if replyStart == nil { rows += groups }
+    return rows
+  }
   var activityGroups: [CoordinationGroup] {
     var groups: [CoordinationGroup] = []
     for message in messages where message.isInternalActivity || message.isToolActivity || message.toolCall != nil {
@@ -537,8 +566,19 @@ struct Conversation: Codable, Equatable {
   }
   var presentationTurns: [ConversationTurn] {
     var turns: [ConversationTurn] = []
+    var sawActivity = false
     for message in messages {
-      if turns.isEmpty || message.role == "user" { turns.append(ConversationTurn(id: message.id, messages: [])) }
+      if turns.isEmpty || message.role == "user" {
+        turns.append(ConversationTurn(id: message.id, messages: []))
+        sawActivity = false
+      }
+      if message.isConversationVisible && message.role != "user" && sawActivity && turns[turns.count - 1].replyStart == nil {
+        turns[turns.count - 1].replyStart = message.id
+      }
+      if message.isInternalActivity || message.isToolActivity || message.toolCall != nil {
+        sawActivity = true
+        turns[turns.count - 1].replyStart = nil
+      }
       turns[turns.count - 1].messages.append(message)
     }
     for call in toolCalls ?? [] {
@@ -560,6 +600,10 @@ struct Conversation: Codable, Equatable {
         if turns.isEmpty { turns.append(ConversationTurn(id: "live-activity", messages: [])) }
         turns[turns.count - 1].messages.append(Message(id: "live-" + call.id, role: "tool", text: "", toolCall: call))
       }
+    }
+    // Appended live calls must not become a new history position for the reply.
+    for index in turns.indices where turns[index].activityGroups.contains(where: { $0.messages.contains(where: { $0.toolCall?.status == "running" }) }) {
+      turns[index].replyStart = nil
     }
     return turns
   }

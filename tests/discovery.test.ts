@@ -45,6 +45,10 @@ it('does not mistake completed transport or shell exit zero for a confirmed exte
   expect(receipt(call).label).toBe('Tool finished');expect(receipt({...call,result:'{"success":true,"html_url":"https://example.test/result"}'}).links).toEqual(['https://example.test/result']);
   expect(receipt({...call,result:'{"success":false,"error":"No permission"}'}).label).toBe('Tool failed');expect(receipt({...call,result:'{"success":true,"url":"javascript:alert(1)"}'}).links).toEqual([]);
 });
+it('keeps the end of long tool output available inside a scrollable receipt',()=>{
+  const result = 'Synthetic tool detail\n'.repeat(300) + 'Final outcome after 4,000 characters';
+  expect(receipt({id:'long-tool',name:'terminal',status:'completed',result}).text).toBe(result);
+});
 it('does not lose an accessible update when another member’s bot is revoked from its digest',async()=>{
   const store=setup();store.savePreferences('one',{...defaultPreferences,notifications:{timezone:'UTC',batchMinutes:5}});store.participate('run','one');
   store.recordEvents([{id:'public',botId:'public',runId:'run',kind:'completed',title:'Public update',occurredAt:new Date().toISOString()},{id:'private',botId:'private',runId:'run',kind:'completed',title:'Private secret title',occurredAt:new Date().toISOString()}],'1');store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);store.deliveryGroups();store.savePresentation('private',{ownerId:'two',shared:false});
