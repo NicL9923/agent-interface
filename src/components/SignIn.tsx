@@ -15,7 +15,8 @@ const trio = [
 /** A small household of assistants, so the first screen shows who is waiting. */
 export function AvatarTrio() {
   return <div className="avatar-trio" aria-hidden="true">
-    {trio.map((avatar, i) => <Avatar key={i} avatar={avatar} size={i === 1 ? 84 : 64} />)}
+    {/* Distinct names give each its own idle gesture timing. */}
+    {trio.map((avatar, i) => <Avatar key={i} avatar={avatar} size={i === 1 ? 84 : 64} name={`Welcome ${i + 1}`} />)}
   </div>;
 }
 

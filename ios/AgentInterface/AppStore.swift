@@ -7,21 +7,29 @@ import UniformTypeIdentifiers
 final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
   @Published var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
   @Published var api: APIClient?
-  @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot() } }
+  @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot(); updateEcho() } }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
   var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
   @Published var conversation: Conversation? {
-    didSet { if conversation != oldValue { turns = conversation?.presentationTurns ?? [] } }
+    didSet { if conversation != oldValue { updateEcho(conversationChanged: true) } }
   }
-  /// The open conversation grouped into turns, computed once per change instead of on every render.
+  /// The open conversation as shown: with the echo of a message still on its way at its end.
+  private(set) var transcript: Conversation?
+  /// The transcript grouped into turns, computed once per change instead of on every render.
   private(set) var turns: [ConversationTurn] = []
-  @Published var selectedBotId: String?
+  /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
+  /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
+  @Published private(set) var echoes: [SentEcho] = []
+  private var echoTimer: Task<Void, Never>?
+  /// When the earliest accepted echo whose run never showed runs out of patience.
+  private var echoDeadline: Date?
+  @Published var selectedBotId: String? { didSet { updateEcho() } }
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
   @Published var draft = Draft()
   @Published var draftReady = false
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
-  @Published var pendings: [String: PendingSubmission] = [:]
+  @Published var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho() } }
   /// The open assistant's unconfirmed send. Setting one files it under its own assistant.
   var pending: PendingSubmission? {
     get { selectedBotId.flatMap { pendings[$0] } }
@@ -30,7 +38,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   /// The latest submission receipt per assistant.
-  @Published var receipts: [String: Receipt] = [:]
+  @Published var receipts: [String: Receipt] = [:] { didSet { updateEcho() } }
   var receipt: Receipt? {
     get { selectedBotId.flatMap { receipts[$0] } }
     set { if let id = selectedBotId { receipts[id] = newValue } }
@@ -46,7 +54,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var stayHome = false
   @Published var signingIn = false
   @Published var loading = false
-  @Published var sending = false
+  @Published var sending = false { didSet { updateEcho() } }
   @Published var uploading = false
   @Published var attachmentUploads: [AttachmentUpload] = []
   /// Files from the last attempt to attach that could not be added, each with its reason.
@@ -727,7 +735,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if !force, !settled(botId) { return false }
     let snapshot = draft
     let sent = pendings[botId]
-    guard sent == nil || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
+    guard sent == nil || !snapshot.isSentCopy || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
     else { return false }
     let currentGeneration = generation
     Task {
@@ -870,7 +878,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pendings[id] = submission
     save(submission, key("pending", id))
     // Until the server shows the send, a save of the sent text from this copy is not new work.
-    markSent(submission, true)
+    // A retry sends the same request again; the copy it came from is already marked, and a copy
+    // edited since is not it.
+    if !reviewedUncertain { markSent(submission, true) }
     sending = true
     error = nil
     let currentGeneration = generation
@@ -888,7 +898,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       // the server stopped waiting for the request before handling it.
       if let failure = error as? APIError, (400..<500).contains(failure.status) {
         clearPending(id)
-        markSent(submission, false)
+        refused(submission)
         receipts[id] = Receipt(
           requestId: submission.requestId, status: "rejected", message: failure.message)
       } else {
@@ -941,7 +951,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       // The server clears its copy for this send, which a later save here must not mistake
       // for a send from another device.
       if selectedBotId == original.botId && draftReady {
-        if draft.text == original.text && draft.attachments == original.attachments {
+        if draft.isSentCopy && draft.text == original.text && draft.attachments == original.attachments {
           draftTask?.cancel()
           scheduledDraftSave = nil
         }
@@ -952,21 +962,108 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         if let cached: Draft = read(draftKey) { save(cached.sent(original), draftKey) }
       }
     }
-    if value.status == "rejected" || value.status == "interrupted" { markSent(original, false) }
+    if value.status == "rejected" || value.status == "interrupted" { refused(original) }
     clearPending(botId)
+  }
+  /// A refused message goes back into its draft, in front of anything that replaced it meanwhile,
+  /// such as an edit from another device or the Share inbox, unless the draft still holds it, as
+  /// on the web.
+  private func refused(_ submission: PendingSubmission) {
+    markSent(submission, false)
+    let open = selectedBotId == submission.botId
+    if open && draftReady {
+      let target = Self.draft(restoring: submission, into: draft)
+      if target != draft { updateDraft(target) }
+    } else if let localKey = key("draft", submission.botId), let cached: Draft = read(localKey) {
+      var target = Self.draft(restoring: submission, into: cached)
+      guard target != cached else { return }
+      target.dirty = true
+      save(target, localKey)
+      // While the open assistant's draft is still loading, its read merges this cached copy.
+      if open { draft = target }
+    }
+  }
+  /// Follows the open assistant's submissions and keeps each echo until Hermes's copy replaces it.
+  /// Every input it reads calls it when it changes.
+  private func updateEcho(conversationChanged: Bool = false) {
+    let now = Date()
+    let next = SentEcho.nextEchoes(
+      echoes, pending: pending, receipt: receipt, sending: sending, conversation: conversation,
+      sender: bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }, now: now)
+    let changed = next != echoes
+    if changed { echoes = next }
+    if changed || conversationChanged {
+      transcript = SentEcho.transcript(conversation, echoes)
+      turns = transcript?.presentationTurns ?? []
+    }
+    // An accepted message that never shows is checked again once its patience runs out. Only the
+    // open conversation can retire one, so another assistant's echo waits for its return.
+    let deadline = next.filter { $0.status == .accepted && !$0.ran && $0.request.botId == conversation?.botId }
+      .compactMap { $0.acceptedAt?.addingTimeInterval(SentEcho.patience + 0.1) }.min()
+    guard deadline != echoDeadline else { return }
+    echoTimer?.cancel()
+    echoDeadline = deadline
+    echoTimer = deadline.map { deadline in
+      Task { [weak self] in
+        try? await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSince(now))))
+        guard !Task.isCancelled else { return }
+        self?.echoDeadline = nil
+        self?.updateEcho()
+      }
+    }
+  }
+  /// The one message on its way, if any. Accepted ones read as ordinary messages.
+  var outgoing: SentEcho.Delivery? { echoes.lazy.compactMap(\.delivery).first }
+  /// Whether the open draft is the message on its way. The transcript shows it, so the composer
+  /// reads empty, and read-only: until Hermes answers, a draft and its send are told apart only by
+  /// their content, so the draft must stay the sent copy.
+  var sendingDraft: Bool { SentEcho.sendingDraft(draft, pending: pending, sending: sending) }
+  /// The draft as the composer shows it: empty while its message is on its way.
+  var composerDraft: Draft {
+    guard sendingDraft else { return draft }
+    var shown = draft
+    shown.text = ""
+    shown.attachments = []
+    return shown
+  }
+  /// An edit in the composer. One made while its draft is on its way is ignored: the composer is
+  /// read-only then, and this keeps any other path from changing the sent copy.
+  func editComposer(_ edit: (inout Draft) -> Void) {
+    guard !sendingDraft else { return }
+    var next = draft
+    edit(&next)
+    updateDraft(next)
+  }
+  /// Whether shared items wait in the inbox for this assistant: while a send for it is unsettled,
+  /// its draft is told apart from that send by content, so an addition could be mistaken for it
+  /// or keep it alive to be sent again. Added once the send settles, they land in the cleared or
+  /// given-back draft.
+  func holdsShared(_ botId: String) -> Bool { pendings[botId] != nil }
+  /// Adds shared text or an uploaded shared file to the open assistant's draft, unless it holds
+  /// shared items for now.
+  @discardableResult func addShared(text: String = "", file: FileRef? = nil, botId: String) -> Bool {
+    guard selectedBotId == botId, draftReady, !holdsShared(botId) else { return false }
+    var next = draft
+    if !text.isEmpty { next.text += (next.text.isEmpty ? "" : "\n\n") + text }
+    if let file { next.attachments.append(file) }
+    updateDraft(next)
+    return true
   }
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
     let hash = sent ? Draft.contentHash(submission.text, submission.attachments) : nil
     let base = sent ? submission.draftBaseRevision ?? 0 : nil
+    // The copy's edit sequence identifies it as the sent copy until someone types in it again.
     if let localKey = key("draft", submission.botId), var cached: Draft = read(localKey) {
       cached.sentHash = hash
       cached.sentBase = base
+      if sent { cached.sentSeq = cached.seq ?? 0 }
       save(cached, localKey)
     }
     if selectedBotId == submission.botId {
       draft.sentHash = hash
       draft.sentBase = base
+      if sent { draft.sentSeq = draft.seq ?? 0 }
       persistDraft()
     }
   }
@@ -1008,10 +1105,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Adds a voice transcript to the open assistant's draft on its own line, as the web does.
   @discardableResult func appendTranscript(_ text: String, botId: String) -> Bool {
     guard selectedBotId == botId, draftReady else { return false }
-    var next = draft
-    next.text =
-      next.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : next.text + "\n" + text
-    updateDraft(next)
+    editComposer {
+      $0.text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : $0.text + "\n" + text
+    }
     return true
   }
   /// Shows the draft once a read returns, merged with this device's copy. Unsaved edits that
@@ -1027,14 +1123,15 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
     ensureDraftSaved(botId)
   }
-  /// Puts a pending message back in front of whatever the person has typed since.
+  /// Puts a pending message back in front of whatever the person has typed since, unless the
+  /// draft still holds it, as the web's `restoreSent` does.
   static func draft(restoring old: PendingSubmission, into current: Draft) -> Draft {
     var next = current
     if !next.text.contains(old.text) {
       next.text = [old.text, next.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
-    next.attachments =
-      old.attachments + next.attachments.filter { file in !old.attachments.contains { $0.id == file.id } }
+    let missing = old.attachments.filter { file in !current.attachments.contains { $0.id == file.id } }
+    next.attachments = missing + current.attachments
     return next
   }
   func reconnect() async {
@@ -1151,12 +1248,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   /// Why files cannot be attached to this assistant's draft right now, in the web's words.
+  static let attachWhileSending = "Wait a moment for your message to send."
   func attachUnavailable(_ botId: String) -> String? {
     if !supports("uploads") {
       let reason = bootstrap?.capabilities["uploads"]?.reason ?? ""
       return reason.isEmpty ? "Hermes can't receive files right now." : reason
     }
     if !draftReady || selectedBotId != botId { return "Your draft is still loading." }
+    if sending { return Self.attachWhileSending }
     if attachmentSlots(botId) <= 0 { return "A message can carry up to \(UploadRules.maxAttachments) attachments." }
     return nil
   }

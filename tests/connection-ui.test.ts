@@ -290,7 +290,10 @@ describe('setup and recovery interface',()=>{
     expect(vi.mocked(write).mock.calls.filter(([path])=>path==='/bots/shared/messages')).toHaveLength(2);
     await act(async()=>finish());
     expect(container.textContent).not.toContain('Old account');
-    expect(container.querySelector('textarea')?.value).toBe('Second member draft');
+    // The composer is free while the message sends; the draft keeps it until Hermes answers.
+    expect(container.querySelector('textarea')?.value).toBe('');
+    expect(container.querySelector('.message-sending')?.textContent).toContain('Second member draft');
+    expect(JSON.parse(localStorage.getItem('agent-interface:draft:two:shared')!).text).toBe('Second member draft');
     // An in-flight send only spins the send button; Retry returns if it ends without a receipt.
     expect(Array.from(container.querySelectorAll('button')).some(node=>node.textContent==='Retry this saved message')).toBe(false);
     expect(container.querySelector('[aria-label="Send message"]')?.getAttribute('aria-busy')).toBe('true');

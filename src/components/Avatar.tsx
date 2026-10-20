@@ -8,10 +8,15 @@ import {
   expressionFor,
   faceInk,
   frozenStates,
+  motionSeed,
   orbitArcs,
+  perspective,
+  pitchEyes,
+  popIn,
   project,
   propMotion,
   smoothstep,
+  tickMarks,
   tint,
   type AvatarProp,
   type Expression,
@@ -239,6 +244,7 @@ export function Avatar({
     return () => observer.disconnect();
   }, []);
   const reduce = useReducedMotion(reducedMotion);
+  const seed = motionSeed(name);
   const id = useId().replace(/:/g, "");
   const [, setFrame] = useState(0);
   // Mutable animation clock. Only commit-phase effects and frame callbacks write
@@ -291,7 +297,7 @@ export function Avatar({
       last = now;
       const clock = motion.current;
       const t = (now - clock.since) / 1000;
-      const trail = trailsAt(avatarPose(state, t, false, clock.prop), t, clock.carry, clock.carrySweep);
+      const trail = trailsAt(avatarPose(state, t, false, clock.prop, seed), t, clock.carry, clock.carrySweep);
       motion.current = { ...clock, elapsed: t, now, ...trail };
       expression.current = approach(expression.current, expressionFor(state, t), dt);
       const targets = morphTargets(state);
@@ -310,14 +316,14 @@ export function Avatar({
     };
     frame = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(frame); clearTimeout(wake); };
-  }, [state, still, size]);
+  }, [state, still, size, seed]);
 
   // A state that has not committed yet renders from its first frame.
   const clock = motion.current;
   const fresh = clock.state !== state;
   const t = still || fresh ? 0 : clock.elapsed;
   const held = state === "working" && avatar.mode !== "portrait" ? prop : undefined;
-  const pose = avatarPose(state, t, still, held);
+  const pose = avatarPose(state, t, still, held, seed);
   const { level: trailLevel, sweep } = still
     ? { level: 0, sweep: 0 }
     : fresh
@@ -344,6 +350,11 @@ export function Avatar({
   const eyeOffset = (mascot ? 17 : 15) * eyeSpacing * eyeScale;
   const center = project(pose.gazeX * 2, pose.yaw);
   const open = Math.max(face.open * pose.blink * eyeHeight * eyeScale, 0.04);
+  // A pitched face rolls everything painted on it, eyes and muzzle alike, around the sphere.
+  const roll = pitchEyes(pose.pitch);
+  // Dots replace pills outright; other eye styles shrink toward a dot instead.
+  const pill = !(mascot && (eyes === "oval" || eyes === "round")) && eyes !== "spark" && eyes !== "visor" && eyes !== "round";
+  const dotShrink = pill ? 1 + 0.12 * face.dot : 1 - 0.3 * face.dot;
   const trailArcs = trailLevel > 0.01
     ? trailOrbits.map(([rx, ry, tilt], i) =>
         orbitArcs(-sweep - i * 0.9, 1.5, rx, ry, tilt),
@@ -376,8 +387,9 @@ export function Avatar({
       return <path d="M0 -10 L3.2 -3.2 L10 0 L3.2 3.2 L0 10 L-3.2 3.2 L-10 0 L-3.2 -3.2Z" />;
     if (eyes === "visor") return <rect x="-10" y="-4.5" width="20" height="9" rx="4.5" />;
     if (eyes === "round") return <circle r="7.5" />;
+    const height = 25 - 14 * face.dot;
     return (
-      <rect x="-5.5" y="-12.5" width="11" height="25" rx="5.5"
+      <rect x="-5.5" y={-height / 2} width="11" height={height} rx="5.5"
         transform={`rotate(${face.tilt * side})`} />
     );
   };
@@ -385,11 +397,13 @@ export function Avatar({
     const p = project(direction * eyeOffset + pose.gazeX * 4, pose.yaw);
     if (!p.visible) return null;
     const side = -direction;
+    // Near eyes read a little larger as the face turns, and a pop of surprise grows both.
+    const size = perspective(p.scale) * pose.eyeScale * dotShrink;
     return (
       <g key={direction} transform={`translate(${50 + p.x} ${eyeY})`}>
         <g
           opacity={1 - face.happy}
-          transform={`scale(${p.scale * eyeWidth * eyeScale * (1 + (1 - Math.min(face.open, 1)) * 0.4)} ${open})`}
+          transform={`scale(${p.scale * eyeWidth * eyeScale * size * (1 + (1 - Math.min(face.open, 1)) * 0.4)} ${open * size})`}
         >
           {eyeShape(side)}
         </g>
@@ -523,6 +537,12 @@ export function Avatar({
       <PropArt prop={held} t={t} grow={popIn(propAge / 0.4)} />
     </g>
   );
+  // Emphasis marks are lost at list sizes, so only larger avatars draw them.
+  const ticks = size >= 40 && pose.ticks > 0.01 && (
+    <g fill="none" stroke={color} strokeWidth="4.2" strokeLinecap="round" opacity={Math.min(pose.ticks, 1)} className="avatar-ticks">
+      {tickMarks(pose.ticks, pose.tickSide, hatAnchor === anchor ? anchor.top : hatAnchor.top).map((d, i) => <path key={i} d={d} />)}
+    </g>
+  );
   const bodyScale = 1 - 0.45 * symbolic;
   const bodyTransform = [
     `translate(${pose.shiftX} ${pose.lift})`,
@@ -574,13 +594,18 @@ export function Avatar({
             {seasonal && <SeasonalBack family={seasonal} color={color} yaw={pose.yaw} />}
             <path d={bodyPath} fill={color} className="avatar-body" />
             <g clipPath={`url(#face-${id})`}>
-              {mascotFace}
-              {cheeks}
-              <g fill={ink}>{eyesLayer}</g>
-              {glassesBridge}
+              {roll.visible && (
+                <g transform={pose.pitch ? `translate(0 ${anchor.cy + roll.y}) scale(1 ${roll.scale}) translate(0 ${-anchor.cy})` : undefined}>
+                  {mascotFace}
+                  {cheeks}
+                  <g fill={ink}>{eyesLayer}</g>
+                  {glassesBridge}
+                </g>
+              )}
             </g>
             {seasonal && <SeasonalFront family={seasonal} yaw={pose.yaw} />}
             {hat}
+            {ticks}
             {trailLayer("front")}
           </g>
           {heldProp}
@@ -606,11 +631,6 @@ export function Avatar({
     </span>
   );
 }
-
-const popIn = (t: number) => {
-  const x = Math.min(Math.max(t, 0), 1);
-  return 1 + 2.2 * (x - 1) ** 3 + 1.2 * (x - 1) ** 2;
-};
 
 /** Small held props, drawn in avatar units in front of the body. */
 function PropArt({ prop, t, grow }: { prop: AvatarProp; t: number; grow: number }) {

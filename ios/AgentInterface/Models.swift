@@ -344,6 +344,16 @@ struct Draft: Codable, Equatable {
   var sentHash: String? = nil
   /// The revision that send was written on; a `sentRevision` past it shows the send completed.
   var sentBase: Int? = nil
+  /// The edit sequence of the copy this device last sent. A copy whose `seq` still matches, while
+  /// `sentHash` marks the send as open, is that copy. Anything typed since, or the server's copy
+  /// adopted since, is new work even in the same words. Kept after the send completes.
+  var sentSeq: Int? = nil
+
+  /// Whether this copy may be the one this device sent, untouched since. Drafts are compared by
+  /// content on the server, so only the edit sequence can tell the sent copy from the same words
+  /// typed again. A copy from an older version has no sequence and keeps the content-only check.
+  /// The web client's `isSentCopy` in src/app/storage.ts applies the same rule.
+  var isSentCopy: Bool { sentSeq == nil || sentHash != nil && (seq ?? 0) == sentSeq }
 
   /// A fingerprint of draft content, kept with a cached copy.
   static func contentHash(_ text: String, _ attachments: [FileRef]) -> String {
@@ -377,7 +387,9 @@ struct Draft: Codable, Equatable {
     let revision = server.revision ?? 0
     if !authoritative && revision < base { return (local, false) }
     let hash = contentHash(server.text, server.attachments)
-    let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash)
+    // The server's copy is never this device's sent copy, so the send's sequence comes along to say so.
+    let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash,
+      sentSeq: local.sentSeq)
     // The guard for this device's send lasts until the server shows that send completed.
     let sendShown = local.sentHash != nil && (server.sentRevision ?? 0) > (local.sentBase ?? 0)
     if local.dirty != true {
@@ -385,7 +397,11 @@ struct Draft: Codable, Equatable {
       return (adopt, false)
     }
     let mine = contentHash(local.text, local.attachments)
-    if (server.sentRevision ?? 0) > base && (mine == local.baseHash || sendShown && mine == local.sentHash) { return (adopt, false) }
+    // Typed since this device's send, the copy is new work whatever words it shares with the send.
+    let untouched = local.sentHash == nil || local.isSentCopy
+    if untouched && (server.sentRevision ?? 0) > base && (mine == local.baseHash || sendShown && mine == local.sentHash) {
+      return (adopt, false)
+    }
     var current = local
     if sendShown {
       current.sentHash = nil
@@ -395,15 +411,23 @@ struct Draft: Codable, Equatable {
     kept.baseRevision = revision
     kept.baseHash = hash
     if local.text == server.text && local.attachments == server.attachments {
-      return settled ? (adopt, false) : (kept, false)
+      guard settled else { return (kept, false) }
+      // Saved as it is: the copy stays this device's sent copy until the server shows the send.
+      if sendShown || local.sentHash == nil { return (adopt, false) }
+      var saved = adopt
+      saved.seq = local.seq
+      saved.sentHash = local.sentHash
+      saved.sentBase = local.sentBase
+      return (saved, false)
     }
     if revision == base { return (current, false) }
     return (kept, true)
   }
-  /// This copy once its send was accepted: emptied if it still holds the sent text.
+  /// This copy once its send was accepted: emptied if it is still the sent copy.
   func sent(_ submission: PendingSubmission) -> Draft {
-    guard text == submission.text && attachments == submission.attachments else { return self }
-    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash, sentBase: sentBase)
+    guard isSentCopy && text == submission.text && attachments == submission.attachments else { return self }
+    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash, sentBase: sentBase,
+      sentSeq: sentSeq)
   }
 }
 /// The server's copy of a draft. Older servers omit the revision fields, which read as 0.
@@ -740,6 +764,128 @@ struct PendingSubmission: Codable, Equatable {
   /// edits were never saved.
   var draftBaseRevision: Int? = nil
   var draft: Draft { Draft(text: text, attachments: attachments) }
+}
+/// A sent message shown in the transcript at once, until Hermes's own copy arrives. It never
+/// changes what was sent or saved: it is drawn only from the pending submission and its receipt.
+/// Ported from the web's src/app/sent-echo.ts.
+struct SentEcho: Equatable {
+  /// Sending: the request is in flight. Unconfirmed: it ended without a receipt.
+  enum Status: Equatable { case sending, unconfirmed, accepted }
+  /// How long an accepted message may stay missing from a conversation that never shows its run.
+  static let patience: TimeInterval = 30
+  var request: PendingSubmission
+  var sender: Sender
+  var sentAt: String
+  /// The last message shown when it was sent. A copy of the same words counts only after it.
+  var after: String?
+  var status: Status
+  var messageId: String?
+  var acceptedAt: Date?
+  /// The conversation has shown activity since Hermes accepted it.
+  var ran = false
+  /// The message drawn from an echo and how far it got.
+  struct Delivery: Equatable {
+    var id: String
+    var status: Status
+  }
+  /// Accepted, it reads as any other message until Hermes's own copy takes its place.
+  var delivery: Delivery? { status == .accepted ? nil : Delivery(id: request.requestId, status: status) }
+
+  /// Whether Hermes's own copy of the message is in the conversation.
+  func shown(in conversation: Conversation) -> Bool {
+    let messages = conversation.messages
+    if messages.contains(where: { $0.id == request.requestId || $0.id == messageId }) { return true }
+    // Hermes names a staged prompt by its request ID. Other rows, such as image-only prompts, are
+    // matched by their words once it accepted them, after the message that was last when it was sent.
+    let text = Self.trimmed(request.text)
+    guard status == .accepted, !text.isEmpty else { return false }
+    var start = 0
+    if let after {
+      // Without its anchor, an older message with the same words could pass for this one.
+      guard let anchor = messages.firstIndex(where: { $0.id == after }) else { return false }
+      start = anchor + 1
+    }
+    return messages[start...].contains {
+      $0.role == "user" && Self.trimmed($0.text) == text && ($0.sender == nil || $0.sender?.id == sender.id)
+    }
+  }
+  /// The echo after the submission, its receipt or the conversation changed. Nil removes it.
+  static func next(_ echo: SentEcho?, pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
+    conversation: Conversation?, sender: Sender?, now: Date) -> SentEcho?
+  {
+    // Another person signed in, or nobody is: nothing of the last one's stays on screen.
+    var next = echo?.sender.id == sender?.id ? echo : nil
+    if let pending, pending.requestId != next?.request.requestId {
+      guard let sender else { return nil }
+      // A live reply's row is replaced as it is saved, so it cannot anchor anything.
+      let anchor: String? = conversation?.botId == pending.botId
+        ? conversation?.messages.last(where: { !$0.id.hasSuffix("-inflight") })?.id : nil
+      next = SentEcho(request: pending, sender: sender, sentAt: Self.timestamp(now), after: anchor, status: .sending)
+    }
+    guard var next else { return nil }
+    if pending?.requestId == next.request.requestId {
+      next.status = sending ? .sending : .unconfirmed
+    } else if next.status != .accepted {
+      // A refused, interrupted or abandoned send leaves only the draft it came from.
+      guard let receipt, receipt.requestId == next.request.requestId, receipt.status == "accepted" else { return nil }
+      next.status = .accepted
+      next.messageId = receipt.messageId
+      next.acceptedAt = now
+    }
+    guard let conversation, conversation.botId == next.request.botId else { return next }
+    if next.shown(in: conversation) { return nil }
+    if next.status != .accepted { return next }
+    // Some prompts are saved only when their run finishes, so the echo stands in until then.
+    if conversation.activity.state.active {
+      next.ran = true
+      return next
+    }
+    return next.ran || now.timeIntervalSince(next.acceptedAt ?? now) > patience ? nil : next
+  }
+  /// The conversation with the echo at its end, as the person's own message. Its ID is the
+  /// request ID, so Hermes's copy, which carries the same ID, takes its place without a flicker.
+  static func transcript(_ conversation: Conversation?, _ echoes: [SentEcho]) -> Conversation? {
+    guard let saved = conversation else { return nil }
+    var conversation = saved
+    // Checked against Hermes's messages only, so one echo never passes for another's copy.
+    for echo in echoes where echo.request.botId == saved.botId && !echo.shown(in: saved) {
+      conversation.messages.append(Message(
+        id: echo.request.requestId, role: "user", text: echo.request.text, createdAt: echo.sentAt,
+        sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments))
+    }
+    return conversation
+  }
+  /// Every echo after a change. A message Hermes accepted stays until its own copy arrives, even
+  /// when another is sent meanwhile, such as guidance after a photo whose row is saved only when
+  /// its run ends.
+  static func nextEchoes(_ echoes: [SentEcho], pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
+    conversation: Conversation?, sender: Sender?, now: Date) -> [SentEcho]
+  {
+    var next = echoes.compactMap { echo in
+      Self.next(echo, pending: pending?.requestId == echo.request.requestId ? pending : nil, receipt: receipt,
+        sending: sending, conversation: conversation, sender: sender, now: now)
+    }
+    // A send gets one echo; once it leaves, the same pending submission never brings it back.
+    if let pending, !echoes.contains(where: { $0.request.requestId == pending.requestId }),
+      let created = Self.next(nil, pending: pending, receipt: receipt, sending: sending, conversation: conversation, sender: sender, now: now)
+    {
+      next.append(created)
+    }
+    return next
+  }
+  /// Whether the composer is showing a draft that is on its way. The echo carries it in the
+  /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
+  /// because a draft and its send are told apart by content until Hermes answers.
+  static func sendingDraft(_ draft: Draft, pending: PendingSubmission?, sending: Bool) -> Bool {
+    guard sending, let pending, draft.isSentCopy else { return false }
+    return draft.text == pending.text && draft.attachments == pending.attachments
+  }
+  private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private static func timestamp(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+  }
 }
 struct AuthConfig: Codable {
   var googleClientId: String?

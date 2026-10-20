@@ -1,5 +1,5 @@
 import type { SavedDraft } from "../shared/types";
-import { draftContent, sameDraft } from "./storage";
+import { draftContent, isSentCopy, sameDraft } from "./storage";
 import type { Draft } from "./storage";
 
 /** Reads a draft response. Someone who never saved a draft, or an older server, is at revision 0. */
@@ -48,8 +48,9 @@ export function mergeDraft(local: Draft, server: SavedDraft, { authoritative = f
   const base = local.baseRevision ?? 0;
   if (!authoritative && server.revision < base) return { draft: local, push: false };
   const hash = contentHash(server);
+  // The server's copy is never this device's sent copy, so the send's sequence comes along to say so.
   const adopt = {
-    draft: { text: server.text, attachments: server.attachments, botId: local.botId, userId: local.userId, baseRevision: server.revision, baseHash: hash, dirty: false },
+    draft: { text: server.text, attachments: server.attachments, botId: local.botId, userId: local.userId, baseRevision: server.revision, baseHash: hash, dirty: false, sentSeq: local.sentSeq },
     push: false,
   };
   // The guard for this device's send lasts until the server shows that send completed.
@@ -62,10 +63,14 @@ export function mergeDraft(local: Draft, server: SavedDraft, { authoritative = f
     return adopt;
   }
   const mine = contentHash(local);
-  if (server.sentRevision > base && (mine === local.baseHash || sendShown && mine === local.sentHash)) return adopt;
+  // Typed since this device's send, the copy is new work whatever words it shares with the send.
+  const untouched = local.sentHash === undefined || isSentCopy(local);
+  if (untouched && server.sentRevision > base && (mine === local.baseHash || sendShown && mine === local.sentHash)) return adopt;
   const current = sendShown ? { ...local, sentHash: undefined, sentBase: undefined } : local;
   if (sameDraft(local, server)) {
-    if (settled) return adopt;
+    // Saved as it is: the copy stays this device's sent copy until the server shows the send.
+    if (settled) return sendShown || local.sentHash === undefined ? adopt
+      : { draft: { ...adopt.draft, seq: local.seq, sentHash: local.sentHash, sentBase: local.sentBase }, push: false };
     return { draft: server.revision === base ? current : { ...current, baseRevision: server.revision, baseHash: hash }, push: false };
   }
   if (server.revision === base) return { draft: current, push: false };

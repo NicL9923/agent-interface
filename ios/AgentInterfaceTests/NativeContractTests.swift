@@ -617,9 +617,12 @@ private final class NativeMockServer: @unchecked Sendable {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-upload-\(UUID().uuidString).txt")
         try Data("Attachment to keep".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
         server.failUploads(true)
+        // As on the web, a message on its way must finish sending before files can be attached.
         value.sending = true
         await value.attach(urls: [file])
+        XCTAssertEqual(value.attachNotice, [AppStore.attachWhileSending]); XCTAssertTrue(value.attachmentUploads.isEmpty)
         value.sending = false
+        await value.attach(urls: [file])
         XCTAssertEqual(value.attachmentUploads.count, 1); XCTAssertNotNil(value.attachmentUploads.first?.error)
         XCTAssertFalse(value.canSend); XCTAssertTrue(value.draft.attachments.isEmpty)
         server.failUploads(false)
@@ -797,6 +800,82 @@ private final class NativeMockServer: @unchecked Sendable {
             if status < 500 { XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "rejected") }
             else { XCTAssertNotNil(value.pending); XCTAssertEqual(value.receipt?.status, "uncertain") }
         }
+    }
+
+    func testASentMessageShowsAtOnceAndHandsItsPlaceToHermessCopy() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/messages"; server.hold(path)
+        let operation = Task { await value.send() }
+        try await server.waitForHeld(path)
+        let requestId = try XCTUnwrap(value.pending?.requestId)
+        XCTAssertTrue(value.sending, "Send keeps spinning until Hermes answers")
+        XCTAssertEqual(value.outgoing, SentEcho.Delivery(id: requestId, status: .sending))
+        XCTAssertEqual(value.transcript?.messages.last?.text, "Send this")
+        XCTAssertEqual(value.turns.last?.id, requestId)
+        XCTAssertTrue(value.sendingDraft, "The composer is read-only while its draft is on its way")
+        XCTAssertEqual(value.composerDraft.text, "", "The transcript shows the message, so the composer reads empty")
+        XCTAssertEqual(value.draft.text, "Send this", "The draft keeps the message until Hermes accepts it")
+        XCTAssertEqual(value.attachUnavailable("bot"), AppStore.attachWhileSending)
+        // The sent copy must stay as sent: a draft and its send are told apart by content.
+        value.editComposer { $0.text = "Typed over" }
+        XCTAssertEqual(value.draft.text, "Send this"); XCTAssertEqual(value.composerDraft.text, "")
+        server.release(path); await operation.value
+        XCTAssertEqual(value.echoes.map(\.status), [.accepted])
+        XCTAssertNil(value.outgoing)
+        XCTAssertEqual(value.transcript?.messages.map(\.id), [requestId], "Accepted, it stands in until Hermes's copy arrives")
+        XCTAssertEqual(value.draft.text, ""); XCTAssertFalse(value.sendingDraft)
+        value.editComposer { $0.text = "Next message" }
+        XCTAssertEqual(value.draft.text, "Next message", "Once the send settles, the composer takes typing again")
+        server.serveHistory([requestId]); await value.refreshConversation()
+        XCTAssertEqual(value.echoes, [])
+        XCTAssertEqual(value.transcript, value.conversation)
+        XCTAssertEqual(value.turns.map(\.id), [requestId])
+    }
+
+    func testSharedItemsWaitInTheInboxUntilASendForThatAssistantSettles() async throws {
+        for refused in [false, true] {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            if refused { server.sendStatus = 413 }
+            let path = "/api/bots/bot/messages"; server.hold(path)
+            let operation = Task { await value.send() }
+            try await server.waitForHeld(path)
+            XCTAssertTrue(value.holdsShared("bot"))
+            XCTAssertFalse(value.addShared(text: "Shared note", botId: "bot"))
+            XCTAssertEqual(value.draft.text, "Send this", "The sent copy is left exactly as sent")
+            server.release(path); await operation.value
+            XCTAssertFalse(value.holdsShared("bot"))
+            XCTAssertTrue(value.addShared(text: "Shared note", botId: "bot"))
+            XCTAssertEqual(value.draft.text, refused ? "Send this\n\nShared note" : "Shared note")
+        }
+    }
+
+    func testARefusedMessageGivesItsDraftBack() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/messages"; server.hold(path)
+        server.sendStatus = 413
+        let operation = Task { await value.send() }
+        try await server.waitForHeld(path)
+        value.editComposer { $0.text = "Typed over" }
+        XCTAssertTrue(value.sendingDraft); XCTAssertEqual(value.composerDraft.text, "")
+        server.release(path); await operation.value
+        XCTAssertFalse(value.sendingDraft)
+        XCTAssertEqual(value.composerDraft.text, "Send this", "The refused message is back in the composer")
+        XCTAssertEqual(value.echoes, []); XCTAssertNil(value.pending)
+        XCTAssertEqual(value.transcript?.messages.isEmpty, true)
+        XCTAssertEqual(value.receipt?.status, "rejected")
+    }
+
+    func testARefusedMessageGoesBackInFrontOfWhatReplacedItsDraftMeanwhile() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/messages"; server.hold(path)
+        server.sendStatus = 413
+        let operation = Task { await value.send() }
+        try await server.waitForHeld(path)
+        // Not the composer: another device's edit or the Share inbox can still change the draft.
+        value.updateDraft(Draft(text: "From the phone"))
+        server.release(path); await operation.value
+        XCTAssertEqual(value.draft.text, "Send this\n\nFrom the phone")
+        XCTAssertEqual(value.draft.dirty, true)
     }
 
     func testInterruptionReviewCannotCarryIntoAnotherRun() async throws {
@@ -1440,6 +1519,59 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft.text, "Second message"); XCTAssertEqual(value.draft.dirty, false)
     }
 
+    func testTheSameWordsTypedRightAfterSendingSurviveTheClearForThatSend() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Send this", revision: 1)
+        value.draft = Draft(text: "Send this", attachments: [], dirty: false, baseRevision: 1)
+        await value.send()
+        XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent")
+        // Typed again, word for word: new work, told apart from the sent copy by its edit.
+        value.editComposer { $0.text = "Send this" }
+        XCTAssertFalse(value.draft.isSentCopy)
+        try await Task.sleep(for: .milliseconds(900))
+        await value.refreshConversation()
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Send this")
+        XCTAssertEqual(value.draft.text, "Send this")
+    }
+
+    func testTheSameWordsTypedAfterTheServerClearedBeforeTheReceiptAreKept() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Send this", revision: 1)
+        value.draft = Draft(text: "Send this", attachments: [], dirty: false, baseRevision: 1)
+        let sendPath = "/api/bots/bot/messages"; server.delayResponse(sendPath)
+        let sending = Task { await value.send() }
+        try await server.waitForDelayed(sendPath)
+        XCTAssertTrue(value.sendingDraft)
+        // A poll brings the server's clear before the receipt: the composer is free again.
+        await value.refreshConversation()
+        XCTAssertEqual(value.draft.text, ""); XCTAssertFalse(value.sendingDraft)
+        value.editComposer { $0.text = "Send this" }
+        XCTAssertEqual(value.composerDraft.text, "Send this")
+        server.releaseResponse(sendPath); await sending.value
+        XCTAssertEqual(value.draft.text, "Send this", "Acceptance empties only the copy that was sent")
+        try await Task.sleep(for: .milliseconds(900))
+        await value.refreshConversation()
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Send this")
+        XCTAssertEqual(value.draft.text, "Send this")
+    }
+
+    func testARetryNeverTakesAnEditedDraftForTheMessageItResends() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.sendStatus = 503
+        await value.send()
+        XCTAssertEqual(value.receipt?.status, "uncertain"); XCTAssertFalse(value.sendingDraft)
+        value.editComposer { $0.text = "Edited meanwhile" }
+        server.sendStatus = 200
+        let path = "/api/bots/bot/messages"; server.hold(path)
+        let retry = Task { await value.send(reviewedUncertain: true) }
+        try await server.waitForHeld(path)
+        // Edited back to the resent words: still the person's own copy, shown and kept.
+        value.editComposer { $0.text = "Send this" }
+        XCTAssertFalse(value.sendingDraft); XCTAssertEqual(value.composerDraft.text, "Send this")
+        server.release(path); await retry.value
+        XCTAssertEqual(value.draft.text, "Send this")
+    }
+
     func testASendBeforeTheLastEditsSavedStillClearsTheServerDraft() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts(text: "Pick up fe", revision: 1)
@@ -1875,6 +2007,35 @@ final class DraftMergeTests: XCTestCase {
         let merged = Draft.merge(offline, with: server("", 3, sent: 3), authoritative: true)
         XCTAssertEqual(merged.draft, copy("Offline note", base: 3, baseHash: hash(""))); XCTAssertTrue(merged.push)
         XCTAssertEqual(Draft.merge(copy(base: nil), with: server("", 1, sent: 1)).draft.text, "Typed here", "A copy without a fingerprint is kept")
+    }
+
+    func testTellsTheSentCopyFromTheSameWordsTypedAgainByEditSequence() {
+        let marked = Draft(text: "Typed here", attachments: [], dirty: true, baseRevision: 3, baseHash: hash("Older"), seq: 5,
+            sentHash: hash("Typed here"), sentBase: 3, sentSeq: 5)
+        let submission = PendingSubmission(requestId: "req", botId: "bot", text: "Typed here", attachments: [], reviewedInterruption: false)
+        XCTAssertTrue(marked.isSentCopy)
+        let cleared = marked.sent(submission)
+        XCTAssertEqual(cleared.text, ""); XCTAssertEqual(cleared.sentSeq, 5); XCTAssertEqual(cleared.seq, 5)
+        var retyped = cleared
+        retyped.text = "Typed here"; retyped.dirty = true; retyped.seq = 6
+        XCTAssertFalse(retyped.isSentCopy)
+        XCTAssertEqual(retyped.sent(submission), retyped)
+        let merged = Draft.merge(retyped, with: server("", 4, sent: 4))
+        XCTAssertEqual(merged.draft.text, "Typed here"); XCTAssertEqual(merged.draft.baseRevision, 4); XCTAssertTrue(merged.push)
+        retyped.text = "Older"
+        XCTAssertEqual(Draft.merge(retyped, with: server("", 4, sent: 4)).draft.text, "Older", "Typed back to its base words: new work too")
+        XCTAssertEqual(Draft.merge(marked, with: server("", 4, sent: 4)).draft.text, "", "Untouched, the sent copy gives way to the clear")
+    }
+
+    func testAnAdoptedClearIsNeverTheSentCopy() {
+        let marked = Draft(text: "Typed here", attachments: [], dirty: false, baseRevision: 3, seq: 5, sentHash: hash("Typed here"), sentBase: 3, sentSeq: 5)
+        let adopted = Draft.merge(marked, with: server("", 4, sent: 4)).draft
+        XCTAssertEqual(adopted.text, ""); XCTAssertEqual(adopted.sentSeq, 5); XCTAssertFalse(adopted.isSentCopy)
+        let saved = Draft.merge(Draft(text: "Typed here", attachments: [], dirty: true, baseRevision: 3, seq: 5,
+            sentHash: hash("Typed here"), sentBase: 3, sentSeq: 5), with: server("Typed here", 4)).draft
+        XCTAssertEqual(saved.dirty, false); XCTAssertTrue(saved.isSentCopy, "Saved as it is, it stays the sent copy until the send shows")
+        let legacy = Draft(text: "Typed here", attachments: [], dirty: true)
+        XCTAssertTrue(legacy.isSentCopy, "A copy from an older version keeps the content-only check")
     }
 
     func testTheTextThisDeviceSentIsDroppedOnceTheServerShowsTheSend() {

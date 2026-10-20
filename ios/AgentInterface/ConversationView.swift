@@ -122,25 +122,25 @@ struct ConversationView: View {
                 loadEarlier(proxy)
               }
           }
-          if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.conversation?.messages.isEmpty == false {
+          // The transcript includes a message still on its way.
+          if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.transcript?.messages.isEmpty == false {
             Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
           }
           if store.conversation == nil {
             ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40)
-          } else if store.conversation?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
+          } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
             VStack(spacing: 14) {
               AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
               Text("Let's discuss your role.").font(.title2.bold())
               Text(bot.description?.isEmpty == false ? bot.description! : "Tell \(bot.name) what you need help with.").foregroundStyle(.secondary)
               Button("Discuss \(bot.name)'s role") {
-                var draft = store.draft
-                draft.text = RoleDiscussion.draft(appendingTo: draft.text, description: bot.description)
-                store.updateDraft(draft); composerFocused = true
+                store.editComposer { $0.text = RoleDiscussion.draft(appendingTo: $0.text, description: bot.description) }
+                composerFocused = true
               }.buttonStyle(.bordered).disabled(!store.draftReady)
               if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
             }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
-          TranscriptTurns(turns: store.turns, advanced: advanced)
+          TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing)
           if ![.idle, .done].contains(store.activity) { liveActivity }
           // Questions and secure requests come before approvals, as on the web.
           ForEach(store.conversation?.attention ?? []) { request in
@@ -318,15 +318,15 @@ struct ConversationView: View {
 struct MessageView: View {
   var message: Message
   var continued = false
+  /// Set while the person's sent message is on its way: faint while sending, with its progress
+  /// in place of the time.
+  var delivery: SentEcho.Status? = nil
   @Environment(\.unobservedStore) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       if !continued && !message.isAgentExchange && (!label.isEmpty || message.createdAt != nil) {
-        HStack(spacing: 12) {
-          if !label.isEmpty { Text(label).font(.caption.weight(.semibold)) }
-          if let date = message.createdAt { WhenText(value: date).font(.caption2) }
-        }.foregroundStyle(.secondary)
+        attribution
       }
       if message.isAgentExchange {
         AgentExchangeView(message: message, recipient: store?.bot?.name ?? "Assistant")
@@ -338,12 +338,45 @@ struct MessageView: View {
       message.role == "user" && !message.isAgentExchange ? Palette.user(scheme) : Color.clear,
       in: RoundedRectangle(cornerRadius: 14)
     ).padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
+      .modifier(SendingMessage(delivery: delivery))
       .accessibilityElement(children: .contain)
+  }
+  private var attribution: some View {
+    HStack(spacing: 12) {
+      if !label.isEmpty { Text(label).font(.caption.weight(.semibold)) }
+      if let delivery {
+        Text(delivery == .sending ? "Sending…" : "Not confirmed yet").font(.caption2)
+          .foregroundStyle(delivery == .unconfirmed ? AnyShapeStyle(Palette.attention) : AnyShapeStyle(.secondary))
+      } else if let date = message.createdAt { WhenText(value: date).font(.caption2) }
+    }.foregroundStyle(.secondary)
   }
   private var label: String {
     message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
       ?? (message.isInternalActivity ? message.presentationOrigin?.title ?? message.activityGroup : message.role == "assistant"
         ? "" : message.role == "tool" ? message.toolName ?? "Tool" : message.role.capitalized)
+  }
+}
+/// A sent message rises into the transcript at once, faint until Hermes accepts it, as on the web.
+private struct SendingMessage: ViewModifier {
+  var delivery: SentEcho.Status?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  /// False only for the first frame of a message that appears on its way.
+  @State private var risen: Bool
+  init(delivery: SentEcho.Status?) {
+    self.delivery = delivery
+    _risen = State(initialValue: delivery == nil)
+  }
+  func body(content: Content) -> some View {
+    let rising = delivery != nil && !risen && !reduceMotion
+    content
+      .opacity(rising ? 0 : delivery == .sending ? 0.66 : 1)
+      .scaleEffect(rising ? 0.96 : 1, anchor: .bottomTrailing)
+      .offset(y: rising ? 14 : 0)
+      .animation(.easeInOut(duration: 0.24), value: delivery)
+      .onAppear {
+        guard !risen else { return }
+        if reduceMotion { risen = true } else { withAnimation(.spring(duration: 0.38, bounce: 0.3)) { risen = true } }
+      }
   }
 }
 /// A message between assistants, as the web's AgentExchange shows it.

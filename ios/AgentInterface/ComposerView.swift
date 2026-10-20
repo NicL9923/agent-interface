@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 struct ComposerView: View {
   var bot: Bot
   @Binding var focused: Bool
-  /// Called after a send, so the transcript can follow the new message.
+  /// Called when Send is pressed, so the transcript can follow the new message.
   var onSent: () -> Void
   @EnvironmentObject private var store: AppStore
   @Environment(\.colorScheme) private var scheme
@@ -59,26 +59,26 @@ struct ComposerView: View {
       .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
   }
   private var input: some View {
+    // While a message is on its way the transcript shows it, so the box reads empty and is
+    // read-only until Hermes answers. It keeps focus, so the next message can start at once.
     ComposerTextView(
       text: Binding(
-        get: { store.draft.text },
-        set: {
-          var value = store.draft
-          value.text = $0
-          store.updateDraft(value)
-        }),
-      label: "Message \(bot.name)", editable: store.draftReady, focused: $focused,
+        get: { store.composerDraft.text },
+        set: { text in store.editComposer { $0.text = text } }),
+      label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
       onPasteImages: { images in Task { await store.attach(images: images, named: "Pasted image") } }
     )
     .overlay(alignment: .topLeading) {
-      if store.draft.text.isEmpty {
-        Text(store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…")
-          .foregroundStyle(.tertiary).allowsHitTesting(false).accessibilityHidden(true)
+      if store.composerDraft.text.isEmpty {
+        Text(placeholder).foregroundStyle(.tertiary).allowsHitTesting(false).accessibilityHidden(true)
       }
     }
     .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16))
     .opacity(store.draftReady ? 1 : 0.6)
+  }
+  private var placeholder: String {
+    store.sendingDraft ? "Sending…" : store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…"
   }
   private var tools: some View {
     HStack(alignment: .center, spacing: 8) {
@@ -132,8 +132,8 @@ struct ComposerView: View {
     } else if store.draft.text.utf16.count > AppStore.maxMessageLength {
       Text("Messages can contain up to 50,000 characters.").font(.caption).foregroundStyle(.red)
     }
-    // A loading draft already shows as a dimmed message box.
-    if let reason = store.attachUnavailable(bot.id), reason != "Your draft is still loading." {
+    // A loading draft already shows as a dimmed message box, and a send as its spinning button.
+    if let reason = store.attachUnavailable(bot.id), reason != "Your draft is still loading.", reason != AppStore.attachWhileSending {
       Text(reason).font(.caption).foregroundStyle(.secondary)
     }
     if !store.supports("chat") {
@@ -158,11 +158,10 @@ struct ComposerView: View {
     }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
   }
   private func send() {
-    Task {
-      await store.send()
-      focused = false
-      onSent()
-    }
+    // The message shows in the transcript at once, so the transcript follows it now. The box keeps
+    // focus, as on the web, so the next message can start as soon as this one settles.
+    onSent()
+    Task { await store.send() }
   }
   private func stop() {
     guard !stopping else { return }
@@ -190,9 +189,7 @@ struct ComposerView: View {
       defer { dropped.cleanUp() }
       guard scope == store.scope, store.selectedBotId == botId else { return }
       if !dropped.text.isEmpty, store.draftReady {
-        var next = store.draft
-        next.text += (next.text.isEmpty ? "" : "\n") + dropped.text.joined(separator: "\n")
-        store.updateDraft(next)
+        store.editComposer { $0.text += ($0.text.isEmpty ? "" : "\n") + dropped.text.joined(separator: "\n") }
       }
       if !dropped.images.isEmpty { await store.attach(images: dropped.images, named: "Pasted image") }
       if !dropped.files.isEmpty { await store.attach(urls: dropped.files) }

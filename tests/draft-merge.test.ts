@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { contentHash, mergeDraft, savedDraft } from "../src/app/draft-merge";
-import { sameDraft, sentCopy } from "../src/app/storage";
+import { isSentCopy, sameDraft, sentCopy } from "../src/app/storage";
 import type { SavedDraft } from "../src/shared/types";
 
 const server = (text: string, revision: number, sentRevision = 0): SavedDraft =>
@@ -101,6 +101,49 @@ describe("draft merge", () => {
     expect(sentCopy({ ...local, baseRevision: 3, baseHash: "h", sentHash: "s" }, sent)).toEqual({ text: "", attachments: [], botId: "ranch", userId: "one", baseRevision: 3, baseHash: "h", sentHash: "s" });
     const more = { ...local, text: "More", dirty: true, baseRevision: 3 };
     expect(sentCopy(more, sent)).toBe(more);
+  });
+
+  it("tells the sent copy from the same words typed again by edit sequence", () => {
+    const sent = { text: "Typed here", attachments: [] };
+    const marked = { ...local, dirty: true, seq: 5, baseRevision: 3, baseHash: contentHash({ text: "Older", attachments: [] }),
+      sentHash: contentHash(sent), sentBase: 3, sentSeq: 5 };
+    expect(isSentCopy(marked)).toBe(true);
+    const cleared = sentCopy(marked, sent);
+    expect(cleared).toMatchObject({ text: "", seq: 5, sentSeq: 5, sentHash: marked.sentHash });
+    // Typed again in the same words after acceptance: kept, and pushed over the server's clear.
+    const retyped = { ...cleared, text: "Typed here", dirty: true, seq: 6 };
+    expect(isSentCopy(retyped)).toBe(false);
+    expect(sentCopy(retyped, sent)).toBe(retyped);
+    expect(mergeDraft(retyped, server("", 4, 4))).toMatchObject({ draft: { text: "Typed here", baseRevision: 4 }, push: true });
+    // Typed back to the copy's base words: new work too.
+    expect(mergeDraft({ ...retyped, text: "Older" }, server("", 4, 4))).toMatchObject({ draft: { text: "Older" }, push: true });
+    // Untouched, the sent copy still gives way to the server's clear.
+    expect(mergeDraft(marked, server("", 4, 4)).draft).toMatchObject({ text: "", baseRevision: 4 });
+  });
+
+  it("frees a copy the server cleared before the receipt, so the same words typed next are kept", () => {
+    const sent = { text: "Typed here", attachments: [] };
+    const marked = { ...local, seq: 5, baseRevision: 3, sentHash: contentHash(sent), sentBase: 3, sentSeq: 5 };
+    const adopted = mergeDraft(marked, server("", 4, 4)).draft;
+    expect(adopted).toMatchObject({ text: "", sentSeq: 5 });
+    expect(isSentCopy(adopted)).toBe(false);
+    const typed = { ...adopted, text: "Typed here", dirty: true, seq: 7 };
+    expect(sentCopy(typed, sent)).toBe(typed);
+  });
+
+  it("keeps a saved sent copy as the sent copy until the server shows the send", () => {
+    const sent = { text: "Typed here", attachments: [] };
+    const marked = { ...local, dirty: true, seq: 5, baseRevision: 3, sentHash: contentHash(sent), sentBase: 3, sentSeq: 5 };
+    const saved = mergeDraft(marked, server("Typed here", 4)).draft;
+    expect(saved).toMatchObject({ dirty: false, baseRevision: 4 });
+    expect(isSentCopy(saved)).toBe(true);
+    expect(sentCopy(saved, sent).text).toBe("");
+  });
+
+  it("keeps the content-only check for a copy marked by an older version", () => {
+    const sent = { text: "Typed here", attachments: [] };
+    expect(sentCopy({ ...local, dirty: true }, sent).text).toBe("");
+    expect(sentCopy({ ...local, sentHash: contentHash(sent), sentBase: 3 }, sent).text).toBe("");
   });
 
   it("fingerprints and compares attachments regardless of their field order", () => {

@@ -24,6 +24,12 @@ export type Draft = {
   sentHash?: string;
   /** The revision that send was written on; a `sentRevision` past it shows the send completed. */
   sentBase?: number;
+  /**
+   * The edit sequence of the copy this device last sent. A copy whose `seq` still matches, while
+   * `sentHash` marks the send as open, is that copy. Anything typed since, or the server's copy
+   * adopted since, is new work even in the same words. Kept after the send completes.
+   */
+  sentSeq?: number;
 };
 // A file still on its way to Hermes. It joins the draft's attachments once uploaded.
 export type LocalUpload = {
@@ -73,10 +79,17 @@ export const draftContent = (draft: Pick<Draft, "text" | "attachments">) =>
   JSON.stringify([draft.text, draft.attachments.map(file => [file.id, file.name, file.mime, file.size ?? null, file.url ?? null])]);
 export const sameDraft = (a: Pick<Draft, "text" | "attachments">, b: Pick<Draft, "text" | "attachments">) =>
   draftContent(a) === draftContent(b);
-/** This device's copy once its send was accepted: emptied if it still holds the sent text. */
+/**
+ * Whether this copy may be the one this device sent, untouched since. Drafts are compared by
+ * content on the server, so only the edit sequence can tell the sent copy from the same words
+ * typed again. A copy from an older version has no sequence and keeps the content-only check.
+ */
+export const isSentCopy = (draft: Draft) =>
+  draft.sentSeq === undefined || draft.sentHash !== undefined && (draft.seq ?? 0) === draft.sentSeq;
+/** This device's copy once its send was accepted: emptied if it is still the sent copy. */
 export function sentCopy(draft: Draft, submission: Pick<Pending, "text" | "attachments">): Draft {
-  return sameDraft(draft, submission)
-    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, baseHash: draft.baseHash, sentHash: draft.sentHash, sentBase: draft.sentBase, seq: draft.seq }
+  return isSentCopy(draft) && sameDraft(draft, submission)
+    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, baseHash: draft.baseHash, sentHash: draft.sentHash, sentBase: draft.sentBase, sentSeq: draft.sentSeq, seq: draft.seq }
     : draft;
 }
 export function clearSavedDraft(user: string, submission: Pending) {

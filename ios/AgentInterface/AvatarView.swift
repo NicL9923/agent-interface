@@ -67,6 +67,10 @@ enum AvatarMotion {
   static let celebration = 1.8
   static let workCycle = 3.8
   static let workSpin = 0.95
+  /// One thinking loop: ponder one way, glance the other, then a beat (an idea or a tumble).
+  static let thinkCycle = 6.4
+  /// Seconds between idle gestures, on average.
+  static let idleGesture = 9.0
   /// Radius of the imaginary sphere the face is painted on, in body units.
   static let faceRadius = 42.0
   static let expressionTime = 0.09
@@ -107,6 +111,14 @@ enum AvatarMotion {
     var trails = 0.0
     var sweep = 0.0
     var symbolTilt = 0.0
+    /// Vertical turn of the face, in radians; a full turn rolls the eyes over the top and back.
+    var pitch = 0.0
+    /// Momentary eye size, for a pop of surprise.
+    var eyeScale = 1.0
+    /// Emphasis marks beside the head, from 0 (none) to 1.
+    var ticks = 0.0
+    /// Which side the marks appear on: -1 left, 1 right.
+    var tickSide = 1.0
   }
   static let restingPose = Pose()
 
@@ -142,6 +154,116 @@ enum AvatarMotion {
     let from = target(segment - 1)
     let to = target(segment)
     return (from.0 + (to.0 - from.0) * blend, from.1 + (to.1 - from.1) * blend)
+  }
+
+  /// 0 to 1 over [start, end], eased.
+  static func span(_ t: Double, _ start: Double, _ end: Double) -> Double {
+    smoothstep((t - start) / (end - start))
+  }
+  /// Up then back down over [start, end]: 0 at both ends, 1 in the middle.
+  static func hump(_ t: Double, _ start: Double, _ end: Double) -> Double {
+    t <= start || t >= end ? 0 : sin(Double.pi * (t - start) / (end - start))
+  }
+
+  /// Thinking: eyes shrink to dots and look up to one side, then dart to the other with the body
+  /// following a beat later. Each loop ends in a beat: a squash and pop of wide eyes with
+  /// emphasis marks (an idea), or every other loop a hop that rolls the face over the top.
+  static func thinkPose(_ start: Pose, _ t: Double) -> Pose {
+    var pose = start
+    let k = floor(t / thinkCycle)
+    let u = t - k * thinkCycle
+    let even = k.truncatingRemainder(dividingBy: 2) == 0
+    // Sides alternate, so each loop starts where the last one looked.
+    let first = even ? 1.0 : -1.0
+    // The eyes switch sides in 0.14 s; the head follows over 0.4 s.
+    let eyes = first * (1 - 2 * span(u, 3.2, 3.34))
+    let head = first * (1 - 2 * span(u, 3.26, 3.66))
+    let drift = sin(t * 1.1)
+    pose.gazeX = eyes * (0.5 + 0.12 * drift)
+    pose.gazeY = -0.8 + 0.08 * sin(t * 0.9)
+    pose.yaw = head * 0.2
+    pose.roll = head * 5 + drift * 1.2
+    let b = sin(t * 2.1)
+    pose.scaleY *= 1 + 0.016 * b
+    pose.scaleX *= 1 - 0.01 * b
+    pose.lift = -1.5 - b
+    // Both beats start from a squash that gathers the body.
+    let squash = hump(u, 5.0, 5.42)
+    pose.scaleY *= 1 - 0.08 * squash
+    pose.scaleX *= 1 + 0.05 * squash
+    if even {
+      let pop = hump(u, 5.3, 5.85)
+      pose.scaleY *= 1 + 0.07 * pop
+      pose.scaleX *= 1 - 0.035 * pop
+      pose.lift -= 4 * pop
+      // The idea lands facing forward with wide eyes, marks on the side it was looking.
+      let forward = span(u, 5.25, 5.5) * (1 - span(u, 6.05, 6.4))
+      pose.gazeX *= 1 - 0.8 * forward
+      pose.gazeY += 0.55 * forward
+      pose.yaw *= 1 - forward
+      pose.roll *= 1 - 0.7 * forward
+      pose.eyeScale = u < 5.3 ? 1 : 1 + 0.22 * pow(hump(u, 5.3, 6.3), 0.6)
+      pose.ticks = u < 5.32 ? 0 : popIn((u - 5.32) / 0.3) * (1 - span(u, 5.95, 6.3))
+      pose.tickSide = -first
+    } else {
+      let s = clamp((u - 5.3) / 0.8)
+      pose.pitch = tau * easeInOut(s)
+      pose.lift -= 3.5 * sin(Double.pi * s)
+      pose.gazeY *= 1 - hump(u, 5.3, 6.1)
+    }
+    return pose
+  }
+
+  /// A per-avatar offset, so avatars that settle together do not gesture in step.
+  static func motionSeed(_ name: String) -> Double {
+    var seed = 0
+    for unit in name.utf16 { seed = (seed * 31 + Int(unit)) % 997 }
+    return Double(seed)
+  }
+  /// Now and then an idle avatar does something small: a curious head tilt, a peek to one side,
+  /// a hop, or a double take with emphasis marks. Each lasts about 1.4 s.
+  static func idleGesturePose(_ start: Pose, _ t: Double, seed: Double) -> Pose {
+    var pose = start
+    let clock = t + seed
+    let j = floor(clock / idleGesture)
+    let begin = j * idleGesture + 3 + hash(j + 5) * 3
+    let g = clock - begin
+    // Nothing while the arrival settles, and nothing outside the gesture.
+    if t < 2 || g < 0 || g > 1.4 { return pose }
+    let side = hash(j + 11) < 0.5 ? -1.0 : 1.0
+    let e = span(g, 0, 0.25) * (1 - span(g, 1.05, 1.4))
+    switch Int(floor(hash(j + 17) * 4)) {
+    case 0:  // A curious tilt toward one side, eyes a little wider.
+      pose.roll += side * 13 * e
+      pose.gazeX += (side * 0.6 - pose.gazeX) * e
+      pose.gazeY += (-0.3 - pose.gazeY) * e
+      pose.eyeScale = 1 + 0.12 * e
+    case 1:  // A peek: the head turns a quarter so the far eye shrinks.
+      pose.yaw += (side * 0.55 - pose.yaw) * e
+      pose.gazeX += (side * 0.9 - pose.gazeX) * e
+      pose.shiftX += side * 1.5 * e
+    case 2:  // A hop: gather, spring up, land.
+      let gather = hump(g, 0, 0.22) + hump(g, 0.62, 0.86)
+      let air = hump(g, 0.18, 0.66)
+      pose.scaleY *= 1 - 0.09 * gather + 0.06 * air
+      pose.scaleX *= 1 + 0.06 * gather - 0.03 * air
+      pose.lift -= 7 * air
+      pose.eyeScale = 1 + 0.1 * air
+      pose.blink = 1
+    default:  // A double take: a glance, back, then wide eyes and marks.
+      let glance = hump(g, 0, 0.3)
+      pose.gazeX += (side * 0.9 - pose.gazeX) * glance
+      pose.yaw += side * 0.25 * glance
+      let take = span(g, 0.32, 0.42) * (1 - span(g, 1.05, 1.4))
+      let fade = 1 - span(g, 1.05, 1.4)
+      pose.eyeScale = g < 0.32 ? 1 : 1 + 0.26 * popIn((g - 0.32) / 0.25) * fade
+      pose.gazeX *= 1 - take
+      pose.lift -= 2.5 * hump(g, 0.32, 0.6)
+      pose.ticks = g < 0.36 ? 0 : popIn((g - 0.36) / 0.3) * (1 - span(g, 0.95, 1.3))
+      pose.tickSide = side
+      pose.blink = 1
+    }
+    return pose
   }
 
   /// A short damped "boop" that acknowledges every state change.
@@ -200,9 +322,9 @@ enum AvatarMotion {
     return pose
   }
 
-  static func pose(_ state: ActivityState, _ t: Double, reduce: Bool, prop: AvatarProp? = nil)
-    -> Pose
-  {
+  static func pose(
+    _ state: ActivityState, _ t: Double, reduce: Bool, prop: AvatarProp? = nil, seed: Double = 0
+  ) -> Pose {
     if reduce || frozenStates.contains(state) { return restingPose }
     let pop = arrival(t)
     var pose = Pose(scaleX: pop, scaleY: pop, blink: blinkAt(t))
@@ -216,14 +338,16 @@ enum AvatarMotion {
     case .idle:
       let b = breathe(1.7, 0.012)
       let w = wander(t)
+      // The eyes lead; the head turns and leans after them.
+      let lag = wander(t - 0.18)
       pose.lift = -0.6 * b
-      pose.roll = sin(t * 0.55) * 1.6
+      pose.roll = sin(t * 0.55) * 1.6 + lag.x * 2.5
       pose.gazeX = w.x
       pose.gazeY = w.y
-      pose.yaw = w.x * 0.16
+      pose.yaw = lag.x * 0.2
+      return idleGesturePose(pose, t, seed: seed)
     case .thinking:
-      pose.gazeX = sin(t * 1.3) * 0.5
-      pose.gazeY = -0.8
+      return thinkPose(pose, t)
     case .working:
       if let prop { return propPose(pose, prop, t) }
       let u = t.truncatingRemainder(dividingBy: workCycle)
@@ -261,7 +385,9 @@ enum AvatarMotion {
         pose.roll = 14 * sin(s * tau * 1.5) * (1 - s)
         pose.scaleY *= 1 - 0.06 * sin(tau * 2 * s) * (1 - s)
         pose.blink = 1
+        pose.ticks = s < 0.82 ? 0 : popIn((t - celebration * 0.82) / 0.3)
       } else {
+        pose.ticks = 1 - span(t, celebration + 0.3, celebration + 0.7)
         let b = breathe(1.5, 0.012)
         pose.lift = -0.5 * b
         pose.roll = sin(t * 0.7) * 2
@@ -285,21 +411,33 @@ enum AvatarMotion {
     var happy: Double
     /// Mascot mouth curve: -1 frown, 0 flat, 1 smile.
     var mouth: Double
+    /// 0 = the style's own eyes, 1 = small round dots, as when concentrating.
+    var dot: Double
+  }
+  /// Whether a thinking avatar is in the wide-eyed beat of an idea at `t`.
+  static func ideaBeat(at t: Double) -> Bool {
+    let u = t.truncatingRemainder(dividingBy: thinkCycle)
+    return floor(t / thinkCycle).truncatingRemainder(dividingBy: 2) == 0 && u > 5.2 && u < 6.1
   }
   static func expression(for state: ActivityState, at t: Double) -> Expression {
     switch state {
-    case .working: Expression(open: 0.82, tilt: 0, happy: 0, mouth: 0.3)
-    case .waiting: Expression(open: 0.36, tilt: 0, happy: 0, mouth: 0)
-    case .blocked: Expression(open: 1.1, tilt: 0, happy: 0, mouth: -0.2)
+    case .thinking:
+      // Dots while pondering; the idea beat opens them wide again.
+      let idea = ideaBeat(at: t)
+      return Expression(
+        open: idea ? 1.1 : 1, tilt: 0, happy: 0, mouth: idea ? 0.9 : 0.1, dot: idea ? 0 : 1)
+    case .working: return Expression(open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0)
+    case .waiting: return Expression(open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0)
+    case .blocked: return Expression(open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0)
     case .done:
-      t < celebration * 0.75
-        ? Expression(open: 1.1, tilt: 0, happy: 0, mouth: 1)
-        : Expression(open: 1, tilt: 0, happy: 1, mouth: 1)
-    case .failed: Expression(open: 0.62, tilt: 14, happy: 0, mouth: -1)
-    case .disconnected: Expression(open: 0.7, tilt: 0, happy: 0, mouth: 0)
-    case .interrupted: Expression(open: 0.5, tilt: 0, happy: 0, mouth: 0)
-    case .unknown: Expression(open: 1, tilt: 0, happy: 0, mouth: 0)
-    case .idle, .thinking: Expression(open: 1, tilt: 0, happy: 0, mouth: 0.6)
+      return t < celebration * 0.75
+        ? Expression(open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0)
+        : Expression(open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0)
+    case .failed: return Expression(open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0)
+    case .disconnected: return Expression(open: 0.7, tilt: 0, happy: 0, mouth: 0, dot: 0)
+    case .interrupted: return Expression(open: 0.5, tilt: 0, happy: 0, mouth: 0, dot: 0)
+    case .unknown: return Expression(open: 1, tilt: 0, happy: 0, mouth: 0, dot: 0)
+    case .idle: return Expression(open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0)
     }
   }
   /// Frame-rate independent approach toward a target expression.
@@ -309,35 +447,57 @@ enum AvatarMotion {
       open: current.open + (target.open - current.open) * k,
       tilt: current.tilt + (target.tilt - current.tilt) * k,
       happy: current.happy + (target.happy - current.happy) * k,
-      mouth: current.mouth + (target.mouth - current.mouth) * k)
+      mouth: current.mouth + (target.mouth - current.mouth) * k,
+      dot: current.dot + (target.dot - current.dot) * k)
   }
-  /// The closed form of repeatedly applying `approach` from `start` since the state change,
-  /// including the done state's switch to happy eyes partway through its celebration.
+  /// Moments in (from, to) when a state's target expression changes: the done state's switch
+  /// to happy eyes, and each wide-eyed idea beat of a thinking loop.
+  static func expressionSwitches(_ state: ActivityState, from: Double, to: Double) -> [Double] {
+    var edges: [Double] = []
+    switch state {
+    case .done: edges = [celebration * 0.75]
+    case .thinking:
+      let loop = 2 * thinkCycle
+      var k = max(0, floor((from - 6.1) / loop))
+      while k * loop + 5.2 < to {
+        edges += [k * loop + 5.2, k * loop + 6.1]
+        k += 1
+      }
+    default: break
+    }
+    return edges.filter { $0 > from && $0 < to }
+  }
+  /// The closed form of repeatedly applying `approach` from `start` since the state change.
+  /// The target holds between its switches, so each stretch approaches its own target. Only
+  /// the last few seconds matter, because the approach forgets the start within a second.
   static func expression(from start: Expression, toward state: ActivityState, after t: Double)
     -> Expression
   {
-    let flip = celebration * 0.75
-    if state == .done && t > flip {
-      let middle = approach(start, expression(for: .done, at: 0), flip)
-      return approach(middle, expression(for: .done, at: flip), t - flip)
+    var from = 0.0
+    var current = start
+    if t > 4 {
+      from = t - 4
+      current = expression(for: state, at: from)
     }
-    return approach(start, expression(for: state, at: t), t)
+    for edge in expressionSwitches(state, from: from, to: t) + [t] {
+      let target = expression(for: state, at: (from + edge) / 2)
+      current = approach(current, target, edge - from)
+      from = edge
+    }
+    return current
   }
 
-  /// How far the body has turned into the thinking dots or the blocked exclamation.
+  /// How far the body has turned into the blocked exclamation.
   struct Morph: Equatable {
-    var dots: Double
     var bang: Double
   }
   static func morphTarget(_ state: ActivityState) -> Morph {
-    Morph(dots: state == .thinking ? 1 : 0, bang: state == .blocked ? 1 : 0)
+    Morph(bang: state == .blocked ? 1 : 0)
   }
   static func morph(from start: Morph, toward state: ActivityState, after t: Double) -> Morph {
     let target = morphTarget(state)
     let k = exp(-t / morphTime)
-    return Morph(
-      dots: target.dots + (start.dots - target.dots) * k,
-      bang: target.bang + (start.bang - target.bang) * k)
+    return Morph(bang: target.bang + (start.bang - target.bang) * k)
   }
 
   struct Projection: Equatable {
@@ -351,6 +511,35 @@ enum AvatarMotion {
     let angle = yaw + asin(clamp(dx / radius, -1, 1))
     let depth = cos(angle)
     return Projection(x: radius * sin(angle), scale: max(depth, 0.02), visible: depth > 0.02)
+  }
+  /// The eyes' height on the face sphere turned by `pitch`: `y` from the face center, the
+  /// vertical squash, and whether they face the viewer. A full turn rolls them over the top.
+  struct PitchProjection: Equatable {
+    var y: Double
+    var scale: Double
+    var visible: Bool
+  }
+  static func pitchEyes(_ pitch: Double, radius: Double = faceRadius) -> PitchProjection {
+    let depth = cos(pitch)
+    return PitchProjection(y: -radius * sin(pitch), scale: max(depth, 0.02), visible: depth > 0.02)
+  }
+  /// Near features look a little larger than far ones as the face turns.
+  static func perspective(_ depth: Double) -> Double { 0.86 + 0.14 * depth }
+  /// Emphasis marks: three short strokes fanning out from beside the top of the head on `side`,
+  /// growing with `level`. Returned as path data in avatar units, as on the web.
+  static func tickMarks(level: Double, side: Double, top: Double) -> [String] {
+    if level <= 0.01 { return [] }
+    let cx = 50 + side * 34
+    let cy = max(top, 4) + 8
+    return [-84.0, -52, -20].map { degrees in
+      let a = degrees * Double.pi / 180
+      let dx = cos(a) * side
+      let dy = sin(a)
+      let r0 = 6 + 3 * level
+      let r1 = r0 + 9 * level
+      func f(_ v: Double) -> String { String(format: "%.2f", v) }
+      return "M\(f(cx + dx * r0)) \(f(cy + dy * r0)) L\(f(cx + dx * r1)) \(f(cy + dy * r1))"
+    }
   }
 
   /// Splits a trail segment on a tilted orbit into the arcs behind and in front of the body,
@@ -460,7 +649,7 @@ enum AvatarMotion {
   /// `prop` is the tool the caller wants held and `propSince` when it last changed.
   static func frame(
     _ snapshot: Snapshot, at date: Date, still: Bool, prop: AvatarProp? = nil,
-    propSince: Date = .distantPast
+    propSince: Date = .distantPast, seed: Double = 0
   ) -> Frame {
     let state = snapshot.state
     let held = state == .working ? prop : nil
@@ -470,7 +659,7 @@ enum AvatarMotion {
         morph: morphTarget(state), trailLevel: 0, sweep: 0, prop: held)
     }
     let t = max(0, date.timeIntervalSince(snapshot.since))
-    let pose = self.pose(state, t, reduce: false, prop: held)
+    let pose = self.pose(state, t, reduce: false, prop: held, seed: seed)
     let carry = snapshot.carry * (1 - smoothstep(t / 0.6))
     return Frame(
       t: t, pose: pose, expression: expression(from: snapshot.expression, toward: state, after: t),
@@ -481,9 +670,9 @@ enum AvatarMotion {
   }
   static func next(
     _ snapshot: Snapshot, to state: ActivityState, at date: Date, still: Bool,
-    prop: AvatarProp? = nil
+    prop: AvatarProp? = nil, seed: Double = 0
   ) -> Snapshot {
-    let current = frame(snapshot, at: date, still: still, prop: prop)
+    let current = frame(snapshot, at: date, still: still, prop: prop, seed: seed)
     return Snapshot(
       state: state, since: date, expression: current.expression, morph: current.morph,
       carry: current.trailLevel, carrySweep: current.sweep)
@@ -882,13 +1071,14 @@ struct AvatarArtwork {
   var still: Bool
   var body: Path
   var bodyColor: Color
+  /// The avatar's point size. Emphasis marks are lost at list sizes, so only larger ones draw them.
+  var size: Double = 48
 
   func draw(_ root: GraphicsContext) {
     let pose = frame.pose
     let face = frame.expression
-    let dots = frame.morph.dots
     let bang = frame.morph.bang
-    let symbolic = max(dots, bang)
+    let symbolic = bang
     let mascot = avatar.mode == "mascot"
     let family = avatar.family ?? "sprout"
     let colorHex = avatar.color ?? "#1084FE"
@@ -908,6 +1098,19 @@ struct AvatarArtwork {
     let eyeOffset = (mascot ? 17 : 15) * eyeSpacing * eyeScale
     let center = AvatarMotion.project(pose.gazeX * 2, yaw: pose.yaw)
     let open = max(face.open * pose.blink * eyeHeight * eyeScale, 0.04)
+    // A pitched face rolls everything painted on it, eyes and muzzle alike, around the sphere.
+    let roll = AvatarMotion.pitchEyes(pose.pitch)
+    // Dots replace pills outright; other eye styles shrink toward a dot instead.
+    let drawsPill = !(mascot && (eyes == "oval" || eyes == "round")) && !["spark", "visor", "round"].contains(eyes)
+    let dotShrink = drawsPill ? 1 + 0.12 * face.dot : 1 - 0.3 * face.dot
+    let pillHeight = 25 - 14 * face.dot
+    // A smaller extra hat leaves the seasonal character's ears, cap and antlers visible.
+    let hatAnchor: AvatarGeometry.Anchor = switch seasonal ? family : "" {
+    case "santa": .init(cy: anchor.cy, scale: anchor.scale, top: -3, hat: 0.45)
+    case "rudolph": .init(cy: anchor.cy, scale: anchor.scale, top: 24, hat: 0.45)
+    case "bunny": .init(cy: anchor.cy, scale: anchor.scale, top: 31, hat: 0.4)
+    default: anchor
+    }
     let round = StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
     func stroke(_ width: Double) -> StrokeStyle {
       var style = round
@@ -983,8 +1186,12 @@ struct AvatarArtwork {
 
         var faceLayer = layer
         faceLayer.clip(to: body)
+        // The clip stays on the body while the painted face rolls beneath it.
+        faceLayer.translateBy(x: 0, y: anchor.cy + roll.y)
+        faceLayer.scaleBy(x: 1, y: roll.scale)
+        faceLayer.translateBy(x: 0, y: -anchor.cy)
         let dark = Color(hex: "#2b201b")
-        if mascot && center.visible {
+        if mascot && center.visible && roll.visible {
           var muzzle = faceLayer
           muzzle.translateBy(x: 50 + center.x, y: 0)
           muzzle.scaleBy(x: center.scale, y: 1)
@@ -1013,7 +1220,7 @@ struct AvatarArtwork {
             }
           }
         }
-        if mascot {
+        if mascot && roll.visible {
           for direction in [-1.0, 1.0] {
             let p = AvatarMotion.project(direction * 27, yaw: pose.yaw)
             guard p.visible else { continue }
@@ -1024,17 +1231,20 @@ struct AvatarArtwork {
               with: .color(Color(hex: "#ff7a8a")))
           }
         }
-        for direction in [-1.0, 1.0] {
+        for direction in roll.visible ? [-1.0, 1.0] : [] {
           let p = AvatarMotion.project(direction * eyeOffset + pose.gazeX * 4, yaw: pose.yaw)
           guard p.visible else { continue }
           let side = -direction
+          // Near eyes read a little larger as the face turns, and a pop of surprise grows both.
+          let grow = AvatarMotion.perspective(p.scale) * pose.eyeScale * dotShrink
           var eye = faceLayer
           eye.translateBy(x: 50 + p.x, y: eyeY)
           if face.happy < 0.999 {
             var shape = eye
             shape.opacity = 1 - face.happy
-            shape.scaleBy(
-              x: p.scale * eyeWidth * eyeScale * (1 + (1 - min(face.open, 1)) * 0.4), y: open)
+            let squint = 1 + (1 - min(face.open, 1)) * 0.4
+            let widthScale = p.scale * eyeWidth * eyeScale * grow * squint
+            shape.scaleBy(x: widthScale, y: open * grow)
             if mascot && (eyes == "oval" || eyes == "round") {
               shape.fill(
                 AvatarArt.ellipse(0, 0, eyes == "oval" ? 6.5 : 7.5, eyes == "oval" ? 8.5 : 7.5),
@@ -1058,7 +1268,8 @@ struct AvatarArtwork {
               shape.rotate(by: .degrees(face.tilt * side))
               shape.fill(
                 Path(
-                  roundedRect: CGRect(x: -5.5, y: -12.5, width: 11, height: 25), cornerRadius: 5.5,
+                  roundedRect: CGRect(x: -5.5, y: -pillHeight / 2, width: 11, height: pillHeight),
+                  cornerRadius: 5.5,
                   style: .circular), with: .color(ink))
             }
           }
@@ -1074,7 +1285,7 @@ struct AvatarArtwork {
               with: .color(ink), lineWidth: 2.5)
           }
         }
-        if accessory == "glasses" && center.visible {
+        if accessory == "glasses" && center.visible && roll.visible {
           var bridge = Path()
           bridge.move(to: CGPoint(x: 50 + center.x - 4 * center.scale, y: eyeY - 2))
           bridge.addQuadCurve(
@@ -1084,18 +1295,19 @@ struct AvatarArtwork {
         }
         if seasonal { SeasonalAvatarArt.front(layer, family: family, yaw: pose.yaw) }
         if accessory == "hat" {
-          let hatAnchor: AvatarGeometry.Anchor = switch seasonal ? family : "" {
-          case "santa": .init(cy: anchor.cy, scale: anchor.scale, top: -3, hat: 0.45)
-          case "rudolph": .init(cy: anchor.cy, scale: anchor.scale, top: 24, hat: 0.45)
-          case "bunny": .init(cy: anchor.cy, scale: anchor.scale, top: 31, hat: 0.4)
-          default: anchor
-          }
           var hat = layer
           hat.translateBy(x: 50, y: hatAnchor.top + 15 * hatAnchor.hat)
           hat.scaleBy(x: hatAnchor.hat, y: hatAnchor.hat)
           hat.fill(AvatarArt.hatCrown, with: .color(Color(hex: "#3a2f28")))
           hat.fill(AvatarArt.hatBand, with: .color(Color(hex: "#b48156")))
           hat.fill(AvatarArt.hatBrim, with: .color(Color(hex: "#302925")))
+        }
+        if size >= 40 && pose.ticks > 0.01 {
+          var marks = layer
+          marks.opacity = min(pose.ticks, 1)
+          for d in AvatarMotion.tickMarks(level: pose.ticks, side: pose.tickSide, top: hatAnchor.top) {
+            marks.stroke(SVGPath.parse(d), with: .color(bodyColor), style: stroke(4.2))
+          }
         }
         trails(front: true)
       }
@@ -1123,18 +1335,6 @@ struct AvatarArtwork {
       symbol.drawLayer { context in
         context.fill(AvatarArt.bang, with: .color(color))
         context.fill(AvatarArt.circle(50, 79, 7.5), with: .color(color))
-      }
-    }
-    if dots > 0.01 {
-      for i in 0..<3 {
-        let offset = Double(i - 1)
-        let wave = still ? 0.5 : max(0, sin(frame.t * 4.2 - Double(i) * 0.9))
-        var dot = root
-        dot.opacity =
-          AvatarMotion.smoothstep(dots) * (still ? 1 - Double(i) * 0.25 : 0.5 + 0.5 * wave)
-        dot.fill(
-          AvatarArt.circle(50 + offset * 25 * dots, 50 - wave * 7 * dots, 8.5 * dots.squareRoot()),
-          with: .color(color))
       }
     }
   }
@@ -1178,6 +1378,8 @@ struct AvatarView: View {
   private var reduceMotion: Bool { systemReduceMotion || forceReducedMotion }
   private var portrait: Bool { avatar.mode == "portrait" }
   private var heldProp: AvatarProp? { portrait ? nil : prop }
+  /// Offsets idle gestures so avatars that settle together do not move in step.
+  private var seed: Double { AvatarMotion.motionSeed(name) }
   private var geometry: String { avatar.geometry }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
@@ -1209,7 +1411,8 @@ struct AvatarView: View {
     .onDisappear { visible = false }
     .onChange(of: state) { old, new in
       let now = Date()
-      snapshot = AvatarMotion.next(snapshot, to: new, at: now, still: still(old), prop: heldProp)
+      snapshot = AvatarMotion.next(
+        snapshot, to: new, at: now, still: still(old), prop: heldProp, seed: seed)
       changes += 1
     }
     .onChange(of: prop) { propSince = Date() }
@@ -1243,8 +1446,10 @@ struct AvatarView: View {
       let artwork = AvatarArtwork(
         avatar: avatar, state: state,
         frame: AvatarMotion.frame(
-          snapshot, at: date, still: still(state), prop: heldProp, propSince: propSince),
-        still: still(state), body: bodyPath(at: date), bodyColor: bodyColor(at: date))
+          snapshot, at: date, still: still(state), prop: heldProp, propSince: propSince,
+          seed: seed),
+        still: still(state), body: bodyPath(at: date), bodyColor: bodyColor(at: date),
+        size: Double(size))
       // Motion can reach past the 116-unit box (trails, hops), as the web SVG overflows.
       let pad = size * 0.2
       Canvas { context, _ in
