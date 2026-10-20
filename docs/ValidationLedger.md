@@ -3,7 +3,7 @@
 ## October 19 secure input and tool receipts
 
 Base `2141b24`; final source fingerprint
-`179bda0f17267122d7cb64a855df645d6899878a5ef063c9e414959630c16756`.
+`ff6166021e149b009da45740f5ae9eda353732419d4d751a0f370407772320ed`.
 The vault implementation and regression-test fingerprint is
 `0ab887973ce11375e33848b0db05e5b8cc5f7cd48b8c4b5f226ee0116639134e`.
 Read-only production inspection found repeated Patch login requests ending after
@@ -33,13 +33,17 @@ state, and output regions needed clearer accessibility semantics. The fixes scop
 the wait to an open app receipt, keep each activity group in one keyed sibling
 collection on both clients, and name web/native output regions. Fields now stay
 enabled during temporary inactivity. Backgrounding still clears both fields, as
-the existing security behavior requires. Follow-up review is pending.
+the existing security behavior requires. Round two confirmed those fixes and
+found an iOS reasoning/tool ordering regression. Reasoning now has its own stable
+row before tools, with a model-level parity regression matching the web fixture.
+Claude Opus 5.5 round three found no remaining actionable issues. All 16
+native presentation tests passed after the reasoning-row fix.
 
 - The initial full web suite passed all 848 tests. After review fixes, 71 focused
   web tests passed, including receipt identity/expansion/scroll preservation during
   completion, and the production build passed with web build `b688581988af98c7`.
 - Xcode 27.1 on iOS 27.0 simulator `DB70DBE8-5F8D-40DA-8DFA-B724FE2CD03A`
-  reran 284 native unit tests on the final source, with two skips and no failures. The native secure
+  reran 284 native unit tests after round-one fixes, with two skips and no failures. The native secure
   login/code/unlock/secret background flow passed. The final UI check passed in
   simple and advanced presentation: short output stays compact, long output is
   complete and capped at 280 points, swiping scrolls its content while its

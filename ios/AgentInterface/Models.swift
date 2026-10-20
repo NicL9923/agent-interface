@@ -469,6 +469,18 @@ struct CoordinationGroup: Identifiable, Equatable {
   var id: String
   var messages: [Message]
 }
+enum ConversationTurnRow: Identifiable {
+  case message(Int, Message)
+  case activity(CoordinationGroup)
+  case reasoning
+  var id: String {
+    switch self {
+    case .message(_, let message): return "message-" + message.id
+    case .activity(let group): return "activity-" + group.id
+    case .reasoning: return "reasoning"
+    }
+  }
+}
 struct ConversationTurn: Identifiable, Equatable {
   var id: String
   var messages: [Message]
@@ -478,6 +490,22 @@ struct ConversationTurn: Identifiable, Equatable {
     let text = $0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return text.isEmpty ? nil : text
   } }
+  /// One identity scope preserves disclosure state when activity moves above the final reply.
+  func rows(advanced: Bool) -> [ConversationTurnRow] {
+    var rows: [ConversationTurnRow] = []
+    var needsReasoning = advanced && !reasoning.isEmpty
+    let groups = activityGroups.map(ConversationTurnRow.activity)
+    for (index, message) in visibleMessages.enumerated() {
+      if needsReasoning && message.role != "user" {
+        rows.append(.reasoning); needsReasoning = false
+      }
+      if message.id == replyStart { rows += groups }
+      rows.append(.message(index, message))
+    }
+    if needsReasoning { rows.append(.reasoning) }
+    if replyStart == nil { rows += groups }
+    return rows
+  }
   var activityGroups: [CoordinationGroup] {
     var groups: [CoordinationGroup] = []
     for message in messages where message.isInternalActivity || message.isToolActivity || message.toolCall != nil {

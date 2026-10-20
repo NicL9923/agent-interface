@@ -55,6 +55,21 @@ final class PresentationTests: XCTestCase {
       XCTAssertEqual(turn.activityGroups[0].messages.count, 3)
     }
   }
+  func testReasoningPrecedesToolsAndFinalReplyAsOnTheWeb() {
+    var conversation = Conversation(botId: "b", messages: [
+      Message(id: "question", role: "user", text: "Join the NAS"),
+      Message(id: "plan", role: "assistant", text: "", reasoning: "Plan the SSH steps."),
+      Message(id: "call", role: "assistant", text: "", reasoning: "Check the status.", toolCall: ToolCall(id: "ssh", name: "terminal", status: "completed")),
+      Message(id: "answer", role: "assistant", text: "Tailscale is up."),
+    ], activity: Activity(state: .idle), approvals: [], files: [])
+    XCTAssertEqual(conversation.presentationTurns[0].rows(advanced: true).map(\.id),
+      ["message-question", "reasoning", "activity-Tool calls", "message-answer"])
+    XCTAssertEqual(conversation.presentationTurns[0].rows(advanced: false).map(\.id),
+      ["message-question", "activity-Tool calls", "message-answer"])
+    conversation.messages.removeLast()
+    XCTAssertEqual(conversation.presentationTurns[0].rows(advanced: true).map(\.id),
+      ["message-question", "reasoning", "activity-Tool calls"])
+  }
   func testToolCallCommentaryStaysBeforeAnAttachmentOnlyFinalReply() throws {
     let json = #"{"botId":"b","messages":[{"id":"commentary","role":"assistant","text":"Preparing the report.","toolCall":{"id":"call","name":"terminal","status":"completed","result":"Ready"}},{"id":"answer","role":"assistant","text":"","files":[{"id":"report","name":"report.txt","mime":"text/plain"}]}],"activity":{"state":"idle"},"approvals":[],"files":[]}"#
     let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))

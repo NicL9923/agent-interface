@@ -37,16 +37,6 @@ struct TranscriptTurns: View, Equatable {
   }
 }
 
-private enum TurnRow: Identifiable {
-  case message(Int, Message)
-  case activity(CoordinationGroup)
-  var id: String {
-    switch self {
-    case .message(_, let message): return "message-" + message.id
-    case .activity(let group): return "activity-" + group.id
-    }
-  }
-}
 struct ConversationTurnView: View, Equatable {
   var turn: ConversationTurn
   var advanced: Bool
@@ -56,24 +46,17 @@ struct ConversationTurnView: View, Equatable {
   static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery }
   var body: some View {
     let visible = turn.visibleMessages
-    // Keep activity in one identity scope when it moves above the completed reply.
-    let rows: [TurnRow] = visible.enumerated().flatMap { index, message in
-      (message.id == turn.replyStart ? turn.activityGroups.map(TurnRow.activity) : []) + [.message(index, message)]
-    } + (turn.replyStart == nil ? turn.activityGroups.map(TurnRow.activity) : [])
     VStack(alignment: .leading, spacing: 18) {
-      ForEach(rows) { row in
+      ForEach(turn.rows(advanced: advanced)) { row in
         switch row {
+        case .reasoning: reasoning
         case .activity(let group): activityGroup(group)
         case .message(let index, let message):
-        if advanced && !turn.reasoning.isEmpty && message.role != "user" && visible.prefix(index).allSatisfy({ $0.role == "user" }) {
-          reasoning
-        }
         MessageView(message: message,
           continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant" && message.id != turn.replyStart,
           delivery: delivery?.id == message.id ? delivery?.status : nil).id(message.id)
         }
       }
-      if advanced && !turn.reasoning.isEmpty && visible.allSatisfy({ $0.role == "user" }) { reasoning }
     }
   }
   private var recipient: String { store?.bot?.name ?? "Assistant" }
