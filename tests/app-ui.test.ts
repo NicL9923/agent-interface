@@ -356,25 +356,7 @@ describe("conversation state", () => {
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
-  it("keeps a new message on screen even when its words pass through the sent text", async () => {
-    conversation = { ...conversation, activity: { state: "idle" } };
-    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
-      ? await new Promise<T>(() => {}) : {} as T);
-    try {
-      await render();
-      await act(async () => sendButton().click());
-      const textarea = container.querySelector("textarea")!;
-      for (const text of ["My", "My saved server draft", "My saved server draft, again"]) {
-        await act(async () => {
-          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-          textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        });
-        expect(textarea.value).toBe(text);
-      }
-    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
-  });
-
-  it("puts a refused message back in front of what was typed while it sent", async () => {
+  it("holds the composer read-only while a message sends, and gives a refused one back", async () => {
     conversation = { ...conversation, activity: { state: "idle" } };
     let refuse!: () => void;
     vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
@@ -383,13 +365,12 @@ describe("conversation state", () => {
       await render();
       await act(async () => sendButton().click());
       const textarea = container.querySelector("textarea")!;
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "And another thing");
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      expect(textarea.value).toBe("And another thing");
+      expect(textarea.readOnly).toBe(true);
+      expect(textarea.placeholder).toBe("Sending…");
+      expect(container.querySelector<HTMLButtonElement>('button[aria-label="Attach images, PDFs, or text"]')!.disabled).toBe(true);
       await act(async () => refuse());
-      expect(textarea.value).toBe("My saved server draft\n\nAnd another thing");
+      expect(textarea.readOnly).toBe(false);
+      expect(textarea.value).toBe("My saved server draft");
       expect(container.querySelector(".message-user")).toBeNull();
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });

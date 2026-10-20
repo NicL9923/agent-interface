@@ -37,8 +37,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     if (saved) localSave(key, { ...saved, ...mark });
     setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, ...mark } : current);
   };
-  // The composer empties while a message sends, so text typed meanwhile may have replaced it.
-  // A refused message goes back into its draft in front of that text.
+  // A refused message goes back into its draft, in front of anything that replaced it meanwhile.
   const refused = (user: string, request: Pending) => {
     markSent(user, request, false);
     const key = draftKey(user, request.botId);

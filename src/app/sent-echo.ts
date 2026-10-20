@@ -88,15 +88,16 @@ export function withEcho(conversation: SavedConversation | null, echo: SentEcho 
 }
 /**
  * Whether the composer is showing a draft that is on its way. The echo carries it in the
- * transcript, so the composer starts empty; typing there begins a new draft. The composer also
- * remembers being typed in, so new words that pass through the sent text never blank it again.
+ * transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
+ * because a draft and its send are told apart by content until Hermes answers.
  */
 export function sendingDraft(draft: Draft, pending: Pending | null, sending: boolean) {
   return sending && !!pending && draft.botId === pending.botId && sameDraft(draft, pending);
 }
 /**
- * The draft after a send was refused: the sent text and files go back in front of anything typed
- * since, unless it still holds them. The native client restores a discarded send the same way.
+ * The draft after a send was refused: the sent text and files go back in front of anything that
+ * replaced them meanwhile, such as an edit from another device, unless it still holds them. The
+ * native client restores a discarded send the same way.
  */
 export function restoreSent(draft: Draft, request: Pick<Pending, "text" | "attachments">): Draft {
   const missing = request.attachments.filter(file => !draft.attachments.some(kept => kept.id === file.id));

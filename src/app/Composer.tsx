@@ -135,10 +135,9 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const [stopping, setStopping] = useState(false);
   // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
   const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
-  // The transcript shows a message on its way, so the composer is free for the next one.
-  // The draft itself keeps the message until Hermes accepts it.
-  const [typedOver, setTypedOver] = useState<string>();
-  const handedOff = sendingDraft(draft, pending, sending) && typedOver !== pending?.requestId;
+  // The transcript shows a message on its way, so the composer reads empty until Hermes answers.
+  // The draft itself keeps the message until then, and is read-only so it stays the sent copy.
+  const handedOff = sendingDraft(draft, pending, sending);
   const shown = draft.botId === botId && !handedOff ? draft : { text: "", attachments: [] };
   const input = useComposerInput(shown.text, botId);
   const advanced = boot.preferences.presentation === "advanced";
@@ -230,20 +229,20 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           id="message"
           value={shown.text}
           placeholder={
-            active
+            handedOff ? "Sending…"
+              : active
               ? `Guide ${selected.name} while they work…`
               : `Message ${selected.name}…`
           }
-          onChange={(event) => {
-            if (sending && pending) setTypedOver(pending.requestId);
+          // Read-only rather than disabled, so focus stays here for the next message.
+          readOnly={handedOff}
+          onChange={(event) =>
             setDraft((previous) => ({
               ...previous,
-              // Typing over a message on its way starts a new draft without its files.
-              ...(handedOff ? { attachments: [] } : {}),
               dirty: true,
               text: event.target.value,
-            }));
-          }}
+            }))
+          }
           onPaste={(event) => {
             const files = event.clipboardData ? pastedFiles(event.clipboardData) : [];
             if (!files.length) return;
