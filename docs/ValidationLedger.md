@@ -1,5 +1,15 @@
 # Validation ledger
 
+## October 20 qualification and Household build 9
+
+PR #162 merged at `2cdd913c7cb790a95343218952b3e4969e55b205` after all four CI jobs completed. WildBots 1.0 build 9 was archived from its reviewed parent `5bd28a925477f3f0963cc047dd36ecf722eb4e31`. All three signed bundles and the exported IPA passed the release checks. Apple confirmed the exact build as installable in the internal Household group with two testers. The [distribution receipt](evidence/2026-10-20-household-testflight.json) binds the commit and IPA hash. Installation and password-manager AutoFill on a physical phone remain unverified.
+
+Fresh isolated qualification passed the native/application probes and all 18 private OAuth/Google regressions against unchanged Hermes `acc3cada0da86`. The [sanitized native receipts](evidence/qualification-secure-input-20261020/manifest.json) retain the actual probe evidence. The native qualification receipt binds integration digest `bfeafff2fab529b75a93f374307bd8d3d9c2b3b0a3c8b4093fed5c5faaab840b` and repair `30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+
+The qualification's silent SSH connection lost its idle NAT mapping after the remote work completed. A new connection verified the actual receipt with the release's verifier and confirmed completed cleanup before reusing it for normal guarded preparation. Only the stalled local SSH process was terminated. No qualification receipt was recreated. Release SSH calls now send 30-second keepalives and fail after four missed responses. The idle helper also recognizes the gateway's preflight busy refusal, discards that unchanged stage and retries; integrity failures still stop immediately.
+
+Four focused deployment Python suites and Ruff passed. Independent Claude Opus 5.5 review found no blockers and requested a source-linked test for the gateway refusal; the AST wiring test now checks both the real preflight message and refusal to match its post-drain variant. Helper/test fingerprint: `fd858a76ea3a1894e1c06ab0e188fb8b7609fe813ac45f77ba20cdbbab2ed2e8`. Independent round-two review confirmed the helper fixes, regression coverage and release records with no remaining findings. Guarded web activation is still waiting for idle admission.
+
 ## October 19 secure input and tool receipts
 
 Base `2141b24`; final source fingerprint

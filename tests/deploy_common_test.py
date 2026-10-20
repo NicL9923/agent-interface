@@ -231,6 +231,12 @@ class ToolWiringTests(unittest.TestCase):
         self.assertEqual(len(busy), 1)
         # Only the fence's own line, as a traceback without source would print it.
         self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + busy[0]))
+        gateway = sorted((node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "fence" and "record['active_agents'] == 0" in ast.unparse(node.args[0])),
+            key=lambda node: node.lineno)
+        self.assertEqual(len(gateway), 2)
+        self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + gateway[0].args[1].value))
+        self.assertFalse(idle.BUSY.search("deploy_common.Fence: " + gateway[1].args[1].value))
         self.assertFalse(idle.BUSY.search("deploy_common.Fence: release serves the configured web build"))
 
     def test_staged_recovery_ships_the_shared_module_its_helper_pins(self):
