@@ -73,18 +73,38 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
   if (active(conversation.activity.state)) return next.ran ? next : { ...next, ran: true };
   return next.ran || now - (next.acceptedAt ?? now) > ECHO_PATIENCE ? null : next;
 }
-/** The conversation with the echo at its end, as the person's own message. */
-export function withEcho(conversation: SavedConversation | null, echo: SentEcho | null): SavedConversation | null {
-  if (!conversation || !echo || conversation.botId !== echo.request.botId || echoShown(echo, conversation)) return conversation;
-  const message: Message = {
+type EchoInput = Parameters<typeof nextEcho>[1];
+/**
+ * Every echo after a change. A message Hermes accepted stays until its own copy arrives, even
+ * when another is sent meanwhile, such as guidance after a photo whose row is saved only when its
+ * run ends. The same list comes back when nothing changed.
+ */
+export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
+  const { pending } = input;
+  const next = echoes.flatMap(echo => {
+    const advanced = nextEcho(echo, { ...input, pending: pending?.requestId === echo.request.requestId ? pending : null });
+    return advanced ? [advanced] : [];
+  });
+  // A send gets one echo; once it leaves, the same pending submission never brings it back.
+  if (pending && !echoes.some(echo => echo.request.requestId === pending.requestId)) {
+    const created = nextEcho(null, input);
+    if (created) next.push(created);
+  }
+  return next.length === echoes.length && next.every((echo, index) => echo === echoes[index]) ? echoes : next;
+}
+/** The conversation with its echoes at the end, as the person's own messages. */
+export function withEchoes(conversation: SavedConversation | null, echoes: SentEcho[]): SavedConversation | null {
+  const shown = conversation ? echoes.filter(echo => echo.request.botId === conversation.botId && !echoShown(echo, conversation)) : [];
+  if (!conversation || !shown.length) return conversation;
+  const messages = shown.map((echo): Message => ({
     id: echo.request.requestId,
     role: "user",
     text: echo.request.text,
     createdAt: echo.sentAt,
     sender: echo.sender,
     ...(echo.request.attachments.length ? { files: echo.request.attachments } : {}),
-  };
-  return { ...conversation, messages: [...conversation.messages, message] };
+  }));
+  return { ...conversation, messages: [...conversation.messages, ...messages] };
 }
 /**
  * Whether the composer is showing a draft that is on its way. The echo carries it in the
@@ -110,19 +130,19 @@ export function restoreSent(draft: Draft, request: Pick<Pending, "text" | "attac
     attachments: [...missing, ...draft.attachments],
   };
 }
-/** Follows the open assistant's submission, and keeps its echo until Hermes's copy replaces it. */
-export function useSentEcho(input: Omit<Parameters<typeof nextEcho>[1], "now">) {
+/** Follows the open assistant's submissions, and keeps each echo until Hermes's copy replaces it. */
+export function useSentEchoes(input: Omit<EchoInput, "now">) {
   const { pending, receipt, sending, conversation, sender } = input;
-  const [echo, setEcho] = useState<SentEcho | null>(null);
+  const [echoes, setEchoes] = useState<SentEcho[]>([]);
   useEffect(() => {
-    setEcho(current => nextEcho(current, { pending, receipt, sending, conversation, sender, now: Date.now() }));
+    setEchoes(current => nextEchoes(current, { pending, receipt, sending, conversation, sender, now: Date.now() }));
   }, [pending, receipt, sending, conversation, sender?.id]);
-  const waiting = echo?.status === "accepted" && !echo.ran;
+  const waiting = echoes.some(echo => echo.status === "accepted" && !echo.ran);
   // An accepted message that never shows is checked again once its patience runs out.
   useEffect(() => {
     if (!waiting) return;
-    const timer = setTimeout(() => setEcho(current => nextEcho(current, { pending, receipt, sending, conversation, sender, now: Date.now() })), ECHO_PATIENCE + 100);
+    const timer = setTimeout(() => setEchoes(current => nextEchoes(current, { pending, receipt, sending, conversation, sender, now: Date.now() })), ECHO_PATIENCE + 100);
     return () => clearTimeout(timer);
   }, [waiting, pending, receipt, sending, conversation, sender?.id]);
-  return echo;
+  return echoes;
 }

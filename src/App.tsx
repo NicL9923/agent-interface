@@ -12,7 +12,7 @@ import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useSubmission } from "./app/use-submission";
-import { useSentEcho, withEcho } from "./app/sent-echo";
+import { useSentEchoes, withEchoes } from "./app/sent-echo";
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { UpdateNotice } from "./app/UpdateNotice";
 import { Sidebar } from "./app/Sidebar";
@@ -64,8 +64,10 @@ export function App() {
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
   // A sent message shows in the transcript at once; Send keeps spinning until Hermes answers.
-  const echo = useSentEcho({ pending, receipt, sending, conversation, sender: boot?.user });
-  const transcript = useMemo(() => withEcho(conversation, echo), [conversation, echo]);
+  const echoes = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
+  const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
+  // At most one message is on its way; accepted ones read as ordinary messages.
+  const outgoing = echoes.find(echo => echo.status !== "accepted") ?? null;
   useEffect(() => {
     const theme = boot?.preferences.theme || "system";
     document.documentElement.dataset.theme = theme;
@@ -151,7 +153,7 @@ export function App() {
         {/* On a computer the rail is always beside this, so its notice is enough. */}
         {mobile && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading key="groups"><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
-          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} echo={echo} state={state}
+          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} echo={outgoing} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
