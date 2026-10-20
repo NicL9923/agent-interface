@@ -1,5 +1,28 @@
 # Validation ledger
 
+## October 20 app release 2141b24
+
+PR #160 merged at `2141b2408e90119b2fd50af7ea0c8f2a727bdad3`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `41d3898d79da77b7`, from the archive with SHA256
+`4a37e9656ae5236ff90aeac0c1ac26fd61a20c39cbc9f137ef30ae8d15e2fde4`. The host build reproduced the local web build.
+
+The app integration inputs were unchanged, so the existing qualification receipt validated against the release and was reused. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-2141b240-20261020T013159Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. A signed-in household session was not exercised.
+
+iOS 1.0 (8) was signed, uploaded once, and confirmed installable in the internal
+Household TestFlight group for both configured testers. The archive came from
+reviewed head `1bb099a`; its entire `ios/` tree matches merged commit `2141b24`.
+The [distribution receipt](evidence/2026-10-20-household-testflight-build-8.json)
+records the IPA hash, exact Apple build and expiry. Only the server's
+`IOS_APP_LATEST_BUILD` changed from 7 to 8 before guarded activation; its update
+URL stayed the same. No physical-device installation was exercised.
+
 ## October 19 sent-message echo and avatar motion
 
 Validated on `ee3988b` (branch `nic/optimistic-send-avatar-motion`, base
