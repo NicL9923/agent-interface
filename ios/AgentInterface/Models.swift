@@ -344,6 +344,16 @@ struct Draft: Codable, Equatable {
   var sentHash: String? = nil
   /// The revision that send was written on; a `sentRevision` past it shows the send completed.
   var sentBase: Int? = nil
+  /// The edit sequence of the copy this device last sent. A copy whose `seq` still matches, while
+  /// `sentHash` marks the send as open, is that copy. Anything typed since, or the server's copy
+  /// adopted since, is new work even in the same words. Kept after the send completes.
+  var sentSeq: Int? = nil
+
+  /// Whether this copy may be the one this device sent, untouched since. Drafts are compared by
+  /// content on the server, so only the edit sequence can tell the sent copy from the same words
+  /// typed again. A copy from an older version has no sequence and keeps the content-only check.
+  /// The web client's `isSentCopy` in src/app/storage.ts applies the same rule.
+  var isSentCopy: Bool { sentSeq == nil || sentHash != nil && (seq ?? 0) == sentSeq }
 
   /// A fingerprint of draft content, kept with a cached copy.
   static func contentHash(_ text: String, _ attachments: [FileRef]) -> String {
@@ -377,7 +387,9 @@ struct Draft: Codable, Equatable {
     let revision = server.revision ?? 0
     if !authoritative && revision < base { return (local, false) }
     let hash = contentHash(server.text, server.attachments)
-    let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash)
+    // The server's copy is never this device's sent copy, so the send's sequence comes along to say so.
+    let adopt = Draft(text: server.text, attachments: server.attachments, dirty: false, baseRevision: revision, baseHash: hash,
+      sentSeq: local.sentSeq)
     // The guard for this device's send lasts until the server shows that send completed.
     let sendShown = local.sentHash != nil && (server.sentRevision ?? 0) > (local.sentBase ?? 0)
     if local.dirty != true {
@@ -385,7 +397,11 @@ struct Draft: Codable, Equatable {
       return (adopt, false)
     }
     let mine = contentHash(local.text, local.attachments)
-    if (server.sentRevision ?? 0) > base && (mine == local.baseHash || sendShown && mine == local.sentHash) { return (adopt, false) }
+    // Typed since this device's send, the copy is new work whatever words it shares with the send.
+    let untouched = local.sentHash == nil || local.isSentCopy
+    if untouched && (server.sentRevision ?? 0) > base && (mine == local.baseHash || sendShown && mine == local.sentHash) {
+      return (adopt, false)
+    }
     var current = local
     if sendShown {
       current.sentHash = nil
@@ -395,15 +411,23 @@ struct Draft: Codable, Equatable {
     kept.baseRevision = revision
     kept.baseHash = hash
     if local.text == server.text && local.attachments == server.attachments {
-      return settled ? (adopt, false) : (kept, false)
+      guard settled else { return (kept, false) }
+      // Saved as it is: the copy stays this device's sent copy until the server shows the send.
+      if sendShown || local.sentHash == nil { return (adopt, false) }
+      var saved = adopt
+      saved.seq = local.seq
+      saved.sentHash = local.sentHash
+      saved.sentBase = local.sentBase
+      return (saved, false)
     }
     if revision == base { return (current, false) }
     return (kept, true)
   }
-  /// This copy once its send was accepted: emptied if it still holds the sent text.
+  /// This copy once its send was accepted: emptied if it is still the sent copy.
   func sent(_ submission: PendingSubmission) -> Draft {
-    guard text == submission.text && attachments == submission.attachments else { return self }
-    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash, sentBase: sentBase)
+    guard isSentCopy && text == submission.text && attachments == submission.attachments else { return self }
+    return Draft(dirty: false, baseRevision: baseRevision, baseHash: baseHash, seq: seq, sentHash: sentHash, sentBase: sentBase,
+      sentSeq: sentSeq)
   }
 }
 /// The server's copy of a draft. Older servers omit the revision fields, which read as 0.
@@ -853,7 +877,7 @@ struct SentEcho: Equatable {
   /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
   /// because a draft and its send are told apart by content until Hermes answers.
   static func sendingDraft(_ draft: Draft, pending: PendingSubmission?, sending: Bool) -> Bool {
-    guard sending, let pending else { return false }
+    guard sending, let pending, draft.isSentCopy else { return false }
     return draft.text == pending.text && draft.attachments == pending.attachments
   }
   private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }

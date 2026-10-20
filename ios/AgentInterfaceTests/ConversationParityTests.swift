@@ -219,6 +219,12 @@ import XCTest
     XCTAssertTrue(SentEcho.sendingDraft(draft, pending: request, sending: true))
     XCTAssertFalse(SentEcho.sendingDraft(draft, pending: request, sending: false))
     XCTAssertFalse(SentEcho.sendingDraft(Draft(text: "Something new"), pending: request, sending: true))
+    // Marked by its send, only the untouched copy counts, not the same words typed again.
+    let marked = Draft(text: "Hello there", seq: 4, sentHash: "h", sentSeq: 4)
+    XCTAssertTrue(SentEcho.sendingDraft(marked, pending: request, sending: true))
+    var retyped = marked
+    retyped.seq = 9
+    XCTAssertFalse(SentEcho.sendingDraft(retyped, pending: request, sending: true))
   }
 
   func testRestoresARefusedMessageInFrontOfNewerTextOnce() {

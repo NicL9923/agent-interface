@@ -735,7 +735,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if !force, !settled(botId) { return false }
     let snapshot = draft
     let sent = pendings[botId]
-    guard sent == nil || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
+    guard sent == nil || !snapshot.isSentCopy || sent?.text != snapshot.text || sent?.attachments != snapshot.attachments
     else { return false }
     let currentGeneration = generation
     Task {
@@ -878,7 +878,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pendings[id] = submission
     save(submission, key("pending", id))
     // Until the server shows the send, a save of the sent text from this copy is not new work.
-    markSent(submission, true)
+    // A retry sends the same request again; the copy it came from is already marked, and a copy
+    // edited since is not it.
+    if !reviewedUncertain { markSent(submission, true) }
     sending = true
     error = nil
     let currentGeneration = generation
@@ -949,7 +951,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       // The server clears its copy for this send, which a later save here must not mistake
       // for a send from another device.
       if selectedBotId == original.botId && draftReady {
-        if draft.text == original.text && draft.attachments == original.attachments {
+        if draft.isSentCopy && draft.text == original.text && draft.attachments == original.attachments {
           draftTask?.cancel()
           scheduledDraftSave = nil
         }
@@ -1051,14 +1053,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
     let hash = sent ? Draft.contentHash(submission.text, submission.attachments) : nil
     let base = sent ? submission.draftBaseRevision ?? 0 : nil
+    // The copy's edit sequence identifies it as the sent copy until someone types in it again.
     if let localKey = key("draft", submission.botId), var cached: Draft = read(localKey) {
       cached.sentHash = hash
       cached.sentBase = base
+      if sent { cached.sentSeq = cached.seq ?? 0 }
       save(cached, localKey)
     }
     if selectedBotId == submission.botId {
       draft.sentHash = hash
       draft.sentBase = base
+      if sent { draft.sentSeq = draft.seq ?? 0 }
       persistDraft()
     }
   }
