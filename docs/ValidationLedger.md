@@ -1,5 +1,51 @@
 # Validation ledger
 
+## October 19 sent-message echo and avatar motion
+
+Validated on `1f4d013` (branch `nic/optimistic-send-avatar-motion`, base
+`f5631d1`). Web and iOS show a sent message in the transcript as soon as Send
+is pressed: faint and marked Sending while the request is in flight, Not
+confirmed yet when it ends without a receipt, and an ordinary message once
+Hermes accepts it, until Hermes's copy with the same request ID takes its place.
+Send keeps its spinner. The composer reads empty and read-only until the send
+settles, keeping focus, and attaching waits. A refused send returns its text to
+the draft. Accepted echoes stay while later messages are sent, which covers a
+photo whose row is saved only when its run ends. iOS holds Share inbox items
+while a send to that assistant is unsettled.
+
+Avatars gain a thinking routine: dot eyes look up to one side, glance across
+with the head following, then pop wide-eyed with emphasis marks or roll the
+face over the top. Idle avatars occasionally tilt, peek, hop or do a double take
+on per-name timing. Eyes gain perspective, and Done adds marks. The motion was
+studied from frames of the reference post's video. `tests/avatar-motion-parity.test.ts`
+writes `ios/AgentInterfaceTests/Motion/avatar-motion.json`, which
+`AvatarMotionParityTests` checks AvatarView.swift against at 1e-5.
+
+Claude Opus 5.5 implemented the web change and the native echo; Claude Sonnet
+5.5 ported the native motion. OpenAI GPT-6.1 Sol reviewed in five rounds and
+found no motion defects. Its echo findings were fixed: account changes, live-row
+anchors, a second send replacing an unsaved accepted echo, the native patience
+timer rescheduling forever for another assistant, identical messages hiding each
+other, and Share inbox imports mid-send. Its findings about text typed over a
+sending message led to the read-only composer, which replaced a tracked
+fresh-draft design that still had races. One known limit remains from `main`:
+drafts and sends are told apart by content, so retyping the exact sent words
+in the moment between the server clearing the draft and the receipt arriving
+can still erase them.
+
+- `npx vitest run` passed 837 tests in 73 files on Node 26.10.0 and Node 24.21.0.
+  `npm run build` passed with service worker `ea2ba62e2a56f263`, and
+  `git diff --check` passed.
+- `validate-ios.sh` on the AgentInterfaceCollaborationValidation simulator ran
+  275 unit tests at `1f4d013` content with 2 skipped and no failures. The
+  NativeFlowTests UI class passed 12 of 12, including a send, at `663f805`.
+- WebKit against the preview fixture, with a mocked 2.5 s admission, showed the
+  sending echo, read-only composer, accepted message and refused-send restore.
+  Specimen recordings covered thinking, idle, done and a mascot.
+
+Native IME, dictation and VoiceOver behavior during a send were not exercised on
+a device. Production is unchanged.
+
 ## October 19 app release 9ada665
 
 PR #158 merged at `9ada6653982ad62aece542ae2fe382bc708be152`. The release is live at `https://agentui.wildflowersranch.com`,
