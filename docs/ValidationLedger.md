@@ -2,7 +2,7 @@
 
 ## October 19 sent-message echo and avatar motion
 
-Validated on `1f4d013` (branch `nic/optimistic-send-avatar-motion`, base
+Validated on `ee3988b` (branch `nic/optimistic-send-avatar-motion`, base
 `f5631d1`). Web and iOS show a sent message in the transcript as soon as Send
 is pressed: faint and marked Sending while the request is in flight, Not
 confirmed yet when it ends without a receipt, and an ordinary message once
@@ -28,17 +28,27 @@ anchors, a second send replacing an unsaved accepted echo, the native patience
 timer rescheduling forever for another assistant, identical messages hiding each
 other, and Share inbox imports mid-send. Its findings about text typed over a
 sending message led to the read-only composer, which replaced a tracked
-fresh-draft design that still had races. One known limit remains from `main`:
-drafts and sends are told apart by content, so retyping the exact sent words
-in the moment between the server clearing the draft and the receipt arriving
-can still erase them.
+fresh-draft design that still had races.
 
-- `npx vitest run` passed 837 tests in 73 files on Node 26.10.0 and Node 24.21.0.
-  `npm run build` passed with service worker `ea2ba62e2a56f263`, and
-  `git diff --check` passed.
+Drafts and sends were told apart only by content, a limit inherited from
+`main`, so retyping the exact sent words right after acceptance, or after the
+server cleared the draft before the receipt arrived, could erase them. A send
+now records the edit sequence of the copy it sent. Only that untouched copy
+hides behind the echo, empties on acceptance, skips saving while pending or
+gives way to the server's clear. The sequence survives a cached restore and is
+carried into adopted server copies. Copies marked by older versions keep the
+content-only check. A native retry no longer marks a copy edited since. The
+server's content-based clear is unchanged and still clears a draft holding
+exactly the words a retried send delivers, which is the intended result.
+
+- `npx vitest run` passed 844 tests in 73 files on Node 26.10.0 and Node 24.21.0.
+  New UI tests for retyping after acceptance, the clear arriving before the
+  receipt, and a reloaded sent copy failed on the earlier code. `npm run build`
+  and `git diff --check` passed.
 - `validate-ios.sh` on the AgentInterfaceCollaborationValidation simulator ran
-  275 unit tests at `1f4d013` content with 2 skipped and no failures. The
-  NativeFlowTests UI class passed 12 of 12, including a send, at `663f805`.
+  280 unit tests with 2 skipped and no failures on the native sources of
+  `ee3988b`, which changed only web files after that run. The NativeFlowTests
+  UI class passed 12 of 12, including a send, at `663f805`.
 - WebKit against the preview fixture, with a mocked 2.5 s admission, showed the
   sending echo, read-only composer, accepted message and refused-send restore.
   Specimen recordings covered thinking, idle, done and a mascot.
