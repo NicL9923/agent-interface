@@ -1,5 +1,34 @@
 # Validation ledger
 
+## October 20 app release 2cdd913
+
+PR #162 merged at `2cdd913c7cb790a95343218952b3e4969e55b205`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `b688581988af98c7`, from the archive with SHA256
+`09d3cb87ae9c3f5e183ed8572e290cb6f17c23ef48acd22cfc0ff25e6ea91677`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-2cdd913c-20261020T124144Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+Nicolas explicitly authorized interrupting the active work after the earlier idle
+wait expired. The supported gateway stop/start completed successfully and the new
+gateway reported zero active work before normal guarded preparation and activation.
+No admission check was bypassed. The shared computer and terminal services stayed
+active; all five user services, Caddy and WireGuard were active after deployment.
+
+The existing Household TestFlight distribution receipt was confirmed before
+changing the server announcement from build 8 to build 9. The exact prior private
+environment was backed up. A temporary operator session verified the live
+authenticated bootstrap, native connection and build 9 update link, then was
+deleted. Interactive household use and physical-phone installation/AutoFill were
+not exercised. The earlier qualification receipt was verified and activated;
+qualification was not rerun for this cutover.
+
 ## October 20 qualification and Household build 9
 
 PR #162 merged at `2cdd913c7cb790a95343218952b3e4969e55b205` after all four CI jobs completed. WildBots 1.0 build 9 was archived from its reviewed parent `5bd28a925477f3f0963cc047dd36ecf722eb4e31`. All three signed bundles and the exported IPA passed the release checks. Apple confirmed the exact build as installable in the internal Household group with two testers. The [distribution receipt](evidence/2026-10-20-household-testflight.json) binds the commit and IPA hash. Installation and password-manager AutoFill on a physical phone remain unverified.
@@ -8,7 +37,7 @@ Fresh isolated qualification passed the native/application probes and all 18 pri
 
 The qualification's silent SSH connection lost its idle NAT mapping after the remote work completed. A new connection verified the actual receipt with the release's verifier and confirmed completed cleanup before reusing it for normal guarded preparation. Only the stalled local SSH process was terminated. No qualification receipt was recreated. Release SSH calls now send 30-second keepalives and fail after four missed responses. The idle helper also recognizes the gateway's preflight busy refusal, discards that unchanged stage and retries; integrity failures still stop immediately.
 
-Four focused deployment Python suites and Ruff passed. Independent Claude Opus 5.5 review found no blockers and requested a source-linked test for the gateway refusal; the AST wiring test now checks both the real preflight message and refusal to match its post-drain variant. Helper/test fingerprint: `fd858a76ea3a1894e1c06ab0e188fb8b7609fe813ac45f77ba20cdbbab2ed2e8`. Independent round-two review confirmed the helper fixes, regression coverage and release records with no remaining findings. Guarded web activation is still waiting for idle admission.
+Four focused deployment Python suites and Ruff passed. Independent Claude Opus 5.5 review found no blockers and requested a source-linked test for the gateway refusal; the AST wiring test now checks both the real preflight message and refusal to match its post-drain variant. Helper/test fingerprint: `fd858a76ea3a1894e1c06ab0e188fb8b7609fe813ac45f77ba20cdbbab2ed2e8`. Independent round-two review confirmed the helper fixes, regression coverage and release records with no remaining findings. At that checkpoint, guarded web activation was waiting for idle admission; the release entry above records the subsequent cutover.
 
 ## October 19 secure input and tool receipts
 
