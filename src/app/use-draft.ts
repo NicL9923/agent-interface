@@ -104,7 +104,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     // the page is shown: it may have been edited or sent from another device since.
     let draftLoaded = false;
     let loadingDraft = false;
-    setDraft({ ...(cached || { text: "", attachments: [] }), botId, userId });
+    // Restoring the cached copy is not an edit: it keeps its own sequence, so a copy that was sent
+    // is still the sent copy after a reload or a switch back.
+    setDraftState({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {

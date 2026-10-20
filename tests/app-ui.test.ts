@@ -9,6 +9,7 @@ import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
+import { contentHash } from "../src/app/draft-merge";
 
 vi.mock("../src/client-api", async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -405,6 +406,23 @@ describe("conversation state", () => {
       await advance(3000);
       expect(container.querySelector("textarea")!.value).toBe("My saved server draft");
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("still knows a reloaded copy as the sent copy once the server clears it", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    const text = "My saved server draft";
+    localStorage.setItem("agent-interface:draft:one:shared", JSON.stringify({ text, attachments: [], botId: "shared", userId: "one",
+      dirty: true, baseRevision: 0, seq: 5, sentHash: contentHash({ text, attachments: [] }), sentBase: 0, sentSeq: 5 }));
+    localStorage.setItem("agent-interface:submission:one:shared", JSON.stringify({ requestId: "saved-request", botId: "shared",
+      text, attachments: [], reviewedInterruption: false, draftBaseRevision: 0 }));
+    serveClearedDraft();
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, init?: RequestInit) => path === "/submissions/saved-request"
+      ? { requestId: "saved-request", status: "accepted" } as T : await original(path, init) as T);
+    await render();
+    await advance(3000);
+    expect(container.querySelector("textarea")!.value).toBe("");
+    expect(vi.mocked(write).mock.calls.some(([path, value]) => path === "/bots/shared/draft" && (value as { text: string }).text === text)).toBe(false);
   });
 
   it("holds the composer read-only while a message sends, and gives a refused one back", async () => {
