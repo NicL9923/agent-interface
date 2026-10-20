@@ -381,7 +381,7 @@ def remote_source(program, payload):
 
 def remote(host, program, payload, timeout=900):
     """Run a Python program on the host with a JSON payload; return its final JSON line."""
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python3", "-"], input=remote_source(program, payload),
+    done = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", host, "python3", "-"], input=remote_source(program, payload),
                           capture_output=True, text=True, timeout=timeout)
     if done.returncode:
         raise SystemExit(f"Host step failed:\n{(done.stderr or done.stdout).strip()[-3000:]}")
@@ -390,7 +390,7 @@ def remote(host, program, payload, timeout=900):
 
 def guarded(host, manifest, check):
     command = f"cd {shlex.quote(manifest['release'])} && python3 {GUARDED_TOOL} --config {shlex.quote(manifest['configPath'])}"
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, command + (" --check" if check else "")],
+    done = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", host, command + (" --check" if check else "")],
                           capture_output=True, text=True, timeout=1800)
     output = done.stdout.strip()
     print(output)
