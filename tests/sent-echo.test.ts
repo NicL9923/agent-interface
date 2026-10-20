@@ -78,6 +78,11 @@ describe("sent message echo", () => {
     expect(sendingDraft(draft, request, true)).toBe(true);
     expect(sendingDraft(draft, request, false)).toBe(false);
     expect(sendingDraft({ ...draft, text: "Something new" }, request, true)).toBe(false);
+    // Marked by its send, only the untouched copy counts, not the same words typed again.
+    const marked = { ...draft, seq: 4, sentHash: "h", sentSeq: 4 };
+    expect(sendingDraft(marked, request, true)).toBe(true);
+    expect(sendingDraft({ ...marked, seq: 9 }, request, true)).toBe(false);
+    expect(sendingDraft({ ...marked, sentHash: undefined }, request, true)).toBe(false);
   });
 
   it("restores a refused message in front of newer text, once", () => {

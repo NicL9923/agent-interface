@@ -31,11 +31,14 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     );
   // Until the server shows the send, a save of the sent text from this copy is not new work.
   const markSent = (user: string, request: Pending, sent: boolean) => {
-    const mark = sent ? { sentHash: contentHash(request), sentBase: request.draftBaseRevision ?? 0 } : { sentHash: undefined, sentBase: undefined };
+    // The copy's edit sequence identifies it as the sent copy until someone types in it again.
+    const mark = (copy: Draft) => sent
+      ? { sentHash: contentHash(request), sentBase: request.draftBaseRevision ?? 0, sentSeq: copy.seq ?? 0 }
+      : { sentHash: undefined, sentBase: undefined };
     const key = draftKey(user, request.botId);
     const saved = localRead<Draft>(key);
-    if (saved) localSave(key, { ...saved, ...mark });
-    setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, ...mark } : current);
+    if (saved) localSave(key, { ...saved, ...mark(saved) });
+    setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, ...mark(current) } : current);
   };
   // A refused message goes back into its draft, in front of anything that replaced it meanwhile.
   const refused = (user: string, request: Pending) => {

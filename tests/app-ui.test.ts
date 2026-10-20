@@ -356,6 +356,57 @@ describe("conversation state", () => {
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
+  // The server clears the draft when it accepts a send; draft reads then return this.
+  const serveClearedDraft = () => {
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, init?: RequestInit) => path === "/bots/shared/draft"
+      ? { text: "", attachments: [], revision: 1, reason: "sent", sentRevision: 1 } as T : await original(path, init) as T);
+  };
+  const type = async (text: string) => {
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+
+  it("keeps the same words typed again right after Hermes accepts them", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    try {
+      vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => path === "/bots/shared/messages"
+        ? { requestId: (value as { requestId: string }).requestId, status: "accepted" } as T : {} as T);
+      await render();
+      await act(async () => sendButton().click());
+      serveClearedDraft();
+      await type("My saved server draft");
+      await advance(3000);
+      expect(container.querySelector("textarea")!.value).toBe("My saved server draft");
+      expect(vi.mocked(write).mock.calls.some(([path, value, method]) => path === "/bots/shared/draft" && method === "PUT"
+        && (value as { text: string }).text === "My saved server draft")).toBe(true);
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
+  it("frees the composer when the server clears the draft before the receipt, and keeps what is typed", async () => {
+    conversation = { ...conversation, activity: { state: "idle" } };
+    let finish!: (receipt: { requestId: string; status: "accepted" }) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = receipt => resolve(receipt as T); }) : {} as T);
+    try {
+      await render();
+      await act(async () => sendButton().click());
+      expect(container.querySelector("textarea")!.readOnly).toBe(true);
+      serveClearedDraft();
+      await advance(1600);
+      expect(container.querySelector("textarea")!.readOnly).toBe(false);
+      await type("My saved server draft");
+      expect(container.querySelector("textarea")!.value).toBe("My saved server draft");
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      await act(async () => finish({ requestId, status: "accepted" }));
+      await advance(3000);
+      expect(container.querySelector("textarea")!.value).toBe("My saved server draft");
+    } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
+  });
+
   it("holds the composer read-only while a message sends, and gives a refused one back", async () => {
     conversation = { ...conversation, activity: { state: "idle" } };
     let refuse!: () => void;

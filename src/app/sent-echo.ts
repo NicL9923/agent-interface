@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Message, SubmissionReceipt, User } from "../shared/types";
-import { sameDraft } from "./storage";
+import { isSentCopy, sameDraft } from "./storage";
 import type { Draft, Pending, SavedConversation } from "./storage";
 /** How long an accepted message may stay missing from a conversation that never shows its run. */
 export const ECHO_PATIENCE = 30_000;
@@ -107,12 +107,12 @@ export function withEchoes(conversation: SavedConversation | null, echoes: SentE
   return { ...conversation, messages: [...conversation.messages, ...messages] };
 }
 /**
- * Whether the composer is showing a draft that is on its way. The echo carries it in the
- * transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
- * because a draft and its send are told apart by content until Hermes answers.
+ * Whether the composer is showing the copy that is on its way. The echo carries it in the
+ * transcript, so the composer reads empty, and read-only so the copy stays the one sent. Once the
+ * draft is anything else, such as the server's cleared copy, the composer is free again.
  */
 export function sendingDraft(draft: Draft, pending: Pending | null, sending: boolean) {
-  return sending && !!pending && draft.botId === pending.botId && sameDraft(draft, pending);
+  return sending && !!pending && draft.botId === pending.botId && isSentCopy(draft) && sameDraft(draft, pending);
 }
 /**
  * The draft after a send was refused: the sent text and files go back in front of anything that

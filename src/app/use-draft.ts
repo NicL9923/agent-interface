@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { api, ApiError, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
-import { draftKey, localRead, localSave, sameDraft } from "./storage";
+import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
 type SetDraft = (update: (current: Draft) => Draft) => void;
@@ -288,7 +288,7 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
       return;
     const user = userId;
     localSave(draftKey(user, botId), draft);
-    if (!draft.dirty || offline || appUnavailable || pending && pending.botId === botId && sameDraft(pending, draft)) return;
+    if (!draft.dirty || offline || appUnavailable || pending && pending.botId === botId && isSentCopy(draft) && sameDraft(pending, draft)) return;
     const epoch = identityEpoch.current;
     let saved = false;
     const save = (keepalive = false) => {
