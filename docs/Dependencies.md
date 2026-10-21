@@ -6,7 +6,8 @@ Verified September 29, 2026. Direct dependencies use exact versions in
 | Component | Pin | Primary evidence |
 | --- | --- | --- |
 | React and React DOM | 19.3.0 | [React versions](https://react.dev/versions), [registry](https://registry.npmjs.org/react/19.3.0) |
-| TypeScript | 7.0.2 | [Microsoft release announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/), [registry](https://registry.npmjs.org/typescript/7.0.2) |
+| TypeScript, retained comparison and rollback compiler | 7.0.2 | [Microsoft release announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/), [registry](https://registry.npmjs.org/typescript/7.0.2) |
+| Oxc tsrs, command-line type checking | 0.18.0-ts7.1.0-dev.20260929 | [Primary documentation](https://github.com/oxc-project/tsrs), [registry](https://registry.npmjs.org/tsrs/0.18.0-ts7.1.0-dev.20260929) |
 | Vite | 8.3.1 | [Vite 8 requirements](https://v8.vite.dev/guide/), [registry](https://registry.npmjs.org/vite/8.3.1) |
 | React Vite plugin | 6.1.1 | [Registry](https://registry.npmjs.org/@vitejs/plugin-react/6.1.1) |
 | Fastify | 5.12.5 | [Fastify v5 requirements](https://fastify.dev/docs/latest/Guides/Migration-Guide-V5/), [registry](https://registry.npmjs.org/fastify/5.12.5) |
@@ -35,8 +36,22 @@ The app contract tests passed under Node 24.21.0 and Node 26.10.0. Integration a
 browser evidence records its actual runtime in `ValidationLedger.md`. This does
 not claim that every accepted future patch release has been tested.
 
-TypeScript 7 has no compiler API in this release. This repository invokes `tsc`
-as a command and does not depend on the removed programmatic API.
+## Command-line type checking
+
+Verified October 20, 2026 against npm's current release and the
+[tsrs CLI documentation](https://github.com/oxc-project/tsrs/blob/main/docs/USAGE.md).
+`npm run typecheck` and the first step of `npm run build` use the exactly pinned
+Oxc tsrs with `--noEmit` and the existing `tsconfig.json`. Its strictness, included
+files and other compiler options are unchanged. Vite, the service-worker build
+and the server's tsx runtime keep producing and running JavaScript as before.
+
+This is a prerelease targeting TypeScript 7.1 development semantics. Retain
+TypeScript 7.0.2 for comparisons and rollback with `npx --no-install tsc --noEmit`.
+The repository uses the compiler CLI and does not depend on a compiler API.
+The [compatibility record](https://github.com/oxc-project/tsrs/blob/main/docs/COMPATIBILITY.md)
+lists known gaps and supported platforms. The lockfile retains every published
+optional native package: macOS arm64 and Linux x64/arm64 with GNU and musl libc.
+Do not omit optional dependencies when installing the checker.
 
 # App state and authentication
 
