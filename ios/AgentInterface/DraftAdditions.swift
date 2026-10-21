@@ -120,9 +120,12 @@ extension AppStore {
   }
   /// Lands an assistant's waiting text in its open draft as one edit, in arrival order, up to the
   /// first Ask that still has to open its chat, so nothing that came later goes ahead of it. Waits
-  /// while the draft cannot take text: not open, still loading, or holding a send.
+  /// while the draft cannot take text: not open, still loading, or holding a send. An Ask that lapsed
+  /// meanwhile, such as while its chat opened, is dropped here rather than landed late.
   private func landAdditions(for id: String) {
     guard selectedBotId == id, draftReady, !holdsAdditions(id) else { return }
+    let now = Date(), saved = savedAdditions()
+    if saved.contains(where: { $0.lapsed(at: now) }) { storeAdditions(saved.filter { !$0.lapsed(at: now) }) }
     let ready = Array(savedAdditions().filter { $0.botId == id }.prefix { !$0.opens })
     guard !ready.isEmpty, addShared(text: ready.map(\.text).joined(separator: "\n\n"), botId: id) else { return }
     storeAdditions(savedAdditions().filter { addition in !ready.contains { $0.id == addition.id } })

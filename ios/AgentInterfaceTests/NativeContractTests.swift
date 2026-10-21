@@ -2611,6 +2611,25 @@ extension NativeContractTests {
         value.suspend()
     }
 
+    /// Before this, an Ask that lapsed while its chat opened landed anyway, because expiry was checked only
+    /// before the opening's reads.
+    func testAnAskThatLapsesWhileItsChatOpensIsDropped() async throws {
+        let server = NativeMockServer(); server.addFamilyBot()
+        let value = try store(server); defer { clean(server, value) }
+        server.versionDrafts("family", text: "Milk", revision: 1)
+        let path = "/api/bots/family/draft"; server.holdNext(path)
+        value.queueAsk(AskRequest(botId: "family", text: "Too late", scope: value.scope ?? "", at: Date().addingTimeInterval(0.5 - AskRequest.patience)))
+        let delivering = Task { await value.deliverAdditions() }
+        try await server.waitForHeld(path)
+        try await Task.sleep(for: .milliseconds(700))
+        server.release(path); await delivering.value
+        await value.deliverAdditions()
+        XCTAssertEqual(value.selectedBotId, "family")
+        XCTAssertEqual(value.draft.text, "Milk")
+        XCTAssertTrue(value.additions.isEmpty)
+        value.suspend()
+    }
+
     /// Before this, a reply or shared text queued after an Ask for the open chat landed ahead of it.
     func testTextFromEverySourceLandsInTheOrderItArrived() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
