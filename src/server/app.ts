@@ -24,7 +24,7 @@ import { Store } from "./store.js";
 import { installAuth, signedIn, stillSignedIn } from "./auth.js";
 import { installBotAccess, notFound, redactAgents, visible, visibleTo } from "./bot-access.js";
 import { BackgroundWorker } from "./notifications.js";
-import type { ApnsSender } from "./apns.js";
+import { accountMarker, type ApnsSender } from "./apns.js";
 import type { LiveActivitySender } from "./live-activity.js";
 import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
@@ -787,10 +787,13 @@ export async function createApp(
   });
   app.post("/api/bots/:id/approvals/:approvalId", async (req) => {
     await requireCapability("approvals");
-    const { decision } = z
-      .object({ decision: z.enum(["approved", "denied"]) })
+    const { decision, account } = z
+      .object({ decision: z.enum(["approved", "denied"]), account: z.string().max(64).optional() })
       .parse(req.body);
     const p = params(req);
+    // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
+    if (account !== undefined && account !== accountMarker(signedIn(req).id))
+      throw failure(409, "This approval was sent to a different account");
     const conversation = await runtime.conversation(p.id, { history: false });
     const approval = conversation.approvals.find((a) => a.id === p.approvalId);
     if (

@@ -317,6 +317,8 @@ export interface RuntimeEvent {
   runId?: string;
   routineId?: string;
   kind: "completed" | "approval" | "failed" | "interrupted" | "activity";
+  /** The pending approval an approval event asked about, from add-ons that report it. */
+  approvalId?: string;
   title: string;
   body?: string;
   occurredAt: string;

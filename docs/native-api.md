@@ -283,6 +283,45 @@ Notification taps receive the existing relative `url` field such as `/?bot=ID`
 and the event `tag`. Resolve links against the configured application origin;
 reject external URLs. Oversized links are omitted instead of truncated.
 
+### Notification payload and actions
+
+Each iOS alert carries `aps.thread-id` set to the assistant ID, so iOS groups
+notifications per assistant. Alerts without an assistant, such as digests and
+host alerts, have none. The request sets `apns-collapse-id` to the `tag` when it is
+1 to 64 printable ASCII characters, or to the tag's base64url SHA-256 otherwise.
+Tags name one notification, so the collapse ID only replaces a repeated delivery
+of the same one. Clearing still matches the payload's `tag`.
+
+Approval requests set `aps.interruption-level` to `time-sensitive`. iOS honors it
+only when the app is signed with the Time Sensitive Notifications entitlement,
+and ignores it otherwise.
+
+Actionable alerts also name their account with `account`, the first 16 hex
+characters of SHA-256 of `wildbots-account:` and the user ID, and their
+assistant with `botId`:
+
+| Notification | `aps.category` | Extra fields |
+| --- | --- | --- |
+| Approval request from an add-on that reports its ID | `APPROVAL` | `botId`, `approvalId`, `account` |
+| Finished reply in a one-to-one chat | `REPLY` | `botId`, `account` |
+| Everything else, including routine results, digests and failures | none | none |
+
+`APPROVAL` offers Approve and Deny. Both need the phone unlocked and run without
+opening the app. They call `POST /api/bots/:id/approvals/:approvalId` with
+`{ "decision": "approved" | "denied", "account": ACCOUNT }`, the request the
+approval card makes plus the account. The server answers 409 when the account is
+not the signed-in person's, or when the approval is no longer pending. The app
+sends a decision once and never retries it. When it does not go through, the app
+posts a local notification saying so, and tapping it opens the chat. `REPLY`
+offers a Reply text field. It opens the app and adds the text to that assistant's
+draft for review. While a send to that assistant is unsettled, the text waits, as
+Share inbox items do. It is never sent for the person.
+
+Grouping and actions are optional: when they would push the payload past 4000
+bytes, the actions go first, then the grouping. IDs over 200 bytes get neither.
+Older app builds ignore the new fields. Web Push payloads are unchanged, apart
+from approval events' new `approvalId`, which browsers ignore.
+
 ### Chat presence
 
 | Route | Body |
