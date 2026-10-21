@@ -43,7 +43,7 @@ struct AppleDeviceSnapshot: Codable {
   }
   func requestCalendar() async throws { _ = try await eventStore.requestFullAccessToEvents(); refreshAccess() }
   func requestReminders() async throws { _ = try await eventStore.requestFullAccessToReminders(); refreshAccess() }
-  static func includesReminder(due: Date?, start: Date, exclusiveEnd: Date, undated: Bool) -> Bool {
+  nonisolated static func includesReminder(due: Date?, start: Date, exclusiveEnd: Date, undated: Bool) -> Bool {
     guard let due else { return undated }
     return due >= start && due < exclusiveEnd
   }
@@ -58,14 +58,16 @@ struct AppleDeviceSnapshot: Codable {
     var reminders: [AppleSnapshotReminder] = []
     if !allowedLists.isEmpty {
       let predicate = eventStore.predicateForReminders(in: allowedLists)
-      let fetched: [EKReminder] = await withCheckedContinuation { continuation in
-        eventStore.fetchReminders(matching: predicate) { continuation.resume(returning: $0 ?? []) }
+      // Read on EventKit's queue: the reminders themselves cannot cross to the main actor, their values can.
+      let fetched: [AppleSnapshotReminder] = await withCheckedContinuation { continuation in
+        // Explicitly Sendable: EventKit calls back on its own queue, never the main actor.
+        eventStore.fetchReminders(matching: predicate) { @Sendable found in
+          continuation.resume(returning: (found ?? []).filter { reminder in
+            !reminder.isCompleted && Self.includesReminder(due: reminder.dueDateComponents?.date, start: start, exclusiveEnd: end, undated: undated)
+          }.map { AppleSnapshotReminder(list: $0.calendar.title, title: $0.title ?? "Untitled reminder", due: $0.dueDateComponents?.date) })
+        }
       }
-      reminders = fetched.filter { reminder in
-        guard !reminder.isCompleted else { return false }
-        return Self.includesReminder(due: reminder.dueDateComponents?.date, start: start, exclusiveEnd: end, undated: undated)
-      }.map { AppleSnapshotReminder(list: $0.calendar.title, title: $0.title ?? "Untitled reminder", due: $0.dueDateComponents?.date) }
-        .sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
+      reminders = fetched.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
     }
     return AppleDeviceSnapshot(capturedAt: Date(), windowStart: start, windowEnd: end, events: events, reminders: reminders)
   }

@@ -9,12 +9,12 @@ import XCTest
   private var directory: URL!
   private var url: URL { directory.appendingPathComponent("snapshot.json") }
   private let now = Date(timeIntervalSince1970: 1_800_000_000)
-  override func setUpWithError() throws {
+  override func setUp() async throws {
     directory = FileManager.default.temporaryDirectory.appendingPathComponent("assistant-surface-" + UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     AssistantEntityQuery.snapshotURL = url
   }
-  override func tearDownWithError() throws {
+  override func tearDown() async throws {
     AssistantEntityQuery.snapshotURL = WidgetSnapshotStore.defaultURL
     try? FileManager.default.removeItem(at: directory)
   }
@@ -195,7 +195,7 @@ import XCTest
 
   func testWidgetShowsOnlyChosenAssistantsAndCountsThem() throws {
     let all = snapshot([assistant("kitchen", "waiting"), assistant("ranch", "working"), assistant("garden")])
-    var intent = SelectAssistantsIntent()
+    let intent = SelectAssistantsIntent()
     XCTAssertEqual(intent.shown(in: all), all, "Nothing chosen keeps today's behavior")
     intent.assistants = []
     XCTAssertEqual(intent.shown(in: all), all)

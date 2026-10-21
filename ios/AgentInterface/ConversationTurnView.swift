@@ -48,7 +48,7 @@ struct ConversationTurnView: View, Equatable {
   var delivery: SentEcho.Delivery? = nil
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.transcriptRecipient) private var recipient
-  static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery }
+  nonisolated static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery }
   var body: some View {
     let visible = turn.visibleMessages
     VStack(alignment: .leading, spacing: 18) {

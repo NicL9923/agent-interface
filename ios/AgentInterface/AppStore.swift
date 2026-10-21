@@ -236,7 +236,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       && (activity != .interrupted || interruptionReviewed)
   }
   /// The server's limit, counted in UTF-16 code units as JavaScript counts string length.
-  static let maxMessageLength = 50_000
+  nonisolated static let maxMessageLength = 50_000
   func supports(_ key: String) -> Bool { bootstrap?.capabilities[key]?.supported == true }
   func reason(_ key: String) -> String {
     bootstrap?.capabilities[key]?.reason
@@ -363,8 +363,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
         URLQueryItem(name: "code_challenge_method", value: "S256"),
       ]
       let callback: URL = try await withCheckedThrowingContinuation { continuation in
+        // Sendable: the session may answer off the main actor, and only resumes the continuation.
         let session = ASWebAuthenticationSession(url: url.url!, callbackURLScheme: "agentinterface")
-        { url, error in
+        { @Sendable url, error in
           if let url {
             continuation.resume(returning: url)
           } else {

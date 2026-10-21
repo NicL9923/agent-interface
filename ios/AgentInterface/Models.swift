@@ -949,12 +949,12 @@ struct PushDevice: Encodable {
 }
 enum ServerDate {
   /// ISO8601DateFormatter is thread-safe, so one of each serves every parse instead of one per call.
-  private static let fractional: ISO8601DateFormatter = {
+  nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return formatter
   }()
-  private static let whole = ISO8601DateFormatter()
+  nonisolated(unsafe) private static let whole = ISO8601DateFormatter()
   static func parse(_ value: String) -> Date? { fractional.date(from: value) ?? whole.date(from: value) }
   static func string(_ date: Date) -> String { fractional.string(from: date) }
 }

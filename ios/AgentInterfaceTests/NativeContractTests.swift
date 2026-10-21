@@ -536,10 +536,10 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertTrue(notices.isEmpty)
         // A second tap while the first is on its way never sends it twice.
         server.hold(path)
-        async let first: Void = controller.decide(decision())
+        let first = Task { await controller.decide(decision()) }
         try await server.waitForHeld(path)
         await controller.decide(decision())
-        server.release(path); await first
+        server.release(path); await first.value
         XCTAssertEqual(server.requestCount(path), 2)
     }
     func testADecisionThatDidNotGoThroughIsReportedAndNeverRetried() async throws {
@@ -1549,9 +1549,9 @@ private final class NativeMockServer: @unchecked Sendable {
             fetches += 1; try await Task.sleep(for: .milliseconds(100)); return png
         }
         let key = "coalesce:\(UUID().uuidString)" as NSString
-        async let first = loads.image(key, fetch: fetch)
-        async let second = loads.image(key, fetch: fetch)
-        let images = try await [first, second]
+        let first = Task { try await loads.image(key, fetch: fetch) }
+        let second = Task { try await loads.image(key, fetch: fetch) }
+        let images = [try await first.value, try await second.value]
         XCTAssertEqual(fetches, 1); XCTAssertTrue(images.allSatisfy { $0 != nil })
         // A row that scrolled away stops its download; the next one starts its own.
         let other = "abandon:\(UUID().uuidString)" as NSString

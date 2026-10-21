@@ -31,23 +31,20 @@ extension AppStore {
   static let shared = MinuteClock()
   private(set) var now: Date
   @ObservationIgnored private let date: () -> Date
-  @ObservationIgnored private var timer: Timer?
-  @ObservationIgnored private var foreground: NSObjectProtocol?
+  @ObservationIgnored private var ticking: Task<Void, Never>?
+  /// The app ticks it on returning to the foreground: a sleep stands still in the background, and a
+  /// returning app should not show a stale "Just now".
   init(date: @escaping () -> Date = { Date() }, interval: TimeInterval = 60) {
     self.date = date
     now = date()
-    timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
-    }
-    // Timers stand still in the background; a returning app should not show a stale "Just now".
-    foreground = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
+    ticking = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(interval))
+        self?.tick()
+      }
     }
   }
-  deinit {
-    timer?.invalidate()
-    if let foreground { NotificationCenter.default.removeObserver(foreground) }
-  }
+  deinit { ticking?.cancel() }
   func tick() { now = date() }
 }
 

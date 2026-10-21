@@ -352,7 +352,8 @@ struct DroppedItems {
   var text: [String] = []
   func cleanUp() { for url in files { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) } }
 
-  static func load(_ providers: [NSItemProvider]) async -> DroppedItems {
+  /// On the main actor, where the drop delivered its providers; only their loaded values leave the callbacks.
+  @MainActor static func load(_ providers: [NSItemProvider]) async -> DroppedItems {
     var result = DroppedItems()
     for provider in providers {
       // A text selection has no file name; it goes into the message, as in a browser.
@@ -373,18 +374,18 @@ struct DroppedItems {
     }
     return result
   }
-  private static func loadText(_ provider: NSItemProvider) async -> String? {
+  @MainActor private static func loadText(_ provider: NSItemProvider) async -> String? {
     await withCheckedContinuation { continuation in
       _ = provider.loadObject(ofClass: String.self) { value, _ in continuation.resume(returning: value) }
     }
   }
-  private static func loadData(_ provider: NSItemProvider, _ type: UTType) async -> Data? {
+  @MainActor private static func loadData(_ provider: NSItemProvider, _ type: UTType) async -> Data? {
     await withCheckedContinuation { continuation in
       _ = provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in continuation.resume(returning: data) }
     }
   }
   /// The provided file lasts only for the callback, so it is copied, under the name it was dragged with.
-  private static func loadFile(_ provider: NSItemProvider, _ type: UTType) async -> URL? {
+  @MainActor private static func loadFile(_ provider: NSItemProvider, _ type: UTType) async -> URL? {
     let suggested = provider.suggestedName
     return await withCheckedContinuation { continuation in
       _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in

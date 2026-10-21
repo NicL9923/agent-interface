@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import os
 
 /// An assistant as Siri, Shortcuts and the widget's settings see it. It exists only while the app's
 /// App Group snapshot does, so it is per account and disappears on sign-out like the snapshot.
@@ -18,7 +19,12 @@ struct AssistantEntity: AppEntity, Identifiable, Hashable {
 
 struct AssistantEntityQuery: EntityStringQuery {
   /// Where the snapshot lives. Tests point it at a temporary file.
-  static var snapshotURL: URL? = WidgetSnapshotStore.defaultURL
+  /// Locked because intents read it on their own tasks while tests change it.
+  private static let snapshotLocation = OSAllocatedUnfairLock<URL?>(initialState: WidgetSnapshotStore.defaultURL)
+  static var snapshotURL: URL? {
+    get { snapshotLocation.withLock { $0 } }
+    set { snapshotLocation.withLock { $0 = newValue } }
+  }
   init() {}
   private var all: [AssistantEntity] { AssistantEntity.all(in: WidgetSnapshotStore.read(from: Self.snapshotURL)) }
   /// In the order asked for. An assistant that is gone is left out, which Shortcuts shows as missing.

@@ -272,7 +272,7 @@ struct BotSettingsView: View {
         AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name)
       }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
       Section("Style") {
-        Picker("Style", selection: Binding(get: { avatar.mode }, set: switchAvatarMode)) {
+        Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
           Text("Geometric").tag("geometric")
           Text("Mascot").tag("mascot")
           Text("Portrait").tag("portrait")

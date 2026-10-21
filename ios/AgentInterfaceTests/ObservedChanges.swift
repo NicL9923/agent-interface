@@ -38,21 +38,27 @@ extension AppStore {
   final class Log: @unchecked Sendable {
     private let lock = NSLock()
     private var counts: [String: Int] = [:]
-    var active = true
+    private var recording = true
+    var active: Bool {
+      get { lock.withLock { recording } }
+      set { lock.withLock { recording = newValue } }
+    }
     func record(_ name: String) { lock.withLock { counts[name, default: 0] += 1 } }
     var value: [String: Int] { lock.withLock { counts } }
   }
   let log = Log()
-  for (name, path) in AppStore.observedForTests { arm(store, name, path, log.record, while: { log.active }) }
+  for name in AppStore.observedForTests.keys { arm(store, name, { log.record($0) }, while: { log.active }) }
   try await body()
   log.active = false
   return log.value
 }
-@MainActor private func arm(_ store: AppStore, _ name: String, _ path: PartialKeyPath<AppStore>, _ record: @escaping @Sendable (String) -> Void,
+/// Key paths are not Sendable, so the change handler re-arms by name.
+@MainActor private func arm(_ store: AppStore, _ name: String, _ record: @escaping @Sendable (String) -> Void,
   while active: @escaping @Sendable () -> Bool) {
+  guard let path = AppStore.observedForTests[name] else { return }
   withObservationTracking { _ = store[keyPath: path] } onChange: {
     guard active() else { return }
     record(name)
-    MainActor.assumeIsolated { arm(store, name, path, record, while: active) }
+    MainActor.assumeIsolated { arm(store, name, record, while: active) }
   }
 }

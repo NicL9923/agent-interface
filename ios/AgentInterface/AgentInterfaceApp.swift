@@ -24,6 +24,7 @@ import UserNotifications
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
+            MinuteClock.shared.tick()
             Task {
               await store.resume()
               await NotificationController.shared.synchronize()
@@ -88,17 +89,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         .failed("Device registration failed: \(error.localizedDescription)")
     }
   }
-  func userNotificationCenter(
-    _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-  ) {
+  /// iOS may call the notification delegate off the main thread, so its methods are nonisolated
+  /// and read the payload before moving to the main actor.
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
     let info = notification.request.content.userInfo
     let botId = NotificationController.chatBotId(info["url"] as? String), notice = info["decisionNotice"] != nil
-    Task { @MainActor in
-      // The chat on screen already shows this news. A decision that did not go through is not news it shows.
-      let reading = !notice && botId != nil && botId == NotificationController.shared.store?.viewingBotId
-      completionHandler(reading ? [] : [.banner, .sound, .badge])
-    }
+    // The chat on screen already shows this news. A decision that did not go through is not news it shows.
+    let reading = await MainActor.run { !notice && botId != nil && botId == NotificationController.shared.store?.viewingBotId }
+    return reading ? [] : [.banner, .sound, .badge]
   }
   /// A silent push after the person read chats on another device or in the browser.
   func application(
@@ -112,19 +110,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       completionHandler(.newData)
     }
   }
-  func userNotificationCenter(
-    _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void
-  ) {
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
     let route = NotificationActions.route(action: response.actionIdentifier, userInfo: response.notification.request.content.userInfo,
       text: (response as? UNTextInputNotificationResponse)?.userText)
-    Task { @MainActor in
-      // Approve and Deny can run with the app in the background; this keeps it awake for the server's answer.
-      let background = UIApplication.shared.beginBackgroundTask(withName: "Notification action")
-      await NotificationController.shared.handle(route)
-      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-      completionHandler()
-    }
+    await Self.handle(route)
+  }
+  /// Approve and Deny can run with the app in the background; this keeps it awake for the server's answer.
+  @MainActor private static func handle(_ route: NotificationRoute) async {
+    let background = UIApplication.shared.beginBackgroundTask(withName: "Notification action")
+    await NotificationController.shared.handle(route)
+    if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
   }
 }
 @MainActor final class NotificationController {
@@ -406,7 +401,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 struct NotificationPermissions {
   var status: () async -> UNAuthorizationStatus
   var request: () async throws -> Bool
-  static let system = NotificationPermissions(
+  @MainActor static let system = NotificationPermissions(
     status: { await UNUserNotificationCenter.current().notificationSettings().authorizationStatus },
     request: { try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) })
 }

@@ -10,7 +10,7 @@ enum NotificationActions {
   /// The payload leaves out what an approval would run, since it can hold credentials, so approving from the
   /// notification would be blind: Review opens the chat to see it first. Decline needs no detail and works from
   /// the notification once the phone is unlocked. Reply opens the app, because the text only joins the draft.
-  static let categories: Set<UNNotificationCategory> = [
+  static var categories: Set<UNNotificationCategory> { [
     UNNotificationCategory(identifier: approvalCategory, actions: [
       UNNotificationAction(identifier: review, title: "Review", options: [.foreground, .authenticationRequired]),
       UNNotificationAction(identifier: deny, title: "Decline", options: [.authenticationRequired, .destructive]),
@@ -19,7 +19,7 @@ enum NotificationActions {
       UNTextInputNotificationAction(identifier: reply, title: "Reply", options: [.foreground, .authenticationRequired],
         textInputButtonTitle: "Add to draft", textInputPlaceholder: "Review it in the chat before sending"),
     ], intentIdentifiers: [], options: []),
-  ]
+  ] }
   /// The server's `accountMarker`: names the account a notification went to without sending its ID through Apple.
   static func accountMarker(_ userId: String) -> String {
     String(SHA256.hash(data: Data("wildbots-account:\(userId)".utf8)).map { String(format: "%02x", $0) }.joined().prefix(16))

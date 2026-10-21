@@ -1,7 +1,8 @@
 import Foundation
 
 /// Reuses parsing across ordinary SwiftUI updates without retaining unbounded reply prefixes.
-final class MarkdownCache {
+/// Unchecked: its only state is an NSCache, which is thread-safe, of immutable entries.
+final class MarkdownCache: @unchecked Sendable {
   static let shared = MarkdownCache()
   private final class Entry: NSObject {
     let blocks: [MarkdownBlock]
