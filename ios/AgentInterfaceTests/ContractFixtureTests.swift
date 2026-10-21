@@ -91,6 +91,10 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.events.first?.payload.thread_id, "thread-1"); XCTAssertEqual($0.events.first?.created_at, 1790852400.5)
       XCTAssertFalse($0.has_more)
     },
+    "group-log-state": check(GroupPage.self) {
+      XCTAssertEqual($0.events.map(\.seq), [1]); XCTAssertEqual($0.state?.room.id, "room-dinner")
+      XCTAssertEqual($0.state?.driver_status?.pending_actions.first?.execution_generation, 1)
+    },
     "group-message": check(GroupAccepted.self) { XCTAssertTrue($0.accepted) },
     "group-state": check(GroupState.self) {
       let action = try XCTUnwrap($0.driver_status?.pending_actions.first)

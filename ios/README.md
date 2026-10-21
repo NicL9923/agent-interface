@@ -188,11 +188,14 @@ Apple references checked October 16, 2026: [create an app record](https://develo
 and [internal testers and build expiry](https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers/).
 
 The server owns execution and notification delivery while the app is closed.
-The foreground client follows the open conversation's event stream and reads it
-on each change notice, polling every 30 seconds while the stream is live and every
-1.5 seconds without one, with backoff. Bootstrap refreshes every 8 seconds. Reads keep the last response and its ETag in memory, so an unchanged
-response arrives as an empty 304; sign-out and identity changes clear them. It
-preserves drafts and admission IDs; it never automatically resubmits a message.
+The foreground client follows the event stream of the conversation on screen, including the iPad
+detail pane, and reads it on each change notice, polling every 30 seconds while the stream is live and every
+1.5 seconds without one, with backoff. Home, Today and Search leave the conversation alone; it is read
+again as soon as it returns to the screen. Bootstrap refreshes every 45 seconds and on roster notices. Reads keep the last response and its ETag in memory, so an unchanged
+response arrives as an empty 304 and is not decoded or applied again; sign-out and identity changes clear them. Today,
+the group chat list and an open group poll only while the app is active, and refresh once on return. An
+unconfirmed send is checked after 1.5, 5 and 15 seconds, then every minute, and at once after a change
+notice from its conversation. The client preserves drafts and admission IDs; it never automatically resubmits a message.
 Use authenticated Quick Look previews to share or save images, PDFs, and text files.
 
 See [Parity.md](Parity.md) for implemented scope, observed validation, and

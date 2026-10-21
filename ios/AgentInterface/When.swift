@@ -58,11 +58,32 @@ enum When {
     formatted(date, "jmm", calendar: calendar, locale: locale)
   }
   private static func formatted(_ date: Date, _ template: String, calendar: Calendar, locale: Locale) -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = calendar
-    formatter.timeZone = calendar.timeZone
-    formatter.locale = locale
-    formatter.setLocalizedDateFormatFromTemplate(template)
-    return formatter.string(from: date)
+    formatters.formatter(template, calendar: calendar, locale: locale).string(from: date)
+  }
+  private static let formatters = Formatters()
+  /// Building a DateFormatter costs far more than using one, and lists format a date per row. Each
+  /// is configured once, then only formats, which DateFormatter does safely from any thread.
+  private final class Formatters: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cache: [String: DateFormatter] = [:]
+    init() {
+      // A changed 12/24-hour setting or region keeps the locale identifier, so start over.
+      NotificationCenter.default.addObserver(forName: NSLocale.currentLocaleDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
+        self?.lock.withLock { self?.cache.removeAll() }
+      }
+    }
+    func formatter(_ template: String, calendar: Calendar, locale: Locale) -> DateFormatter {
+      let key = "\(template)|\(locale.identifier)|\(locale.hourCycle)|\(calendar.identifier)|\(calendar.timeZone.identifier)"
+      return lock.withLock {
+        if let cached = cache[key] { return cached }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = locale
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        cache[key] = formatter
+        return formatter
+      }
+    }
   }
 }

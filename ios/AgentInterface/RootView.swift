@@ -369,7 +369,8 @@ struct BotListView: View {
     Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(HomeLinkStyle(selected: destination == .groups)).accessibilityIdentifier("openGroups")
   }
   private func state(_ bot: Bot) -> ActivityState {
-    lost ? .disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
+    // The open conversation is read only while on screen; otherwise the roster's state is the current one.
+    lost ? .disconnected : bot.id == store.followedBotId ? store.activity : bot.activity
   }
   private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
   private func pinnedTile(_ bot: Bot) -> some View {
