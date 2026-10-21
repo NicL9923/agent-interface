@@ -98,6 +98,8 @@ struct RootView: View {
     // Only a person looking at its conversation is taken home; Today and the other views stay.
     if UIDevice.current.userInterfaceIdiom == .phone { assistantPath.removeAll { $0 == "chat" } }
     if destination == .conversation { compactColumn = .sidebar }
+    // Handled: losing the same assistant again later is a new change.
+    store.leftBotId = nil
   }
   private func accountChanged() {
     destination = .conversation
