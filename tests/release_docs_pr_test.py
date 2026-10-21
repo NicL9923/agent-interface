@@ -219,6 +219,27 @@ class DocsPullRequest(unittest.TestCase):
         self.assertEqual(self.git("--git-dir", str(self.origin), "branch", "--list", BRANCH), "")
         self.assert_checkout_untouched()
 
+    def test_a_release_recorded_only_in_the_archive_needs_no_pr(self):
+        self.run_tool("activate", NAME, "--no-docs-pr")
+        manifest = release_app.load_manifest(NAME)
+        # Recorded by hand in the archive before entries had their own files, so no entry file exists.
+        (self.seed / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
+        archive = self.seed / "docs/ValidationLedger.md"
+        archive.write_text(archive.read_text() + f"[receipt](evidence/{manifest['receiptName']})\n")
+        self.git("-C", str(self.seed), "add", ".")
+        self.git("-C", str(self.seed), "commit", "--quiet", "-m", "Record in the archive")
+        self.git("-C", str(self.seed), "push", "--quiet", "origin", "HEAD:main")
+        self.assertIn("origin/main already records this release", self.run_tool("record", NAME))
+        self.assertEqual(self.creates(), [])
+        self.assert_checkout_untouched()
+
+    def test_an_entry_saved_for_the_archive_is_written_with_working_links(self):
+        saved = {"name": NAME, "receiptName": "old.json",
+                 "ledgerEntry": "## October 13 app release 7fac68e\n\nThe [production receipt](evidence/old.json) records it.\n"}
+        self.assertTrue(release_app.insert_ledger_entry(self.seed, saved))
+        self.assertEqual((self.seed / ENTRY).read_text(),
+                         "# October 13 app release 7fac68e\n\nThe [production receipt](../evidence/old.json) records it.\n")
+
     def test_a_second_release_of_the_same_commit_on_the_same_day_gets_its_own_pr_and_entry(self):
         self.assertIn("pull/99", self.run_tool("activate", NAME))
         second = NAME[:-7] + "235959Z"

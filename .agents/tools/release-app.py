@@ -182,8 +182,19 @@ def insert_ledger_entry(root, manifest):
     if any(link in entry.read_text() for entry in recorded if entry.is_file()):
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(manifest["ledgerEntry"])
+    path.write_text(relocated_entry(manifest["ledgerEntry"]))
     return True
+
+
+def relocated_entry(text):
+    """An entry saved by an earlier version for the archive, moved to its own file.
+
+    Those manifests hold a `##` heading and receipt links relative to docs/; a retry writes them under
+    docs/ledger/, so the heading becomes the file's title and the links climb one directory.
+    """
+    if text.startswith("## "):
+        text = text[1:]
+    return text.replace("](evidence/", "](../evidence/")
 
 
 def docs_branch(manifest):
@@ -585,9 +596,16 @@ def activate(args):
 
 
 def write_records(root, manifest):
-    """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing."""
-    (root / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
+    """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing.
+
+    Returns the paths that hold this release's records. The entry file is absent when the release was
+    already recorded elsewhere, by hand or in the archive, so only the receipt is listed then.
+    """
+    receipt = "docs/evidence/" + manifest["receiptName"]
+    (root / receipt).write_text(manifest["productionReceipt"])
     insert_ledger_entry(root, manifest)
+    entry = ledger_file(manifest["name"])
+    return [entry, receipt] if (root / entry).exists() else [receipt]
 
 
 def record_release(manifest, docs_pr=True):
@@ -641,8 +659,7 @@ def open_docs_pull_request(manifest):
                 checkout = Path(temporary) / "records"
                 git("worktree", "add", "--quiet", "--detach", str(checkout), "origin/main")
                 try:
-                    write_records(checkout, manifest)
-                    git("add", ledger_file(manifest["name"]), "docs/evidence/" + manifest["receiptName"], cwd=checkout)
+                    git("add", *write_records(checkout, manifest), cwd=checkout)
                     if not git("status", "--porcelain", cwd=checkout):
                         print("origin/main already records this release; no docs PR is needed.")
                         return

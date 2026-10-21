@@ -11,10 +11,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ui-tests-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   ui:
     name: iOS UI tests
@@ -23,6 +19,10 @@ jobs:
       github.event_name != 'pull_request' ||
       (contains(github.event.pull_request.labels.*.name, 'ui-tests') &&
        (github.event.action == 'synchronize' || github.event.label.name == 'ui-tests'))
+    # On the job, not the workflow, so a skipped run for another label never cancels a running one.
+    concurrency:
+      group: ui-tests-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: macos-26
     timeout-minutes: 60
     steps:
