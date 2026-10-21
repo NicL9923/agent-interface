@@ -1,5 +1,45 @@
 # Validation ledger
 
+## October 21 daily-use qualification, awaiting idle admission
+
+PR #167 merged as `14c93da8df3a8a89ebd39e9b0751b8e91467e132` after all four
+CI jobs completed. Fresh isolated qualification passed the native/application
+probes, including the new numeric search-pointer/history locator assertions,
+and all 18 private OAuth/Google regressions. The [sanitized receipts](evidence/qualification-daily-use-20261021/manifest.json)
+record unchanged Hermes `acc3cada0da86` and repair
+`30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+The retained private qualification receipt binds integration digest
+`b64ed1e0f73cc06632af7a51289098cb5b2c528b043a24205c99cadf1a54f7eb`.
+The disposable runtime was removed; the actual qualification receipt remains in
+operation `release-14c93da8-20261021T031808Z` for the final guarded preparation.
+
+WildBots 1.0 build 10 was signed and uploaded once from reviewed commit
+`63cd9cc2d517e90dc94f7b8fd9114e38960bca2d`. All three bundles and the exported
+IPA passed release verification. Apple returned transient upload errors before
+the uploader completed; the exact [build is valid](evidence/2026-10-21-household-build-10-upload.json).
+The later merge and draft-retry test fix did not alter shipping iOS source.
+Household assignment was not performed, and automatic all-build access remains
+disabled. The production announcement remains build 9.
+
+Twenty-eight check-only preflights over the bounded 40-minute wait refused active
+Hermes work. Each refused stage was discarded. Production remains
+`release-2cdd913c-20261020T124144Z`; no task-owned service restart, admission bypass
+or release switch occurred. The five app/Hermes user services remained active.
+Stopping that work requires Nicolas's explicit direction; otherwise resume normal
+guarded preparation with the retained qualification receipt when work is idle.
+
+The reusable native-release check verifies authenticated bootstrap, Hermes
+connectivity, an expected TestFlight build/link and exact service-worker bytes.
+It refuses missing databases and writes an owner-private receipt after deleting
+its temporary session. Independent Claude Opus 5.5 review identified an untied
+release label, possible stray database creation and an incomplete command header.
+The worker-byte comparison, existence guard and full invocation now address them.
+Final independent review confirmed these fixes and found no additional issues.
+Node syntax validation and an actual run against the unchanged build-9 deployment
+confirmed [bootstrap, connectivity and temporary-session cleanup](evidence/2026-10-21-native-baseline-check.json). It does not claim
+build-10 distribution or activation. Physical-phone audio, VoiceOver navigation,
+frame timing and interactive household use remain unverified.
+
 ## October 20 native daily-use improvements
 
 PR #167's first CI run exposed an existing draft-retry test's fixed 1.2-second
