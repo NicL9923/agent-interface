@@ -44,6 +44,45 @@ gap: suspend could recreate an expiring session snapshot. The suggested save gua
 and a focused expiry regression now cover it. The unused root size-class binding
 was also removed. Fresh isolated native qualification is required before activation
 because the integration changed.
+## October 20 tsrs command-line adoption
+
+Validated on Nicolass-Mini, macOS arm64, Node 26.10.0, npm 11.19.1 and Python
+3.14.7. The source fingerprint is
+`sha256:3aaf4b2ea3da33eb1c8ba7300663dc90b358807ac53fa360cd9f24af29d18efd`
+across 891 files. The source-state tool excludes this ledger.
+
+TypeScript 7.0.2 and tsrs `0.18.0-ts7.1.0-dev.20260929` both exited 0 with no
+diagnostics on that same source and `tsconfig.json`, using `--noEmit --pretty false`.
+`/usr/bin/time -l` measured one invocation each, with no incremental compiler cache:
+
+| Compiler | Elapsed execution | macOS peak RSS |
+| --- | --- | --- |
+| TypeScript 7.0.2 | 1.03 s | 781,041,664 bytes |
+| tsrs | 0.29 s | 238,206,976 bytes |
+
+These are single-run observations with OS caches uncontrolled. Queue waits of
+93.14 s and 60.62 s respectively are excluded. tsrs reports upstream TypeScript
+`7.1.0-dev.20260930.4`; this comparison found no diagnostic differences.
+A temporary included `src/tsrs-negative-control.ts` assigned a number to a string.
+`npm run typecheck -- --pretty false` exited 2 with TS2322 naming that file.
+The probe was removed before the successful build and tests.
+
+- `npm ci --no-audit --no-fund` passed. All five optional tsrs native packages
+  remain pinned with integrity hashes, including both Linux libc variants.
+- `npm test` passed all 849 tests in 73 files.
+- `npm run build` passed the tsrs check, Vite build and service-worker build.
+  Web build `b688581988af98c7` matches the recorded base release.
+- `npm run test:py` passed 22 files, with no failures. One system-terminal file
+  skipped without tmux; two individual tests skipped because optional native
+  Hermes source fixtures were not configured.
+- `npm run lint:py` passed with the repository's pinned ruff 0.17.0.
+
+Raw logs and time reports are under
+`/Volumes/DevSSD/scratch/tsrs-rollout-20261020/agent-interface/`; the shared
+`validation.jsonl` records each command against its source fingerprint.
+Validation used the rollout's shared slot and released it between commands.
+Linux execution, native iOS builds and deployment were not performed for this
+tooling change. TypeScript, tsx and the JavaScript emission tools remain installed.
 
 ## October 20 app release 2cdd913
 
