@@ -57,6 +57,8 @@ private final class NativeMockServer: @unchecked Sendable {
     private var connected = true
     private var conversationStatus = 200
     private var botHidden = false
+    private var extraBot = false
+    func addFamilyBot() { lock.withLock { extraBot = true } }
     private var assistantsChanged = 0
     private var history: [String]?
     private var heldOnce: Set<String> = []
@@ -201,11 +203,13 @@ private final class NativeMockServer: @unchecked Sendable {
         throw URLError(.timedOut)
     }
     func bootstrapData() -> Data {
-        let (isConnected, hidden) = lock.withLock { (connected, botHidden) }
+        let (isConnected, hidden, extra) = lock.withLock { (connected, botHidden, extraBot) }
         let family: [String: Any] = ["id": "family", "name": "Family", "model": "test", "shared": true, "activity": "idle"]
+        var bots: [[String: Any]] = !isConnected ? [] : hidden ? [family] : [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": "idle"]]
+        if isConnected && extra && !hidden { bots.append(family) }
         return Self.json(["user": ["id": user, "name": user, "email": "\(user)@example.test", "picture": NSNull()],
                    "household": [], "preferences": ["presentation": "simple", "theme": "system", "favorites": [], "sections": [], "followBots": []],
-                   "bots": !isConnected ? [] : hidden ? [family] : [["id": "bot", "name": "Bot", "model": "test", "shared": true, "activity": "idle"]],
+                   "bots": bots,
                    "capabilities": ["uploads": ["supported": true], "chat": ["supported": true], "steering": ["supported": true], "idempotency": ["supported": true]],
                    "connection": ["connected": isConnected], "csrfToken": NSNull()])
     }
@@ -1158,7 +1162,10 @@ private final class NativeMockServer: @unchecked Sendable {
     }
 
     func testAnExpiringSignInStopsTheChangeStreamToo() async throws {
-        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let server = NativeMockServer(), value = try store(server)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        value.offlineLibraryRoot = root
+        defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
         server.serveEventStreams()
         _ = await value.pollOnce(); try await Task.sleep(for: .milliseconds(150))
         let reads = server.conversationQueries.count
@@ -1168,6 +1175,10 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertFalse(continues); XCTAssertTrue(value.sessionExpired)
         server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(server.conversationQueries.count, reads, "The stream ends with polling, so no read follows a notice")
+        await value.refreshConversation()
+        value.suspend()
+        try await Task.sleep(for: .milliseconds(5300))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "An expiring session recreated its purged snapshot")
     }
 
     func testAnOlderMissingAssistantErrorCannotCloseAConversationANewerReadShowed() async throws {
@@ -1483,7 +1494,10 @@ private final class NativeMockServer: @unchecked Sendable {
         server.failHeld(path)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 0, "Nothing saved yet")
-        try await Task.sleep(for: .milliseconds(1200))
+        let deadline = ContinuousClock.now + .seconds(10)
+        while value.draft.dirty != false, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
         XCTAssertEqual(value.draft.dirty, false)
     }
@@ -2089,5 +2103,83 @@ final class DraftMergeTests: XCTestCase {
         XCTAssertEqual(copy(dirty: nil, base: 3, baseHash: "h", sentHash: "s").sent(submission), Draft(dirty: false, baseRevision: 3, baseHash: "h", sentHash: "s"))
         let more = copy("More", base: 3)
         XCTAssertEqual(more.sent(submission), more)
+    }
+}
+
+extension NativeContractTests {
+    func testOfflineColdLaunchRestoresSessionBoundReadOnlyChatThenRevalidates() async throws {
+        let server = NativeMockServer()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); clean(server) }
+        server.addFamilyBot()
+        let bootstrap = try JSONDecoder().decode(Bootstrap.self, from: server.bootstrapData())
+        let chat = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
+        let url = OfflineLibrary.url(origin: server.origin.absoluteString, token: "synthetic-native-session", root: root)
+        OfflineLibrary(savedAt: Date(), bootstrap: bootstrap, conversations: ["bot": chat], selected: "bot").write(url)
+        let expiryKey = "connection.expiry.\(server.origin.absoluteString)"
+        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: 3600)), forKey: expiryKey)
+        defer { UserDefaults.standard.removeObject(forKey: expiryKey) }
+        server.setOffline(true)
+        let launched = launchedStore(server, token: "synthetic-native-session"); launched.offlineLibraryRoot = root
+        await launched.restore(); launched.suspend()
+        XCTAssertNotNil(launched.offlineSavedAt)
+        XCTAssertEqual(launched.conversation?.messages.map(\.id), OfflineLibrary.conversation(chat).messages.map(\.id))
+        XCTAssertFalse(launched.canSend); XCTAssertFalse(launched.connected)
+        await launched.select("family")
+        XCTAssertNotNil(launched.offlineSavedAt, "An uncached assistant still belongs to the restored offline roster")
+        XCTAssertNil(launched.conversation)
+        await launched.select("bot")
+        server.setOffline(false)
+        await launched.refreshBootstrap()
+        XCTAssertFalse(launched.connected, "A roster read cannot authorize an unrevalidated cached chat")
+        await launched.refreshConversation()
+        XCTAssertTrue(launched.connected); XCTAssertNil(launched.offlineSavedAt)
+        _ = await launched.signOut()
+        try await Task.sleep(for: .milliseconds(5300))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "A delayed write recreated a signed-out snapshot")
+    }
+}
+
+
+extension NativeContractTests {
+    func testRosterAdditionKeepsOpenChatAndClipsWhileRemovalOnlyDeletesItsOwnClip() async throws {
+        let server = NativeMockServer(), value = try store(server)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        value.offlineLibraryRoot = root
+        defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
+        let original = value.conversation
+        let clip = try XCTUnwrap(value.voiceRecordingURL(botId: "bot"))
+        try FileManager.default.createDirectory(at: clip.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("first recording".utf8).write(to: clip)
+        server.addFamilyBot(); await value.refreshBootstrap()
+        let other = try XCTUnwrap(value.voiceRecordingURL(botId: "family"))
+        try Data("other recording".utf8).write(to: other)
+        XCTAssertEqual(value.selectedBotId, "bot"); XCTAssertEqual(value.conversation, original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: clip.path))
+        server.hideBot(); await value.refreshBootstrap()
+        XCTAssertNil(value.voiceRecordingURL(botId: "bot"), "A disappearing composer must not recreate a removed assistant's clip")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clip.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.path))
+        _ = await value.signOut()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
+    }
+}
+
+extension NativeContractTests {
+    func testSnapshotWriterPersistsInBackgroundAndSkipsUnchangedPolls() async throws {
+        let server = NativeMockServer(), value = try store(server)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        value.offlineLibraryRoot = root
+        defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
+        await value.refreshConversation(); value.suspend()
+        let url = OfflineLibrary.url(origin: server.origin.absoluteString, token: "synthetic-native-session", root: root)
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: url.path) { try await Task.sleep(for: .milliseconds(10)) }
+        let original = try Data(contentsOf: url)
+        XCTAssertNotNil(OfflineLibrary.read(url))
+        await value.refreshBootstrap()
+        try await Task.sleep(for: .milliseconds(5300))
+        XCTAssertEqual(try Data(contentsOf: url), original, "An unchanged poll rewrote the snapshot")
+        _ = await value.signOut()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 }

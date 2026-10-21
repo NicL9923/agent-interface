@@ -5,7 +5,12 @@ import SwiftUI
 private struct UnobservedStoreKey: EnvironmentKey { static let defaultValue: AppStore? = nil }
 /// Whether Hermes is reachable, for rows that show "Last seen running".
 private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue = true }
+private struct FoundMessageKey: EnvironmentKey { static let defaultValue: String? = nil }
 extension EnvironmentValues {
+  var foundMessage: String? {
+    get { self[FoundMessageKey.self] }
+    set { self[FoundMessageKey.self] = newValue }
+  }
   var unobservedStore: AppStore? {
     get { self[UnobservedStoreKey.self] }
     set { self[UnobservedStoreKey.self] = newValue }

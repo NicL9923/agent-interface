@@ -34,3 +34,16 @@ it('pauses without resaving a stale prompt, schedule or recipients',async()=>{
 it('offers only enabled tool starters and always leaves sending to the composer',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/bots/shared/starters',headers:s.headers});expect(response.json().map((row:any)=>row.id)).toEqual(['meals','document','server']);
 });
+
+it('locates a live reply before saving and re-resolves an old saved pointer on opening',async()=>{
+  const s=await setup();
+  s.experienceRequest.mockImplementation(async(input:any)=>({botId:input.profile,sessionId:input.sessionId,messages:[{id:'stable-uid',role:'assistant',text:'Late answer'}],offset:200,hasMore:false,targetMessageId:'stable-uid'}));
+  const reply=await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:{kind:'session',botId:'shared',sessionId:'history',messageId:'old-row',title:'Saved answer'}});
+  expect(reply.statusCode).toBe(200);expect(reply.json()).toMatchObject({messageId:'stable-uid',offset:200});
+  expect(s.experienceRequest).toHaveBeenLastCalledWith({operation:'history',profile:'shared',sessionId:'history',messageId:'old-row',offset:0});
+  const opened=await s.app.inject({url:'/api/bots/shared/history/history?offset=0&messageId=stable-uid',headers:s.headers});
+  expect(opened.statusCode).toBe(200);expect(opened.json()).toMatchObject({offset:200,targetMessageId:'stable-uid'});
+  const count=s.experienceRequest.mock.calls.length;
+  expect((await s.app.inject({url:'/api/bots/private/history/history?messageId=stable-uid',headers:s.headers})).statusCode).toBe(404);
+  expect(s.experienceRequest.mock.calls.length).toBe(count);
+});

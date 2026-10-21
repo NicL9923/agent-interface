@@ -41,9 +41,9 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   });
   app.get('/api/bots/:botId/history/:sessionId', async req => {
     const p = z.object({ botId: id, sessionId: id }).parse(req.params);
-    const { offset } = z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0) }).strict().parse(req.query);
+    const { offset, messageId } = z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0), messageId: id.optional() }).strict().parse(req.query);
     await bot(signedIn(req).id, p.botId);
-    const page=await experience()({ operation: 'history', profile: p.botId, sessionId: p.sessionId, offset }) as HistoryPage;
+    const page=await experience()({ operation: 'history', profile: p.botId, sessionId: p.sessionId, offset, ...(messageId ? {messageId} : {}) }) as HistoryPage;
     const redact = await redactAgents(store, roster, signedIn(req).id);
     return {...page,messages:page.messages.map(message=>{const senderId=(message as typeof message & {app_sender_id?:string}).app_sender_id;const user=senderId&&store.getUser(senderId);return user?{...message,origin:undefined,sender:{id:user.id,name:user.name}}:message;}).map(redact.message)};
   });
@@ -59,7 +59,9 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const userId = signedIn(req).id;
     await bot(userId, body.botId);
     if (body.kind === 'session') {
-      const page = await experience()({ operation: 'history', profile: body.botId, sessionId: body.sessionId, offset: body.offset ?? 0 }) as HistoryPage;
+      const locate = body.messageId && body.offset === undefined;
+      const page = await experience()({ operation: 'history', profile: body.botId, sessionId: body.sessionId, offset: body.offset ?? 0, ...(locate ? {messageId: body.messageId} : {}) }) as HistoryPage;
+      if (locate) { body.offset = page.offset; body.messageId = page.targetMessageId ?? body.messageId; }
       if (body.messageId && !page.messages.some(message=>message.id===body.messageId)) throw fail(404,'The saved reply is no longer in this history page.');
     }
     else { if (!runtime.routineOutput) throw fail(409, 'Routine outputs unavailable'); await runtime.routineOutput(body.botId, body.routineId, body.resultId); }

@@ -1,5 +1,58 @@
 # Validation ledger
 
+## October 20 native daily-use improvements
+
+PR #167's first CI run exposed an existing draft-retry test's fixed 1.2-second
+completion wait on a slower host. The test now waits for the settled draft with
+a ten-second deadline and keeps its backoff and final-content assertions. Three
+local iterations passed; independent Claude Opus 5.5 review confirmed the timing
+diagnosis and found no product bug. Final source including merged main tooling:
+`48976bbc6dcd4ffae78f9ddd232daef02dd3ca68bc48ee557b604cff8eca62cd`.
+The signed build 10 archive predates this test-only change; shipping iOS source
+is identical.
+
+Base `8926fb6`; reviewed implementation source fingerprint
+`85a08d99dac7ac828e9727c9a9c9eac359bc7ea2c14f3e7da4377fbf89410706`.
+This records implementation and local validation. Deployment and exact TestFlight
+distribution are recorded separately after their receipts exist.
+
+The change preserves interrupted voice clips, adds native reply actions, restores
+bounded read-only offline snapshots, locates search matches and finds loaded chat
+text, retains iPhone tab roots and memoizes Markdown parses. Snapshot files exclude
+credentials, authority, approvals, tool output, reasoning, drafts and in-flight
+text. A cached conversation stays read-only until its own network refresh.
+
+The shared validation ledger reused successful checks while rerunning checks whose
+inputs changed: 851 web tests across 73 files before the final fallback regression;
+eight focused discovery API/UI tests after it; the TypeScript/production build;
+22 Python suites with one platform suite skipped; all 27 experience tests through
+the script runner after fixing its main-guard placement; and Ruff. Native unit
+validation covered 293 tests with two skips. Focused follow-ups exercised roster
+add/remove clip retention, offline restoration/revalidation, background snapshot
+writes, uncached offline selection and missing search targets.
+
+Agent-driven simulator flows covered retained drafts and search across tabs and
+Pro Max rotation, reply actions, Find, interrupted recording/transcription, search
+scrolling, long-history anchors and existing home/settings flows. The iPad sidebar,
+settings and avatar flow was also exercised. Browser interactions at widths 390
+and 1280 verified the history pointer request, visible highlighted target and
+scrolling. Screenshots use synthetic fixtures; they do not prove real Hermes or
+APNs behavior. No physical-phone microphone, VoiceOver navigation or device frame
+timing claim is made.
+
+The reproducible optimized macOS Markdown benchmark parsed 50,000 blocks across
+100 repetitions in 0.460 seconds without the cache and 0.00358 seconds with it,
+including its first miss. This measures parse reuse, not scrolling frame rate.
+
+Independent Claude Opus 5.5 review found and prompted fixes for roster invalidation,
+rotation state loss, repeated main-thread snapshot writes, optional search failures,
+redundant history scans, stale reply action state and capture dates, misleading
+offline copy, a SQLite row contract mismatch and skipped pointer regressions.
+Final independent review confirmed the prior fixes and found one remaining purge
+gap: suspend could recreate an expiring session snapshot. The suggested save guard
+and a focused expiry regression now cover it. The unused root size-class binding
+was also removed. Fresh isolated native qualification is required before activation
+because the integration changed.
 ## October 20 tsrs command-line adoption
 
 Validated on Nicolass-Mini, macOS arm64, Node 26.10.0, npm 11.19.1 and Python

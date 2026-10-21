@@ -243,7 +243,7 @@ const server = createServer(async (request, response) => {
     if (path === '/auth/confirm') { terminalConfirmed = true; return json(response, { confirmedAt: new Date().toISOString() }); }
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
-    if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.'}],unavailableBots:[]});
+    if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.',messageId:'m2',offset:0}],unavailableBots:[]});
     if (/\/history\//.test(path)) return json(response,{botId:'ranch',sessionId:'fixture-history',messages:ranchMessages,offset:0,hasMore:false});
     if (path === '/saved') { if(request.method==='POST'){const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);}return json(response,savedItems); }
     if(path.startsWith('/saved/')) { const index=savedItems.findIndex(item=>item.id===path.split('/').at(-1));if(index>=0)savedItems.splice(index,1);return json(response,{ok:true}); }

@@ -1,11 +1,11 @@
 import SwiftUI
 
 struct SearchHit: Decodable, Identifiable {
-  var botId: String; var botName: String; var sessionId: String; var title: String; var snippet: String; var routineId: String?; var resultId: String?
+  var botId: String; var botName: String; var sessionId: String; var title: String; var snippet: String; var routineId: String?; var resultId: String?; var messageId: String?; var offset: Int?
   var id: String { botId + ":" + sessionId }
 }
 struct SearchResponse: Decodable { var hits: [SearchHit]; var unavailableBots: [String] }
-struct HistoryPage: Decodable { var botId: String; var sessionId: String; var messages: [Message]; var offset: Int; var hasMore: Bool }
+struct HistoryPage: Decodable { var botId: String; var sessionId: String; var messages: [Message]; var offset: Int; var hasMore: Bool; var targetMessageId: String? }
 struct SavedItem: Codable, Identifiable { var id: String; var botId: String; var kind: String; var sessionId: String?; var routineId: String?; var resultId: String?; var messageId: String?; var offset: Int?; var title: String; var createdAt: String }
 struct SavedPointer: Encodable { var botId: String; var kind: String; var sessionId: String?; var routineId: String?; var resultId: String?; var messageId: String?; var offset: Int?; var title: String }
 struct UsageSummary: Decodable { var botId: String; var sessions: Int; var inputTokens: Int; var outputTokens: Int; var actualCost: Double?; var estimatedCost: Double?; var partial: Bool }
@@ -62,7 +62,7 @@ struct DiscoveryView: View {
             Button("Search") { Task { await search() } }.buttonStyle(.bordered).controlSize(.small)
               .disabled(Self.trimmed(query).isEmpty || busy).accessibilityIdentifier("nativeSearchSubmit")
           }
-          ForEach(hits) { hit in Button { if let routine=hit.routineId { store.routineResult=RoutineResultDestination(botId:hit.botId,routineId:routine,resultId:hit.resultId) } else { Task { await history(hit.botId,hit.sessionId) } } } label: { HStack(spacing:12) { VStack(alignment:.leading,spacing:4) { Text(hit.title).font(.headline).foregroundStyle(Color.primary);Text(hit.botName).font(.caption).foregroundStyle(Palette.muted);Text(String(hit.snippet.replacingOccurrences(of:"<[^>]*>",with:"",options:.regularExpression).prefix(300))).lineLimit(4).font(.footnote).foregroundStyle(Palette.muted) }.frame(maxWidth:.infinity,alignment:.leading);Image(systemName:"chevron.right").font(.caption).foregroundStyle(.secondary) } }.accessibilityIdentifier("nativeSearchResult-" + hit.sessionId) }
+          ForEach(hits) { hit in Button { if let routine=hit.routineId { store.routineResult=RoutineResultDestination(botId:hit.botId,routineId:routine,resultId:hit.resultId) } else { Task { await history(hit.botId,hit.sessionId,hit.offset ?? 0,hit.messageId,searchHit:true) } } } label: { HStack(spacing:12) { VStack(alignment:.leading,spacing:4) { Text(hit.title).font(.headline).foregroundStyle(Color.primary);Text(hit.botName).font(.caption).foregroundStyle(Palette.muted);Text(String(hit.snippet.replacingOccurrences(of:"<[^>]*>",with:"",options:.regularExpression).prefix(300))).lineLimit(4).font(.footnote).foregroundStyle(Palette.muted) }.frame(maxWidth:.infinity,alignment:.leading);Image(systemName:"chevron.right").font(.caption).foregroundStyle(.secondary) } }.accessibilityIdentifier("nativeSearchResult-" + hit.sessionId) }
         } footer: { Text("Searches answers, attachment names and routine previews across your assistants.") }
       } else if tab == "saved" {
         Section {
@@ -143,12 +143,22 @@ struct DiscoveryView: View {
     if scope != store.scope { hits=[];saved=[];overview=nil;page=nil;notice=nil }
   }
   private func load() async { await perform { api in if tab=="saved" { saved=try await api.get("/saved") };if tab=="automations" { overview=try await api.get("/automations") } } }
-  private func search() async { await perform { api in let result:SearchResponse=try await api.get("/search?q=\(Self.trimmed(query).addingPercentEncoding(withAllowedCharacters:.alphanumerics) ?? "")");hits=result.hits;notice=result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)." } }
-  private func history(_ bot:String,_ session:String,_ offset:Int=0,_ messageId:String?=nil) async {
-    let request = UUID(); historyRequest = request
+  private func search() async { let scope = store.scope; await perform { api in let result:SearchResponse=try await api.get("/search?q=\(Self.trimmed(query).addingPercentEncoding(withAllowedCharacters:.alphanumerics) ?? "")");guard scope == store.scope else { return };hits=result.hits;notice=result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)." } }
+  private func history(_ bot:String,_ session:String,_ offset:Int=0,_ messageId:String?=nil,searchHit:Bool=false) async {
+    let request = UUID(); historyRequest = request; let scope = store.scope
     await perform { api in
-      let result:HistoryPage=try await api.get("/bots/\(APIClient.component(bot))/history/\(APIClient.component(session))?offset=\(offset)")
-      guard historyRequest == request else { return }
+      let target = messageId.map { "&messageId=" + APIClient.component($0) } ?? ""
+      let path = "/bots/\(APIClient.component(bot))/history/\(APIClient.component(session))"
+      let result: HistoryPage
+      var requestedMessage = messageId
+      do { result = try await api.get("\(path)?offset=\(offset)\(target)") }
+      catch let error as APIError where searchHit && messageId != nil && error.status == 404 {
+        guard historyRequest == request, scope == store.scope else { return }
+        result = try await api.get("\(path)?offset=0")
+        requestedMessage = nil
+      }
+      guard historyRequest == request, scope == store.scope else { return }
+      let messageId = result.targetMessageId ?? requestedMessage
       if let messageId,!result.messages.contains(where:{$0.id==messageId}) { throw APIError(message:"The saved reply is unavailable. Its original history changed in Hermes.",status:404) }
       savedMessage=messageId;page=result;if messageId != nil { scrollRequest=UUID() }
     }

@@ -1,6 +1,7 @@
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import AVFAudio
 
 /// The message box below a conversation, the web's Composer. Files can be picked, photographed,
 /// pasted or dropped onto it; with a hardware keyboard, Return sends and Shift-Return starts a line.
@@ -38,12 +39,26 @@ struct ComposerView: View {
         discardConfirm: $discardConfirm, modelOpen: $modelOpen))
       .onAppear { configureVoice() }
       // A recording belongs to one account's assistant; a new identity or server starts afresh.
-      .onChange(of: "\(store.scope ?? "")|\(bot.id)") { _, _ in voice.reset(); configureVoice() }
-      .onChange(of: voiceDisabled) { _, disabled in if disabled && voice.state != .idle { voice.cancel() } }
-      .onChange(of: scenePhase) { _, phase in
-        if phase != .active && [.requesting, .recording].contains(voice.state) { voice.cancel() }
+      .onChange(of: store.voiceRecordingURL(botId: bot.id)) { _, _ in voice.cancel(); configureVoice() }
+      .onChange(of: voiceDisabled) { _, disabled in
+        if disabled && voice.state != .idle {
+          if voice.recordingURL == store.voiceRecordingURL(botId: bot.id) { voice.preserveRecording(); voice.cancel() }
+          else { voice.reset() }
+        }
       }
-      .onDisappear { voice.cancel() }
+      .onChange(of: scenePhase) { _, phase in
+        // The microphone permission dialog is temporarily inactive too. Let its request finish.
+        if phase == .background || phase == .inactive && voice.state == .recording { voice.preserveRecording() }
+      }
+      .onDisappear {
+        if voice.recordingURL == store.voiceRecordingURL(botId: bot.id) { voice.preserveRecording(); voice.cancel() }
+        else { voice.reset() }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { event in
+        if event.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt == AVAudioSession.InterruptionType.began.rawValue {
+          voice.preserveRecording()
+        }
+      }
   }
   private var card: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -177,6 +192,7 @@ struct ComposerView: View {
   private func configureVoice() {
     voice.api = store.api
     voice.botId = bot.id
+    voice.restoreRecording(from: store.voiceRecordingURL(botId: bot.id))
     let botId = bot.id
     let target = store
     voice.onTranscript = { [weak target] text in _ = target?.appendTranscript(text, botId: botId) }

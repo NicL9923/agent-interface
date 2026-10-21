@@ -135,7 +135,7 @@ struct MarkdownView: View {
   let text: String
   @Environment(\.unobservedStore) private var store
   var body: some View {
-    MarkdownBlocksView(blocks: Markdown.parse(text))
+    MarkdownBlocksView(blocks: MarkdownCache.shared.blocks(text))
       .frame(maxWidth: .infinity, alignment: .leading)
       .environment(\.openURL, OpenURLAction(handler: open))
   }
