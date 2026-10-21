@@ -8,7 +8,7 @@ import CryptoKit
 final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
   @Published var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
   @Published var api: APIClient?
-  @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot(); updateEcho(); retryAsk() } }
+  @Published var bootstrap: Bootstrap? { didSet { appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); retryAsk() } }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
   var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
   /// Assistants in Spotlight, kept in step with the snapshot. Unit tests leave the system index alone.
@@ -27,8 +27,15 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var searchFocusPending = false
   func retryAsk() { if pendingAsk != nil { Task { await deliverAsk() } } }
   @Published var conversation: Conversation? {
-    didSet { if conversation != oldValue { updateEcho(conversationChanged: true) } }
+    didSet {
+      appliedConversationTag = nil
+      if conversation != oldValue { cachedArtifacts = nil; updateEcho(conversationChanged: true) }
+    }
   }
+  /// The ETags of the bootstrap and conversation bodies last applied. A poll answering with the
+  /// same body skips decoding and applying it. Any other change to the value forgets its tag.
+  private var appliedBootstrapTag: String?
+  private var appliedConversationTag: String?
   /// The open conversation as shown: with the echo of a message still on its way at its end.
   private(set) var transcript: Conversation?
   /// The transcript grouped into turns, computed once per change instead of on every render.
@@ -39,7 +46,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var echoTimer: Task<Void, Never>?
   /// When the earliest accepted echo whose run never showed runs out of patience.
   private var echoDeadline: Date?
-  @Published var selectedBotId: String? { didSet { updateEcho() } }
+  @Published var selectedBotId: String? {
+    didSet { cachedArtifacts = nil; followChanged(from: followed(oldValue)) }
+  }
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
   @Published var draft = Draft()
@@ -103,8 +112,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   private var authSession: ASWebAuthenticationSession?
   private var pollTask: Task<Void, Never>?
-  /// Latest live reply patch, retained across overlapping conversation reads.
-  private var latestInflight: Inflight?
+  /// Latest live reply patch, retained across overlapping conversation reads. A read applied with
+  /// a patch since dropped must apply again, even if the server's body is unchanged.
+  private var latestInflight: Inflight? { didSet { appliedConversationTag = nil } }
   /// Household roster stream, independent of the selected conversation.
   private var rosterTask: Task<Void, Never>?
   /// The open conversation's change stream and when it last spoke.
@@ -156,6 +166,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func clearOfflineLibrary(includingVoice: Bool = true) {
     if let url = offlineURL { offlineWriter.remove(at: url, includingVoice: includingVoice) }
     MarkdownCache.shared.clear()
+    ReplyCards.clearCache()
     offlineSavedAt = nil
     restoredRosterAt = nil
   }
@@ -186,7 +197,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var windowGeneration = 0
   /// Files from before the loaded window, fetched when the file list is opened. They are good
   /// while the message they were fetched before is still loaded, as on the web.
-  @Published private var earlierFileCache: [String: EarlierFilePage] = [:]
+  @Published private var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil } }
   private struct EarlierFilePage {
     var sessionId: String?
     var before: String?
@@ -410,7 +421,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)
-    if conversationDue { await refreshConversation() }
+    if followedBotId != nil, conversationDue { await refreshConversation() }
     await reconcilePending()
     // Files added while the connection was down start once it returns, as on the web.
     if connected, !uploading, attachmentUploads.contains(where: { $0.status == .queued }) {
@@ -444,7 +455,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Without a live stream the conversation is polled every pass, as before streams existed.
   private var conversationDue: Bool {
     guard let heard = streamHeardAt, let refreshed = conversationRefreshedAt,
-      eventBotId == selectedBotId, now() - heard < Self.streamSilence
+      eventBotId == followedBotId, now() - heard < Self.streamSilence
     else { return true }
     return now() - refreshed >= Self.streamFallbackInterval
   }
@@ -470,14 +481,15 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
   }
-  /// Follows the selected assistant's change stream, reconnecting with a growing delay.
+  /// Follows the change stream of the conversation on screen, reconnecting with a growing delay.
   private func watchConversation() {
-    guard eventBotId != selectedBotId || eventTask == nil else { return }
+    let followed = followedBotId
+    guard eventBotId != followed || eventTask == nil else { return }
     eventTask?.cancel()
     streamHeardAt = nil
-    eventBotId = selectedBotId
+    eventBotId = followed
     latestInflight = nil
-    guard let id = selectedBotId, let api else { eventTask = nil; return }
+    guard let id = followed, let api else { eventTask = nil; return }
     eventTask = Task { [weak self] in
       var failures = 0
       while !Task.isCancelled {
@@ -505,6 +517,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
                 }
               } else if event != "inflight" && line != "data: ping" {
                 self.latestInflight = nil
+                // The conversation changed, so an unconfirmed send there is worth asking about now.
+                if let pending = self.pendings[id] { self.submissionChecks[pending.requestId] = nil }
                 self.requestConversationRefresh()
               }
               event = ""
@@ -553,57 +567,63 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrapReads += 1
     let bootstrapRead = bootstrapReads
     do {
-      var value: Bootstrap = try await api.get("/bootstrap?roster=lean")
+      let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       appliedBootstrapRead = bootstrapRead
-      if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
-        value.bots = previous.bots
-      }
-      if let previous = bootstrap, previous.user.id == value.user.id, value.connection.connected,
-        Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
-        let removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
-        if !removed.isEmpty {
-          clearOfflineLibrary(includingVoice: false)
-          for id in removed {
-            conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
-            if let clip = voiceRecordingURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
-          }
-          recentChats.removeAll { removed.contains($0) }
-          // Recheck redacted references without destroying the open view or its scroll anchor.
-          conversationRefreshedAt = nil
+      // The body applied last time, unchanged: nothing to decode, merge or publish.
+      guard var value = response.value ?? bootstrap else { return }
+      if response.value != nil {
+        if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
+          value.bots = previous.bots
         }
+        if let previous = bootstrap, previous.user.id == value.user.id, value.connection.connected,
+          Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
+          let removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
+          if !removed.isEmpty {
+            clearOfflineLibrary(includingVoice: false)
+            for id in removed {
+              conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
+              if let clip = voiceRecordingURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
+            }
+            recentChats.removeAll { removed.contains($0) }
+            // Recheck redacted references without destroying the open view or its scroll anchor.
+            conversationRefreshedAt = nil
+          }
+        }
+        if let previous = bootstrap, previous.user.id != value.user.id {
+          clearOfflineLibrary()
+          persistDraft()
+          draftTask?.cancel()
+          scheduledDraftSave = nil
+          selectionGeneration = UUID()
+          generation = UUID()
+          selectedBotId = nil
+          stayHome = false
+          conversation = nil
+          conversationCache.removeAll()
+          conversationCapturedAt.removeAll()
+          historyStarts.removeAll()
+          earlierFileCache.removeAll()
+          draft = Draft()
+          draftReady = false
+          pendings = [:]
+          receipts = [:]
+          submissionChecks = [:]
+          sending = false
+          uploading = false
+          clearUploads()
+          interruptionReviewed = false
+          resetUpgrade()
+          resetPreferenceSaves()
+        }
+        if bootstrap != value { bootstrap = value }
+        appliedBootstrapTag = response.etag
       }
-      if let previous = bootstrap, previous.user.id != value.user.id {
-        clearOfflineLibrary()
-        persistDraft()
-        draftTask?.cancel()
-        scheduledDraftSave = nil
-        selectionGeneration = UUID()
-        generation = UUID()
-        selectedBotId = nil
-        stayHome = false
-        conversation = nil
-        conversationCache.removeAll()
-        conversationCapturedAt.removeAll()
-        historyStarts.removeAll()
-        earlierFileCache.removeAll()
-        draft = Draft()
-        draftReady = false
-        pendings = [:]
-        receipts = [:]
-        sending = false
-        uploading = false
-        clearUploads()
-        interruptionReviewed = false
-        resetUpgrade()
-        resetPreferenceSaves()
-      }
-      bootstrap = value
       restoredRosterAt = nil
-      if !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
+      if offlineSavedAt != nil, !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
       api.csrf = value.csrfToken
       Task { await self.drainUploads() }
-      appUnavailable = false
+      if appUnavailable { appUnavailable = false }
       failures = 0
       saveOfflineLibrary()
       loadPendings(value.bots)
@@ -645,6 +665,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     flushDraft()
     selectionGeneration = UUID()
     latestInflight = nil
+    // Opening reads the conversation itself, so its view arriving on screen needs no read of its own.
+    openingBotId = id
+    conversationRefreshedAt = nil
+    defer { if openingBotId == id { openingBotId = nil } }
     selectedBotId = id
     if id != nil && navigate { conversationRequest = UUID() }
     conversation = id.flatMap { conversationCache[$0] }
@@ -689,16 +713,24 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       ?? "turns=\(Self.historyPageTurns)"
     conversationReads += 1
     let read = conversationReads
+    // A draft still to load or to save again needs the conversation's copy applied every time.
+    let skippable = draftReady && !(draft.dirty == true && settled(id))
     do {
-      let value: Conversation = try await api.get(conversationPath(id, query: query))
+      let response: (value: Conversation?, etag: String?) = try await api.changed(
+        conversationPath(id, query: query), since: skippable ? appliedConversationTag : nil)
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
         read > appliedConversationRead
       else { return }
       appliedConversationRead = read
+      conversationRefreshedAt = now()
+      // Echoes settle against each current read, changed or not.
+      defer { if !echoes.isEmpty { updateEcho() } }
+      // The conversation applied last time, unchanged: nothing to decode, merge or render.
+      guard let value = response.value else { conversationCapturedAt[id] = Date(); return }
       hearReplies(in: value, botId: id)
       historyStarts[id] = value.messages.first?.id
-      conversationRefreshedAt = now()
       apply(value, botId: id)
+      appliedConversationTag = response.etag
     } catch is CancellationError {} catch {
       // A failure that a newer read or a wider window has already overtaken says nothing current.
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
@@ -743,10 +775,15 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if selectedGeneration == selectionGeneration { report(error) }
     }
   }
-  /// Every file the open conversation knows, oldest first, with where it came from.
+  /// Every file the open conversation knows, oldest first, with where it came from. Listed once per
+  /// change of its inputs, not on every render of the header that counts them.
   var conversationArtifacts: [Artifact] {
-    Artifacts.list(conversation, earlier: currentEarlierFiles?.messages ?? [])
+    if let cachedArtifacts { return cachedArtifacts }
+    let value = Artifacts.list(conversation, earlier: currentEarlierFiles?.messages ?? [])
+    cachedArtifacts = value
+    return value
   }
+  private var cachedArtifacts: [Artifact]?
   var conversationFiles: [FileRef] { conversationArtifacts.map(\.file) }
   var earlierFilesFailed: Bool {
     earlierFilesFailure != nil && earlierFilesFailure == earlierFilesKey
@@ -791,7 +828,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   private func apply(_ value: Conversation, botId id: String) {
     cachedChats.remove(id)
-    offlineSavedAt = nil
+    if offlineSavedAt != nil { offlineSavedAt = nil }
     let value = latestInflight?.applying(to: value) ?? value
     let changed = conversationCache[id] != value
     conversationCapturedAt[id] = Date()
@@ -820,11 +857,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func updateDraft(_ value: Draft) {
     // Callers change the words and files. The revision bookkeeping stays this copy's, and each
     // edit gets the next sequence, so a response to an older save is never taken for this one.
-    draft.text = value.text
-    draft.attachments = value.attachments
-    draft.dirty = true
-    draft.seq = nextDraftSeq(selectedBotId)
-    persistDraft()
+    // One assignment, so a keystroke publishes once.
+    var next = draft
+    next.text = value.text
+    next.attachments = value.attachments
+    next.dirty = true
+    next.seq = nextDraftSeq(selectedBotId)
+    draft = next
+    persistDraftSoon()
     draftTask?.cancel()
     scheduledDraftSave = nil
     guard draftReady, let botId = selectedBotId else { return }
@@ -968,9 +1008,24 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       Task { try? await self.saveDraft(cached, botId: botId, retries: retries) }
     }
   }
+  /// Writes the open draft to this device now. Leaving, switching, signing out and every merge call
+  /// it, which also writes a typing pause's pending copy at once.
   private func persistDraft() {
+    draftPersistTask?.cancel()
+    draftPersistTask = nil
     if draftReady, let botId = selectedBotId { save(draft, key("draft", botId)) }
   }
+  /// Typing writes the local copy after a short pause instead of encoding it on every keystroke.
+  private func persistDraftSoon() {
+    draftPersistTask?.cancel()
+    draftPersistTask = Task { [weak self] in
+      try? await Task.sleep(for: Self.draftPersistDelay)
+      guard !Task.isCancelled else { return }
+      self?.persistDraft()
+    }
+  }
+  private var draftPersistTask: Task<Void, Never>?
+  static let draftPersistDelay: Duration = .milliseconds(300)
   func send(reviewedUncertain: Bool = false) async {
     guard let api, let id = selectedBotId, !sending else { return }
     let submission: PendingSubmission
@@ -985,6 +1040,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         draftBaseRevision: draft.baseRevision ?? 0)
     }
     pendings[id] = submission
+    submissionChecks[submission.requestId] = nil
     save(submission, key("pending", id))
     // Until the server shows the send, a save of the sent text from this copy is not new work.
     // A retry sends the same request again; the copy it came from is already marked, and a copy
@@ -1023,20 +1079,34 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// Asks the server about every assistant's unconfirmed send, not only the open one, so a
   /// message that arrived clears that assistant's draft before it is opened again.
+  /// Each check waits longer for an answer that stays uncertain, but never resubmits.
   func reconcilePending() async {
     guard let api, !sending else { return }
     let currentGeneration = generation
     for pending in pendings.values.sorted(by: { $0.botId < $1.botId }) {
+      if let check = submissionChecks[pending.requestId], now() < check.next { continue }
       do {
         let value: Receipt = try await api.get(
           "/submissions/\(APIClient.component(pending.requestId))")
         guard currentGeneration == generation, !sending else { return }
+        checkedSubmission(pending.requestId)
         await handleReceipt(value, botId: pending.botId)
       } catch {
-        if currentGeneration == generation { report(error) }
+        guard currentGeneration == generation else { return }
+        checkedSubmission(pending.requestId)
+        report(error)
         return
       }
     }
+    submissionChecks = submissionChecks.filter { id, _ in pendings.values.contains { $0.requestId == id } }
+  }
+  /// How long an unconfirmed send waits between checks: 1.5 s, 5 s, 15 s, then a minute. A new
+  /// send, a retry of it, a change notice from its conversation or Reconnect asks again at once.
+  static let submissionCheckDelays: [Duration] = [.seconds(1.5), .seconds(5), .seconds(15), .seconds(60)]
+  private var submissionChecks: [String: (count: Int, next: ContinuousClock.Instant)] = [:]
+  private func checkedSubmission(_ requestId: String) {
+    let count = (submissionChecks[requestId]?.count ?? 0) + 1
+    submissionChecks[requestId] = (count, now() + Self.submissionCheckDelays[min(count, Self.submissionCheckDelays.count) - 1])
   }
   private func clearPending(_ botId: String) {
     pendings[botId] = nil
@@ -1055,7 +1125,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   private func handleReceipt(_ value: Receipt, botId: String) async {
-    receipts[botId] = value
+    if receipts[botId] != value { receipts[botId] = value }
     guard let original = pendings[botId], value.requestId == original.requestId else { return }
     guard value.status != "uncertain" else { return }
     if value.status == "accepted" {
@@ -1098,8 +1168,10 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Every input it reads calls it when it changes.
   private func updateEcho(conversationChanged: Bool = false) {
     let now = Date()
+    // Only a conversation on screen is kept current, so only it can retire an echo or anchor one.
+    let current = followedBotId == nil ? nil : conversation
     let next = SentEcho.nextEchoes(
-      echoes, pending: pending, receipt: receipt, sending: sending, conversation: conversation,
+      echoes, pending: pending, receipt: receipt, sending: sending, conversation: current,
       sender: bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }, now: now)
     let changed = next != echoes
     if changed { echoes = next }
@@ -1109,7 +1181,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
     // An accepted message that never shows is checked again once its patience runs out. Only the
     // open conversation can retire one, so another assistant's echo waits for its return.
-    let deadline = next.filter { $0.status == .accepted && !$0.ran && $0.request.botId == conversation?.botId }
+    let deadline = next.filter { $0.status == .accepted && !$0.ran && $0.request.botId == current?.botId }
       .compactMap { $0.acceptedAt?.addingTimeInterval(SentEcho.patience + 0.1) }.min()
     guard deadline != echoDeadline else { return }
     echoTimer?.cancel()
@@ -1250,8 +1322,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private func loadDraft(_ remote: SavedDraft?, botId: String) {
     let merged = Draft.merge(draftReady ? draft : read(key("draft", botId)) ?? draft, with: remote, settled: settled(botId))
     let changed = merged.draft != draft
-    draft = merged.draft
-    draftReady = true
+    if changed { draft = merged.draft }
+    if !draftReady { draftReady = true }
     clearDraftLoadFailure()
     if changed { persistDraft() }
     if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
@@ -1274,6 +1346,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     do {
       let _: RuntimeStatus = try await api.write("/connection/retry", [String: String]())
       guard currentGeneration == generation else { return }
+      submissionChecks = [:]
       await refreshBootstrap()
       await refreshConversation()
       await reconcilePending()
@@ -1333,6 +1406,35 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if preferences.favorites.contains(id) { preferences.favorites.removeAll { $0 == id } }
     else { preferences.favorites.append(id) }
     queuePreferences(preferences)
+  }
+  /// Conversation views on screen per assistant, counted because the next can appear before the
+  /// last one disappears.
+  private var conversationScreens: [String: Int] = [:]
+  /// The open assistant while its conversation is on screen, in the iPad detail pane or under a
+  /// sheet. Only it is polled and streamed: home, Today and Search leave the conversation alone,
+  /// and it is read again as soon as it returns.
+  var followedBotId: String? { followed(selectedBotId) }
+  private func followed(_ id: String?) -> String? { id.flatMap { conversationScreens[$0] != nil ? $0 : nil } }
+  /// The assistant `select` is opening; its own read makes the view's arrival need none.
+  private var openingBotId: String?
+  func conversationShown(_ botId: String, _ shown: Bool) {
+    let before = followedBotId
+    let count = (conversationScreens[botId] ?? 0) + (shown ? 1 : -1)
+    conversationScreens[botId] = count > 0 ? count : nil
+    followChanged(from: before)
+  }
+  private func followChanged(from before: String?) {
+    guard followedBotId != before, pollTask != nil else { updateEcho(); return }
+    watchConversation()
+    // Back on screen without opening it again, after nothing was read while it was away. Like
+    // opening it, the first read is the reply announcement baseline. Its echoes wait for that
+    // read, so a message on its way is not retired against the copy from before.
+    guard let id = followedBotId, openingBotId != id,
+      conversationRefreshedAt.map({ now() - $0 >= .seconds(1.5) }) ?? true
+    else { updateEcho(); return }
+    replyWatch = nil
+    appliedConversationTag = nil
+    requestConversationRefresh()
   }
   /// The chat on screen while the app is active. Reporting it keeps this person's other devices
   /// quiet about it and marks it read there, as the web does.
@@ -1496,7 +1598,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Uploads queued files one at a time, in the order they were added. A failed attempt always
   /// waits for explicit Retry; a file queued while disconnected starts once the connection returns.
   func drainUploads() async {
-    guard !uploading, connected, api != nil else { return }
+    guard !uploading, connected, api != nil, attachmentUploads.contains(where: { $0.status == .queued }) else { return }
     let currentGeneration = generation
     uploading = true
     defer { if currentGeneration == generation { uploading = false } }
@@ -1651,6 +1753,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     pendingAsk = nil
     askOpened = nil
     receipts = [:]
+    submissionChecks = [:]
     sending = false
     uploading = false
     clearUploads()

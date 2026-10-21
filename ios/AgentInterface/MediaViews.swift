@@ -33,12 +33,54 @@ struct AuthenticatedImage: View {
           failed = true
           return
         }
-        let data = try await api.data(path: path)
+        let path = path
+        let loaded = try await Self.loads.image(key) { try await api.data(path: path) }
         guard !Task.isCancelled else { return }
-        image = Self.downsampled(data)
-        failed = image == nil
-        if let image, let cgImage = image.cgImage { Self.cache.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height) }
+        image = loaded
+        failed = loaded == nil
       } catch is CancellationError {} catch { failed = true }
+    }
+  }
+  /// One download and decode per image at a time: the same picture in a reply and the file
+  /// list, or a row scrolled back in, waits for the load already running.
+  private static let loads = ImageLoads()
+  @MainActor final class ImageLoads {
+    private struct Load { var task: Task<UIImage?, Error>; var waiters = 1; var abandoned = 0 }
+    private var running: [NSString: Load] = [:]
+    func image(_ key: NSString, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
+      // A load every view abandoned is ending; a new view starts its own.
+      if let load = running[key], !load.task.isCancelled {
+        running[key]?.waiters += 1
+        return try await wait(key, load.task)
+      }
+      let task = Task {
+        let data = try await fetch()
+        try Task.checkCancellation()
+        // Decoding a camera photo takes tens of milliseconds, so it stays off the main actor.
+        let image = await Task.detached(priority: .userInitiated) { AuthenticatedImage.downsampled(data) }.value
+        if let image, let cgImage = image.cgImage {
+          AuthenticatedImage.cache.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height)
+        }
+        return image
+      }
+      running[key] = Load(task: task)
+      return try await wait(key, task)
+    }
+    private func wait(_ key: NSString, _ task: Task<UIImage?, Error>) async throws -> UIImage? {
+      defer { leave(key, task) }
+      return try await withTaskCancellationHandler { try await task.value } onCancel: {
+        Task { @MainActor in self.abandon(key, task) }
+      }
+    }
+    private func leave(_ key: NSString, _ task: Task<UIImage?, Error>) {
+      guard let load = running[key], load.task == task else { return }
+      if load.waiters > 1 { running[key]?.waiters -= 1 } else { running[key] = nil }
+    }
+    /// Views that scrolled away stop the download, unless another view still waits for it.
+    private func abandon(_ key: NSString, _ task: Task<UIImage?, Error>) {
+      guard running[key]?.task == task else { return }
+      running[key]?.abandoned += 1
+      if let load = running[key], load.abandoned >= load.waiters { task.cancel() }
     }
   }
   /// Decoded images by server, identity and path, bounded like a browser's memory cache.
@@ -50,7 +92,7 @@ struct AuthenticatedImage: View {
   /// Wide enough for a full-width transcript image on any iPhone or iPad. A camera photo decoded
   /// at full size would hold about 46 MB; Quick Look still opens the original.
   static let maxPixelSize = 1600
-  static func downsampled(_ data: Data) -> UIImage? {
+  nonisolated static func downsampled(_ data: Data) -> UIImage? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
     let options: [CFString: Any] = [
       kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,

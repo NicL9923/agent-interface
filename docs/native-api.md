@@ -227,7 +227,7 @@ Web and native clients share these authenticated operations. See
 
 | Method and route | Body or response |
 | --- | --- |
-| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore` |
+| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore`. The ETag leaves out `generatedAt`, so an unchanged recap answers 304 and the client keeps the body it has; show your own check time |
 | `PUT /api/today/seen` | `{ "seenAt": "LOADED_GENERATED_AT", "frontier": "LOADED_FRONTIER" }`; advances only the returned page |
 | `GET /api/bots/:id/memory` | Native profile scope, document revisions, entries and character limits |
 | `PATCH /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entries": [{ "id": "EXISTING_ID", "text": "FACT" }] }`; target is `memory` or `user` |
@@ -239,6 +239,7 @@ Web and native clients share these authenticated operations. See
 | `POST /api/routines/preview` | `{ "botId": "ID", "schedule": "CRON_OR_NATIVE_SCHEDULE" }`; actual timezone and upcoming runs |
 | `POST /api/routines/:id/run` | `{ "requestId": "UUID" }`; durable native trial receipt |
 | `GET /api/routines/:id/runs/:requestId` | Exact trial result; rechecking does not execute another trial |
+| `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately |
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
 before dispatch and reuse it after an uncertain admission. Do not replay a trial

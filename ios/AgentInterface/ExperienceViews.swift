@@ -49,6 +49,30 @@ struct TodayOverview: Decodable {
     return message
   }
 }
+/// Repeats a read while the app is in use, like the web's `pollWhileVisible`: paused while the app
+/// is inactive or in the background, and run once on return.
+struct ActivePoll: ViewModifier {
+  var id: String
+  var interval: Duration
+  var action: () async -> Void
+  @Environment(\.scenePhase) private var scenePhase
+  func body(content: Content) -> some View {
+    content
+      .task(id: "\(id)|\(scenePhase == .active)") {
+        guard scenePhase == .active else { return }
+        while !Task.isCancelled {
+          do { try await Task.sleep(for: interval) } catch { return }
+          await action()
+        }
+      }
+      .onChange(of: scenePhase) { old, new in if new == .active && old != .active { Task { await action() } } }
+  }
+}
+extension View {
+  func pollWhileActive(id: String, every interval: Duration, _ action: @escaping () async -> Void) -> some View {
+    modifier(ActivePoll(id: id, interval: interval, action: action))
+  }
+}
 struct TodayView: View {
   var openBot: () -> Void
   @EnvironmentObject private var store: AppStore
@@ -57,6 +81,10 @@ struct TodayView: View {
   @State private var error: String?
   @State private var busy = false
   @State private var loadId = UUID()
+  /// The ETag of the overview shown, so an unchanged poll skips decoding it again.
+  @State private var applied: String?
+  /// When this device last confirmed the overview. A 304 keeps the overview's own generatedAt.
+  @State private var checkedAt: Date?
   var body: some View {
     List {
       Group {
@@ -132,7 +160,7 @@ struct TodayView: View {
           Section { Text("Couldn't check \(value.unavailableBots.count) assistant\(value.unavailableBots.count == 1 ? "" : "s"). Their current activity is unknown.").foregroundStyle(.secondary) }
         }
         Section {
-          Text("Checked \(When.format(value.generatedAt, inline: true)) · updates every 30 seconds").font(.caption).foregroundStyle(.secondary)
+          Text("Checked \(checkedAt.map { When.format($0, inline: true) } ?? When.format(value.generatedAt, inline: true)) · updates every 30 seconds").font(.caption).foregroundStyle(.secondary)
         }
       }
       }.listRowBackground(Palette.raised(scheme))
@@ -141,13 +169,8 @@ struct TodayView: View {
       // Split-view reparenting can cancel a view task during a phone push. The initial
       // read belongs to this account/load ID and may finish across that transition.
       .onAppear { Task { await load() } }
-      .onChange(of: store.scope) { _, _ in value = nil; Task { await load() } }
-      .task(id: store.scope) {
-        while !Task.isCancelled {
-          do { try await Task.sleep(for: .seconds(30)) } catch { return }
-          await load()
-        }
-      }
+      .onChange(of: store.scope) { _, _ in value = nil; applied = nil; checkedAt = nil; Task { await load() } }
+      .pollWhileActive(id: store.scope ?? "", every: .seconds(30)) { await load() }
   }
   @ViewBuilder private func counts(_ value: TodayOverview) -> some View {
     count(attention(value).count, "need you")
@@ -194,9 +217,10 @@ struct TodayView: View {
     let id = UUID(); loadId = id; if manual { busy = true }
     defer { if manual { busy = false } }
     do {
-      let overview: TodayOverview = try await api.get("/today")
+      let response: (value: TodayOverview?, etag: String?) = try await api.changed("/today", since: value == nil ? nil : applied)
       guard !Task.isCancelled, loadId == id, store.scope == scope, store.api === api else { return }
-      value = overview; error = nil
+      if let overview = response.value { value = overview; applied = response.etag }
+      checkedAt = Date(); if error != nil { error = nil }
     } catch is CancellationError {} catch { if loadId == id, store.scope == scope { self.error = error.localizedDescription } }
   }
   private func markCaughtUp(_ snapshot: TodayOverview) {

@@ -2,6 +2,8 @@ import XCTest
 import UserNotifications
 import Foundation
 import CryptoKit
+import Combine
+import SwiftUI
 @testable import AgentInterface
 
 private final class NativeMockProtocol: URLProtocol, @unchecked Sendable {
@@ -423,6 +425,8 @@ private final class NativeMockServer: @unchecked Sendable {
         value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: server.bootstrapData())
         value.selectedBotId = "bot"; value.conversation = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
         value.draft = Draft(text: "Send this", attachments: [], dirty: true); value.draftReady = true
+        // Its conversation is on screen, so polls and the change stream follow it.
+        value.conversationShown("bot", true)
         return value
     }
     /// A store that has only a saved server address, like a fresh launch.
@@ -1305,6 +1309,164 @@ private final class NativeMockServer: @unchecked Sendable {
         value.now = { time }
         for _ in 0..<4 { _ = await value.pollOnce(); time += .seconds(1.5) }
         XCTAssertEqual(server.conversationQueries.count, 4)
+    }
+
+    func testOnlyTheConversationOnScreenIsPolledAndStreamedAndItRefreshesOnReturn() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        server.serveEventStreams()
+        server.sendStatus = 503; await value.send()
+        server.answerSubmissions("uncertain")
+        let reads = { server.conversationQueries.count }, checks = { server.requests.filter { $0.url?.path.hasPrefix("/api/submissions/") == true }.count }
+        let before = reads()
+        // Home, Today or Search: the selected assistant stays selected, but nobody is reading it.
+        value.conversationShown("bot", false)
+        for _ in 0..<4 { _ = await value.pollOnce(); time += .seconds(60) }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(reads(), before, "Before this change each pass read the whole loaded history again")
+        XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 0)
+        XCTAssertEqual(checks(), 4, "An unconfirmed send is still checked while its chat is closed")
+        // Back on screen, as after switching tabs: read at once, and follow its stream again.
+        value.startPolling(); try await Task.sleep(for: .milliseconds(150))
+        value.conversationShown("bot", true); try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(reads(), before + 2, "Returning reads now, and the new stream's connection reads once more")
+        XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
+        XCTAssertEqual(value.followedBotId, "bot")
+        // Opening a chat reads it itself; its view arriving adds no read.
+        value.conversationShown("bot", false); try await Task.sleep(for: .milliseconds(100))
+        let opened = reads()
+        await value.select("bot"); value.conversationShown("bot", true); try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(reads(), opened + 2, "One read to open it and one for its stream connecting")
+    }
+
+    func testAnUncertainSendIsCheckedWithBackoffAndNeverResubmitted() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }
+        server.sendStatus = 503; await value.send()
+        server.answerSubmissions("uncertain")
+        let checks = { server.requests.filter { $0.url?.path.hasPrefix("/api/submissions/") == true }.count }
+        let sends = { server.requests.filter { $0.httpMethod == "POST" && $0.url?.path == "/api/bots/bot/messages" }.count }
+        var expected = 0
+        // Each check waits its delay from the last one: just short of it, then just past it.
+        for (wait, asks) in [(0.0, true), (0.0, false), (1.3, false), (0.4, true), (4.8, false), (0.4, true), (14.8, false), (0.4, true), (59.8, false), (0.4, true), (60.2, true)] {
+            time += .seconds(wait); await value.reconcilePending()
+            if asks { expected += 1 }
+            XCTAssertEqual(checks(), expected, "After \(wait) more seconds")
+        }
+        XCTAssertEqual(sends(), 1, "Checking never sends the message again")
+        XCTAssertEqual(value.receipt?.status, "uncertain")
+        // Before this change, the 1.5 second poll asked about 95 times over these 142.5 seconds.
+        await value.send(reviewedUncertain: true)
+        XCTAssertEqual(sends(), 2, "Only the person's explicit retry sends it again")
+        await value.reconcilePending()
+        XCTAssertEqual(checks(), expected + 1, "A retry is checked at once")
+        // A change notice from its conversation asks again at once too.
+        server.serveEventStreams(); _ = await value.pollOnce(); try await Task.sleep(for: .milliseconds(150))
+        await value.reconcilePending()
+        XCTAssertEqual(checks(), expected + 1, "Connecting the stream is not a change notice")
+        server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
+        await value.reconcilePending()
+        XCTAssertEqual(checks(), expected + 2)
+        server.answerSubmissions("accepted"); time += .seconds(60); await value.reconcilePending()
+        XCTAssertNil(value.pending)
+    }
+
+    func testUnchangedPollsSkipDecodingAndPublishNothing() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveETags()
+        value.draft = Draft(text: "", attachments: [], dirty: false)
+        await value.refreshBootstrap(); await value.refreshConversation()
+        var published = 0
+        let watch = value.objectWillChange.sink { published += 1 }
+        defer { watch.cancel() }
+        for _ in 0..<3 { await value.refreshBootstrap(); await value.refreshConversation() }
+        XCTAssertEqual(server.notModified, 6)
+        XCTAssertEqual(published, 0, "Before this change every unchanged pass republished bootstrap and the offline marker")
+        server.startRun("run-two")
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.activity.runId, "run-two", "A changed body still applies")
+        XCTAssertGreaterThan(published, 0)
+        // A local change, such as a live reply patch, makes the next read apply in full again.
+        var patched = try XCTUnwrap(value.conversation); patched.activity.state = .working
+        value.conversation = patched
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.activity.state, .thinking, "The server's copy replaces the local patch")
+    }
+
+    func testTypingPublishesOnceAndWritesTheLocalDraftAfterAPauseOrOnLeaving() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("other")
+        let stored = { UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text }
+        var published = 0
+        let watch = value.objectWillChange.sink { published += 1 }
+        defer { watch.cancel() }
+        value.updateDraft(Draft(text: "Feed the horses", attachments: []))
+        XCTAssertEqual(published, 1, "Before this change each keystroke published four times")
+        XCTAssertNil(stored(), "Typing waits for a pause before encoding the draft")
+        value.updateDraft(Draft(text: "Feed the horses at six", attachments: []))
+        try await Task.sleep(for: AppStore.draftPersistDelay + .milliseconds(150))
+        XCTAssertEqual(stored(), "Feed the horses at six")
+        value.updateDraft(Draft(text: "Feed the horses tonight", attachments: []))
+        value.suspend()
+        XCTAssertEqual(stored(), "Feed the horses tonight", "Leaving the app writes it at once")
+        value.updateDraft(Draft(text: "Switching", attachments: []))
+        await value.select("other")
+        XCTAssertEqual(stored(), "Switching", "Switching assistants writes it at once")
+    }
+
+    func testBackgroundPollsPauseWhileTheAppIsNotActiveAndRefreshOnceOnReturn() async throws {
+        final class Counter { var count = 0 }
+        struct Probe: View {
+            var phase: ScenePhase; var counter: Counter
+            var body: some View {
+                Color.clear.pollWhileActive(id: "probe", every: .milliseconds(250)) { counter.count += 1 }
+                    .environment(\.scenePhase, phase)
+            }
+        }
+        let counter = Counter()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: Probe(phase: .background, counter: counter))
+        window.rootViewController = host; window.isHidden = false
+        defer { window.isHidden = true }
+        let reaches = { (count: Int) in
+            for _ in 0..<100 where counter.count < count { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(counter.count, 0, "Nothing polls in the background")
+        host.rootView = Probe(phase: .active, counter: counter)
+        try await reaches(1)
+        XCTAssertEqual(counter.count, 1, "Returning refreshes once at once, before the interval")
+        try await reaches(3)
+        XCTAssertGreaterThanOrEqual(counter.count, 3, "Active, it polls on its interval")
+        host.rootView = Probe(phase: .inactive, counter: counter)
+        try await Task.sleep(for: .milliseconds(100))
+        let paused = counter.count
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(counter.count, paused, "Inactive, it waits")
+    }
+
+    func testConcurrentLoadsOfOneImageDownloadOnce() async throws {
+        let loads = AuthenticatedImage.ImageLoads()
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 4, height: 4)) }
+        var fetches = 0
+        let fetch: @MainActor () async throws -> Data = {
+            fetches += 1; try await Task.sleep(for: .milliseconds(100)); return png
+        }
+        let key = "coalesce:\(UUID().uuidString)" as NSString
+        async let first = loads.image(key, fetch: fetch)
+        async let second = loads.image(key, fetch: fetch)
+        let images = try await [first, second]
+        XCTAssertEqual(fetches, 1); XCTAssertTrue(images.allSatisfy { $0 != nil })
+        // A row that scrolled away stops its download; the next one starts its own.
+        let other = "abandon:\(UUID().uuidString)" as NSString
+        let leaving = Task { try await loads.image(other, fetch: fetch) }
+        try await Task.sleep(for: .milliseconds(20)); leaving.cancel()
+        _ = try? await leaving.value
+        let returning = try await loads.image(other, fetch: fetch)
+        XCTAssertEqual(fetches, 3); XCTAssertNotNil(returning)
     }
 
     func testFailedEarlierHistoryReportsWithoutMarkingTheServerUnavailable() async throws {

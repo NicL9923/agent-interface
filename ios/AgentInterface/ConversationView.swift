@@ -128,8 +128,9 @@ struct ConversationView: View {
     }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
-    .onAppear { visible = true }
-    .onDisappear { visible = false }
+    // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
+    .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
+    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false }
     .onChange(of: findQuery) { _, _ in findIndex = 0; find(0) }
     .findShortcut(botId: bot.id, open: openFind)
   }
@@ -675,7 +676,8 @@ struct ShimmerText: View {
     let label = Text(text).font(.footnote)
     if moving && !reduceMotion {
       label.foregroundStyle(.secondary).overlay {
-        TimelineView(.animation) { context in
+        // A footnote's sweep reads the same at 30 frames a second, at a fraction of the redraws.
+        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
           let progress = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
           label.foregroundStyle(.primary).mask {
             GeometryReader { proxy in

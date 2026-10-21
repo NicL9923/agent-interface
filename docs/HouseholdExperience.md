@@ -47,7 +47,7 @@ older. When more results are waiting, marking one page loads the next page.
 
 An assistant that cannot be checked has unknown activity. Loaded results remain
 visible after a failed refresh with an explanation that they may be out of date.
-The web overview checks again every 30 seconds while open. Pull to refresh on iOS.
+The overview checks again every 30 seconds while it is open and the page or app is in use, and once on return. Pull to refresh on iOS. "Checked" shows when this device last checked; an unchanged overview is not downloaded again.
 
 ## Voice
 

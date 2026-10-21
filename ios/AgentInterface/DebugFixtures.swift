@@ -107,6 +107,7 @@
     static var trialCount = 0
     static var groupRooms: [[String: Any]] = []
     static var groupEvents: [[String: Any]] = []
+    static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
     static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
     static var secureIndex = 0
@@ -334,8 +335,12 @@
         if path.hasSuffix("/messages") {
           let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"]]
           Self.groupEvents.append(event); object = ["accepted": true]
-        } else if path.hasSuffix("/log") { object = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false] }
-        else { object = ["room": Self.groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+        } else if path.hasSuffix("/log") {
+          var page: [String: Any] = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false]
+          // Like the app server, `state=1` brings the room state along.
+          if request.url?.query?.contains("state=1") == true { page["state"] = Self.groupState }
+          object = page
+        } else { object = Self.groupState }
       } else if path.contains("/routines/") && path.hasSuffix("/results") {
         object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
       } else if path.contains("/routines/") && path.contains("/results/") {
