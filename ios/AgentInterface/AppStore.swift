@@ -4,29 +4,42 @@ import SwiftUI
 import UniformTypeIdentifiers
 import CryptoKit
 
-@MainActor
-final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
-  @Published var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
-  @Published var api: APIClient?
-  @Published var bootstrap: Bootstrap? { didSet { appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); retryAsk() } }
+/// The app's state. Views observe only the properties they read; bookkeeping no view reads is
+/// `@ObservationIgnored`, so changing it renders nothing.
+@MainActor @Observable
+final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding {
+  var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
+  var api: APIClient? { didSet { updateScope() } }
+  var bootstrap: Bootstrap? {
+    didSet { updateScope(); appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); scheduleAdditions() }
+  }
+  /// The signed-in account on this server, kept apart from `bootstrap` so views keyed by the
+  /// account, such as every image in the transcript, render again only when it changes.
+  private(set) var scope: String?
+  private func updateScope() {
+    let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
+    guard next != scope else { return }
+    scope = next
+    additions = savedAdditions()
+  }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
-  var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
+  @ObservationIgnored var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
   /// Assistants in Spotlight, kept in step with the snapshot. Unit tests leave the system index alone.
-  var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
-  /// A question from Siri or Shortcuts waiting for its assistant's draft; see `deliverAsk`.
-  var pendingAsk: AskRequest?
-  var askOpened: AskRequest?
-  var askDelivering = false
+  @ObservationIgnored var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
+  /// Text from Siri, a notification's Reply or the Share inbox waiting for its draft; see `DraftAdditions.swift`.
+  var additions: [DraftAddition] = []
+  @ObservationIgnored var earlyAdditions: [DraftAddition] = []
+  @ObservationIgnored var additionsDrain: Task<Void, Never>?
+  @ObservationIgnored var additionsAgain = false
   /// The latest haptic moment; see `Haptics.swift`.
-  @Published var haptic: HapticEvent?
-  var hapticCount = 0
+  var haptic: HapticEvent?
+  @ObservationIgnored var hapticCount = 0
   /// The latest hardware keyboard shortcut; see `KeyboardCommands.swift`.
-  @Published var keyboardCommand: KeyboardCommand?
-  var commandCount = 0
+  var keyboardCommand: KeyboardCommand?
+  @ObservationIgnored var commandCount = 0
   /// Search should take the keyboard when it appears, as after Cmd+F from anywhere else.
-  @Published var searchFocusPending = false
-  func retryAsk() { if pendingAsk != nil { Task { await deliverAsk() } } }
-  @Published var conversation: Conversation? {
+  var searchFocusPending = false
+  var conversation: Conversation? {
     didSet {
       appliedConversationTag = nil
       if conversation != oldValue { cachedArtifacts = nil; updateEcho(conversationChanged: true) }
@@ -34,27 +47,27 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// The ETags of the bootstrap and conversation bodies last applied. A poll answering with the
   /// same body skips decoding and applying it. Any other change to the value forgets its tag.
-  private var appliedBootstrapTag: String?
-  private var appliedConversationTag: String?
+  @ObservationIgnored private var appliedBootstrapTag: String?
+  @ObservationIgnored private var appliedConversationTag: String?
   /// The open conversation as shown: with the echo of a message still on its way at its end.
   private(set) var transcript: Conversation?
   /// The transcript grouped into turns, computed once per change instead of on every render.
   private(set) var turns: [ConversationTurn] = []
   /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
   /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
-  @Published private(set) var echoes: [SentEcho] = []
-  private var echoTimer: Task<Void, Never>?
+  private(set) var echoes: [SentEcho] = []
+  @ObservationIgnored private var echoTimer: Task<Void, Never>?
   /// When the earliest accepted echo whose run never showed runs out of patience.
-  private var echoDeadline: Date?
-  @Published var selectedBotId: String? {
+  @ObservationIgnored private var echoDeadline: Date?
+  var selectedBotId: String? {
     didSet { cachedArtifacts = nil; followChanged(from: followed(oldValue)) }
   }
-  @Published var routineResult: RoutineResultDestination?
-  @Published var todayRequest: UUID?
-  @Published var draft = Draft()
-  @Published var draftReady = false { didSet { if draftReady && !oldValue { retryAsk(); applyNotificationReplies() } } }
+  var routineResult: RoutineResultDestination?
+  var todayRequest: UUID?
+  var draft = Draft()
+  var draftReady = false { didSet { if draftReady && !oldValue { scheduleAdditions() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
-  @Published var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho(); retryAsk(); applyNotificationReplies() } }
+  var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho(); scheduleAdditions() } }
   /// The open assistant's unconfirmed send. Setting one files it under its own assistant.
   var pending: PendingSubmission? {
     get { selectedBotId.flatMap { pendings[$0] } }
@@ -63,93 +76,90 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   /// The latest submission receipt per assistant.
-  @Published var receipts: [String: Receipt] = [:] { didSet { updateEcho() } }
+  var receipts: [String: Receipt] = [:] { didSet { updateEcho() } }
   var receipt: Receipt? {
     get { selectedBotId.flatMap { receipts[$0] } }
     set { if let id = selectedBotId { receipts[id] = newValue } }
   }
-  @Published var error: String?
+  var error: String?
   /// A short message for home, such as an assistant that is no longer available.
-  @Published var notice: String?
+  var notice: String?
   /// The assistant this person just lost access to, so views showing it close.
-  @Published var leftBotId: String?
+  var leftBotId: String?
   /// Set before deleting, so the deleted assistant leaves without a message.
-  var deletedBotId: String?
+  @ObservationIgnored var deletedBotId: String?
   /// After leaving an assistant, home stays open instead of choosing another one.
-  private var stayHome = false
-  @Published var signingIn = false
-  @Published var loading = false
-  @Published var sending = false { didSet { updateEcho() } }
-  @Published var uploading = false
-  @Published var attachmentUploads: [AttachmentUpload] = []
-  /// Files from the last attempt to attach that could not be added, each with its reason.
-  @Published var attachNotice: [String] = []
-  private var uploadTasks: [UUID: Task<Void, Never>] = [:]
-  @Published var appUnavailable = false
-  @Published var interruptionReviewed = false
-  @Published var authConfig: AuthConfig?
-  @Published var restoring = false
-  @Published var sessionExpired = false
-  @Published var conversationRequest: UUID?
-  @Published var preferencesSaving = false
-  @Published var preferencesSaveFailed = false
-  @Published var preferencesDraft: Preferences?
-  private var preferencesFailureMessage: String?
-  private var queuedPreferences: Preferences?
+  @ObservationIgnored private var stayHome = false
+  var signingIn = false
+  var loading = false
+  var sending = false { didSet { updateEcho() } }
+  /// Files on their way into drafts; see `AttachmentUploads.swift`.
+  let uploads = AttachmentUploads()
+  /// The household's Hermes update; see `HermesUpgrade.swift`.
+  let upgrade = HermesUpgrade()
+  override init() {
+    super.init()
+    uploads.store = self
+    upgrade.store = self
+  }
+  var appUnavailable = false
+  var interruptionReviewed = false
+  var authConfig: AuthConfig?
+  var restoring = false
+  var sessionExpired = false
+  var conversationRequest: UUID?
+  var preferencesSaving = false
+  var preferencesSaveFailed = false
+  var preferencesDraft: Preferences?
+  @ObservationIgnored private var preferencesFailureMessage: String?
+  @ObservationIgnored private var queuedPreferences: Preferences?
   /// This device's notification switch and onboarding card for the signed-in account.
-  @Published var deviceNotifications = DeviceNotificationState()
-  @Published var openedFile: PreviewFile?
-  @Published var upgradeStatus: UpgradeStatus?
-  @Published var upgradeBusy = false
-  @Published var upgradeError: String?
-  @Published var upgradeInstallUncertain = false
-  /// True only while a check, install or recovery request is in flight, not for status polls.
-  @Published var upgradeSubmitting = false
+  var deviceNotifications = DeviceNotificationState()
+  var openedFile: PreviewFile?
   /// The shared desktop's availability for the Settings row. Nil until the first read.
-  @Published var computerStatus: ComputerStatus?
-  private var upgradeRequest: UpgradeInstallRequest?
+  var computerStatus: ComputerStatus?
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
-  var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
-  private var authSession: ASWebAuthenticationSession?
-  private var pollTask: Task<Void, Never>?
+  @ObservationIgnored var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
+  @ObservationIgnored private var authSession: ASWebAuthenticationSession?
+  @ObservationIgnored private var pollTask: Task<Void, Never>?
   /// Latest live reply patch, retained across overlapping conversation reads. A read applied with
   /// a patch since dropped must apply again, even if the server's body is unchanged.
-  private var latestInflight: Inflight? { didSet { appliedConversationTag = nil } }
+  @ObservationIgnored private var latestInflight: Inflight? { didSet { appliedConversationTag = nil } }
   /// Household roster stream, independent of the selected conversation.
-  private var rosterTask: Task<Void, Never>?
+  @ObservationIgnored private var rosterTask: Task<Void, Never>?
   /// The open conversation's change stream and when it last spoke.
-  private var eventTask: Task<Void, Never>?
-  private var eventBotId: String?
-  private var streamHeardAt: ContinuousClock.Instant?
-  private var conversationRefreshedAt: ContinuousClock.Instant?
-  private var conversationRefreshing = false
+  @ObservationIgnored private var eventTask: Task<Void, Never>?
+  @ObservationIgnored private var eventBotId: String?
+  @ObservationIgnored private var streamHeardAt: ContinuousClock.Instant?
+  @ObservationIgnored private var conversationRefreshedAt: ContinuousClock.Instant?
+  @ObservationIgnored private var conversationRefreshing = false
   /// Conversation reads overlap: polls, change notices, selection and pull to refresh each start
   /// one. A response older than one already applied is dropped, so it cannot undo newer state.
-  private var conversationReads = 0
-  private var appliedConversationRead = 0
+  @ObservationIgnored private var conversationReads = 0
+  @ObservationIgnored private var appliedConversationRead = 0
   /// Replies already accounted for in the open conversation. As in the web's conversation hook,
   /// the first successful read after opening is the baseline, even when it matches the cache.
-  private var replyWatch: ReplyWatch?
-  private var announcements = 0
+  @ObservationIgnored private var replyWatch: ReplyWatch?
+  @ObservationIgnored private var announcements = 0
   /// The latest settled reply for VoiceOver, numbered so a repeat of the same words is read again.
-  @Published private(set) var replyAnnouncement: ReplyAnnouncement?
-  private var conversationRefreshAgain = false
+  private(set) var replyAnnouncement: ReplyAnnouncement?
+  @ObservationIgnored private var conversationRefreshAgain = false
   /// While the stream is live, change notices drive updates and this slow poll covers a stream
   /// that fails unnoticed, as on the web. Server pings arrive every 25 seconds.
   static let streamFallbackInterval: Duration = .seconds(30)
   static let streamSilence: Duration = .seconds(60)
-  private var draftTask: Task<Void, Never>?
+  @ObservationIgnored private var draftTask: Task<Void, Never>?
   /// Set while an edit waits for its save, so leaving can send it now instead of dropping it.
-  private var scheduledDraftSave: UUID?
-  private var draftBackgroundTask = UIBackgroundTaskIdentifier.invalid
-  private var conversationCache: [String: Conversation] = [:]
-  var offlineLibraryRoot = OfflineLibrary.root
-  @Published private(set) var offlineSavedAt: Date?
-  private var restoredRosterAt: Date?
+  @ObservationIgnored private var scheduledDraftSave: UUID?
+  @ObservationIgnored private var draftBackgroundTask = UIBackgroundTaskIdentifier.invalid
+  @ObservationIgnored private var conversationCache: [String: Conversation] = [:]
+  @ObservationIgnored var offlineLibraryRoot = OfflineLibrary.root
+  private(set) var offlineSavedAt: Date?
+  @ObservationIgnored private var restoredRosterAt: Date?
   private let offlineWriter = OfflineLibraryWriter()
-  private var conversationCapturedAt: [String: Date] = [:]
-  private var recentChats: [String] = []
-  private var cachedChats: Set<String> = []
+  @ObservationIgnored private var conversationCapturedAt: [String: Date] = [:]
+  @ObservationIgnored private var recentChats: [String] = []
+  private(set) var cachedChats: Set<String> = []
   private var offlineURL: URL? {
     guard let api, let token = api.token else { return nil }
     return OfflineLibrary.url(origin: api.baseURL.absoluteString, token: token, root: offlineLibraryRoot)
@@ -175,39 +185,39 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let name = SHA256.hash(data: Data(botId.utf8)).map { String(format: "%02x", $0) }.joined()
     return offlineURL.map { $0.deletingPathExtension().appendingPathExtension(name + ".m4a") }
   }
-  private var generation = UUID()
-  private var selectionGeneration = UUID()
-  private var fileTask: Task<Void, Never>?
-  private var failures = 0
+  @ObservationIgnored private(set) var generation = UUID()
+  @ObservationIgnored private var selectionGeneration = UUID()
+  @ObservationIgnored private var fileTask: Task<Void, Never>?
+  @ObservationIgnored private var failures = 0
   /// Turns of history one request covers, the same page the web client uses.
   static let historyPageTurns = 20
   /// How long bootstrap may go unrefreshed while the connection is healthy. Actions that change
   /// it, a foreground return and pull to refresh all refresh it sooner.
   static let bootstrapInterval: Duration = .seconds(45)
   /// Tests substitute a clock they advance by hand.
-  var now: () -> ContinuousClock.Instant = { .now }
-  private var bootstrapRefreshedAt: ContinuousClock.Instant?
-  private var bootstrapReads = 0
-  private var appliedBootstrapRead = 0
+  @ObservationIgnored var now: () -> ContinuousClock.Instant = { .now }
+  @ObservationIgnored private var bootstrapRefreshedAt: ContinuousClock.Instant?
+  @ObservationIgnored private var bootstrapReads = 0
+  @ObservationIgnored private var appliedBootstrapRead = 0
   /// Oldest loaded message per assistant. Polls ask for everything from there on, so the window
   /// grows with new turns instead of sliding past the turn being read, as on the web.
-  private var historyStarts: [String: String] = [:]
+  @ObservationIgnored private var historyStarts: [String: String] = [:]
   /// Bumped when earlier history is added, so a poll that asked for the narrower window earlier
   /// cannot replace it when its response arrives late.
-  private var windowGeneration = 0
+  @ObservationIgnored private var windowGeneration = 0
   /// Files from before the loaded window, fetched when the file list is opened. They are good
   /// while the message they were fetched before is still loaded, as on the web.
-  @Published private var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil } }
-  private struct EarlierFilePage {
+  private(set) var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil } }
+  struct EarlierFilePage {
     var sessionId: String?
     var before: String?
     var messages: [EarlierFiles.Entry]
   }
-  @Published var loadingEarlierFiles = false
+  var loadingEarlierFiles = false
   /// The bot and session whose earlier files failed to load, shown as a notice in the file list
   /// instead of an error banner. Opening the list again retries, as on the web.
-  @Published private var earlierFilesFailure: String?
-  @Published var loadingEarlier = false
+  private(set) var earlierFilesFailure: String?
+  var loadingEarlier = false
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
     bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
@@ -218,7 +228,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   var active: Bool { activity.active }
   var canSend: Bool {
-    draftReady && connected && !sending && !uploading && !attachmentUploads.contains { $0.botId == selectedBotId } && pending == nil
+    draftReady && connected && !sending && !uploads.uploading && !uploads.items.contains { $0.botId == selectedBotId } && pending == nil
       && draft.text.utf16.count <= Self.maxMessageLength
       && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !draft.attachments.isEmpty)
@@ -232,18 +242,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrap?.capabilities[key]?.reason
       ?? "This capability is unavailable from the connected Hermes installation."
   }
-  var scope: String? {
-    guard let user = bootstrap?.user.id, let api else { return nil }
-    return Data((api.baseURL.absoluteString + "|" + user).utf8).base64URLEncoded
-  }
   func key(_ kind: String, _ bot: String? = nil) -> String? {
     scope.map { "native.\($0).\(kind)\(bot.map { ".\($0)" } ?? "")" }
   }
-  private func read<T: Decodable>(_ key: String?) -> T? {
+  func read<T: Decodable>(_ key: String?) -> T? {
     guard let key, let data = UserDefaults.standard.data(forKey: key) else { return nil }
     return try? JSONDecoder().decode(T.self, from: data)
   }
-  private func save<T: Encodable>(_ value: T?, _ key: String?) {
+  func save<T: Encodable>(_ value: T?, _ key: String?) {
     guard let key else { return }
     if let value, let data = try? JSONEncoder().encode(value) {
       UserDefaults.standard.set(data, forKey: key)
@@ -424,8 +430,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if followedBotId != nil, conversationDue { await refreshConversation() }
     await reconcilePending()
     // Files added while the connection was down start once it returns, as on the web.
-    if connected, !uploading, attachmentUploads.contains(where: { $0.status == .queued }) {
-      Task { await self.drainUploads() }
+    if connected, !uploads.uploading, uploads.items.contains(where: { $0.status == .queued }) {
+      Task { await self.uploads.drain() }
     }
     return true
   }
@@ -570,8 +576,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       appliedBootstrapRead = bootstrapRead
-      // The body applied last time, unchanged: nothing to decode, merge or publish.
+      // The body applied last time, unchanged: nothing to decode, merge or publish to views.
       guard var value = response.value ?? bootstrap else { return }
+      var applied = false
       if response.value != nil {
         if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
           value.bots = previous.bots
@@ -610,19 +617,20 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           receipts = [:]
           submissionChecks = [:]
           sending = false
-          uploading = false
-          clearUploads()
+          uploads.reset()
           interruptionReviewed = false
-          resetUpgrade()
+          upgrade.reset(); computerStatus = nil
           resetPreferenceSaves()
         }
-        if bootstrap != value { bootstrap = value }
+        if bootstrap != value { bootstrap = value; applied = true }
         appliedBootstrapTag = response.etag
       }
+      // Publishing follows a changed roster; an unchanged one still renews the widgets' freshness.
+      if !applied { publishWidgetSnapshot() }
       restoredRosterAt = nil
       if offlineSavedAt != nil, !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
       api.csrf = value.csrfToken
-      Task { await self.drainUploads() }
+      Task { await self.uploads.drain() }
       if appUnavailable { appUnavailable = false }
       failures = 0
       saveOfflineLibrary()
@@ -646,7 +654,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// Another member made the open assistant personal, or it was deleted: return home and stop asking for it.
   func leave(_ id: String) async {
-    for upload in attachmentUploads.filter({ $0.botId == id }) { removeUpload(upload.id) }
+    for upload in uploads.items.filter({ $0.botId == id }) { uploads.remove(upload.id) }
     conversationCache[id] = nil
     conversationCapturedAt[id] = nil
     cachedChats.remove(id)
@@ -778,12 +786,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Every file the open conversation knows, oldest first, with where it came from. Listed once per
   /// change of its inputs, not on every render of the header that counts them.
   var conversationArtifacts: [Artifact] {
+    // The cache is not observed, so a view reading it still follows the inputs it comes from.
+    _ = conversation; _ = earlierFileCache; _ = selectedBotId
     if let cachedArtifacts { return cachedArtifacts }
     let value = Artifacts.list(conversation, earlier: currentEarlierFiles?.messages ?? [])
     cachedArtifacts = value
     return value
   }
-  private var cachedArtifacts: [Artifact]?
+  @ObservationIgnored private var cachedArtifacts: [Artifact]?
   var conversationFiles: [FileRef] { conversationArtifacts.map(\.file) }
   var earlierFilesFailed: Bool {
     earlierFilesFailure != nil && earlierFilesFailure == earlierFilesKey
@@ -918,14 +928,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// Saves in flight per cached draft. A copy is not marked saved while an older save may land.
   /// The edit sequences of the saves in flight, per cached draft.
-  private var draftSavesInFlight: [String: [Int]] = [:]
+  @ObservationIgnored private var draftSavesInFlight: [String: [Int]] = [:]
   /// Consecutive failed saves per cached draft, for the retry backoff: 1 s, 2 s, 4 s, up to 30 s.
-  private var draftSaveFailures: [String: Int] = [:]
+  @ObservationIgnored private var draftSaveFailures: [String: Int] = [:]
   /// When a failed draft may retry. Until then only a new edit saves it, not a poll.
-  private var draftRetryAt: [String: ContinuousClock.Instant] = [:]
+  @ObservationIgnored private var draftRetryAt: [String: ContinuousClock.Instant] = [:]
   /// The last edit sequence per cached draft, for the life of the store. A copy adopted from the
   /// server forgets its own, so a new edit never reuses one an older save in flight carries.
-  private var draftSeqs: [String: Int] = [:]
+  @ObservationIgnored private var draftSeqs: [String: Int] = [:]
   private func nextDraftSeq(_ botId: String?) -> Int {
     let localKey = botId.flatMap { key("draft", $0) } ?? ""
     let next = max(draftSeqs[localKey] ?? 0, draft.seq ?? 0) + 1
@@ -1024,7 +1034,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       self?.persistDraft()
     }
   }
-  private var draftPersistTask: Task<Void, Never>?
+  @ObservationIgnored private var draftPersistTask: Task<Void, Never>?
   static let draftPersistDelay: Duration = .milliseconds(300)
   func send(reviewedUncertain: Bool = false) async {
     guard let api, let id = selectedBotId, !sending else { return }
@@ -1103,7 +1113,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// How long an unconfirmed send waits between checks: 1.5 s, 5 s, 15 s, then a minute. A new
   /// send, a retry of it, a change notice from its conversation or Reconnect asks again at once.
   static let submissionCheckDelays: [Duration] = [.seconds(1.5), .seconds(5), .seconds(15), .seconds(60)]
-  private var submissionChecks: [String: (count: Int, next: ContinuousClock.Instant)] = [:]
+  @ObservationIgnored private var submissionChecks: [String: (count: Int, next: ContinuousClock.Instant)] = [:]
   private func checkedSubmission(_ requestId: String) {
     let count = (submissionChecks[requestId]?.count ?? 0) + 1
     submissionChecks[requestId] = (count, now() + Self.submissionCheckDelays[min(count, Self.submissionCheckDelays.count) - 1])
@@ -1216,44 +1226,6 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     var next = draft
     edit(&next)
     updateDraft(next)
-  }
-  /// Whether shared items wait in the inbox for this assistant: while a send for it is unsettled,
-  /// its draft is told apart from that send by content, so an addition could be mistaken for it
-  /// or keep it alive to be sent again. Added once the send settles, they land in the cleared or
-  /// given-back draft.
-  func holdsShared(_ botId: String) -> Bool { pendings[botId] != nil }
-  /// Adds shared text or an uploaded shared file to the open assistant's draft, unless it holds
-  /// shared items for now.
-  @discardableResult func addShared(text: String = "", file: FileRef? = nil, botId: String) -> Bool {
-    guard selectedBotId == botId, draftReady, !holdsShared(botId) else { return false }
-    var next = draft
-    if !text.isEmpty { next.text += (next.text.isEmpty ? "" : "\n\n") + text }
-    if let file { next.attachments.append(file) }
-    updateDraft(next)
-    return true
-  }
-  /// Assistants whose notification replies wait for an unsettled send, for the composer's note.
-  @Published private(set) var heldNotificationReplies: Set<String> = []
-  /// Text typed into a notification's Reply joins this assistant's draft for review; it is never sent from
-  /// there. Like the Share inbox, it waits while a send to this assistant is unsettled, saved per account so a
-  /// relaunch keeps it. Returns false when the reply was written for another account.
-  @discardableResult func addNotificationReply(_ text: String, botId: String, account: String) -> Bool {
-    guard let user = bootstrap?.user.id, NotificationActions.accountMarker(user) == account, let localKey = key("notificationReplies", botId) else {
-      report(APIError(message: "That reply was written while another account was signed in, so it was not added to this draft.", status: 0))
-      return false
-    }
-    save((read(localKey) ?? [String]()) + [text], localKey)
-    applyNotificationReplies()
-    return true
-  }
-  private func applyNotificationReplies() {
-    guard let botId = selectedBotId, let localKey = key("notificationReplies", botId), let held: [String] = read(localKey), !held.isEmpty else { return }
-    guard addShared(text: held.joined(separator: "\n\n"), botId: botId) else {
-      if holdsShared(botId) { heldNotificationReplies.insert(botId) }
-      return
-    }
-    save(Optional<[String]>.none, localKey)
-    heldNotificationReplies.remove(botId)
   }
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
@@ -1409,14 +1381,14 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// Conversation views on screen per assistant, counted because the next can appear before the
   /// last one disappears.
-  private var conversationScreens: [String: Int] = [:]
+  private(set) var conversationScreens: [String: Int] = [:]
   /// The open assistant while its conversation is on screen, in the iPad detail pane or under a
   /// sheet. Only it is polled and streamed: home, Today and Search leave the conversation alone,
   /// and it is read again as soon as it returns.
   var followedBotId: String? { followed(selectedBotId) }
   private func followed(_ id: String?) -> String? { id.flatMap { conversationScreens[$0] != nil ? $0 : nil } }
   /// The assistant `select` is opening; its own read makes the view's arrival need none.
-  private var openingBotId: String?
+  @ObservationIgnored private var openingBotId: String?
   func conversationShown(_ botId: String, _ shown: Bool) {
     let before = followedBotId
     let count = (conversationScreens[botId] ?? 0) + (shown ? 1 : -1)
@@ -1438,11 +1410,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   }
   /// The chat on screen while the app is active. Reporting it keeps this person's other devices
   /// quiet about it and marks it read there, as the web does.
-  private(set) var viewingBotId: String?
-  private var presenceBeat: Task<Void, Never>?
-  private var presenceReports: Task<Void, Never>?
+  @ObservationIgnored private(set) var viewingBotId: String?
+  @ObservationIgnored private var presenceBeat: Task<Void, Never>?
+  @ObservationIgnored private var presenceReports: Task<Void, Never>?
   /// Sheets over the chat, such as settings or files. A covered chat is not being read, as on the web.
-  @Published private(set) var chatCovers = 0
+  private(set) var chatCovers = 0
   func cover(_ shown: Bool) { chatCovers = max(0, chatCovers + (shown ? 1 : -1)) }
   func viewing(_ botId: String?) {
     guard botId != viewingBotId else { return }
@@ -1495,163 +1467,28 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if attachmentSlots(botId) <= 0 { return "A message can carry up to \(UploadRules.maxAttachments) attachments." }
     return nil
   }
-  private func attachmentSlots(_ botId: String) -> Int {
-    UploadRules.maxAttachments - draft.attachments.count - attachmentUploads.filter { $0.botId == botId }.count
+  func attachmentSlots(_ botId: String) -> Int {
+    UploadRules.maxAttachments - draft.attachments.count - uploads.items.filter { $0.botId == botId }.count
   }
-  /// Adds files to the open assistant's draft as the web composer does: every file that can't be
-  /// attached is named in one notice, with its size and the limit, and the rest upload in order.
-  func attach(urls: [URL], problems earlier: [String] = []) async {
-    guard !urls.isEmpty || !earlier.isEmpty, let id = selectedBotId else { return }
-    if let reason = attachUnavailable(id) { attachNotice = [reason]; return }
-    let slots = attachmentSlots(id)
-    var problems = earlier
-    var accepted = 0
-    var staged = false
-    for url in urls {
-      let accessed = url.startAccessingSecurityScopedResource()
-      defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-      let name = url.lastPathComponent
-      do {
-        let resource = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-        let size = resource.fileSize ?? 0
-        let mime: String
-        switch UploadRules.prepare(name: name, mime: UploadRules.mime(of: url, contentType: resource.contentType), size: size) {
-        case .failure(let problem): problems.append(problem.message); continue
-        case .success(let value): mime = value
-        }
-        accepted += 1
-        guard accepted <= slots else { continue }
-        // The picked file may be gone once the picker closes, so upload a private copy.
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("upload-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let copy = directory.appendingPathComponent(name)
-        do { try FileManager.default.copyItem(at: url, to: copy) }
-        catch { try? FileManager.default.removeItem(at: directory); throw error }
-        attachmentUploads.append(AttachmentUpload(botId: id, url: copy, name: name, mime: mime, size: size))
-        staged = true
-      } catch {
-        problems.append("\(name) can't be attached. \(error.localizedDescription)")
-      }
-    }
-    if accepted > slots {
-      let left = accepted - slots
-      problems.append("A message can carry up to \(UploadRules.maxAttachments) attachments, so \(left) of these \(left == 1 ? "wasn't" : "weren't") added.")
-    }
-    attachNotice = problems
-    if staged { await drainUploads() }
-  }
-  /// Attaches images that exist only in memory: a paste, a new photo or a library pick. Each gets
-  /// a readable name, such as "Pasted image 14.03.22.png", and formats the server cannot take,
-  /// such as HEIC, are converted.
-  func attach(images: [Data], named prefix: String) async {
-    guard !images.isEmpty else { return }
-    let now = Date()
-    var urls: [URL] = []
-    var problems: [String] = []
-    for (index, data) in images.enumerated() {
-      do {
-        let image = try Self.uploadableImage(data)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("image-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(UploadRules.imageName(prefix, at: now, index: index, ext: image.ext))
-        try image.data.write(to: url, options: .atomic)
-        urls.append(url)
-      } catch {
-        let name = UploadRules.imageName(prefix, at: now, index: index, ext: "png")
-        problems.append(data.count > UploadRules.maxBytes
-          ? "\(name) is \(UploadRules.formatBytes(data.count)). Each attachment can be up to \(UploadRules.formatBytes(UploadRules.maxBytes))."
-          : "\(name) can't be attached. Use \(UploadRules.kinds).")
-      }
-    }
-    await attach(urls: urls, problems: problems)
-    for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-  }
-  /// GIFs keep their animation; other images go through the share extension's conversion.
-  private static func uploadableImage(_ data: Data) throws -> (data: Data, ext: String) {
-    if let source = CGImageSourceCreateWithData(data as CFData, nil),
-      let type = CGImageSourceGetType(source).flatMap({ UTType($0 as String) }), type == .gif,
-      data.count <= UploadRules.maxBytes
-    { return (data, "gif") }
-    return try ShareImage.prepare(data)
-  }
-  /// Cancels a file still uploading, or removes one that failed.
-  func removeUpload(_ id: UUID) {
-    uploadTasks.removeValue(forKey: id)?.cancel()
-    forgetUpload(id)
-  }
-  /// Drops a file's entry and private copy without touching its upload, which may be the caller.
-  private func forgetUpload(_ id: UUID) {
-    guard let upload = attachmentUploads.first(where: { $0.id == id }) else { return }
-    try? FileManager.default.removeItem(at: upload.url.deletingLastPathComponent())
-    attachmentUploads.removeAll { $0.id == id }
-  }
-  private func clearUploads() { for id in attachmentUploads.map(\.id) { removeUpload(id) } }
-  func retryUpload(_ uploadId: UUID) async {
-    guard let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }),
-      attachmentUploads[index].status == .failed
-    else { return }
-    attachmentUploads[index].status = .queued
-    attachmentUploads[index].progress = 0
-    attachmentUploads[index].error = nil
-    await drainUploads()
-  }
-  /// Uploads queued files one at a time, in the order they were added. A failed attempt always
-  /// waits for explicit Retry; a file queued while disconnected starts once the connection returns.
-  func drainUploads() async {
-    guard !uploading, connected, api != nil, attachmentUploads.contains(where: { $0.status == .queued }) else { return }
-    let currentGeneration = generation
-    uploading = true
-    defer { if currentGeneration == generation { uploading = false } }
-    while currentGeneration == generation, connected,
-      let next = attachmentUploads.first(where: { $0.status == .queued }) {
-      let task = Task { await self.uploadAttachment(next.id) }
-      uploadTasks[next.id] = task
-      await task.value
-      uploadTasks[next.id] = nil
-    }
-  }
-  private func uploadAttachment(_ uploadId: UUID) async {
-    guard let api, let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) else { return }
-    let upload = attachmentUploads[index]
-    attachmentUploads[index].status = .uploading
-    attachmentUploads[index].progress = 0
-    attachmentUploads[index].error = nil
-    let currentGeneration = generation
-    do {
-      let data = try Data(contentsOf: upload.url)
-      var file = try await api.upload(botId: upload.botId, name: upload.name, mime: upload.mime, data: data) { [weak self] sent in
-        guard let self, currentGeneration == self.generation,
-          let index = self.attachmentUploads.firstIndex(where: { $0.id == uploadId })
-        else { return }
-        self.attachmentUploads[index].record(sent: sent)
-      }
-      guard currentGeneration == generation, attachmentUploads.contains(where: { $0.id == uploadId }) else { return }
-      if file.size == nil { file.size = upload.size }
-      // No network replay: Retry uploads only this file and never sends the message.
-      if selectedBotId == upload.botId && draftReady {
-        var next = draft; next.attachments.append(file); updateDraft(next)
-        forgetUpload(uploadId)
-      } else {
-        let localKey = key("draft", upload.botId)
-        var target: Draft = read(localKey) ?? Draft()
-        target.attachments.append(file); target.dirty = true; target.seq = (target.seq ?? 0) + 1
-        save(target, localKey)
-        // A draft read already in flight must merge this cached attachment, not replace it.
-        if selectedBotId == upload.botId { draft = target }
-        forgetUpload(uploadId)
-        try await saveDraft(target, botId: upload.botId)
-      }
-    } catch is CancellationError {
-    } catch {
-      guard currentGeneration == generation else { return }
-      if let index = attachmentUploads.firstIndex(where: { $0.id == uploadId }) {
-        attachmentUploads[index].status = .failed
-        attachmentUploads[index].error = error.localizedDescription
-      } else { report(error) }
+  /// An uploaded file joins its assistant's draft. `uploaded` drops its staged entry once the
+  /// draft holds it.
+  func attachUploaded(_ file: FileRef, botId: String, uploaded: () -> Void) async throws {
+    if selectedBotId == botId && draftReady {
+      var next = draft; next.attachments.append(file); updateDraft(next)
+      uploaded()
+    } else {
+      let localKey = key("draft", botId)
+      var target: Draft = read(localKey) ?? Draft()
+      target.attachments.append(file); target.dirty = true; target.seq = (target.seq ?? 0) + 1
+      save(target, localKey)
+      // A draft read already in flight must merge this cached attachment, not replace it.
+      if selectedBotId == botId { draft = target }
+      uploaded()
+      try await saveDraft(target, botId: botId)
     }
   }
   func attachAppleSnapshot(_ data: Data, botId: String) async throws {
-    guard let api, connected, supports("uploads"), !uploading, !sending, pendings[botId] == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
+    guard let api, connected, supports("uploads"), !uploads.uploading, !sending, pendings[botId] == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
       throw APIError(message: "Reconnect to this assistant before sharing a snapshot.", status: 409)
     }
     let currentGeneration = generation
@@ -1666,8 +1503,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       target = Draft.merge(cached ?? Draft(), with: remote).draft
     }
     guard target.attachments.count < 10 else { throw APIError(message: "This draft already has 10 attachments. Send or remove one first.", status: 400) }
-    uploading = true
-    defer { if currentGeneration == generation { uploading = false; Task { await self.drainUploads() } } }
+    uploads.uploading = true
+    defer { if currentGeneration == generation { uploads.uploading = false; Task { await self.uploads.drain() } } }
     let file = try await api.upload(botId: botId, name: "apple-selected-snapshot.txt", mime: "text/plain", data: data)
     guard currentGeneration == generation else { throw CancellationError() }
     // Draft editing remains possible during uploads. Read it again before appending.
@@ -1750,28 +1587,17 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     draft = Draft()
     draftReady = false
     pendings = [:]
-    pendingAsk = nil
-    askOpened = nil
+    earlyAdditions = []
     receipts = [:]
     submissionChecks = [:]
     sending = false
-    uploading = false
-    clearUploads()
-    attachNotice = []
+    uploads.reset()
+    uploads.notice = []
     appUnavailable = false
     sessionExpired = false
-    resetUpgrade()
+    upgrade.reset(); computerStatus = nil
     resetPreferenceSaves()
     return true
-  }
-  private func resetUpgrade() {
-    upgradeStatus = nil
-    upgradeBusy = false
-    upgradeError = nil
-    upgradeInstallUncertain = false
-    upgradeSubmitting = false
-    computerStatus = nil
-    upgradeRequest = nil
   }
   /// A failed read keeps the last known status, like the web panel, which only notes it can't reach the computer.
   func refreshComputer() async {
@@ -1779,64 +1605,6 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     let currentGeneration = generation
     guard let value: ComputerStatus = try? await api.get("/computer"), currentGeneration == generation else { return }
     computerStatus = value
-  }
-  func refreshUpgrade() async {
-    await upgradeOperation(nil)
-  }
-  func checkUpgrade() async {
-    guard upgradeStatus?.canCheck == true else { return }
-    await upgradeOperation("check")
-  }
-  func installUpgrade(candidateRevision: String) async {
-    guard upgradeStatus?.canInstall == true, !upgradeInstallUncertain,
-      upgradeStatus?.candidate?.revision == candidateRevision else { return }
-    if upgradeRequest?.candidateRevision != candidateRevision {
-      upgradeRequest = UpgradeInstallRequest(candidateRevision: candidateRevision, requestId: UUID().uuidString)
-    }
-    await upgradeOperation("install")
-  }
-  func controlUpgrade(_ action: String, operationId: String) async {
-    guard let status = upgradeStatus, status.operationId == operationId, !upgradeInstallUncertain else { return }
-    let permitted = action == "retry" ? status.canRetry : action == "cancel" ? status.canCancel : action == "restart_service" ? status.canRestartService : false
-    guard permitted == true else { return }
-    await upgradeOperation(action)
-  }
-  private func upgradeOperation(_ action: String?) async {
-    guard let api, api.token != nil, !sessionExpired, !upgradeBusy else { return }
-    let currentGeneration = generation
-    upgradeBusy = true
-    upgradeSubmitting = action != nil
-    defer { if currentGeneration == generation { upgradeBusy = false; upgradeSubmitting = false } }
-    do {
-      let value: UpgradeStatus
-      if action == "install", let upgradeRequest {
-        value = try await api.write("/hermes/upgrade/install", upgradeRequest)
-      } else if let action, ["retry", "cancel", "restart_service"].contains(action), let operationId = upgradeStatus?.operationId {
-        value = try await api.write("/hermes/upgrade/control", UpgradeControlRequest(action: action, operationId: operationId, requestId: UUID().uuidString))
-      } else if action == "check" {
-        value = try await api.write("/hermes/upgrade/check", [String: String]())
-      } else {
-        value = try await api.get("/hermes/upgrade")
-      }
-      guard currentGeneration == generation else { return }
-      upgradeStatus = value
-      upgradeError = nil
-      upgradeInstallUncertain = false
-      if ["succeeded", "failed", "rolled_back"].contains(value.phase) { upgradeRequest = nil }
-    } catch {
-      guard currentGeneration == generation, !(error is CancellationError) else { return }
-      let status = (error as? APIError)?.status
-      if status == 401 { report(error) }
-      if status == 404 {
-        upgradeError = "This app server doesn't support Hermes updates yet. Ask the self-hoster to update the app server."
-      } else {
-        upgradeError = error.localizedDescription
-      }
-      if action != nil, status == nil || status == 0 || (status ?? 0) >= 500 {
-        upgradeInstallUncertain = true
-        upgradeError = "The update request may have reached the server. Refresh its status before trying again. \(error.localizedDescription)"
-      }
-    }
   }
   /// Returns false when the server could not be reached to revoke the session. The caller
   /// then asks before repeating with `localOnly`, which still lets the person leave.

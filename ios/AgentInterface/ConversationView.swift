@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 private struct ReadingChat: ViewModifier {
   var botId: String
   @State private var visible = false
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
   func body(content: Content) -> some View {
     content
@@ -32,10 +32,10 @@ extension View {
 struct ConversationView: View {
   var bot: Bot
   var edit: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var checkingConnection = false
-  @ObservedObject private var reachability = NetworkReachability.shared
+  private let reachability = NetworkReachability.shared
   @State private var earlierFailed = false
   @State private var visibleMessage: String?
   @State private var openedBot: String?
@@ -69,63 +69,13 @@ struct ConversationView: View {
   }
   var body: some View {
     VStack(spacing: 0) {
-      if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
-      if let error = store.error {
-        ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(
-          .bottom, 8)
-      }
-      if store.sessionExpired {
-        Button("Sign in again. Your draft is saved.") { Task { await store.signIn() } }.buttonStyle(
-          .bordered
-        ).padding(8)
-      }
-      if findOpen {
-        HStack {
-          TextField("Find in loaded messages", text: $findQuery).textFieldStyle(.roundedBorder)
-            .accessibilityIdentifier("findConversation").focused($findFocused)
-          Text(matches.isEmpty ? "0 matches" : "\(min(findIndex + 1, matches.count)) of \(matches.count)").font(.caption)
-          Button { find(-1) } label: { Image(systemName: "chevron.up") }.accessibilityLabel("Previous match").disabled(matches.isEmpty)
-          Button { find(1) } label: { Image(systemName: "chevron.down") }.accessibilityLabel("Next match").disabled(matches.isEmpty)
-          Button { findOpen = false; findTarget = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Close find")
-        }.padding(.horizontal).padding(.vertical, 8)
-      }
+      banners
+      if findOpen { findBar }
       transcript
       composer
-    }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name).navigationBarTitleDisplayMode(
-      .inline
-    )
-    .toolbar {
-      // Activity reads in the transcript; the bar keeps only the actions.
-      ToolbarItem(placement: .principal) {
-        HStack(spacing: 8) {
-          AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 30, name: bot.name, forceReducedMotion: true)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(bot.name).font(.headline).lineLimit(1)
-            Text("\(bot.shared ? "Shared with your household" : bot.ownerId == nil ? "Personal, visible to the household" : "Your personal assistant") · \(bot.provider.map { $0 + " / " } ?? "")\(bot.model)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-          }
-        }.accessibilityElement(children: .combine)
-      }
-      // The web header's order: files, settings, pin.
-      ToolbarItemGroup(placement: .topBarTrailing) {
-        let files = store.conversationFileCount
-        Button { fileSheetOpen = true } label: {
-          Image(systemName: "doc").overlay(alignment: .topTrailing) {
-            if files > 0 {
-              Text("\(files)").font(.system(size: fileBadge, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
-                .padding(.horizontal, 3).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 5)).offset(x: 9, y: -7)
-            }
-          }
-        }.accessibilityLabel("Artifacts (\(files))").accessibilityIdentifier("conversationFiles")
-        Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel(
-          "Configure \(bot.name)")
-        Menu {
-          Button("Find in conversation", systemImage: "magnifyingglass") { openFind() }
-          Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant", systemImage: "pin") {
-            Task { await store.togglePin(bot.id) }
-          }.disabled(!store.connected || store.sessionExpired)
-        } label: { Image(systemName: "ellipsis") }.accessibilityLabel("Conversation actions")
-      }
-    }
+    }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar { toolbarContent }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
@@ -133,6 +83,60 @@ struct ConversationView: View {
     .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false }
     .onChange(of: findQuery) { _, _ in findIndex = 0; find(0) }
     .findShortcut(botId: bot.id, open: openFind)
+  }
+  @ViewBuilder private var banners: some View {
+    if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
+    if let error = store.error {
+      ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(.bottom, 8)
+    }
+    if store.sessionExpired {
+      Button("Sign in again. Your draft is saved.") { Task { await store.signIn() } }.buttonStyle(.bordered).padding(8)
+    }
+  }
+  private var findBar: some View {
+    HStack {
+      TextField("Find in loaded messages", text: $findQuery).textFieldStyle(.roundedBorder)
+        .accessibilityIdentifier("findConversation").focused($findFocused)
+      Text(matches.isEmpty ? "0 matches" : "\(min(findIndex + 1, matches.count)) of \(matches.count)").font(.caption)
+      Button { find(-1) } label: { Image(systemName: "chevron.up") }.accessibilityLabel("Previous match").disabled(matches.isEmpty)
+      Button { find(1) } label: { Image(systemName: "chevron.down") }.accessibilityLabel("Next match").disabled(matches.isEmpty)
+      Button { findOpen = false; findTarget = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Close find")
+    }.padding(.horizontal).padding(.vertical, 8)
+  }
+  @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
+    // Activity reads in the transcript; the bar keeps only the actions.
+    ToolbarItem(placement: .principal) { titleView }
+    // The web header's order: files, settings, pin.
+    ToolbarItemGroup(placement: .topBarTrailing) {
+      filesButton
+      Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel("Configure \(bot.name)")
+      Menu {
+        Button("Find in conversation", systemImage: "magnifyingglass") { openFind() }
+        Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant", systemImage: "pin") {
+          Task { await store.togglePin(bot.id) }
+        }.disabled(!store.connected || store.sessionExpired)
+      } label: { Image(systemName: "ellipsis") }.accessibilityLabel("Conversation actions")
+    }
+  }
+  private var titleView: some View {
+    HStack(spacing: 8) {
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 30, name: bot.name, forceReducedMotion: true)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(bot.name).font(.headline).lineLimit(1)
+        Text("\(bot.shared ? "Shared with your household" : bot.ownerId == nil ? "Personal, visible to the household" : "Your personal assistant") · \(bot.provider.map { $0 + " / " } ?? "")\(bot.model)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+      }
+    }.accessibilityElement(children: .combine)
+  }
+  private var filesButton: some View {
+    let files = store.conversationFileCount
+    return Button { fileSheetOpen = true } label: {
+      Image(systemName: "doc").overlay(alignment: .topTrailing) {
+        if files > 0 {
+          Text("\(files)").font(.system(size: fileBadge, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
+            .padding(.horizontal, 3).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 5)).offset(x: 9, y: -7)
+        }
+      }
+    }.accessibilityLabel("Artifacts (\(files))").accessibilityIdentifier("conversationFiles")
   }
   private func openFind() {
     findOpen = true
@@ -147,74 +151,7 @@ struct ConversationView: View {
   }
   private var transcript: some View {
     ScrollViewReader { proxy in
-      ScrollView {
-        // Not lazy: like the web's page, every loaded turn has a real height, so the latest
-        // message and a held place can be scrolled to exactly.
-        VStack(alignment: .leading, spacing: 18) {
-          if (store.conversation?.earlier ?? 0) > 0 {
-            Button { loadEarlier(proxy) } label: {
-              HStack(spacing: 7) {
-                if store.loadingEarlier { ProgressView() }
-                Text(store.loadingEarlier ? "Loading earlier messages…" : earlierFailed ? "Try loading earlier messages again" : "Show earlier messages")
-              }
-            }.buttonStyle(.bordered).disabled(store.loadingEarlier || !store.connected).frame(maxWidth: .infinity)
-              .onGeometryChange(for: Bool.self) { geometry in geometry.frame(in: .named("transcript")).maxY >= -600 } action: { earlierEdgeVisible = $0 }
-              .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(placed)") {
-                // A failed page waits for the button, as on the web, instead of retrying on every scroll.
-                guard earlierEdgeVisible, placed, !earlierFailed, store.connected, !store.loadingEarlier else { return }
-                loadEarlier(proxy)
-              }
-          }
-          // The transcript includes a message still on its way.
-          if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.transcript?.messages.isEmpty == false {
-            Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-          }
-          if store.conversation == nil {
-            if store.offlineSavedAt != nil {
-              ContentUnavailableView("No saved messages", systemImage: "wifi.slash",
-                description: Text(store.draftReady ? "Reconnect to load this assistant's conversation. You can keep writing a draft." : "Reconnect to load this assistant's conversation and saved draft."))
-            } else { ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40) }
-          } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
-            VStack(spacing: 14) {
-              AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
-              Text("Let's discuss your role.").font(.title2.bold())
-              Text(bot.description?.isEmpty == false ? bot.description! : "Tell \(bot.name) what you need help with.").foregroundStyle(.secondary)
-              Button("Discuss \(bot.name)'s role") {
-                store.editComposer { $0.text = RoleDiscussion.draft(appendingTo: $0.text, description: bot.description) }
-                composerFocused = true
-              }.buttonStyle(.bordered).disabled(!store.draftReady)
-              if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
-            }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
-          }
-          TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing)
-            .environment(\.foundMessage, findTarget)
-          if ![.idle, .done].contains(store.activity) { liveActivity }
-          // Questions and secure requests come before approvals, as on the web.
-          ForEach(store.conversation?.attention ?? []) { request in
-            AttentionView(request: request, botId: bot.id)
-          }
-          ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
-            approval in approvalCard(approval)
-          }
-          Color.clear.frame(height: 1).id("latest")
-        }.scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(
-          maxWidth: .infinity)
-          .environment(\.transcriptConnected, store.connected)
-          .onGeometryChange(for: TranscriptMetrics.self) { geometry in
-            let frame = geometry.frame(in: .named("transcript"))
-            return TranscriptMetrics(top: frame.minY, height: frame.height)
-          } action: { contentMoved(to: $0, proxy) }
-      }
-      .scrollPosition(id: $visibleMessage, anchor: .top)
-      .coordinateSpace(name: "transcript")
-      .onGeometryChange(for: CGFloat.self) {
-        $0.size.height
-      } action: {
-        viewportHeight = $0
-        // The keyboard or a rotation resizes the view; a follower stays at the end.
-        if following { scrollToLatest(proxy) }
-      }
-      .scrollDismissesKeyboard(.interactively)
+      transcriptScroll(proxy)
       .onChange(of: store.conversation?.botId, initial: true) { _, id in
         guard let id, id != openedBot else { return }
         // Like the web, a chat always opens at its latest message.
@@ -226,13 +163,7 @@ struct ConversationView: View {
         earlierFailed = false
         scrollToLatest(proxy)
       }
-      .overlay(alignment: .bottom) {
-        if !following && store.conversation != nil {
-          Button { jumpToLatest(proxy) } label: {
-            Label(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")", systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
-          }.accessibilityLabel(unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages"), jump to latest").padding(12).transition(.opacity)
-        }
-      }
+      .overlay(alignment: .bottom) { if !following && store.conversation != nil { jumpButton(proxy) } }
       .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
@@ -258,6 +189,89 @@ struct ConversationView: View {
         if let id = readPosition { store.markRead(id) }
       }
     }
+  }
+  private func transcriptScroll(_ proxy: ScrollViewProxy) -> some View {
+    ScrollView {
+      // Not lazy: like the web's page, every loaded turn has a real height, so the latest
+      // message and a held place can be scrolled to exactly.
+      transcriptRows(proxy).scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
+        .environment(\.transcriptConnected, store.connected)
+        .environment(\.transcriptRecipient, bot.name)
+        .onGeometryChange(for: TranscriptMetrics.self) { geometry in
+          let frame = geometry.frame(in: .named("transcript"))
+          return TranscriptMetrics(top: frame.minY, height: frame.height)
+        } action: { contentMoved(to: $0, proxy) }
+    }
+    .scrollPosition(id: $visibleMessage, anchor: .top)
+    .coordinateSpace(name: "transcript")
+    .onGeometryChange(for: CGFloat.self) {
+      $0.size.height
+    } action: {
+      viewportHeight = $0
+      // The keyboard or a rotation resizes the view; a follower stays at the end.
+      if following { scrollToLatest(proxy) }
+    }
+    .scrollDismissesKeyboard(.interactively)
+  }
+  private func transcriptRows(_ proxy: ScrollViewProxy) -> some View {
+    VStack(alignment: .leading, spacing: 18) {
+      if (store.conversation?.earlier ?? 0) > 0 { earlierButton(proxy) }
+      // The transcript includes a message still on its way.
+      if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.transcript?.messages.isEmpty == false {
+        Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+      }
+      emptyState
+      TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing)
+        .environment(\.foundMessage, findTarget)
+      if ![.idle, .done].contains(store.activity) { liveActivity }
+      // Questions and secure requests come before approvals, as on the web.
+      ForEach(store.conversation?.attention ?? []) { request in
+        AttentionView(request: request, botId: bot.id)
+      }
+      ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
+        approval in approvalCard(approval)
+      }
+      Color.clear.frame(height: 1).id("latest")
+    }
+  }
+  private func earlierButton(_ proxy: ScrollViewProxy) -> some View {
+    Button { loadEarlier(proxy) } label: {
+      HStack(spacing: 7) {
+        if store.loadingEarlier { ProgressView() }
+        Text(store.loadingEarlier ? "Loading earlier messages…" : earlierFailed ? "Try loading earlier messages again" : "Show earlier messages")
+      }
+    }.buttonStyle(.bordered).disabled(store.loadingEarlier || !store.connected).frame(maxWidth: .infinity)
+      .onGeometryChange(for: Bool.self) { geometry in geometry.frame(in: .named("transcript")).maxY >= -600 } action: { earlierEdgeVisible = $0 }
+      .task(id: "\(store.conversation?.earlier ?? 0):\(earlierEdgeVisible):\(placed)") {
+        // A failed page waits for the button, as on the web, instead of retrying on every scroll.
+        guard earlierEdgeVisible, placed, !earlierFailed, store.connected, !store.loadingEarlier else { return }
+        loadEarlier(proxy)
+      }
+  }
+  @ViewBuilder private var emptyState: some View {
+    if store.conversation == nil {
+      if store.offlineSavedAt != nil {
+        ContentUnavailableView("No saved messages", systemImage: "wifi.slash",
+          description: Text(store.draftReady ? "Reconnect to load this assistant's conversation. You can keep writing a draft." : "Reconnect to load this assistant's conversation and saved draft."))
+      } else { ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40) }
+    } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
+      VStack(spacing: 14) {
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
+        Text("Let's discuss your role.").font(.title2.bold())
+        Text(bot.description?.isEmpty == false ? bot.description! : "Tell \(bot.name) what you need help with.").foregroundStyle(.secondary)
+        Button("Discuss \(bot.name)'s role") {
+          store.editComposer { $0.text = RoleDiscussion.draft(appendingTo: $0.text, description: bot.description) }
+          composerFocused = true
+        }.buttonStyle(.bordered).disabled(!store.draftReady)
+        if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
+      }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
+    }
+  }
+  private func jumpButton(_ proxy: ScrollViewProxy) -> some View {
+    let label = unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")"
+    return Button { jumpToLatest(proxy) } label: {
+      Label(label, systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
+    }.accessibilityLabel(unseen == 0 ? label : label + ", jump to latest").padding(12).transition(.opacity)
   }
   /// Content grew or the reader scrolled. Growth keeps a follower at the end; a scroll decides
   /// whether the reader is following, as the web's scroll handler does.
@@ -371,7 +385,7 @@ struct MessageView: View {
   /// Set while the person's sent message is on its way: faint while sending, with its progress
   /// in place of the time.
   var delivery: SentEcho.Status? = nil
-  @Environment(\.unobservedStore) private var store
+  @Environment(\.transcriptRecipient) private var recipient
   @Environment(\.colorScheme) private var scheme
   @Environment(\.foundMessage) private var foundMessage
   var body: some View {
@@ -380,7 +394,7 @@ struct MessageView: View {
         attribution
       }
       if message.isAgentExchange {
-        AgentExchangeView(message: message, recipient: store?.bot?.name ?? "Assistant")
+        AgentExchangeView(message: message, recipient: recipient)
       } else if !message.isToolActivity {
         ReplyContentView(message: message)
       }
@@ -539,7 +553,7 @@ private struct ToolOutputHeight: PreferenceKey {
 struct AttentionView: View {
   var request: Attention
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var answers: [String: String] = [:]
   @State private var busy = false

@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 struct BotSettingsView: View {
   var bot: Bot?
   var close: (() -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var form = BotInput()
   @State private var savedForm = BotInput()
@@ -673,7 +673,7 @@ struct BotSettingsView: View {
 struct RoutineEditor: View {
   @State var routine: Routine
   var onSaved: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var busy = false
   @State private var error: String?

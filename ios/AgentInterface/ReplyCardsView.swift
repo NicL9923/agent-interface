@@ -182,7 +182,7 @@ struct ReplyContentView: View {
 struct InteractiveReplyCard: View {
   var card: ReplyCard
   var messageId: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()

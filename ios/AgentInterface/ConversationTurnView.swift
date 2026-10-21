@@ -1,30 +1,30 @@
 import SwiftUI
 
-/// The store as transcript rows read it: without observing it, so a keystroke or poll elsewhere
-/// does not render every message again. The web memoizes its turns for the same reason.
-private struct UnobservedStoreKey: EnvironmentKey { static let defaultValue: AppStore? = nil }
 /// Whether Hermes is reachable, for rows that show "Last seen running".
 private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue = true }
+/// The open assistant's name, for agent exchanges. An environment value, so a roster change that
+/// keeps the name renders no message again.
+private struct TranscriptRecipientKey: EnvironmentKey { static let defaultValue = "Assistant" }
 private struct FoundMessageKey: EnvironmentKey { static let defaultValue: String? = nil }
 extension EnvironmentValues {
   var foundMessage: String? {
     get { self[FoundMessageKey.self] }
     set { self[FoundMessageKey.self] = newValue }
   }
-  var unobservedStore: AppStore? {
-    get { self[UnobservedStoreKey.self] }
-    set { self[UnobservedStoreKey.self] = newValue }
-  }
   var transcriptConnected: Bool {
     get { self[TranscriptConnectedKey.self] }
     set { self[TranscriptConnectedKey.self] = newValue }
   }
+  var transcriptRecipient: String {
+    get { self[TranscriptRecipientKey.self] }
+    set { self[TranscriptRecipientKey.self] = newValue }
+  }
 }
 extension View {
-  /// Provides the store to screens, which observe it, and to transcript rows, which do not.
-  func appStore(_ store: AppStore) -> some View {
-    environmentObject(store).environment(\.unobservedStore, store)
-  }
+  /// Provides the store to a screen or sheet. Views render again only for the properties they
+  /// read, so transcript rows read none while rendering: they take the connection and the
+  /// assistant's name from the environment and use the store only in actions.
+  func appStore(_ store: AppStore) -> some View { environment(store) }
 }
 
 /// The loaded turns. Equatable, so the transcript renders again only when they change.
@@ -47,7 +47,7 @@ struct ConversationTurnView: View, Equatable {
   var advanced: Bool
   var delivery: SentEcho.Delivery? = nil
   @Environment(\.transcriptConnected) private var connected
-  @Environment(\.unobservedStore) private var store
+  @Environment(\.transcriptRecipient) private var recipient
   static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery }
   var body: some View {
     let visible = turn.visibleMessages
@@ -64,7 +64,6 @@ struct ConversationTurnView: View, Equatable {
       }
     }
   }
-  private var recipient: String { store?.bot?.name ?? "Assistant" }
   private func activityGroup(_ group: CoordinationGroup) -> some View {
     DisclosureGroup {
       ForEach(group.messages) { message in
@@ -126,7 +125,7 @@ struct ReasoningDisclosure: View {
 struct ApprovalDecisionView: View {
   var approval: Approval
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var decision: String?
   @State private var settled = false

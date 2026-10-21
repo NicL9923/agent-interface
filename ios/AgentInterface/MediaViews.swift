@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AuthenticatedImage: View {
   let path: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @State private var image: UIImage?
   @State private var failed = false
   var body: some View {
@@ -109,7 +109,7 @@ struct AuthenticatedImage: View {
 /// elsewhere opens at its own address.
 struct FileAttachmentView: View {
   var file: FileRef
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.openURL) private var openURL
   var body: some View {
     let location = file.location(origin: store?.api?.baseURL)
@@ -175,7 +175,7 @@ struct FilePreview: UIViewControllerRepresentable {
 /// text, never an embedded web view.
 struct MarkdownView: View {
   let text: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   var body: some View {
     MarkdownBlocksView(blocks: MarkdownCache.shared.blocks(text))
       .frame(maxWidth: .infinity, alignment: .leading)

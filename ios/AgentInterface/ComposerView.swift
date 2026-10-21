@@ -10,10 +10,10 @@ struct ComposerView: View {
   @Binding var focused: Bool
   /// Called when Send is pressed, so the transcript can follow the new message.
   var onSent: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scenePhase) private var scenePhase
-  @StateObject private var voice = VoiceController()
+  @State private var voice = VoiceController()
   @State private var importFiles = false
   @State private var importPhotos = false
   @State private var takePhoto = false
@@ -63,8 +63,8 @@ struct ComposerView: View {
   }
   private var card: some View {
     VStack(alignment: .leading, spacing: 10) {
-      if !store.attachNotice.isEmpty {
-        AttachNoticeView(problems: store.attachNotice) { store.attachNotice = [] }
+      if !store.uploads.notice.isEmpty {
+        AttachNoticeView(problems: store.uploads.notice) { store.uploads.notice = [] }
       }
       AttachmentTrayView(botId: bot.id)
       input
@@ -83,7 +83,7 @@ struct ComposerView: View {
         set: { text in store.editComposer { $0.text = text } }),
       label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
-      onPasteImages: { images in Task { await store.attach(images: images, named: "Pasted image") } }
+      onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } }
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
@@ -143,7 +143,7 @@ struct ComposerView: View {
       .accessibilityIdentifier("sendMessage")
   }
   @ViewBuilder private var footnotes: some View {
-    if store.uploading && !store.attachmentUploads.contains(where: { $0.botId == bot.id }) {
+    if store.uploads.uploading && !store.uploads.items.contains(where: { $0.botId == bot.id }) {
       ProgressView("Uploading…").font(.caption)
     } else if store.draft.text.utf16.count > AppStore.maxMessageLength {
       Text("Messages can contain up to 50,000 characters.").font(.caption).foregroundStyle(.red)
@@ -208,8 +208,8 @@ struct ComposerView: View {
       if !dropped.text.isEmpty, store.draftReady {
         store.editComposer { $0.text += ($0.text.isEmpty ? "" : "\n") + dropped.text.joined(separator: "\n") }
       }
-      if !dropped.images.isEmpty { await store.attach(images: dropped.images, named: "Pasted image") }
-      if !dropped.files.isEmpty { await store.attach(urls: dropped.files) }
+      if !dropped.images.isEmpty { await store.uploads.attach(images: dropped.images, named: "Pasted image") }
+      if !dropped.files.isEmpty { await store.uploads.attach(urls: dropped.files) }
     }
   }
 }
@@ -223,7 +223,7 @@ private struct ComposerPickers: ViewModifier {
   @Binding var photos: [PhotosPickerItem]
   @Binding var discardConfirm: Bool
   @Binding var modelOpen: Bool
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   func body(content: Content) -> some View {
     content
       .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).appStore(store) }
@@ -234,7 +234,7 @@ private struct ComposerPickers: ViewModifier {
       }
       .fileImporter(isPresented: $importFiles, allowedContentTypes: UploadRules.pickerTypes, allowsMultipleSelection: true) { result in
         switch result {
-        case .success(let urls): Task { await store.attach(urls: urls) }
+        case .success(let urls): Task { await store.uploads.attach(urls: urls) }
         case .failure(let error): store.report(error)
         }
       }
@@ -264,7 +264,7 @@ private struct ComposerPickers: ViewModifier {
     let botId = bot.id
     Task {
       guard scope == store.scope, store.selectedBotId == botId else { return }
-      await store.attach(images: images, named: "Photo")
+      await store.uploads.attach(images: images, named: "Photo")
     }
   }
 }
@@ -273,11 +273,11 @@ private struct ComposerPickers: ViewModifier {
 private struct ComposerNotices: View {
   var botId: String
   @Binding var discardConfirm: Bool
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     if store.activity == .interrupted {
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: $store.interruptionReviewed)
+      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: Bindable(store).interruptionReviewed)
         .toggleStyle(CheckboxStyle()).font(.footnote)
     }
     // A normal send only spins the send button. This appears once the request ended without a receipt.
@@ -294,8 +294,8 @@ private struct ComposerNotices: View {
         .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .contain)
     }
-    if store.heldNotificationReplies.contains(botId) {
-      Text("Your reply from a notification joins this draft once your last message settles.")
+    if store.holdsText(for: botId) {
+      Text("Text from a notification, Siri or the Share sheet joins this draft once your last message settles.")
         .font(.footnote).foregroundStyle(.secondary)
     }
     if let receipt = store.receipt, receipt.status == "rejected" {

@@ -3,7 +3,8 @@ import Foundation
 
 /// A question from Siri or Shortcuts waiting to land in an assistant's draft. It is never sent:
 /// the person reviews it in the chat. It names the account it was asked in, so a different
-/// sign-in cannot receive it, and it lapses if the app cannot take it soon.
+/// sign-in cannot receive it, and it lapses if the app cannot take it soon. The store holds it as
+/// a `DraftAddition`.
 struct AskRequest: Equatable {
   var botId: String
   var text: String
@@ -116,31 +117,5 @@ extension NotificationController {
   /// Hands a question to the store, or keeps it until the store exists, as when Siri launched the app.
   func ask(_ request: AskRequest) {
     if let store { store.queueAsk(request) } else { earlyAsk = request }
-  }
-}
-
-extension AppStore {
-  func queueAsk(_ request: AskRequest) {
-    pendingAsk = request
-    askOpened = nil
-    Task { await deliverAsk() }
-  }
-  /// Moves a waiting question into its assistant's draft and opens the chat. It waits while that
-  /// assistant has an unsettled send, like the Share inbox, because an addition to the sent draft
-  /// could be mistaken for it. The store calls it again when the send settles or the roster loads.
-  func deliverAsk(now: Date = Date()) async {
-    guard let ask = pendingAsk, let scope, let bots = bootstrap?.bots, !askDelivering else { return }
-    guard ask.scope == scope, now.timeIntervalSince(ask.at) < AskRequest.patience, bots.contains(where: { $0.id == ask.botId }) else {
-      pendingAsk = nil
-      return
-    }
-    askDelivering = true
-    defer { askDelivering = false }
-    if askOpened != ask {
-      askOpened = ask
-      if selectedBotId == ask.botId && draftReady { conversationRequest = UUID() } else { await select(ask.botId) }
-    }
-    guard pendingAsk == ask, self.scope == scope, selectedBotId == ask.botId, draftReady, !holdsShared(ask.botId) else { return }
-    if addShared(text: ask.text, botId: ask.botId) { pendingAsk = nil }
   }
 }

@@ -2,12 +2,12 @@ import SwiftUI
 
 struct PreferencesView: View {
   var close: (() -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
   @State private var preferences = Preferences()
   @State private var sectionName = ""
-  @StateObject private var reachability = NetworkReachability()
+  @State private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
   private var saveFailed: Bool { store.preferencesSaveFailed }
   @State private var discardConfirm = false

@@ -108,7 +108,7 @@ private struct IntegrationSafariView: UIViewControllerRepresentable {
 
 struct IntegrationsView: View {
   var botId: String?
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedProfile = ""
   @State private var catalog: IntegrationCatalog?

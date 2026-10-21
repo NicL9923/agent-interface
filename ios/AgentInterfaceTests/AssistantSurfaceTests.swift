@@ -82,33 +82,43 @@ import XCTest
     XCTAssertNoThrow(try AskRequest.make(botId: "kitchen", text: String(repeating: "a", count: AppStore.maxMessageLength), snapshot: current))
   }
 
-  private func askStore(draft: String = "") throws -> AppStore {
-    let store = AppStore()
-    store.widgetSnapshotURL = url
-    store.api = APIClient(baseURL: URL(string: "https://one.invalid")!)
-    store.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data("""
+  private static let askOrigin = "https://one.invalid"
+  private static func forgetHeldText() {
+    let scope = Data((askOrigin + "|one").utf8).base64URLEncoded
+    UserDefaults.standard.removeObject(forKey: "native.\(scope).draftAdditions")
+  }
+  private func askBootstrap() throws -> Bootstrap {
+    try JSONDecoder().decode(Bootstrap.self, from: Data("""
       {"user":{"id":"one","name":"One","email":"one@example.test"},"household":[],
        "preferences":{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]},
        "bots":[{"id":"kitchen","name":"Kitchen","model":"m","shared":true,"activity":"idle"},
                {"id":"garden","name":"Garden","model":"m","shared":false,"activity":"idle"}],
        "capabilities":{},"connection":{"connected":true}}
       """.utf8))
+  }
+  private func askStore(draft: String = "", bootstrap: Bool = true) throws -> AppStore {
+    Self.forgetHeldText()
+    addTeardownBlock { @MainActor in Self.forgetHeldText() }
+    let store = AppStore()
+    store.widgetSnapshotURL = url
+    store.api = APIClient(baseURL: URL(string: Self.askOrigin)!)
+    if bootstrap { store.bootstrap = try askBootstrap() }
     store.selectedBotId = "kitchen"
     store.draft = Draft(text: draft, attachments: [], dirty: true)
     store.draftReady = true
     return store
   }
   private func ask(_ store: AppStore, _ text: String = "What is for dinner?", bot: String = "kitchen", scope: String? = nil, at: Date? = nil) -> AskRequest {
-    AskRequest(botId: bot, text: text, scope: scope ?? store.scope ?? "", at: at ?? Date())
+    AskRequest(botId: bot, text: text, scope: scope ?? store.scope ?? Data((Self.askOrigin + "|one").utf8).base64URLEncoded, at: at ?? Date())
   }
 
   func testAskLandsInTheDraftAfterExistingTextOpensTheChatAndNeverSends() async throws {
     let store = try askStore(draft: "Milk")
     let opened = store.conversationRequest
-    store.pendingAsk = ask(store)
-    await store.deliverAsk()
+    store.queueAsk(ask(store))
+    await store.deliverAdditions()
     XCTAssertEqual(store.draft.text, "Milk\n\nWhat is for dinner?")
-    XCTAssertNil(store.pendingAsk)
+    XCTAssertTrue(store.additions.isEmpty)
     XCTAssertNotEqual(store.conversationRequest, opened, "The chat opens for review")
     XCTAssertFalse(store.sending); XCTAssertTrue(store.pendings.isEmpty); XCTAssertTrue(store.receipts.isEmpty)
     store.suspend()
@@ -116,43 +126,68 @@ import XCTest
   func testAskWaitsForAnUnsettledSendThenLandsInTheClearedDraft() async throws {
     let store = try askStore(draft: "Sent already")
     store.pendings["kitchen"] = PendingSubmission(requestId: "r1", botId: "kitchen", text: "Sent already", attachments: [], reviewedInterruption: false)
-    store.pendingAsk = ask(store)
-    await store.deliverAsk()
+    store.queueAsk(ask(store))
+    await store.deliverAdditions()
     XCTAssertEqual(store.draft.text, "Sent already", "The sent copy is left exactly as sent, like the Share inbox")
-    XCTAssertNotNil(store.pendingAsk, "The question waits")
+    XCTAssertEqual(store.additions.map(\.text), ["What is for dinner?"], "The question waits")
+    XCTAssertTrue(store.holdsText(for: "kitchen"), "The composer says why")
     // The send settles and its draft clears; the question arrives in the empty draft.
-    store.pendings = [:]
     store.draft.text = ""
-    await store.deliverAsk()
+    store.pendings = [:]
+    await store.deliverAdditions()
     XCTAssertEqual(store.draft.text, "What is for dinner?")
-    XCTAssertNil(store.pendingAsk)
+    XCTAssertTrue(store.additions.isEmpty)
     store.suspend()
   }
   func testAskForAnotherAccountOrAGoneAssistantOrAStaleRequestIsDropped() async throws {
     let store = try askStore(draft: "Mine")
     for request in [ask(store, scope: "someone-else"), ask(store, bot: "gone"), ask(store, at: Date().addingTimeInterval(-AskRequest.patience - 1))] {
-      store.pendingAsk = request
-      await store.deliverAsk()
-      XCTAssertNil(store.pendingAsk, "\(request)")
+      store.queueAsk(request)
+      await store.deliverAdditions()
+      XCTAssertTrue(store.additions.isEmpty, "\(request)")
       XCTAssertEqual(store.draft.text, "Mine")
     }
     store.suspend()
   }
-  func testSignOutForgetsAWaitingAsk() async throws {
+  func testSignOutSetsAWaitingAskAsideForItsOwnAccountOnly() async throws {
     let store = try askStore()
-    store.pendingAsk = ask(store)
+    store.pendings["kitchen"] = PendingSubmission(requestId: "r1", botId: "kitchen", text: "", attachments: [], reviewedInterruption: false)
+    store.queueAsk(ask(store))
     await store.signOut(localOnly: true)
-    XCTAssertNil(store.pendingAsk)
+    XCTAssertTrue(store.additions.isEmpty)
+    // Another person signing in never sees it.
+    store.api = APIClient(baseURL: URL(string: Self.askOrigin)!)
+    var other = try askBootstrap(); other.user.id = "two"
+    store.bootstrap = other
+    XCTAssertTrue(store.additions.isEmpty)
+    // The same person signing in again finds it waiting, within its five minutes.
+    store.bootstrap = try askBootstrap()
+    XCTAssertEqual(store.additions.map(\.text), ["What is for dinner?"])
+    store.suspend()
   }
   func testAskBeforeTheStoreExistsIsHandedOverWhenItDoes() async throws {
     let controller = NotificationController()
-    let request = AskRequest(botId: "kitchen", text: "Hi", scope: "one", at: Date())
+    let store = try askStore()
+    let request = ask(store, "Hi")
     controller.ask(request)
     XCTAssertEqual(controller.earlyAsk, request)
-    let store = try askStore()
     controller.store = store
     XCTAssertNil(controller.earlyAsk)
-    XCTAssertEqual(store.pendingAsk, request)
+    XCTAssertEqual(store.additions.map(\.text), ["Hi"])
+    await store.deliverAdditions()
+    XCTAssertEqual(store.draft.text, "Hi")
+    store.suspend()
+  }
+  func testAskBeforeTheSignInLoadsWaitsForItsAccount() async throws {
+    let store = try askStore(draft: "Milk", bootstrap: false)
+    store.queueAsk(ask(store, "Eggs too"))
+    store.queueAsk(ask(store, "For someone else", scope: "someone-else"))
+    await store.deliverAdditions()
+    XCTAssertEqual(store.draft.text, "Milk", "Nothing joins before the account is known")
+    store.bootstrap = try askBootstrap()
+    await store.deliverAdditions()
+    XCTAssertEqual(store.draft.text, "Milk\n\nEggs too", "Only the signed-in account's question lands")
+    XCTAssertTrue(store.additions.isEmpty)
     store.suspend()
   }
 

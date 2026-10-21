@@ -29,12 +29,12 @@ struct AppleDeviceSnapshot: Codable {
   }
 }
 
-@MainActor final class AppleDeviceConnection: ObservableObject {
-  private let eventStore = EKEventStore()
-  @Published var calendars: [EKCalendar] = []
-  @Published var lists: [EKCalendar] = []
-  @Published var calendarStatus = EKEventStore.authorizationStatus(for: .event)
-  @Published var reminderStatus = EKEventStore.authorizationStatus(for: .reminder)
+@MainActor @Observable final class AppleDeviceConnection {
+  @ObservationIgnored private let eventStore = EKEventStore()
+  var calendars: [EKCalendar] = []
+  var lists: [EKCalendar] = []
+  var calendarStatus = EKEventStore.authorizationStatus(for: .event)
+  var reminderStatus = EKEventStore.authorizationStatus(for: .reminder)
   func refreshAccess() {
     calendarStatus = EKEventStore.authorizationStatus(for: .event)
     reminderStatus = EKEventStore.authorizationStatus(for: .reminder)
@@ -73,9 +73,9 @@ struct AppleDeviceSnapshot: Codable {
 
 struct AppleDeviceConnectionsView: View {
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
-  @StateObject private var connection = AppleDeviceConnection()
+  @State private var connection = AppleDeviceConnection()
   @State private var selectedCalendars: Set<String> = []
   @State private var selectedLists: Set<String> = []
   @State private var start = Calendar.current.startOfDay(for: Date())
