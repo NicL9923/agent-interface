@@ -162,9 +162,10 @@ account. Settings has a switch that registers or unregisters this device with th
 server. The app reconciles registration on foreground and removes its server
 registration if permission was denied. iOS Settings owns permission and Live
 Activities, and Settings links there when iOS has denied it. Notifications group by
-assistant. An approval request has Approve and Deny, which need the phone unlocked
-and decide without opening the app; if a decision does not go through, a
-notification says so and opens the chat. A finished reply has Reply, which adds
+assistant. An approval request has Review, which opens the chat to see what it would
+run, and Decline, which declines without opening the app. Both need the phone
+unlocked. If a decline does not go through, a notification says so and opens
+the chat. A finished reply has Reply, which adds
 your text to that assistant's draft and opens the chat for you to review and send.
 Batching, quiet hours,
 and assistant following remain account preferences in WildBots. Devices that had

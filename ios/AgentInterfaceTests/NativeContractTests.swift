@@ -513,10 +513,10 @@ private final class NativeMockServer: @unchecked Sendable {
     }
     // Notification actions. "one" is the mock's signed-in user; its marker is the server's accountMarker("one").
     private let one = NotificationActions.accountMarker("one")
-    private func decision(approve: Bool = true) -> ApprovalDecision {
-        ApprovalDecision(botId: "bot", approvalId: "request-7", account: one, approve: approve, url: "/?bot=bot", title: "Bot")
+    private func decision() -> ApprovalDecision {
+        ApprovalDecision(botId: "bot", approvalId: "request-7", account: one, url: "/?bot=bot", title: "Bot")
     }
-    func testApproveFromANotificationInTheBackgroundUsesTheSavedSignInOnce() async throws {
+    func testDeclineFromANotificationInTheBackgroundUsesTheSavedSignInOnce() async throws {
         let server = NativeMockServer(); defer { clean(server) }
         let controller = NotificationController(permissions: NotificationPermissions(status: { .authorized }, request: { true }), register: {}, unregister: {})
         var notices: [UNNotificationRequest] = []
@@ -529,13 +529,13 @@ private final class NativeMockServer: @unchecked Sendable {
         let sent = try XCTUnwrap(server.requests.last { $0.url?.path == path })
         XCTAssertEqual(sent.httpMethod, "POST")
         XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-native-session")
-        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(NativeMockServer.body(sent))) as? [String: String], ["decision": "approved", "account": one])
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(NativeMockServer.body(sent))) as? [String: String], ["decision": "denied", "account": one])
         XCTAssertTrue(notices.isEmpty)
         // A second tap while the first is on its way never sends it twice.
         server.hold(path)
-        async let first: Void = controller.decide(decision(approve: false))
+        async let first: Void = controller.decide(decision())
         try await server.waitForHeld(path)
-        await controller.decide(decision(approve: false))
+        await controller.decide(decision())
         server.release(path); await first
         XCTAssertEqual(server.requestCount(path), 2)
     }
@@ -549,13 +549,13 @@ private final class NativeMockServer: @unchecked Sendable {
         server.refuseApprovals("This approval is no longer pending")
         await controller.decide(decision())
         XCTAssertEqual(server.requestCount(path), 1)
-        XCTAssertEqual(notices.last?.content.title, "Your approval didn't go through")
+        XCTAssertEqual(notices.last?.content.title, "Your decline didn't go through")
         XCTAssertEqual(notices.last?.content.body, "This approval is no longer pending. Tap to open the chat.")
         XCTAssertEqual(notices.last?.content.userInfo["url"] as? String, "/?bot=bot")
         server.refuseApprovals(nil); server.setOffline(true)
-        await controller.decide(decision(approve: false))
+        await controller.decide(decision())
         XCTAssertEqual(server.requestCount(path), 2, "An unanswered decision may have applied, so it is not sent again")
-        XCTAssertEqual(notices.last?.content.title, "Your denial may not have gone through")
+        XCTAssertEqual(notices.last?.content.title, "Your decline may not have gone through")
         controller.actionClient = { nil }
         await controller.decide(decision())
         XCTAssertEqual(server.requestCount(path), 2)

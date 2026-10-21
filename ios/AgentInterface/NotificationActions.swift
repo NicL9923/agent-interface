@@ -6,13 +6,14 @@ import UserNotifications
 /// request it can name, REPLY for an assistant's finished reply in a one-to-one chat, and none otherwise.
 enum NotificationActions {
   static let approvalCategory = "APPROVAL", replyCategory = "REPLY"
-  static let approve = "APPROVE", deny = "DENY", reply = "REPLY"
-  /// Approve and Deny authorize assistant actions, so the phone must be unlocked first. Reply opens the app,
-  /// because the text only joins the draft: the person reviews it there and taps Send.
+  static let review = "REVIEW", deny = "DENY", reply = "REPLY"
+  /// The payload leaves out what an approval would run, since it can hold credentials, so approving from the
+  /// notification would be blind: Review opens the chat to see it first. Decline needs no detail and works from
+  /// the notification once the phone is unlocked. Reply opens the app, because the text only joins the draft.
   static let categories: Set<UNNotificationCategory> = [
     UNNotificationCategory(identifier: approvalCategory, actions: [
-      UNNotificationAction(identifier: approve, title: "Approve", options: [.authenticationRequired]),
-      UNNotificationAction(identifier: deny, title: "Deny", options: [.authenticationRequired, .destructive]),
+      UNNotificationAction(identifier: review, title: "Review", options: [.foreground, .authenticationRequired]),
+      UNNotificationAction(identifier: deny, title: "Decline", options: [.authenticationRequired, .destructive]),
     ], intentIdentifiers: [], options: []),
     UNNotificationCategory(identifier: replyCategory, actions: [
       UNTextInputNotificationAction(identifier: reply, title: "Reply", options: [.foreground, .authenticationRequired],
@@ -28,11 +29,11 @@ enum NotificationActions {
     let url = userInfo["url"] as? String
     let botId = userInfo["botId"] as? String, account = userInfo["account"] as? String
     switch action {
-    case approve, deny:
+    case deny:
       guard let botId, let account, let approvalId = userInfo["approvalId"] as? String, !botId.isEmpty, !approvalId.isEmpty
       else { return .open(url) }
       let title = ((userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any])?["title"] as? String
-      return .decide(ApprovalDecision(botId: botId, approvalId: approvalId, account: account, approve: action == approve, url: url, title: title))
+      return .decide(ApprovalDecision(botId: botId, approvalId: approvalId, account: account, url: url, title: title))
     case reply:
       guard let botId, let account, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .open(url) }
       return .reply(NotificationReply(botId: botId, account: account, text: text, url: url ?? "/?bot=\(APIClient.component(botId))"))
@@ -53,16 +54,16 @@ struct NotificationReply: Equatable {
   let botId: String, account: String, text: String, url: String
 }
 
-/// An Approve or Deny from a notification. It uses the in-app approval card's endpoint and is sent once:
+/// A Decline from a notification. It uses the in-app approval card's endpoint and is sent once:
 /// the server refuses a second decision, and an unconfirmed one is never retried.
 struct ApprovalDecision: Equatable {
-  let botId: String, approvalId: String, account: String, approve: Bool, url: String?, title: String?
+  let botId: String, approvalId: String, account: String, url: String?, title: String?
   static func path(botId: String, approvalId: String) -> String {
     "/bots/\(APIClient.component(botId))/approvals/\(APIClient.component(approvalId))"
   }
   var path: String { Self.path(botId: botId, approvalId: approvalId) }
   /// The account lets the server refuse a decision when someone else is signed in on this phone now.
-  var body: [String: String] { ["decision": approve ? "approved" : "denied", "account": account] }
+  var body: [String: String] { ["decision": "denied", "account": account] }
   enum Outcome: Equatable {
     case decided
     /// The server answered and did not apply it, such as an approval already decided or expired.
@@ -87,17 +88,16 @@ struct ApprovalDecision: Equatable {
   /// The local notification that says a decision did not go through. Tapping it opens the chat.
   func failureNotice(_ outcome: Outcome) -> UNNotificationRequest? {
     let content = UNMutableNotificationContent()
-    let word = approve ? "approval" : "denial"
     switch outcome {
     case .decided: return nil
     case .refused(let reason):
-      content.title = "Your \(word) didn't go through"
+      content.title = "Your decline didn't go through"
       content.body = (reason.hasSuffix(".") ? reason : reason + ".") + " Tap to open the chat."
     case .uncertain:
-      content.title = "Your \(word) may not have gone through"
+      content.title = "Your decline may not have gone through"
       content.body = "WildBots couldn't confirm it with the server. Tap to open the chat and check before deciding again."
     case .signedOut:
-      content.title = "Your \(word) didn't go through"
+      content.title = "Your decline didn't go through"
       content.body = "Sign in to WildBots again, then decide in the chat."
     }
     if let title { content.subtitle = title }

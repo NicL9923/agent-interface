@@ -306,10 +306,13 @@ assistant with `botId`:
 | Finished reply in a one-to-one chat | `REPLY` | `botId`, `account` |
 | Everything else, including routine results, digests and failures | none | none |
 
-`APPROVAL` offers Approve and Deny. Both need the phone unlocked and run without
-opening the app. They call `POST /api/bots/:id/approvals/:approvalId` with
-`{ "decision": "approved" | "denied", "account": ACCOUNT }`, the request the
-approval card makes plus the account. The server answers 409 when the account is
+`APPROVAL` offers Review and Decline, and both need the phone unlocked. The
+payload leaves out what the approval would run, because it can contain
+credentials, so approving from the notification would be blind: Review opens the
+chat, where the approval card shows it. Decline runs without opening the app. It
+calls `POST /api/bots/:id/approvals/:approvalId` with
+`{ "decision": "denied", "account": ACCOUNT }`, the request the approval card
+makes plus the account. The server answers 409 when the account is
 not the signed-in person's, or when the approval is no longer pending. The app
 sends a decision once and never retries it. When it does not go through, the app
 posts a local notification saying so, and tapping it opens the chat. `REPLY`
