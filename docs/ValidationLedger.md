@@ -1,5 +1,36 @@
 # Validation ledger
 
+## October 21 app release f257cc0
+
+PR #167's native improvements and PR #168's qualification records are deployed at `f257cc090418e0c0f7cd67d8fd0426cddeff6979`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `154d3a216cfac9be`, from the archive with SHA256
+`91249e63582e7a6b1ee9d478679b60d6bd5d3c164dc03800b4fcaf6944725ed1`. The host build reproduced the local web build.
+
+The retained October 21 qualification receipt was verified and activated with the release; qualification was not rerun for this cutover. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-f257cc09-20261021T190417Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear. Interactive household use was not exercised.
+Nicolas explicitly authorized "Stop active work and deploy" after the earlier
+idle wait ended. The supported gateway stop/start completed and reported zero
+active agents. Normal guarded preparation and activation then completed without
+bypassing admission. The independent computer and terminal services remained
+active. The newer Headnet migration and legacy wg0 retirement were preserved.
+
+Apple confirmed WildBots 1.0 build 10 as installable for both internal Household
+testers before changing the app announcement. The [distribution receipt](evidence/2026-10-21-household-testflight-build-10.json)
+binds the signed IPA and reviewed commit. The exact prior app environment was
+privately backed up; only the announced build changed from 9 to 10, with the
+existing TestFlight URL retained. The [native availability check](evidence/2026-10-21-native-availability-build-10.json)
+verified authenticated bootstrap, native connectivity, build 10 and the exact
+served worker bytes, then removed its temporary operator session. A subsequent
+read-only release verification confirmed current release, active services,
+sign-in enforcement and cleared maintenance. Physical-phone installation/audio,
+VoiceOver navigation and device frame timing remain unverified.
+
 ## October 21 daily-use qualification, awaiting idle admission
 
 PR #167 merged as `14c93da8df3a8a89ebd39e9b0751b8e91467e132` after all four
