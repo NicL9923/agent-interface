@@ -136,7 +136,7 @@ def ledger_entry(manifest, receipt_name, day):
                      if manifest["qualification"] == "new"
                      else "The app integration inputs were unchanged, so the existing qualification receipt "
                           "validated against the release and was reused.")
-    return f"""## {day:%B} {day.day} app release {manifest['commit'][:7]}
+    return f"""# {day:%B} {day.day} app release {manifest['commit'][:7]}
 
 {pull} at `{manifest['commit']}`. The release is live at `{manifest['origin']}`,
 web build `{manifest['webBuild']}`, from the archive with SHA256
@@ -146,27 +146,43 @@ web build `{manifest['webBuild']}`, from the archive with SHA256
 Activation drained idle native work, switched the release and verified original
 Google HTTP and fresh WebSockets, the configured Discord connections and the
 gateway guard before clearing maintenance. The
-[production receipt](evidence/{receipt_name}) records the result. Hermes remains
+[production receipt](../evidence/{receipt_name}) records the result. Hermes remains
 at `{manifest['hermesRevision'][:12]}`. Afterwards the public service worker reported the new
 build, API requests required sign-in, the app and Hermes services were active and
 maintenance was clear. A signed-in household session was not exercised.
 """
 
 
-LEDGER_HEADING = "# Validation ledger\n"
+LEDGER_DIR = "docs/ledger"
+# The frozen archive of earlier entries; new ones are files in LEDGER_DIR.
+LEDGER_ARCHIVE = "docs/ValidationLedger.md"
 
 
-def insert_ledger_entry(ledger, entry, receipt_name):
-    """Add a release entry under the ledger heading, once per release.
+def ledger_file(release_name):
+    """Entry path under LEDGER_DIR, named by the release's UTC stamp so listings sort chronologically.
 
-    Keyed by the release's receipt, not its heading: two releases of one commit on one
-    day share a heading but each has its own receipt and entry.
+    Derived from the release name, which two releases never share, so entries cannot collide.
     """
-    text = ledger.read_text()
-    fence(text.startswith(LEDGER_HEADING), "validation ledger starts with its heading")
-    if f"(evidence/{receipt_name})" in text:
+    match = re.fullmatch(r"release-([0-9a-f]+)-(\d{8}T\d{6}Z)", release_name)
+    fence(match, "release name carries its commit and UTC stamp")
+    return f"{LEDGER_DIR}/{match[2]}-app-release-{match[1]}.md"
+
+
+def insert_ledger_entry(root, manifest):
+    """Write the release's entry file under root, once per release.
+
+    Keyed by the release's receipt link as well as its file, so an entry another branch already
+    recorded by hand, in the archive or under another name, is not repeated.
+    """
+    path = root / ledger_file(manifest["name"])
+    if path.exists():
         return False
-    ledger.write_text(LEDGER_HEADING + "\n" + entry + text[len(LEDGER_HEADING):])
+    link = f"evidence/{manifest['receiptName']})"
+    recorded = [root / LEDGER_ARCHIVE, *sorted((root / LEDGER_DIR).glob("*.md"))]
+    if any(link in entry.read_text() for entry in recorded if entry.is_file()):
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(manifest["ledgerEntry"])
     return True
 
 
@@ -571,7 +587,7 @@ def activate(args):
 def write_records(root, manifest):
     """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing."""
     (root / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
-    insert_ledger_entry(root / "docs/ValidationLedger.md", manifest["ledgerEntry"], manifest["receiptName"])
+    insert_ledger_entry(root, manifest)
 
 
 def record_release(manifest, docs_pr=True):
@@ -626,7 +642,7 @@ def open_docs_pull_request(manifest):
                 git("worktree", "add", "--quiet", "--detach", str(checkout), "origin/main")
                 try:
                     write_records(checkout, manifest)
-                    git("add", "docs/ValidationLedger.md", "docs/evidence/" + manifest["receiptName"], cwd=checkout)
+                    git("add", ledger_file(manifest["name"]), "docs/evidence/" + manifest["receiptName"], cwd=checkout)
                     if not git("status", "--porcelain", cwd=checkout):
                         print("origin/main already records this release; no docs PR is needed.")
                         return
@@ -644,7 +660,7 @@ def open_docs_pull_request(manifest):
               f"Retry with: release-app.py record {manifest['name']}\n"
               f"Or by hand:\n"
               f"  git fetch origin main && git switch -c {branch} origin/main\n"
-              f"  git add docs/ValidationLedger.md docs/evidence/{manifest['receiptName']}\n"
+              f"  git add {ledger_file(manifest['name'])} docs/evidence/{manifest['receiptName']}\n"
               f"  git commit -m {shlex.quote(title)} && git push -u origin {branch}\n"
               f"  gh pr create --base main --head {branch} --title {shlex.quote(title)}")
 

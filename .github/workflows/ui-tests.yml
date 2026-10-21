@@ -1,0 +1,61 @@
+name: iOS UI tests
+
+# The fixture UI tests are slow, so pull requests opt in with the ui-tests label.
+on:
+  schedule:
+    - cron: "43 8 * * *"
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui:
+    name: iOS UI tests
+    # A pull request runs only while it carries the label; adding any other label does nothing.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'ui-tests') &&
+       (github.event.action == 'synchronize' || github.event.label.name == 'ui-tests'))
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the image's default Xcode
+        id: xcode
+        run: |
+          xcodebuild -version
+          echo "version=$(xcodebuild -version | tr '\n' ' ' | sed 's/ *$//; s/ /-/g')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/ios
+          key: derived-data-ui-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/**') }}
+          restore-keys: derived-data-ui-${{ steps.xcode.outputs.version }}-
+      - name: Run native UI tests
+        # Ad hoc simulator signing, as in .agents/tools/validate-ios.sh. LiveConnectionTests
+        # compiles out without LIVE_HERMES_UI_TESTS, so it needs no exclusion here. The
+        # screenshot tour skips itself unless asked for evidence, and is excluded to say so.
+        run: |
+          simulator=$(bash ios/tools/ci-simulator.sh)
+          xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
+            -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath build/ios \
+            -resultBundlePath build/ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            -parallel-testing-enabled NO -only-testing:AgentInterfaceUITests \
+            -skip-testing:AgentInterfaceUITests/ScreenshotTourTests test
+      - name: Keep the result bundle
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-tests-xcresult
+          path: build/ui-tests.xcresult
+          if-no-files-found: ignore
+          retention-days: 14

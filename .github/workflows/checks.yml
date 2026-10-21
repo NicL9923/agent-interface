@@ -74,17 +74,20 @@ jobs:
         with:
           persist-credentials: false
       - name: Show the image's default Xcode
-        run: xcodebuild -version
-      - name: Run native unit tests
-        # Ad hoc simulator signing, as in .agents/tools/validate-ios.sh. UI tests run locally.
+        id: xcode
         run: |
-          simulator=$(xcrun simctl list devices available --json | python3 -c '
-          import json, sys
-          devices = json.load(sys.stdin)["devices"]
-          version = lambda runtime: [int(part) for part in runtime.rsplit("iOS-", 1)[1].split("-")]
-          runtimes = sorted((runtime for runtime in devices if ".iOS-" in runtime), key=version, reverse=True)
-          print(next(device["udid"] for runtime in runtimes for device in devices[runtime] if device["name"].startswith("iPhone")))
-          ')
+          xcodebuild -version
+          echo "version=$(xcodebuild -version | tr '\n' ' ' | sed 's/ *$//; s/ /-/g')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/ios
+          key: derived-data-unit-${{ steps.xcode.outputs.version }}-${{ hashFiles('ios/**') }}
+          restore-keys: derived-data-unit-${{ steps.xcode.outputs.version }}-
+      - name: Run native unit tests
+        # Ad hoc simulator signing, as in .agents/tools/validate-ios.sh. The fixture UI tests
+        # run in ui-tests.yml: nightly, on demand and on pull requests labeled ui-tests.
+        run: |
+          simulator=$(bash ios/tools/ci-simulator.sh)
           xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
             -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath build/ios \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \

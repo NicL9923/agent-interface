@@ -110,7 +110,15 @@ normalized responses with `ios/AgentInterfaceTests/Contract/*.json`.
 fixture has no decoding check. After an intended API change, regenerate the files
 with `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, review the
 diff, and update the Swift types and checks. CI runs `npm test` and the native unit
-tests on GitHub's `macos-26` image. An activity state this app version does not
+tests on GitHub's `macos-26` image on every pull request. The fixture UI tests are
+slower, so `.github/workflows/ui-tests.yml` runs them nightly, on manual dispatch and
+on pull requests labeled `ui-tests` (add the label to run them for that PR; they rerun
+on each push while it stays). That run skips `LiveConnectionTests`, which compiles out
+without `LIVE_HERMES_UI_TESTS` and needs a real local server, and `ScreenshotTourTests`,
+which only produces evidence. A failed run uploads its `.xcresult` as the
+`ui-tests-xcresult` artifact. Both iOS jobs use `ios/tools/ci-simulator.sh` to pick the
+simulator and cache DerivedData keyed on the Xcode version and a hash of `ios/**`, so
+any iOS change starts from the nearest older cache for that Xcode version. An activity state this app version does not
 know decodes as "Status unknown" instead of failing the response.
 
 Set `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `ios/tools/generate-project.py`;

@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
+from deploy_common import Fence  # noqa: E402
 spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
 release_app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_app)
@@ -256,9 +257,10 @@ class ReleaseRules(unittest.TestCase):
                     "webBuild": "bbbbbbbbbbbbbbbb", "archiveSha256": "f" * 64, "hermesRevision": PRIOR["hermesRevision"],
                     "qualification": "reused", "pullRequest": 8}
         entry = release_app.ledger_entry(manifest, "production-release-7fac68e4-x.json", datetime.date(2026, 10, 1))
-        self.assertTrue(entry.startswith("## October 1 app release 7fac68e\n"))
+        self.assertTrue(entry.startswith("# October 1 app release 7fac68e\n"))
         self.assertIn("PR #8 merged", entry)
-        self.assertIn("(evidence/production-release-7fac68e4-x.json)", entry)
+        # The entry lives in docs/ledger/, one level below the evidence directory.
+        self.assertIn("(../evidence/production-release-7fac68e4-x.json)", entry)
         self.assertIn("existing qualification receipt", entry)
         fresh = release_app.ledger_entry({**manifest, "qualification": "new", "pullRequest": None}, "r.json", datetime.date(2026, 10, 1))
         self.assertIn("fresh qualification receipt", fresh)
@@ -266,15 +268,26 @@ class ReleaseRules(unittest.TestCase):
         self.assertEqual(receipt["sourceCommit"], manifest["commit"])
         self.assertTrue(receipt["maintenanceCleared"] and receipt["preflightCheckPassed"])
 
+    def test_ledger_files_sort_by_release_time_and_never_share_a_name(self):
+        names = ["release-7fac68e4-20261013T181252Z", "release-7fac68e4-20261013T235959Z", "release-0aa11bb2-20261014T000001Z"]
+        files = [release_app.ledger_file(name) for name in names]
+        self.assertEqual(files[0], "docs/ledger/20261013T181252Z-app-release-7fac68e4.md")
+        self.assertEqual(len(set(files)), 3, "Two releases of one commit on one day get their own entries")
+        self.assertEqual(files, sorted(files))
+        with self.assertRaises(Fence):
+            release_app.ledger_file("release-x")
+
 
 class Activation(unittest.TestCase):
-    NAME = "release-7fac68e4-x"
+    NAME = "release-7fac68e4-20261001T120000Z"
+    ENTRY = "docs/ledger/20261001T120000Z-app-release-7fac68e4.md"
+    ARCHIVE = "# Validation ledger\n\n## Earlier release\n"
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         (root / "docs/evidence").mkdir(parents=True)
-        (root / "docs/ValidationLedger.md").write_text("# Validation ledger\n\n## Earlier release\n")
+        (root / "docs/ValidationLedger.md").write_text(self.ARCHIVE)
         self.saved = (release_app.ROOT, release_app.MANIFESTS, release_app.guarded,
                       release_app.verify_release, release_app.remote)
         release_app.ROOT, release_app.MANIFESTS = root, root / ".private/releases"
@@ -305,9 +318,11 @@ class Activation(unittest.TestCase):
 
     def test_records_a_verified_release(self):
         self.activate(lambda host, manifest, check: {"webBuild": "b" * 16}, {"maintenanceCleared": True})
-        ledger = (self.root / "docs/ValidationLedger.md").read_text()
-        self.assertTrue(ledger.startswith("# Validation ledger\n\n## "))
-        self.assertLess(ledger.index("app release 7fac68e"), ledger.index("## Earlier release"))
+        # A new file per release; the frozen archive is untouched.
+        entry = (self.root / self.ENTRY).read_text()
+        self.assertTrue(entry.startswith("# "))
+        self.assertEqual(entry.count("app release 7fac68e"), 1)
+        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text(), self.ARCHIVE)
         receipt = json.loads((self.root / f"docs/evidence/production-{self.NAME}.json").read_text())
         self.assertEqual((receipt["release"], receipt["webBuild"]), (self.NAME, "b" * 16))
         self.assertEqual(self.status(), "recorded")
@@ -344,7 +359,8 @@ class Activation(unittest.TestCase):
         # Recording again only retries the docs PR; it never writes a second entry.
         release_app.main(["record", self.NAME, "--no-docs-pr"])
         self.assertEqual(len(self.evidence()), 1)
-        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text().count("app release 7fac68e"), 1)
+        self.assertEqual([path.name for path in (self.root / "docs/ledger").iterdir()], [Path(self.ENTRY).name])
+        self.assertEqual((self.root / self.ENTRY).read_text().count("app release 7fac68e"), 1)
 
     def test_rerecording_an_interrupted_record_keeps_one_ledger_entry(self):
         # A record that wrote its files but died before saving its status reruns as activated.
@@ -365,12 +381,14 @@ class Activation(unittest.TestCase):
         release_app.save_manifest({**release_app.load_manifest(self.NAME), "status": "activated"})
         # Rerun on a later day: the saved entry keeps its heading instead of adding a new one.
         original_entry = release_app.ledger_entry
-        release_app.ledger_entry = lambda *args: "## October 2 app release 7fac68e\n"
+        release_app.ledger_entry = lambda *args: "# October 2 app release 7fac68e\n"
         try:
             release_app.main(["record", self.NAME, "--no-docs-pr"])
         finally:
             release_app.ledger_entry = original_entry
-        self.assertEqual((self.root / "docs/ValidationLedger.md").read_text().count("app release 7fac68e"), 1)
+        self.assertEqual([path.name for path in (self.root / "docs/ledger").iterdir()], [Path(self.ENTRY).name])
+        self.assertEqual((self.root / self.ENTRY).read_text().count("app release 7fac68e"), 1)
+        self.assertNotIn("October 2 app", (self.root / self.ENTRY).read_text())
         self.assertEqual(self.status(), "recorded")
 
 
