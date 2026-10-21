@@ -9,6 +9,7 @@ import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
+import { contentEtag } from './etag.js';
 const id = z.string().min(1).max(200);
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
@@ -37,11 +38,12 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     if (!runtime.experienceRequest) throw failure(409, 'The installed Hermes add-on needs memory and routine preview support. Update and qualify the integration.');
     return runtime.experienceRequest(input);
   };
-  app.get('/api/today', async req => {
+  app.get('/api/today', async (req, reply) => {
     const userId = signedIn(req).id;
     const now = new Date();
     const query = z.object({ since: iso.optional() }).strict().parse(req.query);
-    const since = new Date(query.since ?? store.todaySeen(userId) ?? now.getTime() - 86400000).toISOString();
+    // Before a first catch-up the recap covers a day, starting on a whole minute so polls within it can revalidate.
+    const since = new Date(query.since ?? store.todaySeen(userId) ?? Math.floor((now.getTime() - 86400000) / 60_000) * 60_000).toISOString();
     if (Date.parse(since) > now.getTime() + 60_000) throw failure(400, 'The recap start cannot be in the future');
     // Capture the ingestion page before any awaited native read. A completion
     // discovered during those reads belongs to the next page, even when its
@@ -79,9 +81,13 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const ids = new Set(bots.map(bot => bot.id));
     let upcoming: import("../shared/types.js").Routine[] = [];
     try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
-    return { upcoming, generatedAt: now.toISOString(), since, frontier: page.frontier, hasMore: page.hasMore, items,
+    const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
-      unavailableBots: items.filter(item => item.error).map(item => item.botId) } satisfies TodayOverview;
+      unavailableBots: items.filter(item => item.error).map(item => item.botId) };
+    // The check time alone never makes Today new, so an unchanged recap revalidates as 304 and the
+    // client keeps the body it holds, with the time that content was generated.
+    reply.header('ETag', contentEtag([upcoming, content]));
+    return { upcoming, generatedAt: now.toISOString(), ...content } satisfies TodayOverview;
   });
   app.put('/api/today/seen', async req => {
     const { seenAt, frontier } = z.object({ seenAt: iso, frontier: z.string().regex(/^\d{1,16}$/) }).strict().parse(req.body);

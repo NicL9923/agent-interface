@@ -52,6 +52,13 @@ it("can acknowledge an empty overview without hiding later event arrivals", asyn
   await click("Mark caught up");
   expect(write).toHaveBeenCalledWith("/today/seen", { seenAt: generatedAt, frontier: "0" }, "PUT");
 });
+it("shows when this client last checked, since an unchanged recap keeps its original generatedAt", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-10-02T02:20:00Z"));
+  // A 304 hands back the body loaded earlier, generated 20 minutes ago.
+  vi.mocked(api).mockResolvedValue({ generatedAt: "2026-10-02T02:00:00Z", frontier: "0", hasMore: false, since: "2026-10-01T02:00:00Z", unavailableBots: [], items: [], events: [] });
+  await render(createElement(TodayPanel, { bootstrap, onOpen: vi.fn() }));
+  expect(container.querySelector(".today-timestamp")?.textContent).toBe("Checked just now · updates every 30 seconds");
+});
 it("preserves another document's draft and original revision when saving profile memory", async () => {
   const memory: ProfileMemory = { botId: "ranch", profile: "ranch", scope: "profile", owner: "Hermes", notice: "Existing conversations keep their snapshot.", documents: [
     { target: "memory", label: "Assistant notes", revision: "a".repeat(64), enabled: true, charLimit: 5000, charCount: 5, entries: [{ id: "1", text: "First" }] },

@@ -48,6 +48,18 @@ it('lets only the owner put a private assistant in a group, which nobody else ca
   for (const tail of ['', '/log?since=0']) expect((await s.app.inject({url:`/api/groups/private${tail}`,headers:s.headers})).statusCode).toBe(200);
   // The first test covers everyone else: the room, its log and its actions answer 404.
 });
+it('returns the room state with its log for one Hermes state read per poll', async () => {
+  const s = await fixture();
+  const states = () => s.groupRequest.mock.calls.filter(([input]) => input.operation === 'state').length;
+  const polled = await s.app.inject({url:'/api/groups/shared/log?since=0&state=1',headers:s.headers});
+  expect(polled.statusCode).toBe(200);
+  expect(polled.json()).toMatchObject({events:[],cursor:0,has_more:false,state:{room:{room_id:'shared'}}});
+  expect(states()).toBe(1);
+  // Older apps ask for the log alone and read the state separately, as before.
+  expect((await s.app.inject({url:'/api/groups/shared/log?since=0',headers:s.headers})).json()).not.toHaveProperty('state');
+  expect((await s.app.inject({url:'/api/groups/shared/log?since=0&state=yes',headers:s.headers})).statusCode).toBe(400);
+  expect((await s.app.inject({url:'/api/groups/private/log?since=0&state=1',headers:s.headers})).statusCode).toBe(404);
+});
 it('requires CSRF, bounded unique local membership, and exact message payloads',async () => {
   const s = await fixture(), requestId=crypto.randomUUID(), threadId='thread-1';
   const create={requestId,name:'Ranch planning',botIds:['ranch','planner']};
