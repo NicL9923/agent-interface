@@ -31,8 +31,6 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var earlyAdditions: [DraftAddition] = []
   @ObservationIgnored var additionsDrain: Task<Void, Never>?
   @ObservationIgnored var additionsAgain = false
-  /// The chat the drain opened for text that has not landed yet.
-  @ObservationIgnored var additionsDestination: String?
   /// The latest haptic moment; see `Haptics.swift`.
   var haptic: HapticEvent?
   @ObservationIgnored var hapticCount = 0
@@ -1593,7 +1591,6 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     draftReady = false
     pendings = [:]
     earlyAdditions = []
-    additionsDestination = nil
     receipts = [:]
     submissionChecks = [:]
     sending = false

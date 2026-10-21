@@ -2540,6 +2540,7 @@ extension NativeContractTests {
         let value = try store(server)
         server.sendStatus = 503; await value.send()
         XCTAssertNotNil(value.pendings["bot"])
+        XCTAssertFalse(value.sendingDraft, "After an uncertain answer the composer takes edits again, as on main and the web")
         value.queueAsk(AskRequest(botId: "bot", text: "What is for dinner?", scope: value.scope ?? "", at: Date()))
         await value.deliverAdditions()
         XCTAssertEqual(value.draft.text, "Send this")
@@ -2556,6 +2557,7 @@ extension NativeContractTests {
         XCTAssertTrue(launched.draftReady)
         XCTAssertNotNil(launched.pendings["bot"], "The saved send is back before the draft is ready")
         XCTAssertEqual(launched.draft.text, "Send this", "The sent copy stays exactly as sent")
+        XCTAssertFalse(launched.sendingDraft, "A relaunch leaves it as the same session's uncertain answer does")
         XCTAssertEqual(launched.additions.map(\.text), ["What is for dinner?"])
         // Back online the send is accepted: its text clears and the question arrives alone.
         server.setOffline(false); server.answerSubmissions("accepted")
@@ -2580,6 +2582,44 @@ extension NativeContractTests {
         XCTAssertTrue(value.draft.text.hasSuffix("For the bot")); XCTAssertFalse(value.draft.text.contains("For the family"))
         let family: Draft? = value.read(value.key("draft", "family"))
         XCTAssertEqual(family?.text, "Milk\n\nFor the family")
+        value.suspend()
+    }
+}
+
+extension NativeContractTests {
+    /// Before this, an Ask held by an unsettled send kept its chat as the drain's destination, so a later Ask for
+    /// another assistant never opened, even after the first one lapsed.
+    func testAHeldAskNeverKeepsAnotherAssistantsAskFromOpening() async throws {
+        let server = NativeMockServer(); server.addFamilyBot()
+        let value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("family", text: "Milk", revision: 1)
+        let scope = value.scope ?? ""
+        value.pendings["bot"] = PendingSubmission(requestId: "r1", botId: "bot", text: "Send this", attachments: [], reviewedInterruption: false)
+        value.queueAsk(AskRequest(botId: "bot", text: "For the bot", scope: scope, at: Date()))
+        await value.deliverAdditions()
+        XCTAssertEqual(value.draft.text, "Send this", "Held behind its unsettled send")
+        value.queueAsk(AskRequest(botId: "family", text: "For the family", scope: scope, at: Date()))
+        await value.deliverAdditions()
+        XCTAssertEqual(value.selectedBotId, "family")
+        XCTAssertEqual(value.draft.text, "Milk\n\nFor the family")
+        XCTAssertEqual(value.additions.map(\.text), ["For the bot"], "The first question waits for its own draft")
+        // Its send settles and the person returns to it: the question lands there.
+        value.pendings = [:]
+        await value.select("bot"); await value.deliverAdditions()
+        XCTAssertTrue(value.draft.text.hasSuffix("For the bot"), value.draft.text)
+        XCTAssertTrue(value.additions.isEmpty)
+        value.suspend()
+    }
+
+    /// Before this, a reply or shared text queued after an Ask for the open chat landed ahead of it.
+    func testTextFromEverySourceLandsInTheOrderItArrived() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.queueAsk(AskRequest(botId: "bot", text: "First", scope: value.scope ?? "", at: Date()))
+        XCTAssertTrue(value.addNotificationReply("Second", botId: "bot", account: one))
+        XCTAssertTrue(value.holdShared("Third", botId: "bot"))
+        await value.deliverAdditions()
+        XCTAssertEqual(value.draft.text, "Send this\n\nFirst\n\nSecond\n\nThird")
+        XCTAssertTrue(value.additions.isEmpty)
         value.suspend()
     }
 }
