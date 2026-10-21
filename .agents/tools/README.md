@@ -1,5 +1,6 @@
 # Repository tools
 
+- `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/check-native-release.mjs BUILD PRIVATE_RECEIPT` runs from the deployed Linux release to verify authenticated bootstrap, Hermes connectivity, the announced TestFlight build/link and exact service-worker bytes. It removes its temporary session and writes an owner-private sanitized receipt.
 - `python3 .agents/tools/benchmark-native-markdown.py` compares fresh and cached native Markdown parsing with an optimized macOS executable; outputs CPU work timings, not iPhone scrolling measurements.
 - `check-search-pointer-browser.js` is a Playwright CLI run-code function for the loopback preview on port 3017; verifies exact-message history requests, highlighting and scrolling at phone and desktop widths.
 

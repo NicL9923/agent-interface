@@ -1,0 +1,101 @@
+{
+  "kind": "Real Fastify app and Hermes gateway, deterministic model wire fixture; no real model or image backend",
+  "node": "v24.21.0",
+  "hermesRevision": "acc3cada0da86c81efc8aa6c5a291989549ca900",
+  "trackedPatchSha256": "30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1",
+  "startedAt": "2026-10-21T03:22:14.940Z",
+  "checks": {
+    "authAndCapabilities": {
+      "passed": true,
+      "householdMembers": 2,
+      "imageBackendAvailable": false
+    },
+    "createAndEditSharedBot": {
+      "passed": true,
+      "instructionPersistence": true,
+      "sharedProviderModel": true
+    },
+    "avatarMetadataSurvivesConfigurationEdit": {
+      "passed": true,
+      "customEyeDimensions": true,
+      "avatarPreservedAfterBotEdit": true
+    },
+    "toolsAndSkills": {
+      "passed": true,
+      "catalogReadAndToggle": true
+    },
+    "routineCrudAndExplicitRecipients": {
+      "passed": true,
+      "nativeCrud": true,
+      "explicitRecipientRoundTrip": true,
+      "actualSchedulerExecution": true,
+      "canonicalRoutineDelivery": true,
+      "durableCompletionOutboxOnlyExplicitRecipient": true
+    },
+    "textPdfImageAuthenticatedDelivery": {
+      "passed": true,
+      "formats": [
+        "text",
+        "pdf",
+        "image"
+      ],
+      "authenticatedRoundTrip": true,
+      "longSignedIdsAccepted": true
+    },
+    "imageOnlyMessageCanonicalSenderAndAttachment": {
+      "passed": true,
+      "emptyTextAccepted": true,
+      "canonicalRequestBinding": true,
+      "senderPreserved": true,
+      "registeredImageOnCanonicalMessage": true,
+      "noRawImagePath": true,
+      "authenticatedImageBytes": true
+    },
+    "twoUserNativeApprovalAndStaleAnswer": {
+      "passed": true,
+      "nativePolicyRequest": true,
+      "secondMemberApproved": true,
+      "staleOtherMemberRejected": true,
+      "approverAttribution": true
+    },
+    "nativeGeneratedFileAuthenticatedDelivery": {
+      "passed": true,
+      "actualHermesToolOutput": true,
+      "generatedBytesDelivered": true
+    },
+    "uploadedTextUsedByNativeTask": {
+      "passed": true,
+      "nativeToolReadStagedFile": true
+    },
+    "durableSubmissionAndCanonicalAttribution": {
+      "passed": true,
+      "duplicateReceiptStable": true,
+      "canonicalSenderAttribution": true,
+      "canonicalSteeringAttribution": true,
+      "sharedParticipants": 2,
+      "canonicalMessageCount": 16
+    },
+    "appRestartPreservesCanonicalConversationAndDraft": {
+      "passed": true,
+      "canonicalSessionStable": true,
+      "draftPreserved": true,
+      "activeHermesWorkSurvivedAppRestart": true,
+      "appDatabaseHasNoHistoryTable": true
+    },
+    "executorRestartNeedsExplicitReview": {
+      "passed": true,
+      "receiptInterrupted": true,
+      "automaticReconnectMs": 2287,
+      "canonicalStateInterrupted": true,
+      "automaticResume": false,
+      "unreviewedAdmissionRejected": true,
+      "reviewedAdmissionAccepted": true
+    }
+  },
+  "sourceDigestStart": "0e9c4a4e1679b00f2be0a6fd7ed9270b2f220676e3ed33e9b57d5e810b5622d3",
+  "cleanup": {
+    "disposableBotDeleted": true
+  },
+  "sourceDigest": "0e9c4a4e1679b00f2be0a6fd7ed9270b2f220676e3ed33e9b57d5e810b5622d3",
+  "codeStateStable": true
+}
