@@ -16,7 +16,7 @@ follow-up fixes the transcript's scroll and loading, then closes the remaining
 gaps a full side-by-side audit found in rendering, the composer, settings,
 launch and connection states, notifications, group chats, search and Today.
 Current results and code-state fingerprints are recorded in
-[the validation ledger](../docs/ValidationLedger.md).
+[the validation ledger](../docs/ledger/README.md) and its [archive](../docs/ValidationLedger.md).
 
 The [phone comparison](evidence/mobile-parity-phone.png) and
 [iPad comparison](evidence/mobile-parity-ipad.png) show synthetic fixture content

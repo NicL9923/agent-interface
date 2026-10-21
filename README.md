@@ -297,7 +297,7 @@ without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
-The [validation ledger](docs/ValidationLedger.md) distinguishes application tests,
+The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and
 acceptance that needs a physical phone or configured external service. Tests with
 a runtime double do not prove Hermes integration. Simulated push checks do not

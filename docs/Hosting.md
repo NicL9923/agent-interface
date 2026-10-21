@@ -166,7 +166,7 @@ It is ready for the administrator's separate installation action; the running
 Hermes version remains d23.
 
 See the [Linux installer contract](HermesUpgradeLinux.md) for host configuration
-and recovery requirements. The [validation ledger](ValidationLedger.md) records
+and recovery requirements. The [validation ledger](ledger/README.md) records
 isolated execution separately from production activation and update checks.
 
 ## Native distribution

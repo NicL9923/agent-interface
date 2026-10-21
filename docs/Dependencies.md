@@ -33,7 +33,7 @@ shadcn's Base UI registry conventions; the customized components live in this
 repository. The shadcn CLI is development tooling rather than a runtime dependency.
 
 The app contract tests passed under Node 24.21.0 and Node 26.10.0. Integration and
-browser evidence records its actual runtime in `ValidationLedger.md`. This does
+browser evidence records its actual runtime in the validation ledger (`docs/ledger/`). This does
 not claim that every accepted future patch release has been tested.
 
 ## Command-line type checking

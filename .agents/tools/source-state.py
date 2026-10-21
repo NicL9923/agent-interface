@@ -11,11 +11,14 @@ paths = subprocess.check_output(
     ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     cwd=root,
 ).split(b"\0")
+# The ledger records fingerprints of this state, so it cannot be part of it.
+LEDGER_ARCHIVE = b"docs/ValidationLedger.md"
+LEDGER_DIR = b"docs/ledger/"
 prefixes = tuple(prefix.encode() for prefix in sys.argv[1:])
 digest = hashlib.sha256()
 count = 0
 for relative in sorted(set(paths)):
-    if not relative or relative == b"docs/ValidationLedger.md":
+    if not relative or relative == LEDGER_ARCHIVE or relative.startswith(LEDGER_DIR):
         continue
     if prefixes and not relative.startswith(prefixes):
         continue

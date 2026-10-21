@@ -20,6 +20,7 @@ release_app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_app)
 
 NAME = "release-7fac68e4-20261013T181252Z"
+ENTRY = "docs/ledger/20261013T181252Z-app-release-7fac68e4.md"
 BRANCH = "docs/record-" + NAME
 REAL_GIT = shutil.which("git")
 # Records every call. "pr list --head" answers with that branch's PRs; a "fail-gh" file fails "pr create".
@@ -151,10 +152,11 @@ class DocsPullRequest(unittest.TestCase):
         self.assertEqual(self.git("--git-dir", str(self.origin), "rev-parse", BRANCH + "^"), main)
         self.assertEqual(self.git("--git-dir", str(self.origin), "log", "-1", "--format=%s", BRANCH), "Record the #73 deployment")
         self.assertEqual(sorted(self.git("--git-dir", str(self.origin), "diff", "--name-only", main, BRANCH).splitlines()),
-                         ["docs/ValidationLedger.md", f"docs/evidence/production-{NAME}.json"])
-        ledger = self.branch_files("docs/ValidationLedger.md")
-        self.assertTrue(ledger.startswith("# Validation ledger\n\n## "))
-        self.assertEqual(ledger.count("app release 7fac68e"), 1)
+                         sorted([ENTRY, f"docs/evidence/production-{NAME}.json"]))
+        entry = self.branch_files(ENTRY)
+        self.assertTrue(entry.startswith("# "))
+        self.assertEqual(entry.count("app release 7fac68e"), 1)
+        self.assertEqual(self.branch_files("docs/ValidationLedger.md"), "# Validation ledger\n\n## Earlier release")
         self.assertEqual(json.loads(self.branch_files(f"docs/evidence/production-{NAME}.json"))["release"], NAME)
         self.assert_checkout_untouched()
         # The worktree lived in the checkout's ignored .private, and is gone.
@@ -224,19 +226,32 @@ class DocsPullRequest(unittest.TestCase):
         self.assertIn("Opened the docs PR: https://github.com/owner/repo/pull/100", self.run_tool("activate", second))
         heads = [dict(zip(call[2::2], call[3::2]))["--head"] for call in self.creates()]
         self.assertEqual(heads, [BRANCH, "docs/record-" + second])
-        ledger = self.git("--git-dir", str(self.origin), "show", f"docs/record-{second}:docs/ValidationLedger.md")
-        self.assertIn(f"(evidence/production-{second}.json)", ledger)
-        local = (self.checkout / "docs/ValidationLedger.md").read_text()
-        self.assertEqual((local.count(f"(evidence/production-{NAME}.json)"), local.count(f"(evidence/production-{second}.json)")), (1, 1))
+        second_entry = "docs/ledger/20261013T235959Z-app-release-7fac68e4.md"
+        entry = self.git("--git-dir", str(self.origin), "show", f"docs/record-{second}:{second_entry}")
+        self.assertIn(f"(../evidence/production-{second}.json)", entry)
+        self.assertIn(f"(../evidence/production-{NAME}.json)", (self.checkout / ENTRY).read_text())
+        self.assertIn(f"(../evidence/production-{second}.json)", (self.checkout / second_entry).read_text())
 
-    def test_the_ledger_write_skips_only_an_entry_for_the_same_receipt(self):
-        ledger = self.seed / "docs/ValidationLedger.md"
-        entry = lambda receipt: f"## October 13 app release 7fac68e\n\n[production receipt](evidence/{receipt})\n"
-        self.assertTrue(release_app.insert_ledger_entry(ledger, entry("first.json"), "first.json"))
-        self.assertFalse(release_app.insert_ledger_entry(ledger, entry("first.json"), "first.json"))
-        self.assertTrue(release_app.insert_ledger_entry(ledger, entry("second.json"), "second.json"))
-        self.assertEqual(ledger.read_text(), "# Validation ledger\n\n" + entry("second.json") + "\n" + entry("first.json")
-                         + "\n## Earlier release\n")
+    def manifest(self, name, receipt):
+        return {"name": name, "receiptName": receipt, "ledgerEntry": f"# October 13 app release 7fac68e\n\n[receipt](../evidence/{receipt})\n"}
+
+    def test_the_ledger_write_skips_only_an_entry_for_the_same_release_or_receipt(self):
+        first = self.manifest(NAME, "first.json")
+        self.assertTrue(release_app.insert_ledger_entry(self.seed, first))
+        self.assertFalse(release_app.insert_ledger_entry(self.seed, first))
+        self.assertEqual((self.seed / ENTRY).read_text(), first["ledgerEntry"])
+        # Same commit, same day, later release: its own file.
+        second = self.manifest(NAME[:-7] + "235959Z", "second.json")
+        self.assertTrue(release_app.insert_ledger_entry(self.seed, second))
+        self.assertEqual(sorted(path.name for path in (self.seed / "docs/ledger").iterdir()),
+                         ["20261013T181252Z-app-release-7fac68e4.md", "20261013T235959Z-app-release-7fac68e4.md"])
+        # Recorded by hand under another name, or in the archive: not repeated.
+        (self.seed / "docs/ledger/20261013T240000Z-by-hand.md").write_text("[receipt](../evidence/third.json)\n")
+        self.assertFalse(release_app.insert_ledger_entry(self.seed, self.manifest(NAME[:-7] + "000001Z", "third.json")))
+        archive = self.seed / "docs/ValidationLedger.md"
+        archive.write_text(archive.read_text() + "[receipt](evidence/fourth.json)\n")
+        self.assertFalse(release_app.insert_ledger_entry(self.seed, self.manifest(NAME[:-7] + "000002Z", "fourth.json")))
+        self.assertEqual(archive.read_text().count("Earlier release"), 1)
 
 
 if __name__ == "__main__":
