@@ -31,6 +31,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var earlyAdditions: [DraftAddition] = []
   @ObservationIgnored var additionsDrain: Task<Void, Never>?
   @ObservationIgnored var additionsAgain = false
+  /// The chat the drain opened for text that has not landed yet.
+  @ObservationIgnored var additionsDestination: String?
   /// The latest haptic moment; see `Haptics.swift`.
   var haptic: HapticEvent?
   @ObservationIgnored var hapticCount = 0
@@ -273,6 +275,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           let expiry = UserDefaults.standard.string(forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
           let expires = ServerDate.parse(expiry), expires > Date() {
           bootstrap = snapshot.bootstrap
+          // Sends still unsettled come back before any draft is ready, so nothing joins a sent copy.
+          loadPendings(snapshot.bootstrap.bots)
           conversationCache = snapshot.conversations
           conversationCapturedAt = snapshot.capturedAt
           cachedChats = Set(snapshot.conversations.keys)
@@ -1589,6 +1593,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     draftReady = false
     pendings = [:]
     earlyAdditions = []
+    additionsDestination = nil
     receipts = [:]
     submissionChecks = [:]
     sending = false
