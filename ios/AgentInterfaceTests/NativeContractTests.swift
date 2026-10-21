@@ -1494,7 +1494,10 @@ private final class NativeMockServer: @unchecked Sendable {
         server.failHeld(path)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 0, "Nothing saved yet")
-        try await Task.sleep(for: .milliseconds(1200))
+        let deadline = ContinuousClock.now + .seconds(10)
+        while value.draft.dirty != false, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
         XCTAssertEqual(value.draft.dirty, false)
     }

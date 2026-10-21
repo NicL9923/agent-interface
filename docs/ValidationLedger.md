@@ -2,6 +2,15 @@
 
 ## October 20 native daily-use improvements
 
+PR #167's first CI run exposed an existing draft-retry test's fixed 1.2-second
+completion wait on a slower host. The test now waits for the settled draft with
+a ten-second deadline and keeps its backoff and final-content assertions. Three
+local iterations passed; independent Claude Opus 5.5 review confirmed the timing
+diagnosis and found no product bug. Final source including merged main tooling:
+`48976bbc6dcd4ffae78f9ddd232daef02dd3ca68bc48ee557b604cff8eca62cd`.
+The signed build 10 archive predates this test-only change; shipping iOS source
+is identical.
+
 Base `8926fb6`; reviewed implementation source fingerprint
 `85a08d99dac7ac828e9727c9a9c9eac359bc7ea2c14f3e7da4377fbf89410706`.
 This records implementation and local validation. Deployment and exact TestFlight
