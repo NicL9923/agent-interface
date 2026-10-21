@@ -133,7 +133,12 @@ shows its permission prompt only after Enable; "Not now" is remembered for the
 account. Settings has a switch that registers or unregisters this device with the
 server. The app reconciles registration on foreground and removes its server
 registration if permission was denied. iOS Settings owns permission and Live
-Activities, and Settings links there when iOS has denied it. Batching, quiet hours,
+Activities, and Settings links there when iOS has denied it. Notifications group by
+assistant. An approval request has Approve and Deny, which need the phone unlocked
+and decide without opening the app; if a decision does not go through, a
+notification says so and opens the chat. A finished reply has Reply, which adds
+your text to that assistant's draft and opens the chat for you to review and send.
+Batching, quiet hours,
 and assistant following remain account preferences in WildBots. Devices that had
 already allowed notifications stay enabled after updating. Debug signing uses the development APNs entitlement;
 Release uses production. The server's configured APNs topic and environment must

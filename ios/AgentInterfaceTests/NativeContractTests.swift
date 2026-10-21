@@ -101,6 +101,9 @@ private final class NativeMockServer: @unchecked Sendable {
     private var submissionAnswer: String?
     /// Answers submission checks with this status, as the app server does once it knows.
     func answerSubmissions(_ status: String?) { lock.withLock { submissionAnswer = status } }
+    private var approvalRefusal: String?
+    /// Answers approval decisions with a 409, as the app server does for one no longer pending.
+    func refuseApprovals(_ message: String?) { lock.withLock { approvalRefusal = message } }
     func failHeld(_ path: String) {
         lock.withLock { () -> NativeMockProtocol? in heldPaths.remove(path); return held.removeValue(forKey: path) }?
             .respond(status: 500, data: Self.json(["error": "Synthetic save failure"]))
@@ -343,6 +346,7 @@ private final class NativeMockServer: @unchecked Sendable {
             status = lock.withLock { uploadStatus }
             data = status == 200 ? Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) : Self.json(["error": "Synthetic upload failure"])
         }
+        else if path.contains("/approvals/"), let refusal = lock.withLock({ approvalRefusal }) { status = 409; data = Self.json(["error": refusal]) }
         else if path.hasPrefix("/api/submissions/"), let answer = lock.withLock({ submissionAnswer }) {
             data = Self.json(["requestId": request.url!.lastPathComponent, "status": answer])
         }
@@ -506,6 +510,90 @@ private final class NativeMockServer: @unchecked Sendable {
         await controller.synchronize()
         await controller.enable()
         XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/native/push/device" })
+    }
+    // Notification actions. "one" is the mock's signed-in user; its marker is the server's accountMarker("one").
+    private let one = NotificationActions.accountMarker("one")
+    private func decision(approve: Bool = true) -> ApprovalDecision {
+        ApprovalDecision(botId: "bot", approvalId: "request-7", account: one, approve: approve, url: "/?bot=bot", title: "Bot")
+    }
+    func testApproveFromANotificationInTheBackgroundUsesTheSavedSignInOnce() async throws {
+        let server = NativeMockServer(); defer { clean(server) }
+        let controller = NotificationController(permissions: NotificationPermissions(status: { .authorized }, request: { true }), register: {}, unregister: {})
+        var notices: [UNNotificationRequest] = []
+        controller.deliverNotice = { notices.append($0) }
+        // No store: the app was launched in the background just for this action.
+        let api = client(server); controller.actionClient = { api }
+        await controller.decide(decision())
+        let path = "/api/bots/bot/approvals/request-7"
+        XCTAssertEqual(server.requestCount(path), 1)
+        let sent = try XCTUnwrap(server.requests.last { $0.url?.path == path })
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-native-session")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(NativeMockServer.body(sent))) as? [String: String], ["decision": "approved", "account": one])
+        XCTAssertTrue(notices.isEmpty)
+        // A second tap while the first is on its way never sends it twice.
+        server.hold(path)
+        async let first: Void = controller.decide(decision(approve: false))
+        try await server.waitForHeld(path)
+        await controller.decide(decision(approve: false))
+        server.release(path); await first
+        XCTAssertEqual(server.requestCount(path), 2)
+    }
+    func testADecisionThatDidNotGoThroughIsReportedAndNeverRetried() async throws {
+        let server = NativeMockServer(); defer { clean(server) }
+        let controller = NotificationController(permissions: NotificationPermissions(status: { .authorized }, request: { true }), register: {}, unregister: {})
+        var notices: [UNNotificationRequest] = []
+        controller.deliverNotice = { notices.append($0) }
+        let api = client(server); controller.actionClient = { api }
+        let path = "/api/bots/bot/approvals/request-7"
+        server.refuseApprovals("This approval is no longer pending")
+        await controller.decide(decision())
+        XCTAssertEqual(server.requestCount(path), 1)
+        XCTAssertEqual(notices.last?.content.title, "Your approval didn't go through")
+        XCTAssertEqual(notices.last?.content.body, "This approval is no longer pending. Tap to open the chat.")
+        XCTAssertEqual(notices.last?.content.userInfo["url"] as? String, "/?bot=bot")
+        server.refuseApprovals(nil); server.setOffline(true)
+        await controller.decide(decision(approve: false))
+        XCTAssertEqual(server.requestCount(path), 2, "An unanswered decision may have applied, so it is not sent again")
+        XCTAssertEqual(notices.last?.content.title, "Your denial may not have gone through")
+        controller.actionClient = { nil }
+        await controller.decide(decision())
+        XCTAssertEqual(server.requestCount(path), 2)
+        XCTAssertEqual(notices.last?.content.body, "Sign in to WildBots again, then decide in the chat.")
+        XCTAssertEqual(notices.count, 3)
+    }
+    func testANotificationReplyWaitsForTheSendOnItsWayThenJoinsTheDraft() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(text: "Send this", revision: 1)
+        value.draft = Draft(text: "Send this", attachments: [], dirty: false, baseRevision: 1)
+        let notifications = NotificationHarness(.authorized, store: value), controller = notifications.controller
+        let sendPath = "/api/bots/bot/messages"; server.delayResponse(sendPath)
+        let sending = Task { await value.send() }
+        try await server.waitForDelayed(sendPath)
+        await controller.handle(.reply(NotificationReply(botId: "bot", account: one, text: "Also bring rope", url: "/?bot=bot")))
+        XCTAssertEqual(value.selectedBotId, "bot")
+        XCTAssertFalse(value.draft.text.contains("rope"), "The draft stays the sent copy while its send is unsettled")
+        XCTAssertTrue(value.heldNotificationReplies.contains("bot"))
+        server.releaseResponse(sendPath); await sending.value
+        XCTAssertEqual(value.draft.text, "Also bring rope")
+        XCTAssertFalse(value.heldNotificationReplies.contains("bot"))
+        XCTAssertEqual(server.requests.filter { $0.httpMethod == "POST" && $0.url?.path == sendPath }.count, 1, "The reply is never sent for the person")
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Also bring rope", "It saves like any draft edit")
+    }
+    func testAHeldNotificationReplySurvivesARelaunchAndRefusesAnotherAccount() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.pendings["bot"] = PendingSubmission(requestId: "request", botId: "bot", text: "Send this", attachments: [], reviewedInterruption: false)
+        XCTAssertFalse(value.addNotificationReply("Written for two", botId: "bot", account: NotificationActions.accountMarker("two")))
+        XCTAssertNotNil(value.error)
+        XCTAssertTrue(value.addNotificationReply("Bring rope", botId: "bot", account: one))
+        XCTAssertEqual(value.draft.text, "Send this")
+        let relaunched = try store(server)
+        XCTAssertEqual(relaunched.draft.text, "Send this\n\nBring rope", "Without the unsettled send it joins the draft")
+        XCTAssertFalse(relaunched.draft.text.contains("two"))
+        // Taken once: the first copy finds nothing left to add when its send settles.
+        value.pendings["bot"] = nil
+        XCTAssertEqual(value.draft.text, "Send this")
     }
     func testNotNowIsRememberedPerAccountAndNeverReasks() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }

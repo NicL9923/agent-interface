@@ -150,7 +150,7 @@ struct ApprovalDecisionView: View {
     let scope = store.scope
     Task {
       do {
-        try await store.perform("/bots/\(APIClient.component(botId))/approvals/\(APIClient.component(approval.id))", ["decision": value])
+        try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), ["decision": value])
         guard scope == store.scope else { return }
         settled = true
         await store.refreshConversation()

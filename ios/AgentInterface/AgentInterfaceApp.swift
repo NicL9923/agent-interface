@@ -64,6 +64,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     UNUserNotificationCenter.current().delegate = self
+    // Before any notification can be shown, so its actions are always there.
+    UNUserNotificationCenter.current().setNotificationCategories(NotificationActions.categories)
     return true
   }
   func application(
@@ -87,10 +89,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    let botId = NotificationController.chatBotId(notification.request.content.userInfo["url"] as? String)
+    let info = notification.request.content.userInfo
+    let botId = NotificationController.chatBotId(info["url"] as? String), notice = info["decisionNotice"] != nil
     Task { @MainActor in
-      // The chat on screen already shows this news.
-      let reading = botId != nil && botId == NotificationController.shared.store?.viewingBotId
+      // The chat on screen already shows this news. A decision that did not go through is not news it shows.
+      let reading = !notice && botId != nil && botId == NotificationController.shared.store?.viewingBotId
       completionHandler(reading ? [] : [.banner, .sound, .badge])
     }
   }
@@ -110,12 +113,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
-    let info = response.notification.request.content.userInfo
+    let route = NotificationActions.route(action: response.actionIdentifier, userInfo: response.notification.request.content.userInfo,
+      text: (response as? UNTextInputNotificationResponse)?.userText)
     Task { @MainActor in
-      if let relativeURL = info["url"] as? String {
-        NotificationController.shared.pendingURL = relativeURL
-        await NotificationController.shared.openPendingConversation()
-      }
+      // Approve and Deny can run with the app in the background; this keeps it awake for the server's answer.
+      let background = UIApplication.shared.beginBackgroundTask(withName: "Notification action")
+      await NotificationController.shared.handle(route)
+      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
       completionHandler()
     }
   }
@@ -127,6 +131,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var pendingBotId: String?
   var pendingRoutineId: String?
   var pendingURL: String?
+  /// Text typed into a notification's Reply, waiting for its chat to open.
+  var pendingReply: NotificationReply?
+  /// The sign-in a notification action uses. After a launch in the background just for the action, the
+  /// store has not restored, so this falls back to the saved server address and the Keychain sign-in.
+  var actionClient: @MainActor () -> APIClient? = {
+    guard let host = UserDefaults.standard.string(forKey: "connection.host"), let url = try? ConnectionAddress.parse(host) else { return nil }
+    let api = APIClient(baseURL: url)
+    return api.token == nil ? nil : api
+  }
+  var deliverNotice: @MainActor (UNNotificationRequest) async -> Void = { try? await UNUserNotificationCenter.current().add($0) }
+  /// Approvals being decided from a notification, so the same one is never sent twice at once.
+  private var deciding: Set<String> = []
   private(set) var permissions: NotificationPermissions
   private(set) var register: @MainActor () -> Void
   private(set) var unregister: @MainActor () -> Void
@@ -323,6 +339,35 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     store.deviceNotifications.error = nil
     await synchronize()
   }
+  /// A notification tap or one of its actions.
+  func handle(_ route: NotificationRoute) async {
+    switch route {
+    case .open(let url):
+      guard let url else { return }
+      pendingReply = nil
+      pendingURL = url
+      await openPendingConversation()
+    case .decide(let decision): await decide(decision)
+    case .reply(let reply):
+      pendingReply = reply
+      pendingURL = reply.url
+      await openPendingConversation()
+    case .none: return
+    }
+  }
+  /// Approve or Deny from a notification, possibly with the app in the background. It is sent once; when it
+  /// does not go through, a notification says so and opens the chat, where the approval card shows its state.
+  func decide(_ decision: ApprovalDecision) async {
+    guard deciding.insert(decision.approvalId).inserted else { return }
+    defer { deciding.remove(decision.approvalId) }
+    let api = store?.api.flatMap { $0.token != nil || $0.localCookieAuth ? $0 : nil } ?? actionClient()
+    let outcome = await decision.send(with: api)
+    if outcome == .decided {
+      if let store, store.selectedBotId == decision.botId, store.api === api { await store.refreshConversation() }
+    } else if let notice = decision.failureNotice(outcome) {
+      await deliverNotice(notice)
+    }
+  }
   func openPendingConversation() async {
     if let pendingURL, let origin = store?.api?.baseURL, store?.bootstrap != nil {
       if let url=URL(string:pendingURL,relativeTo:origin)?.absoluteURL,url.scheme==origin.scheme,url.host==origin.host,url.port==origin.port,url.path=="/",URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{$0.name=="view"})?.value=="today" {
@@ -341,6 +386,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     else { return }
     pendingBotId = nil
     await store.select(botId)
+    if let reply = pendingReply, reply.botId == botId {
+      pendingReply = nil
+      store.addNotificationReply(reply.text, botId: botId, account: reply.account)
+    }
     if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
     pendingRoutineId = nil
   }

@@ -28,9 +28,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
   @Published var draft = Draft()
-  @Published var draftReady = false
+  @Published var draftReady = false { didSet { if draftReady && !oldValue { applyNotificationReplies() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
-  @Published var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho() } }
+  @Published var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho(); applyNotificationReplies() } }
   /// The open assistant's unconfirmed send. Setting one files it under its own assistant.
   var pending: PendingSubmission? {
     get { selectedBotId.flatMap { pendings[$0] } }
@@ -1141,6 +1141,29 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if let file { next.attachments.append(file) }
     updateDraft(next)
     return true
+  }
+  /// Assistants whose notification replies wait for an unsettled send, for the composer's note.
+  @Published private(set) var heldNotificationReplies: Set<String> = []
+  /// Text typed into a notification's Reply joins this assistant's draft for review; it is never sent from
+  /// there. Like the Share inbox, it waits while a send to this assistant is unsettled, saved per account so a
+  /// relaunch keeps it. Returns false when the reply was written for another account.
+  @discardableResult func addNotificationReply(_ text: String, botId: String, account: String) -> Bool {
+    guard let user = bootstrap?.user.id, NotificationActions.accountMarker(user) == account, let localKey = key("notificationReplies", botId) else {
+      report(APIError(message: "That reply was written while another account was signed in, so it was not added to this draft.", status: 0))
+      return false
+    }
+    save((read(localKey) ?? [String]()) + [text], localKey)
+    applyNotificationReplies()
+    return true
+  }
+  private func applyNotificationReplies() {
+    guard let botId = selectedBotId, let localKey = key("notificationReplies", botId), let held: [String] = read(localKey), !held.isEmpty else { return }
+    guard addShared(text: held.joined(separator: "\n\n"), botId: botId) else {
+      if holdsShared(botId) { heldNotificationReplies.insert(botId) }
+      return
+    }
+    save(Optional<[String]>.none, localKey)
+    heldNotificationReplies.remove(botId)
   }
   /// Records or forgets, on the copy it came from, the text this device sent.
   private func markSent(_ submission: PendingSubmission, _ sent: Bool) {
