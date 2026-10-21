@@ -2527,3 +2527,59 @@ extension NativeContractTests {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 }
+
+extension NativeContractTests {
+    /// Before this, a relaunch from the offline library marked the cached draft ready before its saved send loaded,
+    /// so a held Ask joined the sent copy, which then survived the send's acceptance as an editable draft.
+    func testAnOfflineRelaunchKeepsHeldTextOffTheSentCopyUntilItsSendSettles() async throws {
+        let server = NativeMockServer()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let expiryKey = "connection.expiry.\(server.origin.absoluteString)"
+        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: 3600)), forKey: expiryKey)
+        defer { try? FileManager.default.removeItem(at: root); UserDefaults.standard.removeObject(forKey: expiryKey); clean(server) }
+        let value = try store(server)
+        server.sendStatus = 503; await value.send()
+        XCTAssertNotNil(value.pendings["bot"])
+        value.queueAsk(AskRequest(botId: "bot", text: "What is for dinner?", scope: value.scope ?? "", at: Date()))
+        await value.deliverAdditions()
+        XCTAssertEqual(value.draft.text, "Send this")
+        value.suspend()
+        let bootstrap = try JSONDecoder().decode(Bootstrap.self, from: server.bootstrapData())
+        let chat = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
+        OfflineLibrary(savedAt: Date(), bootstrap: bootstrap, conversations: ["bot": chat], selected: "bot")
+            .write(OfflineLibrary.url(origin: server.origin.absoluteString, token: "synthetic-native-session", root: root))
+        // Relaunch while the server cannot be reached: the roster comes from the device and the bootstrap read fails.
+        server.setOffline(true)
+        let launched = launchedStore(server, token: "synthetic-native-session"); launched.offlineLibraryRoot = root
+        defer { launched.suspend() }
+        await launched.restore(); await launched.deliverAdditions()
+        XCTAssertTrue(launched.draftReady)
+        XCTAssertNotNil(launched.pendings["bot"], "The saved send is back before the draft is ready")
+        XCTAssertEqual(launched.draft.text, "Send this", "The sent copy stays exactly as sent")
+        XCTAssertEqual(launched.additions.map(\.text), ["What is for dinner?"])
+        // Back online the send is accepted: its text clears and the question arrives alone.
+        server.setOffline(false); server.answerSubmissions("accepted")
+        await launched.refreshBootstrap(); await launched.reconcilePending(); await launched.deliverAdditions()
+        XCTAssertNil(launched.pendings["bot"])
+        XCTAssertEqual(launched.draft.text, "What is for dinner?")
+        XCTAssertTrue(launched.additions.isEmpty)
+    }
+
+    /// Before this, a second Ask for another assistant opened its chat before the first one's text landed,
+    /// leaving that text queued until it lapsed.
+    func testAsksForTwoAssistantsInARowEachLandInTheirOwnDraft() async throws {
+        let server = NativeMockServer(); server.addFamilyBot()
+        let value = try store(server); defer { clean(server, value) }
+        server.versionDrafts(); server.versionDrafts("family", text: "Milk", revision: 1)
+        let scope = value.scope ?? ""
+        value.queueAsk(AskRequest(botId: "family", text: "For the family", scope: scope, at: Date()))
+        value.queueAsk(AskRequest(botId: "bot", text: "For the bot", scope: scope, at: Date()))
+        await value.deliverAdditions()
+        XCTAssertTrue(value.additions.isEmpty, "Neither question is left waiting")
+        XCTAssertEqual(value.selectedBotId, "bot", "Each chat opens in turn, and the last one asked stays open")
+        XCTAssertTrue(value.draft.text.hasSuffix("For the bot")); XCTAssertFalse(value.draft.text.contains("For the family"))
+        let family: Draft? = value.read(value.key("draft", "family"))
+        XCTAssertEqual(family?.text, "Milk\n\nFor the family")
+        value.suspend()
+    }
+}

@@ -25,8 +25,11 @@ struct DraftAddition: Codable, Equatable, Identifiable {
 }
 
 extension AppStore {
-  /// Whether additions wait for this assistant: while a send for it is unsettled.
-  func holdsAdditions(_ botId: String) -> Bool { pendings[botId] != nil }
+  /// Whether additions wait for this assistant: while a send for it is unsettled. A saved send counts
+  /// before it is loaded, as on a relaunch whose roster has not answered yet.
+  func holdsAdditions(_ botId: String) -> Bool {
+    pendings[botId] != nil || key("pending", botId).map { UserDefaults.standard.object(forKey: $0) != nil } == true
+  }
   /// Whether text waits for this assistant's send to settle, for the composer's note.
   func holdsText(for botId: String) -> Bool { holdsAdditions(botId) && additions.contains { $0.botId == botId } }
   /// Adds text or an uploaded shared file to the open assistant's draft, unless it holds additions for now.
@@ -100,19 +103,36 @@ extension AppStore {
       let now = Date()
       held.removeAll { addition in addition.lapsed(at: now) || !bots.contains { $0.id == addition.botId } }
       storeAdditions(held)
-      // The earliest that still opens its chat goes first; anything that changed meanwhile is read again.
+      // A chat opened for its text gets it before the next one opens. Until its draft can take it,
+      // the next opening waits, unless the person has moved to another chat.
+      if let destination = additionsDestination {
+        guard selectedBotId == destination else { additionsDestination = nil; additionsAgain = true; continue }
+        guard landAdditions(for: destination) else { continue }
+        additionsDestination = nil
+      }
+      // Text for the open chat lands now; an Ask that still opens its chat waits for its turn.
+      if let id = selectedBotId { _ = landAdditions(for: id, opened: false) }
+      // The earliest that still opens its chat goes next; anything that changed meanwhile is read again.
+      held = savedAdditions()
       if let index = held.firstIndex(where: \.opens) {
         held[index].opens = false
         storeAdditions(held)
         let id = held[index].botId
+        additionsDestination = id
         if selectedBotId == id && draftReady { conversationRequest = UUID() } else { await select(id) }
         additionsAgain = true
-        continue
       }
-      guard let id = selectedBotId, draftReady, !holdsAdditions(id) else { continue }
-      let ready = held.filter { $0.botId == id }
-      guard !ready.isEmpty, addShared(text: ready.map(\.text).joined(separator: "\n\n"), botId: id) else { continue }
-      storeAdditions(savedAdditions().filter { addition in !ready.contains { $0.id == addition.id } })
     } while additionsAgain
+  }
+  /// Lands an assistant's waiting text in its open draft as one edit, in arrival order: everything
+  /// once the drain opened it, otherwise only text that does not open a chat. Returns false while
+  /// its draft cannot take text: not open, still loading, or holding a send.
+  private func landAdditions(for id: String, opened: Bool = true) -> Bool {
+    guard selectedBotId == id, draftReady, !holdsAdditions(id) else { return false }
+    let ready = savedAdditions().filter { $0.botId == id && (opened || !$0.opens) }
+    guard !ready.isEmpty else { return true }
+    guard addShared(text: ready.map(\.text).joined(separator: "\n\n"), botId: id) else { return false }
+    storeAdditions(savedAdditions().filter { addition in !ready.contains { $0.id == addition.id } })
+    return true
   }
 }
