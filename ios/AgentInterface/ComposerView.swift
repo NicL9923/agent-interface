@@ -1,3 +1,4 @@
+import Combine
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -55,7 +56,8 @@ struct ComposerView: View {
         if voice.recordingURL == store.voiceRecordingURL(botId: bot.id) { voice.preserveRecording(); voice.cancel() }
         else { voice.reset() }
       }
-      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { event in
+      // Audio session notifications can arrive on any thread; the voice controller lives on the main actor.
+      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification).receive(on: DispatchQueue.main)) { event in
         if event.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt == AVAudioSession.InterruptionType.began.rawValue {
           voice.preserveRecording()
         }

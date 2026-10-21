@@ -157,6 +157,8 @@ their actions, so typing renders the composer, not the messages. Attachment uplo
 draft (`DraftAdditions.swift`) live in their own files. `ObservedChanges.swift` in the
 unit tests counts which store properties an action changed, and fails when a new
 observed property is missing from its list.
+Every target builds in the Swift 6 language mode with complete concurrency checking, so
+a data race the compiler can see is a build error.
 
 After adding Swift files, run `python3 ios/tools/generate-project.py` to regenerate
 the checked-in Xcode project and shared scheme. The icon is original Core Graphics
