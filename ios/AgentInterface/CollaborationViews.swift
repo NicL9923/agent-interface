@@ -407,6 +407,6 @@ struct GroupConversationView: View {
   private func decide(_ action: GroupAction, _ choice: String) async {
     guard let api = store.api, let member = action.member_id, let generation = action.execution_generation, let request = action.request_id ?? action.approval?.request_id else { return }
     busy = true; defer { busy = false }
-    do { let _: GroupApproved = try await api.write(path + "/approve", GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)); await load() } catch { self.error = error.localizedDescription }
+    do { let _: GroupApproved = try await api.write(path + "/approve", GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)); store.buzz(.decided); await load() } catch { store.buzz(.failed); self.error = error.localizedDescription }
   }
 }

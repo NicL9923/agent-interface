@@ -246,11 +246,12 @@ private struct UploadRing: View {
 private struct AttachmentBadge: View {
   var name: String
   var mime: String
+  @ScaledMetric(relativeTo: .caption2) private var labelSize: CGFloat = 9
   var body: some View {
     VStack(spacing: 1) {
       Image(systemName: "doc").font(.body)
-      Text(UploadRules.kindLabel(name: name, mime: mime)).font(.system(size: 9, weight: .semibold))
-    }.frame(width: 40, height: 40).foregroundStyle(Palette.muted)
+      Text(UploadRules.kindLabel(name: name, mime: mime)).font(.system(size: labelSize, weight: .semibold))
+    }.frame(minWidth: 40, minHeight: 40).foregroundStyle(Palette.muted)
   }
 }
 

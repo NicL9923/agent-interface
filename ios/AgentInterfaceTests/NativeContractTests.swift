@@ -847,6 +847,7 @@ private final class NativeMockServer: @unchecked Sendable {
             XCTAssertFalse(value.addShared(text: "Shared note", botId: "bot"))
             XCTAssertEqual(value.draft.text, "Send this", "The sent copy is left exactly as sent")
             server.release(path); await operation.value
+            XCTAssertEqual(value.haptic?.kind, refused ? .failed : .sent, "The send ends in a tap, and a refusal in a different one")
             XCTAssertFalse(value.holdsShared("bot"))
             XCTAssertTrue(value.addShared(text: "Shared note", botId: "bot"))
             XCTAssertEqual(value.draft.text, refused ? "Send this\n\nShared note" : "Shared note")

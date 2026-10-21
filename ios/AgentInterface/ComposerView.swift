@@ -38,6 +38,7 @@ struct ComposerView: View {
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
         discardConfirm: $discardConfirm, modelOpen: $modelOpen))
       .onAppear { configureVoice() }
+      .stopShortcut(bot: bot, canStop: stopVisible && !stopDisabled, stop: stop)
       // A recording belongs to one account's assistant; a new identity or server starts afresh.
       .onChange(of: store.voiceRecordingURL(botId: bot.id)) { _, _ in voice.cancel(); configureVoice() }
       .onChange(of: voiceDisabled) { _, disabled in
@@ -186,7 +187,7 @@ struct ComposerView: View {
       do {
         try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]())
         await store.refreshConversation()
-      } catch { store.report(error) }
+      } catch { store.buzz(.failed); store.report(error) }
     }
   }
   private func configureVoice() {

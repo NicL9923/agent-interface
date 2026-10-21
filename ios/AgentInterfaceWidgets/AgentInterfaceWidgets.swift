@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -15,33 +16,32 @@ struct AssistantsEntry: TimelineEntry {
 }
 
 /// Reads only the app's snapshot. The app reloads timelines when it changes; the second entry
-/// marks it out of date if the app is not opened again.
-struct AssistantsProvider: TimelineProvider {
+/// marks it out of date if the app is not opened again. The widget's settings only narrow it.
+struct AssistantsProvider: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> AssistantsEntry {
     AssistantsEntry(date: Date(), snapshot: WidgetSnapshot(scope: "", generatedAt: Date(), assistants: [
       .init(id: "placeholder", name: "Assistant", activity: "idle", lastMessage: "Ready when you are", lastMessageAt: nil, color: nil, pinned: false),
     ]))
   }
-  func getSnapshot(in context: Context, completion: @escaping (AssistantsEntry) -> Void) {
-    completion(AssistantsEntry(date: Date(), snapshot: WidgetSnapshotStore.read() ?? placeholder(in: context).snapshot))
+  func snapshot(for configuration: SelectAssistantsIntent, in context: Context) async -> AssistantsEntry {
+    AssistantsEntry(date: Date(), snapshot: configuration.shown(in: WidgetSnapshotStore.read()) ?? placeholder(in: context).snapshot)
   }
-  func getTimeline(in context: Context, completion: @escaping (Timeline<AssistantsEntry>) -> Void) {
+  func timeline(for configuration: SelectAssistantsIntent, in context: Context) async -> Timeline<AssistantsEntry> {
     let now = Date()
-    guard let snapshot = WidgetSnapshotStore.read() else {
-      completion(Timeline(entries: [AssistantsEntry(date: now, snapshot: nil)], policy: .never))
-      return
+    guard let snapshot = configuration.shown(in: WidgetSnapshotStore.read()) else {
+      return Timeline(entries: [AssistantsEntry(date: now, snapshot: nil)], policy: .never)
     }
-    completion(Timeline(entries: snapshot.timelineDates(now: now).map { AssistantsEntry(date: $0, snapshot: snapshot) }, policy: .never))
+    return Timeline(entries: snapshot.timelineDates(now: now).map { AssistantsEntry(date: $0, snapshot: snapshot) }, policy: .never)
   }
 }
 
 struct AssistantsWidget: Widget {
   var body: some WidgetConfiguration {
-    StaticConfiguration(kind: "Assistants", provider: AssistantsProvider()) { entry in
+    AppIntentConfiguration(kind: "Assistants", intent: SelectAssistantsIntent.self, provider: AssistantsProvider()) { entry in
       AssistantsWidgetEntryView(entry: entry)
     }
     .configurationDisplayName("Assistants")
-    .description("Who needs you, who is working, and your latest conversations.")
+    .description("Who needs you, who is working, and your latest conversations. Edit the widget to choose assistants.")
     .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryRectangular, .accessoryCircular, .accessoryInline])
   }
 }

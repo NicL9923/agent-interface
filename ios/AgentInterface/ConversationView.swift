@@ -59,6 +59,8 @@ struct ConversationView: View {
   @State private var findQuery = ""
   @State private var findIndex = 0
   @State private var findTarget: String?
+  @FocusState private var findFocused: Bool
+  @ScaledMetric(relativeTo: .caption2) private var fileBadge: CGFloat = 9
   private var matches: [String] {
     guard !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
     return (store.transcript?.visibleMessages ?? []).filter {
@@ -80,7 +82,7 @@ struct ConversationView: View {
       if findOpen {
         HStack {
           TextField("Find in loaded messages", text: $findQuery).textFieldStyle(.roundedBorder)
-            .accessibilityIdentifier("findConversation")
+            .accessibilityIdentifier("findConversation").focused($findFocused)
           Text(matches.isEmpty ? "0 matches" : "\(min(findIndex + 1, matches.count)) of \(matches.count)").font(.caption)
           Button { find(-1) } label: { Image(systemName: "chevron.up") }.accessibilityLabel("Previous match").disabled(matches.isEmpty)
           Button { find(1) } label: { Image(systemName: "chevron.down") }.accessibilityLabel("Next match").disabled(matches.isEmpty)
@@ -109,7 +111,7 @@ struct ConversationView: View {
         Button { fileSheetOpen = true } label: {
           Image(systemName: "doc").overlay(alignment: .topTrailing) {
             if files > 0 {
-              Text("\(files)").font(.system(size: 9, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
+              Text("\(files)").font(.system(size: fileBadge, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
                 .padding(.horizontal, 3).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 5)).offset(x: 9, y: -7)
             }
           }
@@ -117,7 +119,7 @@ struct ConversationView: View {
         Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel(
           "Configure \(bot.name)")
         Menu {
-          Button("Find in conversation", systemImage: "magnifyingglass") { findOpen = true }
+          Button("Find in conversation", systemImage: "magnifyingglass") { openFind() }
           Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant", systemImage: "pin") {
             Task { await store.togglePin(bot.id) }
           }.disabled(!store.connected || store.sessionExpired)
@@ -129,6 +131,12 @@ struct ConversationView: View {
     .onAppear { visible = true }
     .onDisappear { visible = false }
     .onChange(of: findQuery) { _, _ in findIndex = 0; find(0) }
+    .findShortcut(botId: bot.id, open: openFind)
+  }
+  private func openFind() {
+    findOpen = true
+    // The field exists only once the bar is shown.
+    Task { @MainActor in findFocused = true }
   }
   private func find(_ delta: Int) {
     guard !matches.isEmpty else { findTarget = nil; return }
