@@ -4,7 +4,7 @@ import SwiftUI
 enum HomeDestination { case conversation, today, groups, find }
 
 struct RootView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
@@ -22,92 +22,94 @@ struct RootView: View {
       if store.bootstrap == nil {
         if store.connectingToHousehold { LaunchStateView() } else { ConnectionView() }
       } else {
-        // Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
-        VStack(spacing: 0) {
-          if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
-          if let date = store.offlineSavedAt {
-            Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reconnecting…")
-              .font(.caption).foregroundStyle(.secondary).padding(8)
-          }
-          if UIDevice.current.userInterfaceIdiom == .phone {
-            compactNavigation
-          } else {
-          NavigationSplitView(
-            columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn
-          ) {
-            BotListView(
-              destination: destination, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
-              openBot: { destination = .conversation; compactColumn = .detail },
-              openToday: { destination = .today; compactColumn = .detail },
-              openGroups: { destination = .groups; compactColumn = .detail },
-              openDiscovery: { destination = .find; compactColumn = .detail })
-          } detail: {
-            if destination == .find {
-              DiscoveryView()
-            } else if destination == .groups {
-              GroupChatsView()
-            } else if destination == .today {
-              TodayView(openBot: { destination = .conversation; compactColumn = .detail })
-            } else if let bot = store.bot {
-              ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
-            } else if store.bootstrap?.bots.isEmpty == true {
-              HomeEmptyDetail(create: { creatingBot = true })
-            } else {
-              ContentUnavailableView(
-                "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
-                description: Text("Your assistants keep their conversations here."))
-            }
-          }
-          }
-        }
+        household
       }
     }
     .background(Palette.surface(scheme))
     .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
-    .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture:capture).appStore(store).coveringChat(store) }
+    .modifier(sheets)
     .onAppear { checkShares() }
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
-    .onChange(of:store.scope) { _, scope in
-      checkShares()
-      if let scope, scope != initialScope {
-        initialScope=scope
-        let today=(store.bootstrap?.preferences.startPage == "today" || store.bootstrap?.preferences.startPage != "assistant" && store.bootstrap?.preferences.defaultBotId == nil) && store.routineResult == nil
-        destination = today ? .today : .conversation
-        tab = today ? "today" : "assistants"
-        assistantPath = []
-        compactColumn = .sidebar
-      }
-    }
-    .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).appStore(store).coveringChat(store) }
-    .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store).coveringChat(store) }
-    .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
-    .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
-    .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.appStore(store).coveringChat(store) }
-    .onReceive(store.$todayRequest) { request in if request != nil { destination = .today; tab = "today"; compactColumn = .detail } }
-    .onReceive(store.$leftBotId) { id in
-      guard let id else { return }
-      if settingsBot?.id == id { settingsBot = nil }
-      if store.routineResult?.botId == id { store.routineResult = nil }
-      // Only a person looking at its conversation is taken home; Today and the other views stay.
-      if UIDevice.current.userInterfaceIdiom == .phone { assistantPath.removeAll { $0 == "chat" } }
-      if destination == .conversation { compactColumn = .sidebar }
-    }
-    .onReceive(store.$conversationRequest) { request in
+    .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
+    // Initial too: a notification or Siri can ask before this view first appears.
+    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; tab = "today"; compactColumn = .detail } }
+    .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
+    .onChange(of: store.conversationRequest, initial: true) { _, request in
       if request != nil { destination = .conversation; tab = "assistants"; assistantPath = ["chat"]; compactColumn = .detail }
     }
-    .onChange(of: store.bootstrap?.user.id) { old, new in
-      if let old, old != new {
-        destination = .conversation
-        tab = "assistants"
-        assistantPath = []
-        preferencesOpen = false
-        settingsBot = nil
-        creatingBot = false
-        store.openedFile = nil
-        store.routineResult = nil
+    .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
+  }
+  /// Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
+  private var household: some View {
+    VStack(spacing: 0) {
+      if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
+      if let date = store.offlineSavedAt {
+        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reconnecting…")
+          .font(.caption).foregroundStyle(.secondary).padding(8)
       }
+      if UIDevice.current.userInterfaceIdiom == .phone { compactNavigation } else { splitNavigation }
     }
+  }
+  private var splitNavigation: some View {
+    NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
+      BotListView(
+        destination: destination, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
+        openBot: { destination = .conversation; compactColumn = .detail },
+        openToday: { destination = .today; compactColumn = .detail },
+        openGroups: { destination = .groups; compactColumn = .detail },
+        openDiscovery: { destination = .find; compactColumn = .detail })
+    } detail: { detail }
+  }
+  @ViewBuilder private var detail: some View {
+    if destination == .find {
+      DiscoveryView()
+    } else if destination == .groups {
+      GroupChatsView()
+    } else if destination == .today {
+      TodayView(openBot: { destination = .conversation; compactColumn = .detail })
+    } else if let bot = store.bot {
+      ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
+    } else if store.bootstrap?.bots.isEmpty == true {
+      HomeEmptyDetail(create: { creatingBot = true })
+    } else {
+      ContentUnavailableView(
+        "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
+        description: Text("Your assistants keep their conversations here."))
+    }
+  }
+  private var sheets: RootSheets {
+    RootSheets(store: store, sharedCapture: $sharedCapture, settingsBot: $settingsBot, creatingBot: $creatingBot, preferencesOpen: $preferencesOpen)
+  }
+  private func scopeChanged(_ scope: String?) {
+    checkShares()
+    guard let scope, scope != initialScope else { return }
+    initialScope = scope
+    let preferences = store.bootstrap?.preferences
+    let today = (preferences?.startPage == "today" || preferences?.startPage != "assistant" && preferences?.defaultBotId == nil) && store.routineResult == nil
+    destination = today ? .today : .conversation
+    tab = today ? "today" : "assistants"
+    assistantPath = []
+    compactColumn = .sidebar
+  }
+  private func left(_ id: String) {
+    if settingsBot?.id == id { settingsBot = nil }
+    if store.routineResult?.botId == id { store.routineResult = nil }
+    // Only a person looking at its conversation is taken home; Today and the other views stay.
+    if UIDevice.current.userInterfaceIdiom == .phone { assistantPath.removeAll { $0 == "chat" } }
+    if destination == .conversation { compactColumn = .sidebar }
+    // Handled: losing the same assistant again later is a new change.
+    store.leftBotId = nil
+  }
+  private func accountChanged() {
+    destination = .conversation
+    tab = "assistants"
+    assistantPath = []
+    preferencesOpen = false
+    settingsBot = nil
+    creatingBot = false
+    store.openedFile = nil
+    store.routineResult = nil
   }
   private var compactNavigation: some View {
     TabView(selection: $tab) {
@@ -149,8 +151,28 @@ struct RootView: View {
     if sharedCapture == nil { sharedCapture=ShareInbox.pending(scope:scope).first }
   }
 }
+/// Home's sheets, in their own modifier so the root body stays quick to type-check.
+private struct RootSheets: ViewModifier {
+  let store: AppStore
+  @Binding var sharedCapture: SharedCapture?
+  @Binding var settingsBot: Bot?
+  @Binding var creatingBot: Bool
+  @Binding var preferencesOpen: Bool
+  func body(content: Content) -> some View {
+    @Bindable var store = store
+    content
+      .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture: capture).appStore(store).coveringChat(store) }
+      .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).appStore(store).coveringChat(store) }
+      .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store).coveringChat(store) }
+      .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
+      .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
+      .sheet(item: $store.routineResult) { target in
+        NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId: target.resultId) }.appStore(store).coveringChat(store)
+      }
+  }
+}
 struct ConnectionView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     NavigationStack {
@@ -169,7 +191,7 @@ struct ConnectionView: View {
           if store.api == nil {
             VStack(alignment: .leading, spacing: 10) {
               Text("App server address").font(.headline)
-              TextField("https://assistants.example.com", text: $store.host).textContentType(.URL)
+              TextField("https://assistants.example.com", text: Bindable(store).host).textContentType(.URL)
                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(14).background(
                   Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12)
@@ -263,7 +285,7 @@ struct AvatarTrio: View {
   }
 }
 struct BotListView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.horizontalSizeClass) private var sizeClass
   var destination: HomeDestination
@@ -274,7 +296,7 @@ struct BotListView: View {
   var openToday: () -> Void
   var openGroups: () -> Void
   var openDiscovery: () -> Void
-  @ObservedObject private var reachability = NetworkReachability.shared
+  private let reachability = NetworkReachability.shared
   @State private var checkingConnection = false
   @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
   private var lost: Bool { store.connectionLost(offline: reachability.offline) }
@@ -466,11 +488,11 @@ private struct SyncSpinner: View {
       .onAppear { turn = true }.accessibilityHidden(true)
   }
 }
-@MainActor final class NetworkReachability: ObservableObject {
+@MainActor @Observable final class NetworkReachability {
   /// One monitor for every screen that shows the connection.
   static let shared = NetworkReachability()
-  @Published private(set) var offline = false
-  private let monitor = NWPathMonitor()
+  private(set) var offline = false
+  @ObservationIgnored private let monitor = NWPathMonitor()
   init() {
     monitor.pathUpdateHandler = { [weak self] path in Task { @MainActor in self?.offline = path.status != .satisfied } }
     monitor.start(queue: DispatchQueue(label: "dev.agentinterface.reachability"))
@@ -534,7 +556,7 @@ struct AccountAvatar: View {
 }
 private struct AssistantListDate: View {
   var date: Date
-  @ObservedObject private var clock = MinuteClock.shared
+  private let clock = MinuteClock.shared
   var body: some View {
     Text(When.listDate(date, now: clock.now)).font(.caption).foregroundStyle(.secondary).fixedSize()
   }

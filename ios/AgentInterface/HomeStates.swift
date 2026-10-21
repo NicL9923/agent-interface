@@ -27,33 +27,30 @@ extension AppStore {
 }
 
 /// One shared minute tick for every time label on a screen, instead of a timeline per row.
-@MainActor final class MinuteClock: ObservableObject {
+@MainActor @Observable final class MinuteClock {
   static let shared = MinuteClock()
-  @Published private(set) var now: Date
-  private let date: () -> Date
-  private var timer: Timer?
-  private var foreground: NSObjectProtocol?
+  private(set) var now: Date
+  @ObservationIgnored private let date: () -> Date
+  @ObservationIgnored private var ticking: Task<Void, Never>?
+  /// The app ticks it on returning to the foreground: a sleep stands still in the background, and a
+  /// returning app should not show a stale "Just now".
   init(date: @escaping () -> Date = { Date() }, interval: TimeInterval = 60) {
     self.date = date
     now = date()
-    timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
-    }
-    // Timers stand still in the background; a returning app should not show a stale "Just now".
-    foreground = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
+    ticking = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(interval))
+        self?.tick()
+      }
     }
   }
-  deinit {
-    timer?.invalidate()
-    if let foreground { NotificationCenter.default.removeObserver(foreground) }
-  }
+  deinit { ticking?.cancel() }
   func tick() { now = date() }
 }
 
 /// The first screen while a saved sign-in loads, or while the app server is out of reach, as on the web.
 struct LaunchStateView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(spacing: 20) {
@@ -97,7 +94,7 @@ enum WelcomeCopy {
 
 /// Leaves this server. If the server cannot confirm the sign-out, asks before forgetting it locally.
 struct ChangeServerButton: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var offline = false
   var body: some View {
     Button("Change server") {
@@ -183,8 +180,8 @@ struct HermesConnectionPanel: View {
 /// otherwise the web's empty home.
 struct HomeEmptyDetail: View {
   var create: () -> Void
-  @EnvironmentObject private var store: AppStore
-  @ObservedObject private var reachability = NetworkReachability.shared
+  @Environment(AppStore.self) private var store
+  private let reachability = NetworkReachability.shared
   @Environment(\.colorScheme) private var scheme
   @State private var checking = false
   var body: some View {

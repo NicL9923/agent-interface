@@ -75,7 +75,7 @@ extension View {
 }
 struct TodayView: View {
   var openBot: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var value: TodayOverview?
   @State private var error: String?
@@ -272,7 +272,7 @@ struct MemoryForget: Encodable { var revision: String; var entryId: String }
 struct MemoryForgetRequest: Identifiable { var document: MemoryDocument; var entryId: String; var id: String { document.target + entryId } }
 struct MemoryDrawer: View {
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var value: ProfileMemory?
   @State private var drafts: [String: [MemoryDraft]] = [:]
   @State private var busy = false
@@ -400,7 +400,7 @@ struct RoutineSchedulePreview: View {
   var botId: String
   var schedule: String
   var onReady: ((String) -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var preview: SchedulePreview?
   @State private var requested = ""
   @State private var busy = false
@@ -435,7 +435,7 @@ struct RoutineSchedulePreview: View {
 struct RoutineEnhancements: View {
   var routine: Routine
   var disabled = false
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var receipt: RoutineRunReceipt?
   @State private var busy = false
   @State private var error: String?

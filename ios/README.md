@@ -59,8 +59,10 @@ same App Group snapshot, so their assistants are per account and disappear on
 sign-out. **Open assistant**, **Ask assistant** and **Open Today** appear in the
 Shortcuts app with phrases that name WildBots, such as "Ask Kitchen in WildBots".
 Ask puts your text in that assistant's draft, opens the chat, and never sends. If a
-send to that assistant is still unsettled, the text waits, as the Share inbox does,
-and it lapses after five minutes. Assistant names (no previews) are also in
+send to that assistant is still unsettled, the text waits, as text from a
+notification's Reply and the Share inbox does, and it lapses after five minutes. Waiting
+text joins the draft in the order it arrived, stays on the device for its own account
+through a relaunch or sign-out, and never joins another account's draft. Assistant names (no previews) are also in
 Spotlight search through Core Spotlight items, and leave it with sign-out or when an
 assistant is removed.
 
@@ -145,6 +147,18 @@ Set `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `ios/tools/generate-pro
 the app and both extensions share them. `SystemSurfaceEvidenceTests` renders the widget,
 Live Activity and update banner views to PNGs when run with
 `TEST_RUNNER_AGENT_INTERFACE_EVIDENCE_DIR=/path/to/output`.
+
+`AppStore` holds the app's state and uses Swift's Observation framework, so a view
+renders again only when a property it read changes. Bookkeeping no view reads, such as
+tasks, ETags and caches, is marked `@ObservationIgnored`. Transcript rows read the
+connection and the assistant's name from the environment and use the store only in
+their actions, so typing renders the composer, not the messages. Attachment uploads
+(`AttachmentUploads`), the Hermes update panel (`HermesUpgrade`) and text waiting for a
+draft (`DraftAdditions.swift`) live in their own files. `ObservedChanges.swift` in the
+unit tests counts which store properties an action changed, and fails when a new
+observed property is missing from its list.
+Every target builds in the Swift 6 language mode with complete concurrency checking, so
+a data race the compiler can see is a build error.
 
 After adding Swift files, run `python3 ios/tools/generate-project.py` to regenerate
 the checked-in Xcode project and shared scheme. The icon is original Core Graphics

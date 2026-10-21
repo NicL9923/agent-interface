@@ -1,6 +1,6 @@
 import XCTest
 
-final class DailyFlowTests: XCTestCase {
+@MainActor final class DailyFlowTests: XCTestCase {
   private func launch(missingTarget: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"

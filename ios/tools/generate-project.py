@@ -71,7 +71,7 @@ for name, kind in [(extension, "extension") for extension in EXTENSIONS] + [("Ag
         values = {
             "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "dev.agentinterface.ios" + ("" if kind == "app" else "." + name),
             "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
-            "TARGETED_DEVICE_FAMILY": "1,2", "SWIFT_VERSION": "5.0", "CODE_SIGN_STYLE": "Automatic", "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
+            "TARGETED_DEVICE_FAMILY": "1,2", "SWIFT_VERSION": "6.0", "SWIFT_STRICT_CONCURRENCY": "complete", "CODE_SIGN_STYLE": "Automatic", "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
             "SWIFT_EMIT_LOC_STRINGS": "YES", "MARKETING_VERSION": MARKETING_VERSION, "CURRENT_PROJECT_VERSION": CURRENT_PROJECT_VERSION, "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @loader_path/Frameworks", "GENERATE_INFOPLIST_FILE": "NO" if kind in ("app", "extension") else "YES",
         }
         if kind == "app":

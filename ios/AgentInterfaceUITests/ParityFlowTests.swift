@@ -2,8 +2,8 @@ import XCTest
 import UIKit
 
 /// Exercises parity behavior against the Debug-only transport, never a household server.
-final class ParityFlowTests: XCTestCase {
-  override func setUp() {
+@MainActor final class ParityFlowTests: XCTestCase {
+  override func setUp() async throws {
     continueAfterFailure = false
     if UIDevice.current.userInterfaceIdiom == .pad { XCUIDevice.shared.orientation = .landscapeLeft }
   }

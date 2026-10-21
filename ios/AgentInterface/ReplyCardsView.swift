@@ -53,7 +53,8 @@ enum ReplyCards {
     let parts: [ReplyContentPart]
     init(_ parts: [ReplyContentPart]) { self.parts = parts }
   }
-  private static let parsed: NSCache<NSString, Parsed> = {
+  /// NSCache is thread-safe, and its entries are immutable.
+  nonisolated(unsafe) private static let parsed: NSCache<NSString, Parsed> = {
     let cache = NSCache<NSString, Parsed>()
     cache.countLimit = 128
     cache.totalCostLimit = 4 * 1024 * 1024
@@ -112,7 +113,7 @@ enum ReplyCards {
   }
   private static let opening = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)$")
   /// Closing patterns by opening fence, compiled once each. NSRegularExpression is thread-safe.
-  private static let closings = NSCache<NSString, NSRegularExpression>()
+  nonisolated(unsafe) private static let closings = NSCache<NSString, NSRegularExpression>()
   private static func closing(_ delimiter: String) -> NSRegularExpression {
     if let cached = closings.object(forKey: delimiter as NSString) { return cached }
     let pattern = "^ {0,3}" + String(delimiter.first!) + "{" + String(delimiter.count) + ",}[ \t]*$"
@@ -182,7 +183,7 @@ struct ReplyContentView: View {
 struct InteractiveReplyCard: View {
   var card: ReplyCard
   var messageId: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()

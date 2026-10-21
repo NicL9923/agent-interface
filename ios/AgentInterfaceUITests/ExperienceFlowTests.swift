@@ -1,6 +1,6 @@
 import XCTest
 
-final class ExperienceFlowTests: XCTestCase {
+@MainActor final class ExperienceFlowTests: XCTestCase {
   func testInlineHtmlRunsLocalControlsAndResets() {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"

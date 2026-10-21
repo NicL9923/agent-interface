@@ -37,7 +37,7 @@ struct SystemSpotlightIndex: SpotlightIndexing {
 struct AssistantSpotlight {
   var index: SpotlightIndexing
   var defaults: UserDefaults = .standard
-  static let system = AssistantSpotlight(index: SystemSpotlightIndex())
+  @MainActor static let system = AssistantSpotlight(index: SystemSpotlightIndex())
   private struct Indexed: Codable, Equatable { var scope: String; var records: [String: String] }
   private static let key = "spotlight.assistants"
 

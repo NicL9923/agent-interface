@@ -1,5 +1,5 @@
 import XCTest
-final class DiscoveryFlowTests:XCTestCase {
+@MainActor final class DiscoveryFlowTests: XCTestCase {
   func testSharedWebpageIsReviewedAndImportedWithoutSending() {
     let app=XCUIApplication();app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_RESET"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_SHARE"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"]=UUID().uuidString;app.launch()
     XCTAssertTrue(app.navigationBars["Review shared content"].waitForExistence(timeout:10),app.debugDescription)

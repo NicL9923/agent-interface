@@ -10,7 +10,7 @@ import XCTest
 /// corners) is approximated here; the content views are the shipped ones.
 @MainActor final class SystemSurfaceEvidenceTests: XCTestCase {
   private var directory: URL!
-  override func setUpWithError() throws {
+  override func setUp() async throws {
     let path = ProcessInfo.processInfo.environment["AGENT_INTERFACE_EVIDENCE_DIR"] ?? ""
     try XCTSkipUnless(!path.isEmpty, "Set AGENT_INTERFACE_EVIDENCE_DIR to render evidence.")
     directory = URL(fileURLWithPath: path, isDirectory: true)

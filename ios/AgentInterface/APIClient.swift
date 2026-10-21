@@ -326,7 +326,7 @@ extension Data {
   /// Uploads one attachment. `progress` hears the share of the request body sent, from 0 to 1.
   func upload(
     botId: String, name: String, mime: String, data: Data,
-    progress: (@MainActor (Double) -> Void)? = nil
+    progress: (@MainActor @Sendable (Double) -> Void)? = nil
   ) async throws -> FileRef {
     guard UploadRules.mimeTypes.contains(mime) else {
       throw APIError(message: "Use \(UploadRules.kinds).", status: 415)
@@ -359,10 +359,10 @@ extension Data {
   }
 }
 
-/// Reports an upload's progress on the main actor.
-private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-  let report: @MainActor (Double) -> Void
-  init(report: @escaping @MainActor (Double) -> Void) { self.report = report }
+/// Reports an upload's progress on the main actor. Checked Sendable: its only state is immutable.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+  let report: @MainActor @Sendable (Double) -> Void
+  init(report: @escaping @MainActor @Sendable (Double) -> Void) { self.report = report }
   func urlSession(
     _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
     totalBytesSent: Int64, totalBytesExpectedToSend: Int64
@@ -373,9 +373,8 @@ private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @u
   }
 }
 
-private final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate,
-  @unchecked Sendable
-{
+/// Checked Sendable: URLSession calls it on its own queue, and its only state is an immutable URL.
+private final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
   let origin: URL
   init(origin: URL) { self.origin = origin }
   func urlSession(

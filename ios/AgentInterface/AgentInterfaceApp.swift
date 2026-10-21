@@ -4,7 +4,7 @@ import UserNotifications
 
 @main struct AgentInterfaceApp: App {
   @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-  @StateObject private var store = AppStore()
+  @State private var store = AppStore()
   @Environment(\.scenePhase) private var scenePhase
   var body: some Scene {
     WindowGroup {
@@ -24,6 +24,7 @@ import UserNotifications
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
+            MinuteClock.shared.tick()
             Task {
               await store.resume()
               await NotificationController.shared.synchronize()
@@ -88,17 +89,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         .failed("Device registration failed: \(error.localizedDescription)")
     }
   }
-  func userNotificationCenter(
-    _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-  ) {
+  /// iOS may call the notification delegate off the main thread, so its methods are nonisolated
+  /// and read the payload before moving to the main actor.
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
     let info = notification.request.content.userInfo
     let botId = NotificationController.chatBotId(info["url"] as? String), notice = info["decisionNotice"] != nil
-    Task { @MainActor in
-      // The chat on screen already shows this news. A decision that did not go through is not news it shows.
-      let reading = !notice && botId != nil && botId == NotificationController.shared.store?.viewingBotId
-      completionHandler(reading ? [] : [.banner, .sound, .badge])
-    }
+    // The chat on screen already shows this news. A decision that did not go through is not news it shows.
+    let reading = await MainActor.run { !notice && botId != nil && botId == NotificationController.shared.store?.viewingBotId }
+    return reading ? [] : [.banner, .sound, .badge]
   }
   /// A silent push after the person read chats on another device or in the browser.
   func application(
@@ -112,19 +110,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       completionHandler(.newData)
     }
   }
-  func userNotificationCenter(
-    _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void
-  ) {
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
     let route = NotificationActions.route(action: response.actionIdentifier, userInfo: response.notification.request.content.userInfo,
       text: (response as? UNTextInputNotificationResponse)?.userText)
-    Task { @MainActor in
-      // Approve and Deny can run with the app in the background; this keeps it awake for the server's answer.
-      let background = UIApplication.shared.beginBackgroundTask(withName: "Notification action")
-      await NotificationController.shared.handle(route)
-      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-      completionHandler()
-    }
+    await Self.handle(route)
+  }
+  /// Approve and Deny can run with the app in the background; this keeps it awake for the server's answer.
+  @MainActor private static func handle(_ route: NotificationRoute) async {
+    let background = UIApplication.shared.beginBackgroundTask(withName: "Notification action")
+    await NotificationController.shared.handle(route)
+    if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
   }
 }
 @MainActor final class NotificationController {
@@ -136,8 +131,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var pendingBotId: String?
   var pendingRoutineId: String?
   var pendingURL: String?
-  /// Text typed into a notification's Reply, waiting for its chat to open.
-  var pendingReply: NotificationReply?
+  /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
+  var pendingReplies: [NotificationReply] = []
   /// The sign-in a notification action uses. After a launch in the background just for the action, the
   /// store has not restored, so this falls back to the saved server address and the Keychain sign-in.
   var actionClient: @MainActor () -> APIClient? = {
@@ -349,12 +344,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     switch route {
     case .open(let url):
       guard let url else { return }
-      pendingReply = nil
       pendingURL = url
       await openPendingConversation()
     case .decide(let decision): await decide(decision)
     case .reply(let reply):
-      pendingReply = reply
+      pendingReplies.append(reply)
       pendingURL = reply.url
       await openPendingConversation()
     case .none: return
@@ -374,6 +368,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
   }
   func openPendingConversation() async {
+    // Held by the store before anything awaits, so a second reply arriving meanwhile queues behind this one.
+    if let store, store.bootstrap != nil, !pendingReplies.isEmpty {
+      let replies = pendingReplies
+      pendingReplies = []
+      for reply in replies { store.addNotificationReply(reply.text, botId: reply.botId, account: reply.account) }
+    }
     if let pendingURL, let origin = store?.api?.baseURL, store?.bootstrap != nil {
       if let url=URL(string:pendingURL,relativeTo:origin)?.absoluteURL,url.scheme==origin.scheme,url.host==origin.host,url.port==origin.port,url.path=="/",URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{$0.name=="view"})?.value=="today" {
         guard let store,store.bootstrap != nil else { return }
@@ -391,10 +391,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     else { return }
     pendingBotId = nil
     await store.select(botId)
-    if let reply = pendingReply, reply.botId == botId {
-      pendingReply = nil
-      store.addNotificationReply(reply.text, botId: botId, account: reply.account)
-    }
     if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
     pendingRoutineId = nil
   }
@@ -405,7 +401,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 struct NotificationPermissions {
   var status: () async -> UNAuthorizationStatus
   var request: () async throws -> Bool
-  static let system = NotificationPermissions(
+  @MainActor static let system = NotificationPermissions(
     status: { await UNUserNotificationCenter.current().notificationSettings().authorizationStatus },
     request: { try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) })
 }

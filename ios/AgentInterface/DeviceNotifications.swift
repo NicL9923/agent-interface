@@ -47,7 +47,7 @@ struct DeviceNotificationState: Equatable {
 
 /// The web's one-time "Enable notifications on this device?" card. iOS asks for permission only after Enable.
 struct NotificationOnboardingCard: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     let state = store.deviceNotifications
@@ -73,7 +73,7 @@ struct NotificationOnboardingCard: View {
 
 /// The Settings switch for this device, with the web's states: checking, busy, error and retry.
 struct DeviceNotificationSettings: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   var body: some View {
     let state = store.deviceNotifications
     Toggle(isOn: Binding(

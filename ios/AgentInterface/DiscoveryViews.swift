@@ -12,7 +12,7 @@ struct UsageSummary: Decodable { var botId: String; var sessions: Int; var input
 struct AutomationOverview: Decodable { var routines: [Routine]; var usage: [UsageSummary]; var unavailableBots: [String] }
 struct Starter: Decodable, Identifiable { var id: String; var title: String; var prompt: String }
 struct DiscoveryView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var tab = "search"
   @State private var query = ""
   @State private var hits: [SearchHit] = []
@@ -218,7 +218,7 @@ struct HistoryMessageRow: View {
 struct StarterActionsView: View {
   var starters: [Starter]
   var add: (Starter) -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   var body: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack { ForEach(starters) { item in Button(item.title) { add(item) }.buttonStyle(.bordered).disabled(!store.draftReady) } }

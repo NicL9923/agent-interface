@@ -1,6 +1,6 @@
 import XCTest
 
-final class VaultFlowTests: XCTestCase {
+@MainActor final class VaultFlowTests: XCTestCase {
   private func launch(uncertain: Bool = false, cancelledAdd: Bool = false, unlockFails: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"

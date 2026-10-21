@@ -4,7 +4,7 @@ import XCTest
 // Requires the marked isolated Hermes browser fixture and its app server at :3004.
 // The ordinary test scheme never makes real server requests through this suite.
 #if LIVE_HERMES_UI_TESTS
-  final class LiveConnectionTests: XCTestCase {
+  @MainActor final class LiveConnectionTests: XCTestCase {
     func testRealHostSignInConversationAndConfiguration() throws {
       let app = XCUIApplication()
       app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"

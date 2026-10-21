@@ -131,9 +131,9 @@ final class ComposerUITextView: UITextView {
 /// Uploaded attachments first, then files still on their way, in the order they were added.
 struct AttachmentTrayView: View {
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   var body: some View {
-    let uploads = store.attachmentUploads.filter { $0.botId == botId }
+    let uploads = store.uploads.items.filter { $0.botId == botId }
     // A message on its way carries its files in the transcript.
     let files = store.selectedBotId == botId ? store.composerDraft.attachments : []
     if !uploads.isEmpty || !files.isEmpty {
@@ -162,7 +162,7 @@ private func attachmentMeta(name: String, mime: String, size: Int?) -> String {
 
 private struct DraftAttachmentChip: View {
   var file: FileRef
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     HStack(spacing: 8) {
@@ -191,7 +191,7 @@ private struct DraftAttachmentChip: View {
 
 private struct UploadChip: View {
   var upload: AttachmentUpload
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     let failed = upload.status == .failed
@@ -202,11 +202,11 @@ private struct UploadChip: View {
         Text(upload.caption).font(.caption2).foregroundStyle(failed ? Palette.danger : .secondary)
       }.frame(maxWidth: 160, alignment: .leading)
       if failed {
-        Button { Task { await store.retryUpload(upload.id) } } label: {
+        Button { Task { await store.uploads.retry(upload.id) } } label: {
           Label("Retry", systemImage: "arrow.clockwise")
         }.accessibilityLabel("Retry uploading \(upload.name)")
       }
-      Button { store.removeUpload(upload.id) } label: {
+      Button { store.uploads.remove(upload.id) } label: {
         Image(systemName: "xmark.circle.fill").frame(width: 32, height: 32)
       }.accessibilityLabel(failed ? "Remove \(upload.name)" : "Cancel uploading \(upload.name)")
     }.font(.caption).padding(6).background(Palette.user(scheme), in: RoundedRectangle(cornerRadius: 12))

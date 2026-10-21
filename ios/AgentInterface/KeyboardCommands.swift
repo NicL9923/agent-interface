@@ -20,7 +20,7 @@ extension AppStore {
 /// the composer: its hardware Return sends and Shift-Return adds a line, and Command-Return is
 /// left to the system.
 struct AssistantCommands: Commands {
-  @ObservedObject var store: AppStore
+  var store: AppStore
   var body: some Commands {
     CommandMenu("Assistants") {
       ForEach(Array(store.pinnedForShortcuts.enumerated()), id: \.element.id) { index, bot in
@@ -50,7 +50,7 @@ extension View {
 private struct FindShortcut: ViewModifier {
   var botId: String
   var open: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   func body(content: Content) -> some View {
     content.onChange(of: store.keyboardCommand) { _, command in
       if command?.kind == .find, store.viewingBotId == botId { open() }
@@ -62,7 +62,7 @@ private struct StopShortcut: ViewModifier {
   var bot: Bot
   var canStop: Bool
   var stop: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var confirming = false
   func body(content: Content) -> some View {
     content

@@ -1,7 +1,7 @@
 import UIKit
 import XCTest
 
-final class TabletPresentationTests: XCTestCase {
+@MainActor final class TabletPresentationTests: XCTestCase {
   private func fixture() -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"

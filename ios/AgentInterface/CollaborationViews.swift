@@ -10,7 +10,7 @@ struct RoutineResultRow: Decodable, Identifiable {
 struct RoutineOutput: Decodable { var messages: [Message]; var previewOnly: Bool }
 struct RoutineResultsView: View {
   var botId: String; var routineId: String; var resultId: String?
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var rows: [RoutineResultRow] = []
   @State private var selected: String
@@ -138,7 +138,7 @@ struct GroupState: Decodable { var room: GroupRoom; var driver_status: GroupDriv
 struct GroupDecision: Encodable { var taskId: String; var memberId: String; var generation: Int; var choice: String; var requestId: String }
 
 struct GroupChatsView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var catalog: GroupCatalog?
   @State private var error: String?
   @State private var creating = false
@@ -224,7 +224,7 @@ struct GroupChatsView: View {
 }
 struct GroupCreateView: View {
   var onCreated: (GroupRoom) -> Void = { _ in }
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var name = ""
   /// In the order they were chosen, which is the order Hermes receives.
@@ -267,7 +267,7 @@ struct GroupCreateView: View {
 }
 struct GroupConversationView: View {
   var room: GroupRoom; var canSend: Bool
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var state: GroupState?
   @State private var events: [GroupEvent] = []

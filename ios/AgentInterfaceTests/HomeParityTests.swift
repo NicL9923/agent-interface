@@ -1,7 +1,7 @@
 import XCTest
 @testable import AgentInterface
 
-final class HomeParityTests: XCTestCase {
+@MainActor final class HomeParityTests: XCTestCase {
   private func hit(_ session: String, _ title: String) throws -> SearchHit {
     let json = #"{"botId":"ranch","botName":"Ranch","sessionId":"\#(session)","title":"\#(title)","snippet":""}"#
     return try JSONDecoder().decode(SearchHit.self, from: Data(json.utf8))

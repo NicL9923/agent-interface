@@ -1,4 +1,5 @@
-import ActivityKit
+// ActivityKit's Activity predates Sendable annotations; its update and end are safe from any task.
+@preconcurrency import ActivityKit
 import Foundation
 
 struct LiveActivityStatus: Decodable {

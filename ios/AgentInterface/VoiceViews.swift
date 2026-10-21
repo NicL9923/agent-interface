@@ -18,7 +18,7 @@ enum VoiceState: Equatable {
 
 /// The web's VoiceControls: a recording is transcribed as soon as it stops and its text joins the
 /// draft, and a reply is read aloud with the app server's configured voice.
-@MainActor final class VoiceController: NSObject, ObservableObject, AVAudioPlayerDelegate, AVAudioRecorderDelegate {
+@MainActor @Observable final class VoiceController: NSObject, AVAudioPlayerDelegate, AVAudioRecorderDelegate {
   static let maxRecordingSeconds = 120
   static let maxVoiceBytes = 8 * 1024 * 1024
   static let maxSpokenText = 12_000
@@ -26,11 +26,11 @@ enum VoiceState: Equatable {
     /// UI tests record a fixed clip instead of using the microphone.
     static var fixtureRecording = false
   #endif
-  @Published private(set) var state = VoiceState.idle
-  @Published var error = ""
-  @Published var notice = ""
+  private(set) var state = VoiceState.idle
+  var error = ""
+  var notice = ""
   /// A recording kept after its transcription failed, for Retry transcription.
-  @Published private(set) var recording: Data? {
+  private(set) var recording: Data? {
     didSet {
       guard let recordingURL else { return }
       if let recording {
@@ -42,7 +42,7 @@ enum VoiceState: Equatable {
       } else { try? FileManager.default.removeItem(at: recordingURL) }
     }
   }
-  private(set) var recordingURL: URL?
+  @ObservationIgnored private(set) var recordingURL: URL?
   func restoreRecording(from url: URL?) {
     guard url != recordingURL else { return }
     recordingURL = url
@@ -53,20 +53,20 @@ enum VoiceState: Equatable {
     recording = audio.flatMap { $0.count <= Self.maxVoiceBytes ? $0 : nil }
     if recording != nil { notice = "Recording kept. Transcribe it when you're ready, or discard it." }
   }
-  @Published private(set) var playable = false
-  @Published private(set) var elapsed = 0
-  var api: APIClient?
-  var botId = ""
-  var onTranscript: (String) -> Void = { _ in }
-  private var recorder: AVAudioRecorder?
-  private var file: URL?
-  private var player: AVAudioPlayer?
-  private var timer: Task<Void, Never>?
-  private var request: Task<Void, Never>?
+  private(set) var playable = false
+  private(set) var elapsed = 0
+  @ObservationIgnored var api: APIClient?
+  @ObservationIgnored var botId = ""
+  @ObservationIgnored var onTranscript: (String) -> Void = { _ in }
+  @ObservationIgnored private var recorder: AVAudioRecorder?
+  @ObservationIgnored private var file: URL?
+  @ObservationIgnored private var player: AVAudioPlayer?
+  @ObservationIgnored private var timer: Task<Void, Never>?
+  @ObservationIgnored private var request: Task<Void, Never>?
   /// Bumped by every new action, so a late result from an earlier one is ignored.
-  private var generation = 0
-  private var discarded = false
-  private var sessionActive = false
+  @ObservationIgnored private var generation = 0
+  @ObservationIgnored private var discarded = false
+  @ObservationIgnored private var sessionActive = false
 
   /// Inactivity ends capture, but the captured speech stays available for review.
   /// Unlike Stop, this never starts a network request in the background.
@@ -383,7 +383,7 @@ enum VoiceState: Equatable {
 
 /// The record and listen buttons in the composer's tool row.
 struct VoiceButtons: View {
-  @ObservedObject var voice: VoiceController
+  var voice: VoiceController
   var bot: Bot
   var reply: Message?
   var disabled: Bool
@@ -412,7 +412,7 @@ struct VoiceButtons: View {
 
 /// The web's voice actions and status below the tool row.
 struct VoicePanel: View {
-  @ObservedObject var voice: VoiceController
+  var voice: VoiceController
   var disabled: Bool
   var body: some View {
     let busy = voice.state != .idle
