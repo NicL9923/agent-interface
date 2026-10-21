@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { createPrivateKey, sign } from "node:crypto";
+import { createHash, createPrivateKey, sign } from "node:crypto";
 import { connect, type ClientHttp2Session } from "node:http2";
 import type { Config } from "./config.js";
 import type { LiveActivitySender } from "./live-activity.js";
@@ -21,12 +21,33 @@ const fit = (value: string, limit: number) => {
   return result;
 };
 
+/** Names the account a notification was sent to without revealing its ID to Apple. The app and server compare it. */
+export const accountMarker = (userId: string) => createHash("sha256").update(`wildbots-account:${userId}`).digest("hex").slice(0, 16);
+/** APNs replaces a delivered notification that has the same collapse ID. Apple allows 64 bytes; longer or unusual tags are hashed. */
+export const apnsCollapseId = (tag: string) => /^[\x21-\x7e]{1,64}$/.test(tag) ? tag : createHash("sha256").update(tag).digest("base64url");
+// Notification identities are short IDs; anything longer gets no grouping or actions instead of a truncated ID.
+const short = (value: unknown): value is string => typeof value === "string" && !!value && Buffer.byteLength(JSON.stringify(value)) <= 202;
+
 export function apnsPayload(payload: string) {
-  const value = JSON.parse(payload) as { title: string; body: string; url: string; tag: string };
+  const value = JSON.parse(payload) as { title: string; body: string; url: string; tag: string; kind?: string; botId?: string; approvalId?: string; account?: string };
   // Keep standard APNs payload under 4KB even when Hermes reports a long completion.
   // Never truncate a deep link into a different bot ID. Oversized runtime links are omitted.
   const url = Buffer.byteLength(JSON.stringify(value.url)) <= 2402 ? value.url : undefined;
-  return JSON.stringify({ aps: { alert: { title: fit(value.title, 160), body: fit(value.body, 1000) }, sound: "default" }, url, tag: fit(value.tag, 160) });
+  const alert = { title: fit(value.title, 160), body: fit(value.body, 1000) }, tag = fit(value.tag, 160);
+  const botId = short(value.botId) ? value.botId : undefined, account = short(value.account) ? value.account : undefined;
+  // Approval requests break through Focus once the app has the time-sensitive entitlement; iOS ignores this until then.
+  const urgent = value.kind === "approval" ? { "interruption-level": "time-sensitive" } : {};
+  // Actions the app registers: APPROVAL decides from the notification, REPLY starts a reviewed draft. Routine results,
+  // digests and alerts without an assistant get none. Older app builds ignore categories they never registered.
+  const routine = /[?&]routine=/.test(typeof value.url === "string" ? value.url : "");
+  const actions = !botId || !account || routine ? undefined
+    : value.kind === "approval" && short(value.approvalId) ? { category: "APPROVAL", fields: { botId, approvalId: value.approvalId, account } }
+    : value.kind === "completed" ? { category: "REPLY", fields: { botId, account } } : undefined;
+  const build = (thread: boolean, act: boolean) => JSON.stringify({
+    aps: { alert, sound: "default", ...(thread && botId ? { "thread-id": botId } : {}), ...urgent, ...(act && actions ? { category: actions.category } : {}) },
+    url, tag, ...(act && actions ? actions.fields : {}) });
+  // Grouping and actions are extras: drop them before the alert itself would exceed the limit.
+  return [build(true, true), build(true, false)].find(body => Buffer.byteLength(body) <= 4000) ?? build(false, false);
 }
 
 /**
@@ -85,8 +106,11 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
   });
   const send: ApnsSender = async (device, payload) => {
     if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
+    // The collapse ID only replaces a resend of the same notification; clears still match the payload's tag.
+    const tag = (JSON.parse(payload) as { tag?: unknown }).tag;
     const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
-      "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsPayload(payload));
+      "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json",
+      ...(typeof tag === "string" && tag ? { "apns-collapse-id": apnsCollapseId(tag) } : {}) }, apnsPayload(payload));
     if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected notification (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
   };
   // Live Activities take their own topic suffix and push type; the payload is built by LiveActivities.

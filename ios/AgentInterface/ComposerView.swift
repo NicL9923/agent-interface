@@ -294,6 +294,10 @@ private struct ComposerNotices: View {
         .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .contain)
     }
+    if store.heldNotificationReplies.contains(botId) {
+      Text("Your reply from a notification joins this draft once your last message settles.")
+        .font(.footnote).foregroundStyle(.secondary)
+    }
     if let receipt = store.receipt, receipt.status == "rejected" {
       Text(receipt.message?.isEmpty == false ? receipt.message! : "Hermes did not accept this message. Your draft is saved.")
         .font(.footnote).foregroundStyle(Palette.attention)

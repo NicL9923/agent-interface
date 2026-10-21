@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { accountMarker } from "../src/server/apns.js";
 import { createApp } from "../src/server/app.js";
 import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
@@ -614,7 +615,11 @@ describe("safe admission, steering, and approvals", () => {
       headers: two,
       payload: { decision: "approved" },
     };
-    expect((await app.inject(options)).statusCode).toBe(200);
+    // An iOS notification action sent to one is refused when two is signed in on that phone.
+    const elsewhere = await app.inject({ ...options, payload: { decision: "approved", account: accountMarker("local-one") } });
+    expect([elsewhere.statusCode, elsewhere.json().error]).toEqual([409, "This approval was sent to a different account"]);
+    expect(store.approval("approval")).toBeUndefined();
+    expect((await app.inject({ ...options, payload: { decision: "approved", account: accountMarker("local-two") } })).statusCode).toBe(200);
     expect(store.approval("approval")).toMatchObject({
       userId: "local-two",
       decision: "approved",

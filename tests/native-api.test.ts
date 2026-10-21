@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
+import { accountMarker, apnsCollapseId, createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { defaultPreferences, type Runtime, type RuntimeEvent } from "../src/shared/types.js";
@@ -258,6 +258,87 @@ it("shares durable participant/routine notifications across web/APNs without ret
     store.recordEvents([{ ...event, id: "revoked" }], "cursor2"); config.householdEmails = [];
     await worker.tick(); expect(native).toHaveLength(3);
   } finally { await worker.stop(); store.close(); }
+});
+
+it("groups iOS notifications per assistant and adds actions only where they make sense", () => {
+  const base = { title: "Kitchen", body: "Done", url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" };
+  const reply = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed" })));
+  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "thread-id": "kitchen", category: "REPLY" },
+    url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" });
+  const approval = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })));
+  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive" });
+  expect(approval).toMatchObject({ botId: "kitchen", approvalId: "request-7", account: "0123456789abcdef" });
+  // An add-on without approval IDs still sends a time-sensitive approval, which only opens the chat.
+  const unnamed = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval" })));
+  expect([unnamed.aps.category, unnamed.aps["interruption-level"], unnamed.approvalId]).toEqual([undefined, "time-sensitive", undefined]);
+  for (const kind of ["failed", "interrupted", "security", undefined]) {
+    const value = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind })));
+    expect([value.aps.category, value.aps["interruption-level"], value.aps["thread-id"]]).toEqual([undefined, undefined, "kitchen"]);
+  }
+  // Routine results open their results sheet, not a chat to reply in; digests and host alerts have no assistant.
+  expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }))).aps.category).toBeUndefined();
+  const digest = JSON.parse(apnsPayload(JSON.stringify({ title: "2 assistant updates", body: "A · B", url: "/?view=today", tag: "batch", account: "0123456789abcdef" })));
+  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default" });
+  // Without the account marker an action could be taken by whoever is signed in, so there is none.
+  expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" }))).aps.category).toBeUndefined();
+  // An oversized ID is never truncated into a different assistant or approval; that notification just has no actions.
+  const longId = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "a".repeat(300) })));
+  expect([longId.aps.category, longId.approvalId]).toEqual([undefined, undefined]);
+  // Full-size alerts keep their text and link; the extras go first, never the alert itself.
+  const huge = { title: "\u0000".repeat(1000), body: "\n\\\"".repeat(1000), url: "/?bot=" + "a".repeat(2300), tag: "\t".repeat(1000), kind: "approval", botId: "b".repeat(200), approvalId: "c".repeat(200), account: "0123456789abcdef" };
+  const fitted = apnsPayload(JSON.stringify(huge));
+  expect(Buffer.byteLength(fitted)).toBeLessThanOrEqual(4000);
+  expect(JSON.parse(fitted)).toMatchObject({ url: huge.url, aps: { "interruption-level": "time-sensitive" } });
+  expect(JSON.parse(fitted).aps.category).toBeUndefined();
+  const roomy = JSON.parse(apnsPayload(JSON.stringify({ ...huge, url: "/?bot=" + "b".repeat(200) })));
+  expect([roomy.aps.category, roomy.approvalId]).toEqual(["APPROVAL", "c".repeat(200)]);
+});
+
+it("derives an APNs collapse ID from the tag within Apple's 64 bytes", async () => {
+  expect(apnsCollapseId("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70")).toBe("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70");
+  expect(apnsCollapseId("x".repeat(64))).toBe("x".repeat(64));
+  for (const tag of ["x".repeat(65), "😀".repeat(20), "with space", "line\nbreak"]) {
+    const id = apnsCollapseId(tag);
+    expect(Buffer.byteLength(id)).toBeLessThanOrEqual(64);
+    expect(id).toMatch(/^[\x21-\x7e]+$/);
+    expect(apnsCollapseId(tag)).toBe(id);
+  }
+  expect(apnsCollapseId("x".repeat(65))).not.toBe(apnsCollapseId("x".repeat(66)));
+  const dir = mkdtempSync(join(tmpdir(), "apns-collapse-"));
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const seen: Record<string, string>[] = [];
+  const sender = createApnsSender(config, async (_origin, headers) => { seen.push(headers); return { statusCode: 200 }; })!;
+  try {
+    const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" }));
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "t".repeat(200) }));
+    await sender.clear(device, ["event"]);
+    expect(seen.map(headers => headers["apns-collapse-id"])).toEqual(["event", apnsCollapseId("t".repeat(200)), undefined]);
+  } finally { sender.close(); rmSync(dir, { recursive: true }); }
+});
+
+it("names the recipient account and the approval on iOS only, keeping Web Push as before", async () => {
+  const store = new Store(":memory:");
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test" }); config.apns = apnsConfig();
+  store.user({ id: "one", name: "one", email: "one@example.test" });
+  store.nativeSession("one", "one", Date.now() + 100000);
+  store.registerNativeDevice("one", "one", "one", "ab".repeat(32), "sandbox");
+  store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
+  store.recordEvents([{ id: "ask", botId: "kitchen", runId: "run", kind: "approval", approvalId: "request-7", title: "Approval requested", occurredAt: "now" },
+    { id: "done", botId: "kitchen", runId: "run", kind: "completed", title: "Done", occurredAt: "now" }], "cursor");
+  const web: Record<string, unknown>[] = [], native: Record<string, unknown>[] = [];
+  const worker = new BackgroundWorker(store, runtime, config, async (_subscription, payload) => { web.push(JSON.parse(payload)); },
+    async (_device, payload) => { native.push(JSON.parse(apnsPayload(payload))); });
+  await worker.tick();
+  expect(web.map(row => [row.tag, row.approvalId, row.account])).toEqual([["ask", "request-7", undefined], ["done", undefined, undefined]]);
+  expect(native.map(row => [row.tag, (row.aps as { category?: string }).category, row.approvalId, row.account])).toEqual([
+    ["ask", "APPROVAL", "request-7", accountMarker("one")], ["done", "REPLY", undefined, accountMarker("one")]]);
+  expect(accountMarker("one")).toMatch(/^[0-9a-f]{16}$/);
+  expect(accountMarker("one")).not.toBe(accountMarker("two"));
+  store.close();
 });
 
 it("sends a private assistant's news only to its owner on web and APNs, even after quiet hours", async () => {

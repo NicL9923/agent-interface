@@ -121,7 +121,7 @@ extension Data {
     }
     token = SecureToken.read(host: baseURL.absoluteString)
   }
-  static func component(_ value: String) -> String {
+  nonisolated static func component(_ value: String) -> String {
     value.addingPercentEncoding(
       withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_")))!
   }
