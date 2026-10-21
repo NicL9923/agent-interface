@@ -64,8 +64,8 @@ playback. Provider credentials stay in Hermes. If no speech provider is availabl
 the app explains the missing configuration.
 
 iOS records an M4A voice message and shows the transcription for review before
-adding it to the draft. Read aloud uses the device's built-in voice and has a stop
-control. Microphone and audio behavior on a physical phone require separate
+adding it to the draft. Listen to reply plays the same Hermes audio as the web and
+has a stop control. iOS cannot play Ogg or WebM speech and says so. Microphone and audio behavior on a physical phone require separate
 device acceptance.
 
 ## Memory
