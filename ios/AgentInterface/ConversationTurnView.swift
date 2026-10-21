@@ -153,8 +153,9 @@ struct ApprovalDecisionView: View {
         try await store.perform("/bots/\(APIClient.component(botId))/approvals/\(APIClient.component(approval.id))", ["decision": value])
         guard scope == store.scope else { return }
         settled = true
+        store.buzz(.decided)
         await store.refreshConversation()
-      } catch { if scope == store.scope { decision = nil; store.report(error) } }
+      } catch { if scope == store.scope { decision = nil; store.buzz(.failed); store.report(error) } }
     }
   }
 }

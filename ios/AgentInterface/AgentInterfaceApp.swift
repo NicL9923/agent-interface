@@ -1,3 +1,4 @@
+import CoreSpotlight
 import SwiftUI
 import UserNotifications
 
@@ -50,12 +51,14 @@ import UserNotifications
         }
         // Widget and Live Activity taps. The sign-in callback never arrives here: the
         // authentication session receives it directly, and `DeepLink` ignores it anyway.
-        .onOpenURL { url in
-          guard let path = DeepLink.relativePath(for: url) else { return }
-          NotificationController.shared.pendingURL = path
-          Task { await NotificationController.shared.openPendingConversation() }
+        .onOpenURL { url in Task { await NotificationController.shared.open(url) } }
+        // A Spotlight result for an assistant opens its chat like a widget row.
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in
+          guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return }
+          Task { await NotificationController.shared.open(DeepLink.bot(id)) }
         }
     }
+    .commands { AssistantCommands(store: store) }
   }
 }
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -122,7 +125,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 }
 @MainActor final class NotificationController {
   static let shared = NotificationController()
-  weak var store: AppStore?
+  weak var store: AppStore? { didSet { if let store, let earlyAsk { self.earlyAsk = nil; store.queueAsk(earlyAsk) } } }
+  /// A Siri or Shortcuts question that arrived before the store was ready.
+  var earlyAsk: AskRequest?
   var token: String?
   var pendingBotId: String?
   var pendingRoutineId: String?

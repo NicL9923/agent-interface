@@ -202,6 +202,18 @@ final class NativeFlowTests: XCTestCase {
     expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["composerModel"])
     waitForExpectations(timeout: 10)
   }
+  func testCommandPeriodAsksBeforeStoppingActiveWork() {
+    let app = app(liveActivity: true)
+    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))
+    XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
+    app.typeKey(".", modifierFlags: .command)
+    XCTAssertTrue(app.buttons["Stop work"].waitForExistence(timeout: 5), "The shortcut asks first")
+    // Tapping away dismisses the popover (iPad) or sheet (iPhone) without choosing.
+    app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["Stop work"])
+    waitForExpectations(timeout: 5)
+    XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response", "Dismissing the question stops nothing")
+  }
   func testNativeLiveActivityShowsActualExposedDetails() {
     let app = app(liveActivity: true)
     XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))

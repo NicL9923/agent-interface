@@ -52,6 +52,26 @@ after you send, follows server pushes, and respects the device's Live Activities
 About** offer an Update button. Widget and Live Activity taps open
 `agentinterface://open?bot=ID`, handled like a notification link.
 
+Edit the Assistants widget to choose which assistants it shows. With none chosen it
+follows who needs you first, as before. Each row opens its chat. Neither the widget
+nor the app's Siri and Shortcuts actions ever hold the sign-in token: they read the
+same App Group snapshot, so their assistants are per account and disappear on
+sign-out. **Open assistant**, **Ask assistant** and **Open Today** appear in the
+Shortcuts app with phrases that name WildBots, such as "Ask Kitchen in WildBots".
+Ask puts your text in that assistant's draft, opens the chat, and never sends. If a
+send to that assistant is still unsettled, the text waits, as the Share inbox does,
+and it lapses after five minutes. Assistant names (no previews) are also in
+Spotlight search through Core Spotlight items, and leave it with sign-out or when an
+assistant is removed.
+
+Haptics are subtle: a light tap when a send is accepted, a soft success when a reply
+finishes in the open chat, a firmer tap when an approval is decided, and an error
+for a refused send or a failed approval or stop. Swipe an assistant row left to pin
+or unpin it. With a hardware keyboard, Cmd+1 to 9 open pinned assistants in order,
+Cmd+F finds in the open chat or opens Search, and Cmd+. asks before stopping active
+work. Hold Command on an iPad to see them. Return still sends and Shift-Return
+still adds a line.
+
 The server must return `nativeAuthVersion: 1` from `/api/auth/config`. The
 [native API contract](../docs/native-api.md) describes PKCE sign-in, bearer
 sessions, revocation, and Apple push registration. Native tokens are stored in
@@ -97,7 +117,7 @@ xcodebuild -project ios/AgentInterface.xcodeproj \
 ```
 
 `AgentInterfaceTests` covers API contracts, draft/admission recovery, identity
-changes, offline sign-out and change server, launch recovery, discarding unconfirmed sends, Markdown, avatar geometry and motion, and notification routing.
+changes, offline sign-out and change server, launch recovery, discarding unconfirmed sends, Markdown, avatar geometry and motion, notification routing, and the Siri, Spotlight and widget-selection surfaces.
 `AgentInterfaceUITests` exercises native controls with an explicit Debug-only
 transport fixture. These tests establish client behavior; they do not establish
 Hermes execution or delivery from APNs. Release builds omit the fixture code.

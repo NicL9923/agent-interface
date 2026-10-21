@@ -210,6 +210,7 @@ struct AssistantsWidgetView: View {
   var family: WidgetFamily
   @Environment(\.widgetRenderingMode) private var mode
   @Environment(\.isLuminanceReduced) private var reduced
+  @ScaledMetric(relativeTo: .caption2) private var pinSize: CGFloat = 8
   private var tone: WidgetTone { WidgetTone(mode: mode, reduced: reduced) }
   private var stale: Bool { snapshot?.isStale(at: date) ?? false }
   var body: some View {
@@ -267,7 +268,7 @@ struct AssistantsWidgetView: View {
         VStack(alignment: .leading, spacing: 1) {
           HStack(spacing: 6) {
             Text(assistant.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-            if assistant.pinned { Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
+            if assistant.pinned { Image(systemName: "star.fill").font(.system(size: pinSize)).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
             Spacer(minLength: 4)
             if assistant.status != nil { status(assistant) }
           }

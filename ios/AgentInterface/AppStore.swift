@@ -8,9 +8,24 @@ import CryptoKit
 final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
   @Published var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
   @Published var api: APIClient?
-  @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot(); updateEcho() } }
+  @Published var bootstrap: Bootstrap? { didSet { publishWidgetSnapshot(); updateEcho(); retryAsk() } }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
   var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
+  /// Assistants in Spotlight, kept in step with the snapshot. Unit tests leave the system index alone.
+  var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
+  /// A question from Siri or Shortcuts waiting for its assistant's draft; see `deliverAsk`.
+  var pendingAsk: AskRequest?
+  var askOpened: AskRequest?
+  var askDelivering = false
+  /// The latest haptic moment; see `Haptics.swift`.
+  @Published var haptic: HapticEvent?
+  var hapticCount = 0
+  /// The latest hardware keyboard shortcut; see `KeyboardCommands.swift`.
+  @Published var keyboardCommand: KeyboardCommand?
+  var commandCount = 0
+  /// Search should take the keyboard when it appears, as after Cmd+F from anywhere else.
+  @Published var searchFocusPending = false
+  func retryAsk() { if pendingAsk != nil { Task { await deliverAsk() } } }
   @Published var conversation: Conversation? {
     didSet { if conversation != oldValue { updateEcho(conversationChanged: true) } }
   }
@@ -28,9 +43,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   @Published var routineResult: RoutineResultDestination?
   @Published var todayRequest: UUID?
   @Published var draft = Draft()
-  @Published var draftReady = false
+  @Published var draftReady = false { didSet { if draftReady && !oldValue { retryAsk() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
-  @Published var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho() } }
+  @Published var pendings: [String: PendingSubmission] = [:] { didSet { updateEcho(); retryAsk() } }
   /// The open assistant's unconfirmed send. Setting one files it under its own assistant.
   var pending: PendingSubmission? {
     get { selectedBotId.flatMap { pendings[$0] } }
@@ -409,6 +424,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     guard let reply else { return }
     announcements += 1
     replyAnnouncement = ReplyAnnouncement(id: announcements, botId: id, text: ReplyWatch.snippet(reply.text))
+    if viewingBotId == id { buzz(.replied) }
   }
   /// Ends polling and the change stream together, so neither outlives the other.
   private func stopPolling() {
@@ -983,7 +999,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
       await handleReceipt(value, botId: id)
-      if value.status == "accepted" { Task { await LiveActivityController.shared.sent(to: id) } }
+      if value.status == "accepted" { buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
+      else if value.status == "rejected" || value.status == "interrupted" { buzz(.failed) }
     } catch {
       guard currentGeneration == generation else { return }
       report(error)
@@ -992,6 +1009,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if let failure = error as? APIError, (400..<500).contains(failure.status) {
         clearPending(id)
         refused(submission)
+        buzz(.failed)
         receipts[id] = Receipt(
           requestId: submission.requestId, status: "rejected", message: failure.message)
       } else {
@@ -1607,6 +1625,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     draft = Draft()
     draftReady = false
     pendings = [:]
+    pendingAsk = nil
+    askOpened = nil
     receipts = [:]
     sending = false
     uploading = false

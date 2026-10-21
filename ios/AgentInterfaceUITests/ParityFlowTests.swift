@@ -45,6 +45,24 @@ final class ParityFlowTests: XCTestCase {
     waitForExpectations(timeout: 10)
     close.tap()
   }
+  func testSwipingARowPinsItAndCommandShortcutsOpenAndFind() throws {
+    let app = launch(home: true)
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))
+    let preview = app.staticTexts["The north gate battery needs replacing."]
+    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5)); XCTAssertTrue(preview.exists)
+    // A pinned assistant leaves the list for the tiles above it, which show no preview.
+    app.buttons["bot.ranch"].swipeLeft()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: preview)
+    waitForExpectations(timeout: 5)
+    // The first pin opens with Cmd+1, and Cmd+F in that chat finds, keyboard ready.
+    app.typeKey("1", modifierFlags: .command)
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
+    app.typeKey("f", modifierFlags: .command)
+    let find = app.textFields["findConversation"]
+    XCTAssertTrue(find.waitForExistence(timeout: 5))
+    expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: find)
+    waitForExpectations(timeout: 5)
+  }
   func testHomePinsSettingsAutosaveAndAdvancedComposer() throws {
     let app = launch(home: true)
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))

@@ -63,6 +63,7 @@ struct RootView: View {
       }
     }
     .background(Palette.surface(scheme))
+    .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
     .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture:capture).appStore(store).coveringChat(store) }
     .onAppear { checkShares() }
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
@@ -126,6 +127,20 @@ struct RootView: View {
       }.tabItem { Label("Today", systemImage: "calendar") }.tag("today")
       NavigationStack { DiscoveryView() }
         .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag("search")
+    }
+  }
+  /// Hardware keyboard shortcuts that belong to home. An open chat takes Find and Stop itself.
+  private func run(_ command: KeyboardCommand) {
+    switch command.kind {
+    case .pinned(let index):
+      guard store.pinnedForShortcuts.indices.contains(index) else { return }
+      let id = store.pinnedForShortcuts[index].id
+      Task { await store.select(id) }
+    case .find:
+      guard store.viewingBotId == nil else { return }
+      store.searchFocusPending = true
+      destination = .find; tab = "search"; compactColumn = .detail
+    case .stop: break
     }
   }
   private func checkShares() {
@@ -261,6 +276,7 @@ struct BotListView: View {
   var openDiscovery: () -> Void
   @ObservedObject private var reachability = NetworkReachability.shared
   @State private var checkingConnection = false
+  @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
   private var lost: Bool { store.connectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
@@ -379,7 +395,7 @@ struct BotListView: View {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
           size: sizeClass == .compact ? 92 : 60, name: bot.name, forceReducedMotion: true)
           .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "pin.fill").font(.system(size: 11)).padding(5)
+            Image(systemName: "pin.fill").font(.system(size: pinBadge)).padding(5)
               .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
           }
         Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
@@ -417,11 +433,14 @@ struct BotListView: View {
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
       .contextMenu { botMenu(bot) }
+      .swipeAction(isPinned(bot) ? "Unpin" : "Pin", symbol: isPinned(bot) ? "pin.slash" : "pin", enabled: canPin) { Task { await store.togglePin(bot.id) } }
   }
+  private func isPinned(_ bot: Bot) -> Bool { store.bootstrap?.preferences.favorites.contains(bot.id) == true }
+  private var canPin: Bool { store.connected && !store.sessionExpired }
   @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
-    Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin" : "Pin to top", systemImage: "pin") {
+    Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") {
       Task { await store.togglePin(bot.id) }
-    }.disabled(!store.connected || store.sessionExpired)
+    }.disabled(!canPin)
     Button("Assistant settings", systemImage: "gearshape") { edit(bot) }
   }
 }

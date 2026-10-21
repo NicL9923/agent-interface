@@ -28,6 +28,7 @@ struct DiscoveryView: View {
   /// The saved reply a history page opened at, highlighted and scrolled to as on the web.
   @State private var savedMessage: String?
   @State private var scrollRequest: UUID?
+  @FocusState private var searchFocused: Bool
   var body: some View {
     ScrollViewReader { proxy in
       list.onChange(of: scrollRequest) { _, _ in
@@ -35,6 +36,14 @@ struct DiscoveryView: View {
         Task { @MainActor in withAnimation { proxy.scrollTo(savedMessage, anchor: .top) } }
       }
     }
+    .onAppear(perform: focusSearchIfAsked).onChange(of: store.searchFocusPending) { _, _ in focusSearchIfAsked() }
+  }
+  /// Cmd+F from anywhere opens Search with the keyboard ready.
+  private func focusSearchIfAsked() {
+    guard store.searchFocusPending else { return }
+    store.searchFocusPending = false
+    tab = "search"
+    Task { @MainActor in searchFocused = true }
   }
   private var list: some View {
     List {
@@ -58,7 +67,7 @@ struct DiscoveryView: View {
       } else if tab == "search" {
         Section {
           HStack {
-            TextField("Answers, files, or a topic",text:Binding(get:{ query },set:{ query=Self.clip($0) })).submitLabel(.search).onSubmit { Task { await search() } }.accessibilityLabel("Search conversations")
+            TextField("Answers, files, or a topic",text:Binding(get:{ query },set:{ query=Self.clip($0) })).submitLabel(.search).onSubmit { Task { await search() } }.accessibilityLabel("Search conversations").focused($searchFocused)
             Button("Search") { Task { await search() } }.buttonStyle(.bordered).controlSize(.small)
               .disabled(Self.trimmed(query).isEmpty || busy).accessibilityIdentifier("nativeSearchSubmit")
           }
