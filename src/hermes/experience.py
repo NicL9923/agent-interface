@@ -393,6 +393,56 @@ def history_receipt(journal, profile, lineage, native_row):
     return read([row["id"] for row in clones]) if clones else None
 
 
+def history_pointer(db, sid, identities, *, projector, profile_home):
+    """Find a visible stable identity in native display order, including compression ancestors."""
+    identities = {str(value) for value in identities}
+    lineage = db._resume_lineage_ids(sid)
+    # FTS and the live transcript can name an older representative row. Its immutable
+    # message UID survives compression and maps onto the current display generation.
+    for identity in list(identities):
+        row = db._read_one("SELECT message_uid FROM messages WHERE id=? AND session_id IN (" + ",".join("?" for _ in lineage) + ")", (identity, *lineage))
+        if row and row["message_uid"]:
+            identities.add(row["message_uid"])
+    # Native compression merges the whole lineage before applying a page. Read it
+    # once so locating a recent reply does not repeat that work for every page.
+    rows = db.get_messages(sid, include_ancestors=True, include_compacted=True)
+    for index, candidate in enumerate(rows):
+        if str(candidate["id"]) not in identities and candidate.get("message_uid") not in identities:
+            continue
+        offset = index // 100 * 100
+        raw = rows[offset:offset + 100]
+        visible = projector([dict(row, _row_id=row["id"]) for row in raw], profile_home=profile_home, image_urls=False)
+        if any(row.get("row_id") == candidate["id"] and row.get("display_kind") != "hidden" for row in visible):
+            return {"messageId": str(candidate.get("message_uid") or candidate["id"]), "offset": offset}
+    return None
+
+
+def enrich_search_pointers(db, hits, files, sessions, profile, query):
+    """Optional cheap candidates; opening a hit resolves its current visible page."""
+    try:
+        prefix_query = " ".join(token if token.startswith('"') or token.endswith("*") else token + "*" for token in __import__("re").findall(r'"[^"]*"|\S+', query.strip()))
+        matches = db.search_messages(query=prefix_query, fields=("id", "session_id"), limit=100)
+    except Exception:
+        matches = []  # Older native search contracts still return useful session hits.
+    for hit in hits:
+        try:
+            resolved = sessions._timeline_session_id(db, hit["sessionId"], profile)
+            lineage = set(db._resume_lineage_ids(resolved))
+            identities = [row["id"] for row in matches if row["session_id"] in lineage]
+            identities += [row[2] for row in files if row[0] in lineage and row[2] is not None]
+            if identities:
+                hit["messageId"] = str(identities[0])
+                continue
+            tools = {row[3] for row in files if row[0] in lineage and row[3] is not None}
+            if tools:
+                # Reused tool IDs must not point an attachment hit at another run.
+                rows = db._read_all("SELECT COALESCE(message_uid,CAST(id AS TEXT)) AS identity FROM messages WHERE session_id IN (" + ",".join("?" for _ in lineage) + ") AND tool_call_id IN (" + ",".join("?" for _ in tools) + ") AND (active=1 OR compacted=1) GROUP BY COALESCE(message_uid,CAST(id AS TEXT)) LIMIT 2", (*lineage, *tools))
+                if len(rows) == 1:
+                    hit["messageId"] = str(rows[0]["identity"])
+        except Exception:
+            continue  # A retired session or optional pointer failure cannot erase search hits.
+
+
 def discovery(data, journal, projector):
     """Read native profile-owned history without opening or resuming a chat."""
     import asyncio
@@ -413,7 +463,7 @@ def discovery(data, journal, projector):
         # native FTS does not index image-only attachment metadata.
         pattern = "%" + query.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         with journal.lock:
-            files = journal.db.execute("SELECT r.stored_session AS sid,json_extract(f.value,'$.name') AS name FROM receipts r,json_each(r.attachments) f WHERE r.profile=? AND r.status='accepted' AND lower(json_extract(f.value,'$.name')) LIKE ? ESCAPE '\\' UNION ALL SELECT t.stored_session AS sid,json_extract(f.value,'$.name') AS name FROM tools t,json_each(t.artifacts) f WHERE t.profile=? AND lower(json_extract(f.value,'$.name')) LIKE ? ESCAPE '\\' LIMIT 40", (profile, pattern, profile, pattern)).fetchall()
+            files = journal.db.execute("SELECT r.stored_session AS sid,json_extract(f.value,'$.name') AS name,r.row_id AS message_row_id,NULL AS tool_id FROM receipts r,json_each(r.attachments) f WHERE r.profile=? AND r.status='accepted' AND lower(json_extract(f.value,'$.name')) LIKE ? ESCAPE '\\' UNION ALL SELECT t.stored_session AS sid,json_extract(f.value,'$.name') AS name,NULL AS message_row_id,t.tool_id AS tool_id FROM tools t,json_each(t.artifacts) f WHERE t.profile=? AND lower(json_extract(f.value,'$.name')) LIKE ? ESCAPE '\\' LIMIT 40", (profile, pattern, profile, pattern)).fetchall()
         db = _open_session_db_for_profile(profile, read_only=True)
         try:
             known = {hit["sessionId"] for hit in hits}
@@ -425,6 +475,7 @@ def discovery(data, journal, projector):
                 if sid not in known:
                     known.add(sid)
                     hits.append({"botId": profile, "botName": profile, "sessionId": sid, "title": row[1] or "Attachment", "snippet": "Matching attachment name"})
+            enrich_search_pointers(db, hits, files, sessions, profile, query)
         finally:
             db.close()
         return hits
@@ -454,6 +505,14 @@ def discovery(data, journal, projector):
     try:
         resolved = sessions._timeline_session_id(db, sid, profile)
         lineage = db._resume_lineage_ids(resolved)
+        target = None
+        if data.get("messageId") is not None:
+            if not isinstance(data["messageId"], str) or not 1 <= len(data["messageId"]) <= 200:
+                raise ExperienceError("Invalid message identity.")
+            target = history_pointer(db, resolved, [data["messageId"]], projector=projector, profile_home=sessions._history_profile_home(profile))
+            if target is None:
+                raise ExperienceError("The original message is no longer available in Hermes.", 404)
+            offset = target["offset"]
         raw = db.get_messages(resolved, limit=100, offset=offset, include_ancestors=True, include_compacted=True)
         for row in raw:
             row["_row_id"] = row["id"]
@@ -510,7 +569,7 @@ def discovery(data, journal, projector):
             text = json.dumps(text)
         # Keep the native projector's attachment fields for the server's signed registrar.
         rows.append({**row, "id": str(native_ids.get(row.get("row_id")) or row.get("row_id") or row.get("id") or f"{sid}-{offset + index}"), "role": row.get("role", "system"), "text": text, "toolName": row.get("name"), **({"createdAt": __import__("datetime").datetime.fromtimestamp(row["timestamp"], __import__("datetime").timezone.utc).isoformat()} if isinstance(row.get("timestamp"), (float, int)) else {})})
-    return {"botId": profile, "sessionId": value["session_id"], "messages": rows, "offset": offset, "hasMore": len(raw) == 100, **({"app_prior_prompt": prior_prompt} if prior_prompt else {})}
+    return {"botId": profile, "sessionId": value["session_id"], "messages": rows, "offset": offset, "hasMore": len(raw) == 100, **({"targetMessageId": target["messageId"]} if target else {}), **({"app_prior_prompt": prior_prompt} if prior_prompt else {})}
 
 
 def install(web, journal, projector):

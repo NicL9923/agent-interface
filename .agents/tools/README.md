@@ -1,5 +1,8 @@
 # Repository tools
 
+- `python3 .agents/tools/benchmark-native-markdown.py` compares fresh and cached native Markdown parsing with an optimized macOS executable; outputs CPU work timings, not iPhone scrolling measurements.
+- `check-search-pointer-browser.js` is a Playwright CLI run-code function for the loopback preview on port 3017; verifies exact-message history requests, highlighting and scrolling at phone and desktop widths.
+
 - `PREVIEW_LONG_TOOL=1 node .agents/tools/preview-app.mjs` shows short, long and unstructured tool-output fixtures for scrolling checks; combine with `PREVIEW_PRESENTATION=advanced` for raw tool details.
 - `capture-ui-comparison.js` is a Playwright CLI run-code function that captures six desktop/phone states from the synthetic loopback preview. A wrapper can pass `{ outputDir, prefix }` as its second argument; defaults write to ignored `.private/ui-comparison`.
 - `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that text and voice controls remain uncovered at desktop and phone widths.

@@ -140,3 +140,12 @@ import XCTest
     XCTAssertEqual(MarkdownTableView.alignment(.trailing), .trailing)
   }
 }
+
+extension MarkdownTests {
+  func testCachedParsingMatchesFreshParsingAsFencesAndTablesFinish() {
+    let cache = MarkdownCache()
+    let variants = ["hello", "```swift\nlet x", "```swift\nlet x = 1\n```", "| One | Two |\n| --- | --- |\n| 1", "| One | Two |\n| --- | --- |\n| 1 | 2 |"]
+    for text in variants { XCTAssertEqual(cache.blocks(text), Markdown.parse(text)); XCTAssertEqual(cache.blocks(text), Markdown.parse(text)) }
+    cache.clear(); XCTAssertEqual(cache.blocks(variants[0]), Markdown.parse(variants[0]))
+  }
+}

@@ -16,10 +16,14 @@ app server's shared desktop and VPS terminal in the system browser. The browser
 uses its own household sign-in; the native session token is never passed in the
 URL. This keeps the native client free of embedded browser and terminal views.
 
+On iPhone, the Assistants, Today and Search tabs keep their navigation state and drafts as you switch. Group chats stay under Assistants. iPad keeps its sidebar.
+
 Home opens with an account button for **Settings**, Search, and New assistant.
 Pin assistants from a conversation header or by long-pressing an assistant. Pins
 appear as large avatars above the household links; the remaining list shows each
 assistant's latest message and date. Settings saves changes as you make them.
+
+Long-press a settled assistant reply to copy the whole answer, share it, or save a reference. The conversation actions menu includes Find in loaded messages and pinning. Search opens a matching message when Hermes supplies a pointer, including after compression moves it to another history page.
 
 The **Today** screen shows recent canonical events, new replies, pending decisions,
 and current work. **Mark caught up** saves the signed-in account's recap position
@@ -29,7 +33,7 @@ Assistant settings include **Memory** for inspecting and
 editing the actual Hermes profile documents, plus routine recipes, timezone and
 next-run previews, and a single-tap **Try once** action.
 
-The conversation microphone records up to two minutes, transcribes on the app
+The conversation microphone records up to two minutes. An interrupted recording stays on this device for explicit transcription or discarding, including after reopening the app. Stopping normally transcribes on the app
 server when you stop, and adds the text to the draft for review, as on the web. The composer's
 **Listen to reply** plays the latest reply through the server's configured Hermes speech and has an explicit Stop control. The paperclip
 attaches photos, a new camera photo or files; you can also paste or drop images, and a hardware keyboard's Return sends. An empty conversation offers an editable role discussion. In Advanced presentation, the composer's
@@ -193,3 +197,5 @@ Use authenticated Quick Look previews to share or save images, PDFs, and text fi
 
 See [Parity.md](Parity.md) for implemented scope, observed validation, and
 acceptance that requires a signed physical device or configured external service.
+
+Recent messages can reopen without a network connection. The app keeps up to five chats, 100 visible messages per chat and 2 MB total, for at most seven days, in protected files excluded from backup. Copies are bound to the exact server and sign-in session; expired sessions do not restore them. Prompts for secure input, approvals, tool output, reasoning, streaming text, and credentials are excluded. Sending stays disabled until the selected chat has been revalidated. Signing out or losing assistant visibility clears the installation's old conversation copies.

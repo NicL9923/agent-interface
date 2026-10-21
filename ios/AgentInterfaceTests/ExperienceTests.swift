@@ -137,3 +137,20 @@ final class ExperienceTests: XCTestCase {
   }
 
 }
+
+extension ExperienceTests {
+  @MainActor func testInterruptedRecordingSurvivesRelaunchWithoutTranscribing() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root); VoiceController.fixtureRecording = false }
+    let url = root.appendingPathComponent("recording.m4a")
+    VoiceController.fixtureRecording = true
+    let voice = VoiceController(); voice.restoreRecording(from: url)
+    await voice.startRecording(); XCTAssertEqual(voice.state, .recording)
+    voice.preserveRecording()
+    XCTAssertEqual(voice.state, .idle); XCTAssertNotNil(voice.recording)
+    let reopened = VoiceController(); reopened.restoreRecording(from: url)
+    XCTAssertEqual(reopened.recording, voice.recording)
+    XCTAssertEqual(reopened.state, .idle)
+    reopened.discardRecording(); XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+  }
+}

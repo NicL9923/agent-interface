@@ -4,16 +4,18 @@ import UniformTypeIdentifiers
 /// Reports the chat as read while it is on screen, uncovered, and the app is in use.
 private struct ReadingChat: ViewModifier {
   var botId: String
+  @State private var visible = false
   @EnvironmentObject private var store: AppStore
   @Environment(\.scenePhase) private var scenePhase
   func body(content: Content) -> some View {
     content
+      .onAppear { visible = true; update(scenePhase, store.chatCovers) }
       .onChange(of: scenePhase, initial: true) { _, phase in update(phase, store.chatCovers) }
       .onChange(of: store.chatCovers) { _, covers in update(scenePhase, covers) }
-      .onDisappear { store.leave(botId) }
+      .onDisappear { visible = false; store.leave(botId) }
   }
   private func update(_ phase: ScenePhase, _ covers: Int) {
-    if phase == .active && covers == 0 { store.viewing(botId) } else { store.leave(botId) }
+    if visible && phase == .active && covers == 0 { store.viewing(botId) } else { store.leave(botId) }
   }
 }
 /// Marks a sheet as covering the chat underneath for as long as it shows.
@@ -52,6 +54,17 @@ struct ConversationView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
   @State private var composerFocused = false
+  @State private var visible = false
+  @State private var findOpen = false
+  @State private var findQuery = ""
+  @State private var findIndex = 0
+  @State private var findTarget: String?
+  private var matches: [String] {
+    guard !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+    return (store.transcript?.visibleMessages ?? []).filter {
+      $0.text.localizedStandardContains(findQuery) || ($0.files ?? []).contains { $0.name.localizedStandardContains(findQuery) }
+    }.map(\.id)
+  }
   var body: some View {
     VStack(spacing: 0) {
       if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
@@ -63,6 +76,16 @@ struct ConversationView: View {
         Button("Sign in again. Your draft is saved.") { Task { await store.signIn() } }.buttonStyle(
           .bordered
         ).padding(8)
+      }
+      if findOpen {
+        HStack {
+          TextField("Find in loaded messages", text: $findQuery).textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier("findConversation")
+          Text(matches.isEmpty ? "0 matches" : "\(min(findIndex + 1, matches.count)) of \(matches.count)").font(.caption)
+          Button { find(-1) } label: { Image(systemName: "chevron.up") }.accessibilityLabel("Previous match").disabled(matches.isEmpty)
+          Button { find(1) } label: { Image(systemName: "chevron.down") }.accessibilityLabel("Next match").disabled(matches.isEmpty)
+          Button { findOpen = false; findTarget = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Close find")
+        }.padding(.horizontal).padding(.vertical, 8)
       }
       transcript
       composer
@@ -93,14 +116,25 @@ struct ConversationView: View {
         }.accessibilityLabel("Artifacts (\(files))").accessibilityIdentifier("conversationFiles")
         Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel(
           "Configure \(bot.name)")
-        Button { Task { await store.togglePin(bot.id) } } label: {
-          Image(systemName: store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "pin.fill" : "pin")
-        }.accessibilityLabel(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant")
-          .disabled(!store.connected || store.sessionExpired)
+        Menu {
+          Button("Find in conversation", systemImage: "magnifyingglass") { findOpen = true }
+          Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant", systemImage: "pin") {
+            Task { await store.togglePin(bot.id) }
+          }.disabled(!store.connected || store.sessionExpired)
+        } label: { Image(systemName: "ellipsis") }.accessibilityLabel("Conversation actions")
       }
     }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
+    .onAppear { visible = true }
+    .onDisappear { visible = false }
+    .onChange(of: findQuery) { _, _ in findIndex = 0; find(0) }
+  }
+  private func find(_ delta: Int) {
+    guard !matches.isEmpty else { findTarget = nil; return }
+    findIndex = (findIndex + delta + matches.count) % matches.count
+    following = false
+    findTarget = matches[findIndex]
   }
   private var transcript: some View {
     ScrollViewReader { proxy in
@@ -127,7 +161,10 @@ struct ConversationView: View {
             Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
           }
           if store.conversation == nil {
-            ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40)
+            if store.offlineSavedAt != nil {
+              ContentUnavailableView("No saved messages", systemImage: "wifi.slash",
+                description: Text(store.draftReady ? "Reconnect to load this assistant's conversation. You can keep writing a draft." : "Reconnect to load this assistant's conversation and saved draft."))
+            } else { ProgressView("Opening your conversation…").frame(maxWidth: .infinity).padding(40) }
           } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
             VStack(spacing: 14) {
               AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
@@ -141,6 +178,7 @@ struct ConversationView: View {
             }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
           }
           TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing)
+            .environment(\.foundMessage, findTarget)
           if ![.idle, .done].contains(store.activity) { liveActivity }
           // Questions and secure requests come before approvals, as on the web.
           ForEach(store.conversation?.attention ?? []) { request in
@@ -199,9 +237,12 @@ struct ConversationView: View {
         }
       }
       .onChange(of: latestTrigger) { _, _ in following = true; scrollToLatest(proxy) }
+      .onChange(of: findTarget) { _, id in
+        if let id { following = false; proxy.scrollTo(id, anchor: .center) }
+      }
       // VoiceOver reads each settled reply once, as the web's live region does.
       .onChange(of: store.replyAnnouncement) { _, reply in
-        if let reply, reply.botId == bot.id { AccessibilityNotification.Announcement("\(bot.name) replied: \(reply.text)").post() }
+        if visible, let reply, reply.botId == bot.id { AccessibilityNotification.Announcement("\(bot.name) replied: \(reply.text)").post() }
       }
       .onDisappear {
         readSaveTask?.cancel()
@@ -250,7 +291,7 @@ struct ConversationView: View {
   }
   private func saveReadPosition() {
     readSaveTask?.cancel()
-    guard placed, let id = readPosition else { return }
+    guard visible, placed, let id = readPosition else { return }
     readSaveTask = Task {
       try? await Task.sleep(for: .milliseconds(350))
       guard !Task.isCancelled else { return }
@@ -323,6 +364,7 @@ struct MessageView: View {
   var delivery: SentEcho.Status? = nil
   @Environment(\.unobservedStore) private var store
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.foundMessage) private var foundMessage
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       if !continued && !message.isAgentExchange && (!label.isEmpty || message.createdAt != nil) {
@@ -339,6 +381,8 @@ struct MessageView: View {
       in: RoundedRectangle(cornerRadius: 14)
     ).padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
       .modifier(SendingMessage(delivery: delivery))
+      .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 10).stroke(Palette.accent, lineWidth: 2) } }
+      .modifier(ReplyActions(message: message))
       .accessibilityElement(children: .contain)
   }
   private var attribution: some View {

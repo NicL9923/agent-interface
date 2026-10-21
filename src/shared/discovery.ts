@@ -1,6 +1,6 @@
 import type { Message, Routine, ToolCall } from './types.js';
-export interface SearchHit { botId: string; botName: string; sessionId: string; title: string; snippet: string; routineId?: string; resultId?: string; updatedAt?: string }
-export interface HistoryPage { botId: string; sessionId: string; messages: Message[]; offset: number; hasMore: boolean }
+export interface SearchHit { botId: string; botName: string; sessionId: string; title: string; snippet: string; messageId?: string; offset?: number; routineId?: string; resultId?: string; updatedAt?: string }
+export interface HistoryPage { botId: string; sessionId: string; messages: Message[]; offset: number; hasMore: boolean; targetMessageId?: string }
 export interface SavedItem { id: string; botId: string; kind: 'session' | 'routine'; sessionId?: string; routineId?: string; resultId?: string; messageId?: string; offset?: number; title: string; createdAt: string }
 export interface UsageSummary { botId: string; days: number; sessions: number; inputTokens: number; outputTokens: number; actualCost: number | null; estimatedCost: number | null; partial: boolean; notice: string }
 export interface AutomationOverview { routines: Routine[]; usage: UsageSummary[]; unavailableBots: string[] }

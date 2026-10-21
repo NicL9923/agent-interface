@@ -30,7 +30,29 @@ enum VoiceState: Equatable {
   @Published var error = ""
   @Published var notice = ""
   /// A recording kept after its transcription failed, for Retry transcription.
-  @Published private(set) var recording: Data?
+  @Published private(set) var recording: Data? {
+    didSet {
+      guard let recordingURL else { return }
+      if let recording {
+        try? FileManager.default.createDirectory(at: recordingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var directory = recordingURL.deletingLastPathComponent()
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        try? directory.setResourceValues(values)
+        try? recording.write(to: recordingURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      } else { try? FileManager.default.removeItem(at: recordingURL) }
+    }
+  }
+  private(set) var recordingURL: URL?
+  func restoreRecording(from url: URL?) {
+    guard url != recordingURL else { return }
+    recordingURL = url
+    let audio = url.flatMap { path -> Data? in
+      guard let size = try? path.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= Self.maxVoiceBytes else { return nil }
+      return try? Data(contentsOf: path)
+    }
+    recording = audio.flatMap { $0.count <= Self.maxVoiceBytes ? $0 : nil }
+    if recording != nil { notice = "Recording kept. Transcribe it when you're ready, or discard it." }
+  }
   @Published private(set) var playable = false
   @Published private(set) var elapsed = 0
   var api: APIClient?
@@ -45,6 +67,35 @@ enum VoiceState: Equatable {
   private var generation = 0
   private var discarded = false
   private var sessionActive = false
+
+  /// Inactivity ends capture, but the captured speech stays available for review.
+  /// Unlike Stop, this never starts a network request in the background.
+  func preserveRecording() {
+    guard state == .recording else {
+      if state == .requesting { cancel() }
+      return
+    }
+    #if DEBUG
+      if Self.fixtureRecording {
+        keepRecording(Data("fixture-recording".utf8))
+        return
+      }
+    #endif
+    recorder?.delegate = nil
+    recorder?.stop()
+    let audio = file.flatMap { try? Data(contentsOf: $0) }
+    keepRecording(audio ?? Data())
+  }
+  private func keepRecording(_ audio: Data) {
+    releaseRecorder()
+    state = .idle
+    guard !audio.isEmpty, audio.count <= Self.maxVoiceBytes else {
+      error = "The recording could not be kept. Try recording again. Your draft is kept."
+      return
+    }
+    recording = audio
+    notice = "Recording kept. Transcribe it when you're ready, or discard it."
+  }
 
   /// Stops whatever is happening and keeps the draft as it is.
   func cancel() {
@@ -149,8 +200,8 @@ enum VoiceState: Equatable {
       self.releaseRecorder()
       guard !self.discarded, self.state == .recording else { return }
       guard flag else {
-        self.state = .idle
-        self.error = "The microphone stopped recording. Try recording again. Your draft is kept."
+        self.keepRecording(data ?? Data())
+        if self.recording != nil { self.error = "Recording was interrupted. Your captured audio is kept for transcription." }
         return
       }
       self.finishRecording(data ?? Data())
@@ -349,7 +400,7 @@ struct VoiceButtons: View {
         Image(systemName: "mic").frame(width: 44, height: 44)
       }.accessibilityLabel("Record voice")
         .accessibilityHint("Record up to two minutes. Review the transcript before sending.")
-        .disabled(disabled || voice.state != .idle)
+        .disabled(disabled || voice.state != .idle || voice.recording != nil)
     }
     if let reply {
       Button { voice.speak(reply) } label: {
@@ -383,7 +434,7 @@ struct VoicePanel: View {
         Button(voice.state == .speaking ? "Stop speaking" : "Cancel voice") { voice.cancel() }
       }
       if let recording = voice.recording, !busy {
-        Button("Retry transcription") { voice.transcribe(recording) }.disabled(disabled)
+        Button(voice.error.isEmpty ? "Transcribe recording" : "Retry transcription") { voice.transcribe(recording) }.disabled(disabled)
         Button("Discard recording") { voice.discardRecording() }
       }
       if voice.playable && !busy {

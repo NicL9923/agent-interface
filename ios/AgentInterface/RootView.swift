@@ -12,6 +12,8 @@ struct RootView: View {
   @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
   @Environment(\.scenePhase) private var scenePhase
+  @State private var tab = "assistants"
+  @State private var assistantPath: [String] = []
   @State private var initialScope: String?
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
@@ -23,6 +25,13 @@ struct RootView: View {
         // Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
         VStack(spacing: 0) {
           if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
+          if let date = store.offlineSavedAt {
+            Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reconnecting…")
+              .font(.caption).foregroundStyle(.secondary).padding(8)
+          }
+          if UIDevice.current.userInterfaceIdiom == .phone {
+            compactNavigation
+          } else {
           NavigationSplitView(
             columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn
           ) {
@@ -49,6 +58,7 @@ struct RootView: View {
                 description: Text("Your assistants keep their conversations here."))
             }
           }
+          }
         }
       }
     }
@@ -63,6 +73,8 @@ struct RootView: View {
         initialScope=scope
         let today=(store.bootstrap?.preferences.startPage == "today" || store.bootstrap?.preferences.startPage != "assistant" && store.bootstrap?.preferences.defaultBotId == nil) && store.routineResult == nil
         destination = today ? .today : .conversation
+        tab = today ? "today" : "assistants"
+        assistantPath = []
         compactColumn = .sidebar
       }
     }
@@ -71,26 +83,49 @@ struct RootView: View {
     .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
     .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
     .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.appStore(store).coveringChat(store) }
-    .onReceive(store.$todayRequest) { request in if request != nil { destination = .today;compactColumn = .detail } }
+    .onReceive(store.$todayRequest) { request in if request != nil { destination = .today; tab = "today"; compactColumn = .detail } }
     .onReceive(store.$leftBotId) { id in
       guard let id else { return }
       if settingsBot?.id == id { settingsBot = nil }
       if store.routineResult?.botId == id { store.routineResult = nil }
       // Only a person looking at its conversation is taken home; Today and the other views stay.
+      if UIDevice.current.userInterfaceIdiom == .phone { assistantPath.removeAll { $0 == "chat" } }
       if destination == .conversation { compactColumn = .sidebar }
     }
     .onReceive(store.$conversationRequest) { request in
-      if request != nil { destination = .conversation; compactColumn = .detail }
+      if request != nil { destination = .conversation; tab = "assistants"; assistantPath = ["chat"]; compactColumn = .detail }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in
       if let old, old != new {
         destination = .conversation
+        tab = "assistants"
+        assistantPath = []
         preferencesOpen = false
         settingsBot = nil
         creatingBot = false
         store.openedFile = nil
         store.routineResult = nil
       }
+    }
+  }
+  private var compactNavigation: some View {
+    TabView(selection: $tab) {
+      NavigationStack(path: $assistantPath) {
+        BotListView(destination: destination, openPreferences: { preferencesOpen = true },
+          edit: { settingsBot = $0 }, create: { creatingBot = true },
+          openBot: { destination = .conversation; assistantPath = ["chat"] },
+          openToday: { tab = "today" }, openGroups: { assistantPath = ["groups"] },
+          openDiscovery: { tab = "search" })
+          .navigationDestination(for: String.self) { route in
+            if route == "groups" { GroupChatsView() }
+            else if let bot = store.bot { ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id) }
+          }
+      }.tabItem { Label("Assistants", systemImage: "bubble.left.and.bubble.right") }.tag("assistants")
+      NavigationStack {
+        TodayView(openBot: { tab = "assistants"; assistantPath = ["chat"]; destination = .conversation })
+      }.tabItem { Label("Today", systemImage: "calendar") }.tag("today")
+      NavigationStack { DiscoveryView() }
+        .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag("search")
     }
   }
   private func checkShares() {

@@ -59,7 +59,7 @@ export interface RoutineRunReceipt {
 }
 export type ExperienceRequest =
   | { operation: 'search'; profile: string; query: string }
-  | { operation: 'history'; profile: string; sessionId: string; offset: number }
+  | { operation: 'history'; profile: string; sessionId: string; offset: number; messageId?: string }
   | { operation: 'usage'; profile: string; days: number }
   | { operation: 'routine_results'; profile: string; routineId: string }
   | { operation: 'routine_output'; profile: string; routineId: string; resultId: string }

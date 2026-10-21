@@ -316,4 +316,63 @@ class HistoryDiscoveryTests(unittest.TestCase):
                 experience.discovery({'operation':'usage','profile':'new','days':5},self.journal,None)
             self.assertEqual(invalid.exception.status,400)
 
+
+
+class HistoryPointerTests(unittest.TestCase):
+    def test_finds_visible_uid_after_hidden_rows_and_compression(self):
+        rows = [dict(id=i, message_uid=f"uid-{i}", role="assistant", content="text") for i in range(1, 206)]
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE messages(id TEXT, session_id TEXT, message_uid TEXT)")
+        connection.execute("INSERT INTO messages VALUES ('old-row', 'old', 'uid-205')")
+        reads = []
+        def messages(sid, **kw):
+            self.assertNotIn("limit", kw)
+            reads.append(sid)
+            return rows
+        db = types.SimpleNamespace(
+            _resume_lineage_ids=lambda sid: ["old", "tip"],
+            _read_one=lambda sql, params: connection.execute(sql, params).fetchone(),
+            get_messages=messages)
+        def project(page, **kw):
+            return [dict(row, row_id=row["id"], display_kind="hidden" if row["id"] == 204 else "conversation") for row in page]
+        pointer = experience.history_pointer(db, "tip", ["old-row"], projector=project, profile_home="/fixture")
+        self.assertEqual(pointer, {"messageId": "uid-205", "offset": 200})
+        self.assertEqual(reads, ["tip"], "A locator must merge native compression lineage only once")
+        self.assertIsNone(experience.history_pointer(db, "tip", ["204"], projector=project, profile_home="/fixture"))
+        self.assertIsNone(experience.history_pointer(db, "tip", ["missing"], projector=project, profile_home="/fixture"))
+
+
+    def test_search_pointers_are_cheap_and_optional(self):
+        hits = [dict(sessionId="retired"), dict(sessionId="live")]
+        def resolve(db, sid, profile):
+            if sid == "retired":
+                raise RuntimeError("retired native session")
+            return sid
+        sessions = types.SimpleNamespace(_timeline_session_id=resolve)
+        db = types.SimpleNamespace(_resume_lineage_ids=lambda sid: ["old", sid],
+            search_messages=lambda **kw: [dict(id=205, session_id="old")],
+            get_messages=lambda *args, **kw: self.fail("Search must not scan history pages"))
+        experience.enrich_search_pointers(db, hits, [], sessions, "profile", "synthetic")
+        self.assertNotIn("messageId", hits[0]); self.assertEqual(hits[1]["messageId"], "205")
+        db.search_messages = lambda **kw: (_ for _ in ()).throw(ValueError("unsupported native FTS query"))
+        untouched = [dict(sessionId="live", title="Still useful")]
+        experience.enrich_search_pointers(db, untouched, [], sessions, "profile", 'foo"')
+        self.assertEqual(untouched, [dict(sessionId="live", title="Still useful")])
+
+    def test_attachment_tool_pointer_is_only_assigned_when_unambiguous(self):
+        hits = [dict(sessionId="live")]
+        db = types.SimpleNamespace(_resume_lineage_ids=lambda sid: [sid], search_messages=lambda **kw: [],
+            _read_all=lambda *args: [dict(identity="stable")])
+        sessions = types.SimpleNamespace(_timeline_session_id=lambda db, sid, profile: sid)
+        files = [("live", "artifact.pdf", None, "tool")]
+        experience.enrich_search_pointers(db, hits, files, sessions, "profile", "artifact.pdf")
+        self.assertEqual(hits[0]["messageId"], "stable")
+        db._read_all = lambda *args: [dict(identity="first-run"), dict(identity="second-run")]
+        hits = [dict(sessionId="live")]
+        experience.enrich_search_pointers(db, hits, files, sessions, "profile", "artifact.pdf")
+        self.assertNotIn("messageId", hits[0])
+
+
 if __name__ == '__main__': unittest.main()

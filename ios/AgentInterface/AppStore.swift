@@ -2,6 +2,7 @@ import AuthenticationServices
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
+import CryptoKit
 
 @MainActor
 final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
@@ -117,6 +118,37 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   private var scheduledDraftSave: UUID?
   private var draftBackgroundTask = UIBackgroundTaskIdentifier.invalid
   private var conversationCache: [String: Conversation] = [:]
+  var offlineLibraryRoot = OfflineLibrary.root
+  @Published private(set) var offlineSavedAt: Date?
+  private var restoredRosterAt: Date?
+  private let offlineWriter = OfflineLibraryWriter()
+  private var conversationCapturedAt: [String: Date] = [:]
+  private var recentChats: [String] = []
+  private var cachedChats: Set<String> = []
+  private var offlineURL: URL? {
+    guard let api, let token = api.token else { return nil }
+    return OfflineLibrary.url(origin: api.baseURL.absoluteString, token: token, root: offlineLibraryRoot)
+  }
+  private func saveOfflineLibrary(immediately: Bool = false) {
+    guard !sessionExpired, offlineSavedAt == nil, let bootstrap, let url = offlineURL else { return }
+    let allowed = Set(bootstrap.bots.map(\.id))
+    let ids = Array(recentChats.filter { allowed.contains($0) }.suffix(OfflineLibrary.maximumChats))
+    let chats = conversationCache.filter { ids.contains($0.key) }
+    let snapshot = OfflineLibrary(savedAt: Date(), bootstrap: bootstrap, conversations: chats,
+      selected: selectedBotId, capturedAt: conversationCapturedAt)
+    offlineWriter.replace(snapshot, at: url, immediately: immediately)
+  }
+  private func clearOfflineLibrary(includingVoice: Bool = true) {
+    if let url = offlineURL { offlineWriter.remove(at: url, includingVoice: includingVoice) }
+    MarkdownCache.shared.clear()
+    offlineSavedAt = nil
+    restoredRosterAt = nil
+  }
+  func voiceRecordingURL(botId: String) -> URL? {
+    guard !sessionExpired, bootstrap?.bots.contains(where: { $0.id == botId }) == true else { return nil }
+    let name = SHA256.hash(data: Data(botId.utf8)).map { String(format: "%02x", $0) }.joined()
+    return offlineURL.map { $0.deletingPathExtension().appendingPathExtension(name + ".m4a") }
+  }
   private var generation = UUID()
   private var selectionGeneration = UUID()
   private var fileTask: Task<Void, Never>?
@@ -129,6 +161,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   /// Tests substitute a clock they advance by hand.
   var now: () -> ContinuousClock.Instant = { .now }
   private var bootstrapRefreshedAt: ContinuousClock.Instant?
+  private var bootstrapReads = 0
+  private var appliedBootstrapRead = 0
   /// Oldest loaded message per assistant. Polls ask for everything from there on, so the window
   /// grows with new turns instead of sliding past the turn being read, as on the web.
   private var historyStarts: [String: String] = [:]
@@ -151,6 +185,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   var bot: Bot? { bootstrap?.bots.first { $0.id == selectedBotId } }
   var connected: Bool {
     bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
+      && !cachedChats.contains(selectedBotId ?? "")
   }
   var activity: ActivityState {
     connected ? conversation?.activity.state ?? bot?.activity ?? .idle : .disconnected
@@ -201,6 +236,26 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       if api == nil { api = makeClient(try ConnectionAddress.parse(host)) }
       error = nil
       if api?.token != nil {
+        if bootstrap == nil, let api, let url = offlineURL,
+          let snapshot = OfflineLibrary.read(url),
+          let expiry = UserDefaults.standard.string(forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
+          let expires = ServerDate.parse(expiry), expires > Date() {
+          bootstrap = snapshot.bootstrap
+          conversationCache = snapshot.conversations
+          conversationCapturedAt = snapshot.capturedAt
+          cachedChats = Set(snapshot.conversations.keys)
+          recentChats = Array(snapshot.conversations.keys.sorted())
+          restoredRosterAt = snapshot.savedAt
+          offlineSavedAt = snapshot.selected.flatMap { snapshot.capturedAt[$0] } ?? snapshot.savedAt
+          appUnavailable = true
+          if let id = snapshot.selected, bootstrap?.bots.contains(where: { $0.id == id }) == true {
+            selectedBotId = id
+            conversation = conversationCache[id]
+            let cachedDraft: Draft? = read(key("draft", id))
+            draft = cachedDraft ?? Draft()
+            draftReady = cachedDraft != nil
+          }
+        }
         await refreshBootstrap()
         if api?.token != nil { startPolling() }
       } else {
@@ -330,6 +385,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
     {
+      clearOfflineLibrary()
       sessionExpired = true
       stopStream()
       error =
@@ -464,6 +520,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrapRefreshedAt = nil
     persistDraft()
     flushDraft(inBackground: true)
+    saveOfflineLibrary(immediately: true)
   }
   /// Bootstrap costs the server several Hermes calls, so the poll loop asks for it only when it
   /// is due. A failure, an outage or a missing roster is always due, because recovery needs it.
@@ -477,13 +534,31 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     guard let api, api.token != nil, !ifDue || bootstrapDue else { return }
     bootstrapRefreshedAt = now()
     let currentGeneration = generation
+    bootstrapReads += 1
+    let bootstrapRead = bootstrapReads
     do {
       var value: Bootstrap = try await api.get("/bootstrap?roster=lean")
-      guard generation == currentGeneration else { return }
+      guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
+      appliedBootstrapRead = bootstrapRead
       if let previous = bootstrap, previous.user.id == value.user.id, !value.connection.connected {
         value.bots = previous.bots
       }
+      if let previous = bootstrap, previous.user.id == value.user.id, value.connection.connected,
+        Set(previous.bots.map(\.id)) != Set(value.bots.map(\.id)) {
+        let removed = Set(previous.bots.map(\.id)).subtracting(value.bots.map(\.id))
+        if !removed.isEmpty {
+          clearOfflineLibrary(includingVoice: false)
+          for id in removed {
+            conversationCache[id] = nil; cachedChats.remove(id); conversationCapturedAt[id] = nil
+            if let clip = voiceRecordingURL(botId: id) { try? FileManager.default.removeItem(at: clip) }
+          }
+          recentChats.removeAll { removed.contains($0) }
+          // Recheck redacted references without destroying the open view or its scroll anchor.
+          conversationRefreshedAt = nil
+        }
+      }
       if let previous = bootstrap, previous.user.id != value.user.id {
+        clearOfflineLibrary()
         persistDraft()
         draftTask?.cancel()
         scheduledDraftSave = nil
@@ -493,6 +568,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         stayHome = false
         conversation = nil
         conversationCache.removeAll()
+        conversationCapturedAt.removeAll()
         historyStarts.removeAll()
         earlierFileCache.removeAll()
         draft = Draft()
@@ -507,10 +583,13 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         resetPreferenceSaves()
       }
       bootstrap = value
+      restoredRosterAt = nil
+      if !cachedChats.contains(selectedBotId ?? "") { offlineSavedAt = nil }
       api.csrf = value.csrfToken
       Task { await self.drainUploads() }
       appUnavailable = false
       failures = 0
+      saveOfflineLibrary()
       loadPendings(value.bots)
       if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
@@ -523,7 +602,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
         await select(next, navigate: false)
       }
     } catch is CancellationError {} catch {
-      guard generation == currentGeneration else { return }
+      guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       failures += 1
       appUnavailable = true
       report(error)
@@ -533,6 +612,9 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
   func leave(_ id: String) async {
     for upload in attachmentUploads.filter({ $0.botId == id }) { removeUpload(upload.id) }
     conversationCache[id] = nil
+    conversationCapturedAt[id] = nil
+    cachedChats.remove(id)
+    saveOfflineLibrary()
     if deletedBotId == id { deletedBotId = nil } else { notice = "That assistant is no longer available to you." }
     error = nil
     stayHome = true
@@ -550,6 +632,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     selectedBotId = id
     if id != nil && navigate { conversationRequest = UUID() }
     conversation = id.flatMap { conversationCache[$0] }
+    offlineSavedAt = id.flatMap { cachedChats.contains($0) ? conversationCapturedAt[$0] : nil } ?? restoredRosterAt
     draftReady = false
     interruptionReviewed = false
     receipt = pending?.botId == id ? receipt : nil
@@ -691,7 +774,11 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     }
   }
   private func apply(_ value: Conversation, botId id: String) {
+    cachedChats.remove(id)
+    offlineSavedAt = nil
     let value = latestInflight?.applying(to: value) ?? value
+    let changed = conversationCache[id] != value
+    conversationCapturedAt[id] = Date()
     if conversation?.activity.runId != value.activity.runId
       || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
     {
@@ -700,6 +787,12 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     // An unchanged poll leaves the transcript alone instead of rendering it again.
     if conversation != value { conversation = value }
     conversationCache[id] = value
+    recentChats.removeAll { $0 == id }; recentChats.append(id)
+    while recentChats.count > OfflineLibrary.maximumChats {
+      let expired = recentChats.removeFirst()
+      conversationCache[expired] = nil; cachedChats.remove(expired)
+    }
+    if changed { saveOfflineLibrary() }
     // The conversation carries the saved draft, so a draft that failed to load has now loaded.
     clearDraftLoadFailure()
     // Polling also brings in a draft changed on another device, or a send made there, and
@@ -1484,6 +1577,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
           return false
         }
       }
+      clearOfflineLibrary()
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
       api.token = nil
       api.csrf = nil
@@ -1493,6 +1587,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
       }
     }
     stopPolling()
+    cachedChats.removeAll()
     draftTask?.cancel()
     scheduledDraftSave = nil
     fileTask?.cancel()
@@ -1501,6 +1596,8 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     bootstrap = nil
     conversation = nil
     conversationCache.removeAll()
+    conversationCapturedAt.removeAll()
+    recentChats.removeAll()
     historyStarts.removeAll()
     earlierFileCache.removeAll()
     bootstrapRefreshedAt = nil
@@ -1607,6 +1704,7 @@ final class AppStore: NSObject, ObservableObject, ASWebAuthenticationPresentatio
     if error is CancellationError { return }
     self.error = error.localizedDescription
     if let apiError = error as? APIError, apiError.isSessionExpired {
+      clearOfflineLibrary()
       if let api { try? SecureToken.save(nil, host: api.baseURL.absoluteString) }
       api?.token = nil
       stopPolling()

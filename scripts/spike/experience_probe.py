@@ -100,8 +100,11 @@ async def main():
         assert call("routine_results", profile="default", routineId=job_id)[1] == [], "Routine history crossed profile scope"
         status, search = call("search", query="synthetic")
         assert status == 200 and search, search
-        session = search[0]["sessionId"]
-        status, history = call("history", sessionId=session, offset=0)
+        match = next(hit for hit in search if hit.get("messageId"))
+        session = match["sessionId"]
+        status, history = call("history", sessionId=session, offset=0, messageId=match["messageId"])
+        assert status == 200 and history.get("targetMessageId"), history
+        assert any(row["id"] == history["targetMessageId"] for row in history["messages"]), history
         assert status == 200 and history["messages"], history
         assert call("history", profile=profile, sessionId=session, offset=0)[0] == 404, "History crossed profile scope"
         status, usage = call("usage", days=30)

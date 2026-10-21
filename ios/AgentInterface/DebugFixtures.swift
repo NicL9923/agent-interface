@@ -189,7 +189,7 @@
       } else if path.hasSuffix("/voice/speak") {
         object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
       } else if path == "/api/search" {
-        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list."]],"unavailableBots":[]]
+        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","messageId":"history-saved","offset":0]],"unavailableBots":[]]
       } else if path.contains("/history/") {
         // A person's Markdown stays literal, an assistant's exchange is its card, and the saved
         // reply sits below the fold so opening it has to scroll there.
@@ -198,7 +198,12 @@
           ["id":"history-user","role":"user","text":"Use **only** pantry staples"],
           ["id":"history-agent","role":"user","text":"Pantry list is ready","origin":["kind":"agent","visibility":"conversation","name":"Kitchen companion"]]]
         let saved: [[String: Any]] = [["id":"history-saved","role":"assistant","text":"Fixture saved reply: brisket on Sunday."]]
-        object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":lead + filler + saved]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_MISSING_SEARCH_TARGET"] == "1",
+          URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "messageId" }) == true {
+          status = 404; object = ["error":"The original message is no longer available in Hermes."]
+        } else {
+          object = ["botId":"ranch","sessionId":"history-1","offset":0,"hasMore":false,"messages":lead + filler + saved]
+        }
       } else if path == "/api/saved" {
         if method == "POST" { object = ["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"] }
         else { object = [["id":"saved-1","botId":"ranch","kind":"session","sessionId":"history-1","title":"Saved conversation","createdAt":"2026-10-02T12:00:00Z"],
