@@ -17,6 +17,8 @@ import UIKit
     return app
   }
   private func home(_ app: XCUIApplication) {
+    // iPhone keeps home in its Assistants tab; iPad brings back its sidebar.
+    if app.tabBars.buttons["Assistants"].exists { app.tabBars.buttons["Assistants"].tap() }
     if app.buttons["openSettings"].isHittable { return }
     if app.buttons["Show Sidebar"].exists { app.buttons["Show Sidebar"].tap() }
     else { app.navigationBars.buttons.firstMatch.tap() }

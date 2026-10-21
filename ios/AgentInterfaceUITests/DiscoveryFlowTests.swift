@@ -34,7 +34,11 @@ import XCTest
     app.textFields["Search conversations"].tap();app.textFields["Search conversations"].typeText("dinners")
     app.buttons["nativeSearchSubmit"].tap()
     XCTAssertTrue(app.buttons["nativeSearchResult-history-1"].waitForExistence(timeout:5));app.buttons["nativeSearchResult-history-1"].tap()
-    XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].waitForExistence(timeout:5));app.buttons["Save conversation"].tap()
+    // The hit opens at its matching reply, below the fold; saving the conversation is at the top.
+    let match=app.staticTexts["Fixture saved reply: brisket on Sunday."]
+    expectation(for:NSPredicate(format:"hittable == true"),evaluatedWith:match);waitForExpectations(timeout:10)
+    for _ in 0..<20 where !app.buttons["Save conversation"].isHittable { app.swipeDown() }
+    XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].exists,app.debugDescription);app.buttons["Save conversation"].tap()
     XCTAssertTrue(app.staticTexts["Saved. Find it in Saved items."].waitForExistence(timeout:5));app.buttons["Back to results"].tap()
     app.buttons["Saved items"].tap();XCTAssertTrue(app.buttons["savedItem-saved-1"].waitForExistence(timeout:5))
     XCTAssertTrue(app.buttons["savedItem-saved-1"].label.hasSuffix("· Conversation"),app.buttons["savedItem-saved-1"].label);XCTAssertTrue(app.buttons["Remove Saved conversation"].exists)
