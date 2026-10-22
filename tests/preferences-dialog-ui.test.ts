@@ -137,6 +137,6 @@ it("names Hermes by its commit date, or a short hash without one", async () => {
   props.boot = { ...props.boot, connection: { ...props.boot.connection, revisionDate: "2026-10-20T15:00:00Z" } };
   await render();
   const date = new Date("2026-10-20T15:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-  expect(container.querySelector(".settings-footer small")?.textContent).toBe(`Hermes from ${date}`);
-  expect(container.textContent).toContain(`Connected · Hermes from ${date}`);
+  expect(container.querySelector(".settings-footer small")?.textContent).toBe(`Hermes released ${date}`);
+  expect(container.textContent).toContain(`Connected · Hermes released ${date}`);
 });

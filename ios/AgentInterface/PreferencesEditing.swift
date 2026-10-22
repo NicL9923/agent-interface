@@ -11,13 +11,28 @@ extension Preferences {
   func section(of botId: String) -> BotSection? { sections.first { $0.botIds.contains(botId) } }
 
   /// Puts an assistant in one section, or in none with a nil id, removing it from every other.
+  /// Its place in a section it already sits in is kept.
   func moving(bot botId: String, toSection sectionId: String?) -> Preferences {
     var next = self
-    for index in next.sections.indices { next.sections[index].botIds.removeAll { $0 == botId } }
-    if let sectionId, let index = next.sections.firstIndex(where: { $0.id == sectionId }) {
+    for index in next.sections.indices where next.sections[index].id != sectionId {
+      next.sections[index].botIds.removeAll { $0 == botId }
+    }
+    if let sectionId, let index = next.sections.firstIndex(where: { $0.id == sectionId }),
+      !next.sections[index].botIds.contains(botId)
+    {
       next.sections[index].botIds.append(botId)
     }
     return next
+  }
+
+  /// Moves an assistant into a section by name. An existing section with that name is reused
+  /// rather than duplicated. Nil when the name is blank or no more sections fit.
+  func moving(bot botId: String, toNewSection name: String, id: String = UUID().uuidString) -> Preferences? {
+    let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.sectionNameLimit))
+    if let existing = sections.first(where: { !trimmed.isEmpty && $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+      return moving(bot: botId, toSection: existing.id)
+    }
+    return addingSection(named: trimmed, id: id)?.moving(bot: botId, toSection: id)
   }
 
   func isFollowing(_ botId: String) -> Bool { followBots.contains(botId) }

@@ -43,7 +43,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
   const notify = (update: Partial<NonNullable<Preferences["notifications"]>>) =>
     commit(value => ({ ...value, notifications: { timezone, batchMinutes: 0, ...value.notifications, ...update } }));
   const { version, revisionDate: builtOn } = boot.connection;
-  const hermes = revisionDate(builtOn) ? `Hermes from ${revisionDate(builtOn)}` : version ? `Hermes ${hermesVersionLabel(version, undefined)}` : "";
+  const hermes = revisionDate(builtOn) ? `Hermes released ${revisionDate(builtOn)}` : version ? `Hermes ${hermesVersionLabel(version, undefined)}` : "";
   // Following and each home section open as their own page in the sheet, like a phone's settings.
   const [page, setPage] = useState<Page>({ kind: "main" });
   const section = page.kind === "section" ? prefs.sections.find(item => item.id === page.id) : undefined;
