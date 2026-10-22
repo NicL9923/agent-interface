@@ -34,8 +34,7 @@ import XCTest
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
     XCTAssertFalse(app.buttons["hideKeyboard"].exists, "The control shows only while typing")
-    composer.tap(); composer.typeText("Short chat")
-    waitForKeyboardFocus(composer, true)
+    composer.tap(); waitForKeyboardFocus(composer, true); composer.typeText("Short chat")
     try capture(app, "daily-keyboard-control")
     app.buttons["hideKeyboard"].tap()
     waitForKeyboardFocus(composer, false)
@@ -50,7 +49,7 @@ import XCTest
     let app = launch()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
-    composer.tap(); composer.typeText("Keep this draft")
+    composer.tap(); waitForKeyboardFocus(composer, true); composer.typeText("Keep this draft")
     home(app)
     app.buttons["openToday"].tap()
     XCTAssertTrue(app.staticTexts["Needs your attention"].waitForExistence(timeout: 5))
