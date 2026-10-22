@@ -131,7 +131,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored private var eventTask: Task<Void, Never>?
   @ObservationIgnored private var eventBotId: String?
   @ObservationIgnored private var streamHeardAt: ContinuousClock.Instant?
-  @ObservationIgnored private var conversationRefreshedAt: ContinuousClock.Instant?
+  @ObservationIgnored private(set) var conversationRefreshedAt: ContinuousClock.Instant?
   @ObservationIgnored private var conversationRefreshing = false
   /// Conversation reads overlap: polls, change notices, selection and pull to refresh each start
   /// one. A response older than one already applied is dropped, so it cannot undo newer state.

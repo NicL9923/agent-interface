@@ -1283,7 +1283,9 @@ private final class NativeMockServer: @unchecked Sendable {
         for _ in 0..<10 { time += .seconds(1.5); _ = await value.pollOnce() }
         XCTAssertEqual(polls(), connected, "A live stream replaces the 1.5 second conversation poll")
         server.notifyChange()
-        try await until { polls() >= connected + 1 }
+        // The read must be applied, not just sent, before the clock moves on, or its refresh time
+        // would be stamped with the later clock and the slow poll below would be skipped.
+        try await until { polls() >= connected + 1 && value.conversationRefreshedAt == time }
         XCTAssertEqual(polls(), connected + 1, "A change notice reads the conversation")
         time += .seconds(30); _ = await value.pollOnce()
         XCTAssertEqual(polls(), connected + 2, "A slow poll still covers a stream that failed unnoticed")
