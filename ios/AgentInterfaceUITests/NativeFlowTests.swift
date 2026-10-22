@@ -171,7 +171,9 @@ import XCTest
     screenshot(app, "Fixture native Hermes update ready")
     app.buttons["installHermesUpdate"].tap()
     XCTAssertTrue(app.staticTexts["Update the household's Hermes installation?"].waitForExistence(timeout: 5))
-    app.buttons.matching(identifier: "Install update").allElementsBoundByIndex.last?.tap()
+    // The dialog's own button: the one that opened it has the same label and stays in the tree behind it.
+    let install = app.sheets.buttons["Install update"]
+    XCTAssertTrue(install.waitForExistence(timeout: 5)); install.tap()
     XCTAssertTrue(app.buttons["refreshHermesUpdate"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["installHermesUpdate"].isEnabled)
     screenshot(app, "Fixture native uncertain Hermes update")
@@ -283,9 +285,8 @@ import XCTest
     selectSettingsTab(app, "Connections")
     XCTAssertTrue(app.buttons["Disconnect"].waitForExistence(timeout: 10))
     app.buttons["Disconnect"].tap()
-    let confirm = app.buttons.matching(identifier: "Disconnect").allElementsBoundByIndex.last
-    XCTAssertNotNil(confirm)
-    confirm?.tap()
+    let confirm = app.sheets.buttons["Disconnect"]
+    XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
     XCTAssertTrue(app.staticTexts["Not connected"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.staticTexts["The connection change may have reached Hermes"].exists)
     screenshot(app, "Native connection removed after confirmation")

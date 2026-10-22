@@ -38,7 +38,7 @@ import XCTest
     let save = app.buttons["vault.saveLogin"]; reveal(save, app: app, container: app.collectionViews["vaultAddForm"]); save.tap()
     XCTAssertTrue(app.staticTexts["Fixture library"].waitForExistence(timeout: 5))
     let remove = app.buttons["vault.remove.added-login"]; reveal(remove, app: app, container: app.collectionViews["vaultForm"]); remove.tap()
-    app.buttons.matching(identifier: "Remove login").allElementsBoundByIndex.last?.tap()
+    let confirm = app.sheets.buttons["Remove login"]; XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
     let absent = NSPredicate(format: "exists == false"); expectation(for: absent, evaluatedWith: app.staticTexts["Fixture library"]); waitForExpectations(timeout: 5)
     let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
     field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()

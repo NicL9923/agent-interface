@@ -212,6 +212,7 @@ struct ConversationView: View {
       if following { scrollToLatest(proxy) }
     }
     .scrollDismissesKeyboard(.interactively)
+    .accessibilityIdentifier("conversationTranscript")
   }
   private func transcriptRows(_ proxy: ScrollViewProxy) -> some View {
     VStack(alignment: .leading, spacing: 18) {
