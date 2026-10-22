@@ -18,37 +18,56 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
-  /// A full software keyboard covers the tab bar; a minimized one, as with a hardware keyboard, does
-  /// not. Puts it away with the gesture a person would use, and waits until the tab can be tapped.
-  private func uncover(_ tab: XCUIElement, with gesture: () -> Void) {
-    guard !tab.isHittable else { return }
-    gesture()
-    expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: tab); waitForExpectations(timeout: 5)
+  /// Back to home, the root of the iPhone's one navigation stack.
+  private func home(_ app: XCUIApplication) {
+    if app.buttons["openSettings"].isHittable { return }
+    let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
+    if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
   }
-  func testTabsKeepDraftAndFindOpensMessageActions() throws {
+  private func waitForKeyboardFocus(_ element: XCUIElement, _ focused: Bool) {
+    expectation(for: NSPredicate(format: "hasKeyboardFocus == %@", NSNumber(value: focused)), evaluatedWith: element)
+    waitForExpectations(timeout: 5)
+  }
+  func testKeyboardHidesFromItsButtonAndFromATapOnTheTranscript() throws {
     let app = launch()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
-    composer.tap(); composer.typeText("Keep this draft")
-    // The transcript dismisses the keyboard interactively, so drag it down into the keyboard. Start low:
-    // a drag from the transcript's upper half leaves XCTest waiting a minute for the app to idle.
-    uncover(app.tabBars.buttons["Today"]) {
-      app.scrollViews["conversationTranscript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
-    }
-    app.tabBars.buttons["Today"].tap()
+    XCTAssertFalse(app.buttons["hideKeyboard"].exists, "The control shows only while typing")
+    composer.tap(); waitForKeyboardFocus(composer, true); composer.typeText("Short chat")
+    try capture(app, "daily-keyboard-control")
+    app.buttons["hideKeyboard"].tap()
+    waitForKeyboardFocus(composer, false)
+    XCTAssertFalse(app.buttons["hideKeyboard"].exists)
+    // The fixture chat is too short to drag, so a plain tap on it must be enough.
+    composer.tap(); waitForKeyboardFocus(composer, true)
+    app.scrollViews["conversationTranscript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+    waitForKeyboardFocus(composer, false)
+    XCTAssertEqual(composer.value as? String, "Short chat")
+  }
+  func testHomePushesKeepDraftAndFindOpensMessageActions() throws {
+    let app = launch()
+    let composer = app.textViews["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
+    composer.tap(); waitForKeyboardFocus(composer, true); composer.typeText("Keep this draft")
+    home(app)
+    app.buttons["openToday"].tap()
     XCTAssertTrue(app.staticTexts["Needs your attention"].waitForExistence(timeout: 5))
     try capture(app, "daily-today")
-    app.tabBars.buttons["Search"].tap()
+    home(app)
+    app.buttons["openDiscovery"].tap()
     XCTAssertTrue(app.textFields["Search conversations"].waitForExistence(timeout: 5))
     app.textFields["Search conversations"].tap(); app.textFields["Search conversations"].typeText("Retain this query")
     XCUIDevice.shared.orientation = .landscapeLeft
-    XCTAssertTrue(app.tabBars.buttons["Search"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.textFields["Search conversations"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Search conversations"].value as? String, "Retain this query")
     XCUIDevice.shared.orientation = .portrait
-    uncover(app.tabBars.buttons["Assistants"]) { app.textFields["Search conversations"].typeText("\n") }
-    app.tabBars.buttons["Assistants"].tap()
+    home(app)
+    app.buttons["bot.ranch"].tap()
+    XCTAssertTrue(composer.waitForExistence(timeout: 5))
     XCTAssertEqual(composer.value as? String, "Keep this draft")
-    app.buttons["Conversation actions"].tap(); app.buttons["Find in conversation"].tap()
+    app.openBotProfile("Ranch hand")
+    app.buttons["profileFind"].tap()
     let find = app.textFields["findConversation"]
     XCTAssertTrue(find.waitForExistence(timeout: 5)); find.tap(); find.typeText("household assistant")
     XCTAssertTrue(app.staticTexts["1 of 1"].waitForExistence(timeout: 5))
@@ -77,7 +96,7 @@ import XCTest
   }
   func testSearchOpensTheMatchingReply() throws {
     let app = launch()
-    XCTAssertTrue(app.tabBars.buttons["Search"].waitForExistence(timeout: 15)); app.tabBars.buttons["Search"].tap()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app); app.buttons["openDiscovery"].tap()
     let query = app.textFields["Search conversations"]
     XCTAssertTrue(query.waitForExistence(timeout: 5)); query.tap(); query.typeText("brisket")
     app.buttons["nativeSearchSubmit"].tap()
@@ -89,7 +108,7 @@ import XCTest
   }
   func testRetiredSearchTargetStillOpensItsConversation() throws {
     let app = launch(missingTarget: true)
-    XCTAssertTrue(app.tabBars.buttons["Search"].waitForExistence(timeout: 15)); app.tabBars.buttons["Search"].tap()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app); app.buttons["openDiscovery"].tap()
     let query = app.textFields["Search conversations"]
     XCTAssertTrue(query.waitForExistence(timeout: 5)); query.tap(); query.typeText("brisket")
     app.buttons["nativeSearchSubmit"].tap()

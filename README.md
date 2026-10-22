@@ -8,10 +8,14 @@ drafts and notification subscriptions.
 Household installation: [agentui.wildflowersranch.com](https://agentui.wildflowersranch.com).
 
 The web home lists every assistant with its latest message. Pin assistants to show
-them as large live avatars at the top: use the pin in a conversation's header, or
-long-press (right-click on a computer) an assistant on home. Phones open on home and
-push into a conversation; Back returns. The account button opens Settings, which also
-holds Hermes updates, Computer and Integrations.
+them as large live avatars at the top. In a conversation, the assistant's avatar and
+name in the header open its details: Pin, Artifacts, Settings, "Notify me about all
+activity" and its home section. Long-press (right-click on a computer) an assistant
+on home to pin it or move it to a section. Phones open on home and push into a
+conversation; Back returns. The account button opens Settings, which also holds Hermes
+updates, Computer, Integrations, the assistants you follow and your home sections.
+Each assistant can be in one section. New assistants start with their name and look,
+then role and model.
 
 The self-hoster connects this server to Hermes once. Web users sign in to that
 installation. iOS users enter its HTTPS address, then sign in to the same
@@ -273,7 +277,7 @@ working/thinking animation and supports the existing eye and accessory controls.
 Choosing a seasonal character applies its default color and preserves your other
 customization. All five use original artwork.
 
-Open Artifacts in the conversation header to browse that assistant's generated
+Open Artifacts from the assistant's details (tap its name in the conversation header) to browse its generated
 outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.

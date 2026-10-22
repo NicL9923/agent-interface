@@ -366,7 +366,8 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         if (['reasoning.delta', 'reasoning.available'].includes(params.type) && typeof payload.text === 'string') {
           if (params.type !== 'reasoning.available' || !state.reasoning.endsWith(payload.text)) state.reasoning += payload.text;
         }
-        if (params.type === 'thinking.delta' && typeof payload.text === 'string') state.detail = payload.text;
+        // thinking.delta carries only Hermes's terminal spinner line, a kaomoji and a verb such as
+        // "(⌐■_■) ruminating...". The animated avatar already shows thinking, so its text is dropped.
         if (params.type === 'tool.start' || params.type === 'tool.complete') {
           const id = typeof payload.tool_id === 'string' ? payload.tool_id : `live-tool-${params.seq ?? serial}`;
           const existing = state.tools.find(tool => tool.id === id);

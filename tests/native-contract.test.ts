@@ -207,7 +207,7 @@ const runtime = {
   },
   close: async () => {},
 } satisfies Runtime;
-const upgrades: Pick<HermesUpgrades, "status" | "maintenance"> = { status: async () => upgrade, maintenance: () => false };
+const upgrades: Pick<HermesUpgrades, "status" | "maintenance" | "revisionDate"> = { status: async () => upgrade, maintenance: () => false, revisionDate: () => undefined };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Replaces values that differ per run. The frozen clock already fixes server timestamps. */

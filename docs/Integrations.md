@@ -7,6 +7,13 @@ last connection check. **Configured** means Hermes has saved configuration;
 **Connected** requires a successful check. A provider check does not prove a paid
 model or image request will succeed.
 
+Each assistant is its own Hermes profile, so connections belong to one assistant.
+Connecting Google for one assistant doesn't give another assistant access. The
+Google Workspace card says how the assistant uses it (Hermes's built-in Google
+Workspace skill, or a note that the skill is missing), which OAuth client signed
+the saved grant (the household web client, a personal Desktop client, or an
+unrecognized one, never its identifier), and which permissions are missing.
+
 Connections belong to Hermes profiles. Household members share access to the
 installation; marking a bot personal hides it from others in WildBots but does not
 create an account boundary.

@@ -7,6 +7,7 @@ import type { UpgradePhase, UpgradeRevision, UpgradeStatus, UpgradeControlAction
 import "./hermes-upgrade.css";
 import { Icon } from "./Icon";
 import { When } from "./When";
+import { hermesVersionLabel, revisionDate, shortRevision } from "../app/hermes-version";
 
 const runningPhases: UpgradePhase[] = ["checking", "qualifying", "installing", "verifying", "recovering"];
 const installPhases: UpgradePhase[] = ["installing", "verifying", "recovering", "rolled_back"];
@@ -42,16 +43,20 @@ function steps(status: UpgradeStatus, operation: Operation): [string, StepState]
   return [["Find", find], ["Test in a copy", test], ["Install", install]];
 }
 
-function revisionLabel(revision?: UpgradeRevision) {
-  if (!revision) return "Not available yet";
-  return revision.version || revision.revision.slice(0, 10);
+/** The commit date leads; the version or short hash stays as a quiet detail that links to notes. */
+function RevisionLabel({ revision }: { revision: UpgradeRevision }) {
+  const date = revisionDate(revision.committedAt);
+  const name = revision.version || shortRevision(revision.revision);
+  const detail = revision.notesUrl ? <a href={revision.notesUrl} target="_blank" rel="noreferrer">{name}</a> : name;
+  return date ? <>{date}<small className="upgrade-revision">{detail}</small></> : <>{detail}</>;
 }
 
-export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
+export function HermesUpgradePanel({ open, onClose, bots, currentVersion, currentRevisionDate }: {
   open: boolean;
   onClose: () => void;
   bots: Bot[];
   currentVersion?: string;
+  currentRevisionDate?: string;
 }) {
   const [status, setStatus] = useState<UpgradeStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -201,8 +206,9 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion }: {
       </li>)}
     </ol>}
     <dl className="upgrade-versions">
-      <div><dt>Running now</dt><dd>{status?.current ? revisionLabel(status.current) : currentVersion || "Checking…"}</dd></div>
-      {status?.candidate && <div><dt>{status.phase === "ready" ? "Checked update" : "Update"}</dt><dd>{revisionLabel(status.candidate)}</dd></div>}
+      <div><dt>Running now</dt><dd>{status?.current ? <RevisionLabel revision={status.current} />
+        : hermesVersionLabel(currentVersion, currentRevisionDate) || "Checking…"}</dd></div>
+      {status?.candidate && <div><dt>{status.phase === "ready" ? "Checked update" : "Update"}</dt><dd><RevisionLabel revision={status.candidate} /></dd></div>}
     </dl>
     {busyNames.length > 0 && <p className="upgrade-work-block">Finish active work before upgrading: <strong>{busyNames.join(", ")}</strong>.</p>}
     {error && <p className="upgrade-error" role="alert">{error}</p>}

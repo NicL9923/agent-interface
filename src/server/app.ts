@@ -17,6 +17,7 @@ import type {
   CapabilityKey,
   Preferences,
   Runtime,
+  RuntimeStatus,
   Submission,
 } from "../shared/types.js";
 import { allowedIdentity, type Config } from "./config.js";
@@ -252,6 +253,10 @@ export async function createApp(
   await installVaultRoutes(app, runtime);
   await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId),
     redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message) });
+  const dated = (status: RuntimeStatus): RuntimeStatus => {
+    const revisionDate = upgrades.revisionDate(status.version);
+    return revisionDate ? { ...status, revisionDate } : status;
+  };
   let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
   const runtimeSnapshot = () => {
     if (snapshot) return snapshot;
@@ -260,7 +265,7 @@ export async function createApp(
       const [bots, capabilities] = await Promise.all([
         runtime.listBots(), runtime.capabilities(),
       ]);
-      return { bots: bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)), capabilities, connection: await runtime.status() };
+      return { bots: bots.map(bot => decorateBot(bot, capabilities.avatarMetadata.supported)), capabilities, connection: dated(await runtime.status()) };
     })().finally(() => { snapshot = undefined; });
     return snapshot;
   };
@@ -304,7 +309,7 @@ export async function createApp(
     nativeApp: config.nativeApp,
   }));
   app.post("/api/connection/retry", async () =>
-    runtime.reconnect ? runtime.reconnect() : runtime.status(),
+    dated(await (runtime.reconnect ? runtime.reconnect() : runtime.status())),
   );
   app.patch("/api/preferences", async (req) => {
     const value = preferenceInput.parse(req.body) as Preferences;

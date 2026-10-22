@@ -13,13 +13,14 @@ import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useSubmission } from "./app/use-submission";
 import { useSentEchoes, withEchoes } from "./app/sent-echo";
+import { moveBotToSection } from "./app/preferences-editing";
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { UpdateNotice } from "./app/UpdateNotice";
 import { Sidebar } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
 import { Composer } from "./app/Composer";
-import { BotSettings, ComputerPanel, DiscoveryPanel, GroupChats, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, GroupChats, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
   const [panel, setPanel] = useState<Panel | null>(initialPanel);
@@ -32,7 +33,7 @@ export function App() {
   // An assistant this person just deleted leaves quietly; any other one explains itself.
   const deleted = useRef("");
   const gone = (id: string) => {
-    setPanel(current => current?.kind === "routine" && current.botId === id || current?.kind === "settings" && current.bot !== "new" && current.bot.id === id ? null : current);
+    setPanel(current => (current?.kind === "routine" || current?.kind === "details") && current.botId === id || current?.kind === "settings" && current.bot !== "new" && current.bot.id === id ? null : current);
     if (deleted.current === id) return;
     setError("That assistant is no longer available to you.");
     setRailOpen(mobile);
@@ -40,7 +41,7 @@ export function App() {
   const session = useSession({
     onIdentityChange: () => {
       reset(); clearUploads();
-      closePanels("settings", "preferences", "upgrade", "integrations", "computer"); setError("");
+      closePanels("settings", "details", "preferences", "upgrade", "integrations", "computer"); setError("");
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
@@ -102,7 +103,7 @@ export function App() {
       // The signed-out account's in-flight work can never clear these once the identity changes.
       reset(); clearUploads();
       setRailOpen(mobile);
-      closePanels("settings", "preferences", "upgrade", "integrations");
+      closePanels("settings", "details", "preferences", "upgrade", "integrations");
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -130,12 +131,13 @@ export function App() {
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;
   const open = (next: Panel) => setPanel(next);
-  const togglePin = (bot: Bot) => void session.savePreferences({
-    ...boot.preferences,
-    favorites: boot.preferences.favorites.includes(bot.id)
-      ? boot.preferences.favorites.filter(id => id !== bot.id)
-      : [...boot.preferences.favorites, bot.id],
-  });
+  const detailsBot = panel?.kind === "details" ? boot.bots.find(bot => bot.id === panel.botId) : undefined;
+  const togglePin = (bot: Bot) => void session.editPreferences(preferences => ({
+    ...preferences,
+    favorites: preferences.favorites.includes(bot.id)
+      ? preferences.favorites.filter(id => id !== bot.id)
+      : [...preferences.favorites, bot.id],
+  }));
   return (
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} view={view} state={state} connectionLost={connectionLost} offline={offline}
@@ -144,12 +146,13 @@ export function App() {
         onNewBot={() => open({ kind: "settings", bot: "new" })}
         onSettings={() => open({ kind: "preferences" })}
         onPin={togglePin}
-        onBotSettings={bot => open({ kind: "settings", bot })} />
+        onBotSettings={bot => open({ kind: "settings", bot })}
+        onMoveToSection={(bot, sectionId) => void session.editPreferences(preferences => moveBotToSection(preferences, bot.id, sectionId))}
+        onNewSection={bot => open({ kind: "details", botId: bot.id, newSection: true })} />
       <main className="conversation-panel" inert={mobile && railOpen}>
-        <ChatHeader boot={boot} view={view} selected={selected} avatarState={avatarState} conversation={conversation}
-          connectionLost={connectionLost} railOpen={railOpen}
+        <ChatHeader view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
-          onSettings={bot => setPanel({ kind: "settings", bot })} onPin={togglePin} />
+          onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. */}
         {mobile && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading key="groups"><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
@@ -182,14 +185,23 @@ export function App() {
           />
         </Loading>
       )}
+      {panel?.kind === "details" && detailsBot && (
+        <Loading>
+          <BotDetails key={`${boot.user.id}:${detailsBot.id}`} boot={boot} bot={detailsBot}
+            avatarState={detailsBot.id === botId ? avatarState : connectionLost ? "disconnected" : detailsBot.activity}
+            conversation={conversation} connectionLost={connectionLost} startNewSection={panel.newSection}
+            editPreferences={session.editPreferences}
+            onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
+        </Loading>
+      )}
       {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
       {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} /></Loading>}
       {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
-        bots={boot.bots} currentVersion={boot.connection.version} /></Loading>}
+        bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (
         <Loading>
-          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} savePreferences={session.savePreferences}
+          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
             onClose={() => closePanels("preferences")} onSignOut={signOut}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}

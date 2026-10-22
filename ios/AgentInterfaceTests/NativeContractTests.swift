@@ -589,8 +589,8 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft.text, "Also bring rope")
         XCTAssertFalse(value.holdsText(for: "bot"))
         XCTAssertEqual(server.requests.filter { $0.httpMethod == "POST" && $0.url?.path == sendPath }.count, 1, "The reply is never sent for the person")
-        try await Task.sleep(for: .milliseconds(900))
-        XCTAssertEqual(server.draftRecord()?["text"] as? String, "Also bring rope", "It saves like any draft edit")
+        // The draft write is debounced; a slower host gets time without a fixed sleep.
+        try await until { server.draftRecord()?["text"] as? String == "Also bring rope" }
     }
     func testAHeldNotificationReplySurvivesARelaunchAndRefusesAnotherAccount() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }

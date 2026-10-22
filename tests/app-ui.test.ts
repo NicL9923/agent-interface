@@ -236,9 +236,11 @@ describe("conversation state", () => {
     await render();
     expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-prop")).toBe("computer");
-    // Only the inline work indicator animates; the header and home stay still.
+    // The inline work indicator, the header avatar and pinned assistants animate; the home list stays still.
     expect(container.querySelector(".conversation-activity [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
-    expect([...container.querySelectorAll(".chat-header [data-avatar-state], .bot-rail [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
+    expect(container.querySelector(".chat-header [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
+    expect([...container.querySelectorAll(".home-pinned [data-avatar-state]")].every(item => !item.hasAttribute("data-avatar-still"))).toBe(true);
+    expect([...container.querySelectorAll(".home-list [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
     // The sweeping highlight is a visual copy of the text, so assistive technology must hear the line once.
     const highlight = container.querySelector(".activity-shimmer .shimmer-band");
@@ -601,9 +603,15 @@ describe("conversation state", () => {
       expect(write).toHaveBeenCalledWith("/preferences", expect.objectContaining({ favorites: ["shared", "other"] }), "PATCH");
       expect(pinned()).toEqual(["Shared", "Other"]);
       expect(document.body.querySelector(".bot-menu")).toBeNull();
-      const toggle = container.querySelector<HTMLButtonElement>('.chat-header [aria-label="Unpin assistant"]')!;
+      // Pinning also lives in the assistant's details, opened from the header.
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+      await act(async () => container.querySelector<HTMLButtonElement>(".chat-header .chat-identity")!.click());
+      await loaded();
+      const toggle = container.querySelector<HTMLButtonElement>('.bot-details [aria-pressed="true"]')!;
+      expect(toggle.textContent).toBe("Unpin");
       await act(async () => toggle.click());
       expect(pinned()).toEqual(["Other"]);
+      expect(container.querySelector('.bot-details [aria-pressed="false"]')?.textContent).toBe("Pin");
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 

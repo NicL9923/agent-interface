@@ -28,6 +28,8 @@ struct IntegrationConnection: Codable, Identifiable {
   var owner: String
   var profile: String
   var account: String?
+  /// How the assistant reaches this service, from add-ons that report it.
+  var uses: String?
   var status: String
   var detail: String
   var checkedAt: String?
@@ -72,7 +74,7 @@ struct IntegrationFlow: Codable {
   }
 }
 enum IntegrationInput {
-  static let intro = "Connect the accounts and services your assistants use. A saved connection is checked separately from its permissions."
+  static let intro = "Each assistant has its own connections. Connecting an account for one assistant doesn't give another assistant access."
   /// Servers are reached over the network, so only a full web address can work.
   static func validServerURL(_ text: String) -> Bool {
     guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -236,6 +238,7 @@ struct IntegrationsView: View {
       }
       if let account = connection.account { Text(account).font(.subheadline).textSelection(.enabled) }
       Text(connection.detail).font(.footnote).foregroundStyle(.secondary)
+      if let uses = connection.uses { Text(uses).font(.footnote).foregroundStyle(.secondary) }
       Text("Managed by \(connection.owner)").font(.caption).foregroundStyle(.secondary)
       Text("Assistants: \(connection.assistantsLabel { id in store.bootstrap?.bots.first { $0.id == id }?.name })").font(.caption).foregroundStyle(.secondary)
       if let date = connection.checkedAt.flatMap(ServerDate.parse) { Text("Last checked \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }

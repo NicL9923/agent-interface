@@ -626,7 +626,14 @@ class Worker:
         if self.native_claim: self.native_claim.validate()
 
     def revision(self, value):
-        return {"revision": value, "version": value[:12], "notesUrl": "https://github.com/NousResearch/hermes-agent/commit/" + value}
+        result = {"revision": value, "version": value[:12], "notesUrl": "https://github.com/NousResearch/hermes-agent/commit/" + value}
+        # People recognize a date, not a hash. A missing object only loses the label.
+        try:
+            committed = git(self.source, "show", "-s", "--format=%cI", value + "^{commit}").decode().strip()
+            if committed: result["committedAt"] = datetime.datetime.fromisoformat(committed).astimezone(datetime.timezone.utc).isoformat()
+        except (subprocess.SubprocessError, OSError, ValueError):
+            pass
+        return result
 
     def stage_source(self, source, candidate):
         # Installed checkouts may be promisor clones. Sharing their object store

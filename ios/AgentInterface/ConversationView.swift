@@ -53,6 +53,8 @@ struct ConversationView: View {
   @State private var unseen = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
+  @State private var profileOpen = false
+  @State private var profileAction: BotProfileAction?
   @State private var composerFocused = false
   @State private var visible = false
   @State private var findOpen = false
@@ -60,7 +62,6 @@ struct ConversationView: View {
   @State private var findIndex = 0
   @State private var findTarget: String?
   @FocusState private var findFocused: Bool
-  @ScaledMetric(relativeTo: .caption2) private var fileBadge: CGFloat = 9
   private var matches: [String] {
     guard !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
     return (store.transcript?.visibleMessages ?? []).filter {
@@ -75,9 +76,10 @@ struct ConversationView: View {
       composer
     }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
     .navigationBarTitleDisplayMode(.inline)
-    .toolbar { toolbarContent }
+    .bareToolbarItem(.principal) { header }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
+    .sheet(isPresented: $profileOpen, onDismiss: profileClosed) { profileSheet }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
     .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false }
@@ -103,40 +105,41 @@ struct ConversationView: View {
       Button { findOpen = false; findTarget = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Close find")
     }.padding(.horizontal).padding(.vertical, 8)
   }
-  @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
-    // Activity reads in the transcript; the bar keeps only the actions.
-    ToolbarItem(placement: .principal) { titleView }
-    // The web header's order: files, settings, pin.
-    ToolbarItemGroup(placement: .topBarTrailing) {
-      filesButton
-      Button(action: edit) { Image(systemName: "gearshape") }.accessibilityLabel("Configure \(bot.name)")
-      Menu {
-        Button("Find in conversation", systemImage: "magnifyingglass") { openFind() }
-        Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin assistant" : "Pin assistant", systemImage: "pin") {
-          Task { await store.togglePin(bot.id) }
-        }.disabled(!store.connected || store.sessionExpired)
-      } label: { Image(systemName: "ellipsis") }.accessibilityLabel("Conversation actions")
+  /// Like a messaging app: the system back button alone on the left, and the assistant in the
+  /// middle. Tapping it opens the assistant's card, which holds find, pin, artifacts and settings.
+  private var header: some View {
+    Button { profileOpen = true } label: {
+      // The avatar's shape sits inside its frame with room to move, so no extra gap is needed.
+      VStack(spacing: 0) {
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: headerState, size: 40, name: bot.name, botId: bot.id)
+        Text(bot.name).font(.caption.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+      }.frame(maxWidth: 220).contentShape(Rectangle())
+      // The bar does not grow with text, so the name stops at a size the bar can hold.
+      .dynamicTypeSize(...DynamicTypeSize.xLarge)
+    }.buttonStyle(.plain)
+      .accessibilityElement(children: .ignore).accessibilityLabel(bot.name).accessibilityAddTraits(.isButton)
+      .accessibilityHint("Shows find, pin, artifacts and settings").accessibilityIdentifier("botProfile")
+  }
+  /// The assistant's live state, as home shows it: a finished turn rests.
+  private var headerState: ActivityState {
+    !store.connected ? .disconnected : store.activity == .done ? .idle : store.activity
+  }
+  private var profileSheet: some View {
+    BotProfileView(bot: bot, state: headerState) { action in
+      profileAction = action
+      profileOpen = false
+    }.appStore(store).coveringChat(store)
+  }
+  /// Runs once the card has gone, so the next sheet or the find field can take over cleanly.
+  private func profileClosed() {
+    let action = profileAction
+    profileAction = nil
+    switch action {
+    case .find: openFind()
+    case .artifacts: fileSheetOpen = true
+    case .settings: edit()
+    case nil: break
     }
-  }
-  private var titleView: some View {
-    HStack(spacing: 8) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 30, name: bot.name, forceReducedMotion: true)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(bot.name).font(.headline).lineLimit(1)
-        Text("\(bot.shared ? "Shared with your household" : bot.ownerId == nil ? "Personal, visible to the household" : "Your personal assistant") · \(bot.provider.map { $0 + " / " } ?? "")\(bot.model)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-      }
-    }.accessibilityElement(children: .combine)
-  }
-  private var filesButton: some View {
-    let files = store.conversationFileCount
-    return Button { fileSheetOpen = true } label: {
-      Image(systemName: "doc").overlay(alignment: .topTrailing) {
-        if files > 0 {
-          Text("\(files)").font(.system(size: fileBadge, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.accent)
-            .padding(.horizontal, 3).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 5)).offset(x: 9, y: -7)
-        }
-      }
-    }.accessibilityLabel("Artifacts (\(files))").accessibilityIdentifier("conversationFiles")
   }
   private func openFind() {
     findOpen = true
@@ -212,6 +215,9 @@ struct ConversationView: View {
       if following { scrollToLatest(proxy) }
     }
     .scrollDismissesKeyboard(.interactively)
+    // A short chat cannot be dragged, so a tap anywhere on the transcript puts the keyboard away
+    // too. It runs beside the transcript's own buttons and links rather than instead of them.
+    .simultaneousGesture(TapGesture().onEnded { if composerFocused { composerFocused = false } })
     .accessibilityIdentifier("conversationTranscript")
   }
   private func transcriptRows(_ proxy: ScrollViewProxy) -> some View {
@@ -325,7 +331,7 @@ struct ConversationView: View {
   /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
   private var liveActivity: some View {
     HStack(alignment: .center, spacing: 12) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 52, name: bot.name,
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 52, name: bot.name, botId: bot.id,
         prop: store.connected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
       ShimmerText(
         text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),

@@ -1,12 +1,3 @@
-.chat-header > .artifacts-button {
-  position: relative;
-  display: flex;
-  gap: 7px;
-  width: auto;
-  padding: 8px 11px;
-  font-size: 12px;
-  border: 1px solid var(--line);
-}
 .artifacts-count {
   font-size: 10px;
   line-height: 1.2;
@@ -66,11 +57,6 @@
 .artifacts-empty > .icon { margin: 0 auto 20px; color: var(--muted); }
 .artifacts-empty h3 { font-size: 18px; margin: 0 0 12px; }
 .artifacts-empty p { font-size: 14px; line-height: 1.6; color: var(--muted); }
-@media (max-width: 900px) {
-  .chat-header > .artifacts-button { width: 44px; height: 44px; padding: 6px; justify-content: center; border: 0; }
-  .artifacts-button-label { display: none; }
-  .artifacts-count { position: absolute; right: 1px; top: 1px; font-size: 9px; background: var(--surface); padding: 1px 3px; border-radius: 5px; }
-}
 @media (max-width: 620px) {
   .artifacts-dialog { left: 0; right: 0; width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
   .artifacts-header { padding: 18px max(18px, env(safe-area-inset-right)) 16px max(18px, env(safe-area-inset-left)); }

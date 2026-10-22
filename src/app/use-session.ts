@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
 import { api, ApiError, changeStream, clearResponseCache, setCsrf, write } from "../client-api";
+import { preferenceQueue } from "./preference-queue";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -38,6 +39,7 @@ export function useSession(events: SessionEvents) {
   const refresh = useCallback((): Promise<Bootstrap | null> => {
     if (bootstrapRequest.current) return bootstrapRequest.current;
     const epoch = identityEpoch.current;
+    const marked = preferences.current?.mark() ?? -1;
     const request = (async () => {
       try {
         const next = await api<Bootstrap>("/bootstrap?roster=lean");
@@ -51,12 +53,16 @@ export function useSession(events: SessionEvents) {
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
+        // A save that overlapped this read may be newer than its preferences; keep the saved copy.
+        const stalePreferences = !preferences.current?.fresh(marked);
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
+        // A read whose preferences were held back is not remembered, so the next one reconciles them.
         const unchanged = lastBootstrap.current === next;
-        lastBootstrap.current = next;
+        lastBootstrap.current = stalePreferences ? null : next;
         setBoot((previous) => unchanged && previous ? previous : { ...next,
           bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
             ? previous.bots : next.bots,
+          preferences: stalePreferences && previous?.user.id === next.user.id ? previous.preferences : next.preferences,
         });
         setAuth(false);
         setAppUnavailable(false);
@@ -144,18 +150,18 @@ export function useSession(events: SessionEvents) {
       document.removeEventListener("visibilitychange", wake);
     };
   }, [boot?.user.id, auth, refresh]);
-  const savePreferences = async (value: Preferences) => {
-    const epoch = identityEpoch.current;
-    try {
-      const saved = await write<Preferences>("/preferences", value, "PATCH");
-      if (epoch !== identityEpoch.current) return;
-      setBoot((previous) =>
-        previous ? { ...previous, preferences: saved } : previous,
-      );
-    } catch (e) {
-      if (epoch === identityEpoch.current) handlers.current.onError((e as Error).message);
-    }
-  };
+  const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
+  preferences.current ??= preferenceQueue({
+    // Model stars have their own endpoint; leaving them out keeps the server's current list.
+    send: ({ modelFavorites: _, ...value }) => write<Preferences>("/preferences", value, "PATCH"),
+    apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
+    failed: error => handlers.current.onError(error.message),
+    account: () => identityEpoch.current,
+  });
+  const savePreferences = (value: Preferences) => preferences.current!.save(value);
+  /** Applies an edit to the newest preferences, including a save still on its way. */
+  const editPreferences = (edit: (value: Preferences) => Preferences) =>
+    preferences.current!.edit(edit, bootRef.current?.preferences);
   const signedIn = () => {
     nextIdentity();
     bootstrapRequest.current = null;
@@ -170,6 +176,6 @@ export function useSession(events: SessionEvents) {
   };
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
-    identityEpoch, refresh, reconnect, savePreferences, signedIn, signedOut,
+    identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
   };
 }

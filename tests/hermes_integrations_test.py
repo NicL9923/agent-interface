@@ -154,6 +154,33 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(integrations.IntegrationError):
             integrations.private_json(target)
 
+    def test_workspace_says_how_the_assistant_uses_google_and_whose_client_signed_the_grant(self):
+        bare = integrations.workspace(self.home, "one")
+        self.assertEqual(bare["status"], "not_connected")
+        self.assertIn("doesn't have Hermes's Google Workspace skill", bare["uses"])
+        (self.home / "skills/productivity/google-workspace").mkdir(parents=True)
+        linked = integrations.workspace(self.home, "one")
+        self.assertIn("No Google account is linked", linked["detail"])
+        self.assertIn("uses it through Hermes's Google Workspace skill", linked["uses"])
+        client = self.home / "google_client_secret.json"
+        client.write_text(json.dumps({"installed": {"client_id": "desktop-id", "project_id": "hermes-nicolas"}}))
+        client.chmod(0o600)
+        token = self.home / "google_token.json"
+        token.write_text(json.dumps({"client_id": "desktop-id", "account": "", "scopes": [scope for key, (_, scope) in integrations.SCOPES.items() if key not in ("tasks", "contacts")]}))
+        granted = integrations.workspace(self.home, "one")
+        self.assertEqual(granted["owner"], "Hermes, signed in with personal Desktop client (Google project hermes-nicolas)")
+        self.assertNotIn("desktop-id", json.dumps(granted))
+        self.assertEqual(granted["status"], "missing_permission")
+        self.assertIn("doesn't include Tasks and Contacts", granted["detail"])
+        self.assertIsNone(granted["account"])
+        token.write_text(json.dumps({"client_id": "someone-else", "account": "nic@example.com", "scopes": [scope for _, scope in integrations.SCOPES.values()]}))
+        other = integrations.workspace(self.home, "one")
+        self.assertEqual((other["status"], other["account"]), ("configured", "nic@example.com"))
+        self.assertEqual(other["owner"], "Hermes, signed in with an unrecognized Google OAuth client")
+        with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_GOOGLE_CLIENT_FILE": str(client)}):
+            client.write_text(json.dumps({"web": {"client_id": "someone-else", "project_id": "household"}}))
+            self.assertEqual(integrations.workspace(self.home, "one")["owner"], "Hermes, signed in with household web client (Google project household)")
+
     def test_remote_url_fixed_hosts_safe_scope_and_secrets(self):
         with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_MCP_HOSTS": "local.example"}):
             self.assertEqual(integrations.validate_remote_url("https://local.example/mcp"), "https://local.example/mcp")

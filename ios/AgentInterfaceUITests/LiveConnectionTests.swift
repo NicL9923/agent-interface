@@ -45,8 +45,10 @@ import XCTest
       XCTAssertTrue(name.waitForExistence(timeout: 10))
       name.tap()
       name.typeText(botName)
-      let create = app.collectionViews.buttons["Create assistant"]
-      reveal(create, in: app, direction: .up)
+      // Creation is two steps: name and look, then role and model.
+      app.buttons["creationNext"].tap()
+      let create = app.buttons["creationCreate"]
+      XCTAssertTrue(create.waitForExistence(timeout: 5))
       create.tap()
       let newBot = app.buttons.containing(.staticText, identifier: botName).firstMatch
       XCTAssertTrue(newBot.waitForExistence(timeout: 20))
@@ -79,9 +81,9 @@ import XCTest
       XCTAssertTrue(finalParagraph.isHittable)
       capture(app, "Current canonical reply, table and code")
 
-      let configure = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Configure "))
-        .firstMatch
-      configure.tap()
+      app.buttons["botProfile"].tap()
+      XCTAssertTrue(app.buttons["profileSettings"].waitForExistence(timeout: 10))
+      app.buttons["profileSettings"].tap()
       XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
       app.selectSettingsTab("Tools")
       // The full Hermes catalog extends beyond the viewport. Its first switch

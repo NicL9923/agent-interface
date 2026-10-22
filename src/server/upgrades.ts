@@ -28,7 +28,9 @@ export function launchWorker(settings: WorkerSettings, args: { action: string; o
   }
 }
 const phases = ["idle", "checking", "qualifying", "ready", "installing", "verifying", "succeeded", "blocked", "failed", "rolled_back", "recovering", "cancelled"] as const;
-const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional() });
+// A bad date only loses its label; it must never invalidate the record and close the maintenance gate.
+const committedAt = z.string().refine(value => !Number.isNaN(Date.parse(value))).optional().catch(undefined);
+const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional(), committedAt });
 const stateSchema = z.object({
   phase: z.enum(phases), message: z.string(), current: revision.optional(), candidate: revision.optional(),
   checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["pending", "running", "passed", "failed"]), detail: z.string().optional() })),
@@ -92,6 +94,12 @@ export class HermesUpgrades {
           this.save(stateSchema.parse(receipt.admittedState));
       } catch { /* Damaged admissions keep the maintenance gate closed. */ }
     }
+  }
+  /** When a recorded Hermes revision was committed, for showing a date instead of a hash. */
+  revisionDate(revision?: string) {
+    if (!revision || !this.stateFile) return undefined;
+    const state = this.read();
+    return [state.current, state.candidate].find(item => item?.revision === revision)?.committedAt;
   }
   private save(state: WorkerState) { if (this.stateFile) writePrivate(this.stateFile, { ...state, updatedAt: new Date().toISOString() }); }
   private read(): WorkerState {
