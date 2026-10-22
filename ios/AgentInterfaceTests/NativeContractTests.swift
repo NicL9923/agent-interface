@@ -1276,7 +1276,9 @@ private final class NativeMockServer: @unchecked Sendable {
         let polls = { server.conversationQueries.count }
         server.serveEventStreams()
         _ = await value.pollOnce()
-        try await until { server.requestCount("/api/bots/bot/events") == 1 && polls() >= 2 }
+        // Every read the connect started must be applied before fake time moves, or a late one
+        // would be stamped with a later clock.
+        try await until { server.requestCount("/api/bots/bot/events") == 1 && polls() >= 2 && value.conversationRefreshedAt == time }
         XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
         let connected = polls()
         XCTAssertGreaterThanOrEqual(connected, 2, "Connecting reads the conversation, since earlier notices were lost")
