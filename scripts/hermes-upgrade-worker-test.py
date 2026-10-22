@@ -3,6 +3,7 @@
 These prove durable upgrade/rollback ordering, not Hermes integration. The shipped
 worker separately requires the complete real Hermes qualification suite.
 """
+import datetime
 import importlib.util
 import base64
 import re
@@ -18,6 +19,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("worker", Path(__file__).with_name("hermes-upgrade-worker.py"))
@@ -318,6 +320,19 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
     ('HERMES_COMPUTER_PROBE_BROWSER', 'AGENT_BROWSER_EXECUTABLE_PATH')}}))
 ''')
         return output
+
+    def test_check_labels_both_revisions_with_their_commit_dates(self):
+        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
+            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
+            'checks': {'realIntegration': True, 'hostRegressions': True}})
+        self.check()
+        status = self.status()
+        for key, revision in (("current", self.old), ("candidate", self.new)):
+            expected = self.git("show", "-s", "--format=%ct", revision).decode().strip()
+            self.assertEqual(status[key]["revision"], revision)
+            self.assertEqual(int(datetime.datetime.fromisoformat(status[key]["committedAt"]).timestamp()), int(expected))
+        # An unknown object keeps the record and only loses its date.
+        self.assertNotIn("committedAt", worker.Worker.revision(SimpleNamespace(source=self.source), "0" * 40))
 
     def test_legacy_receipt_qualifies_without_a_browser_override(self):
         worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,

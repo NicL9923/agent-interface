@@ -331,6 +331,8 @@ export interface RuntimeStatus {
   connected: boolean;
   code?: "not_configured" | "invalid_config" | "connecting" | "unreachable" | "unauthorized" | "addon_missing" | "incompatible" | "ready" | "reconnecting" | "closed";
   version?: string;
+  /** ISO 8601 commit time of `version`, when the Hermes updater has recorded it. */
+  revisionDate?: string;
   detail?: string;
   address?: string;
   retryAt?: string;

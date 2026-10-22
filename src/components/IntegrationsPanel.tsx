@@ -24,7 +24,7 @@ export function IntegrationsPanel({ bots, accountScope, onClose }: { bots: Bot[]
   const [profile, setProfile] = useState(bots[0]?.id || "");
   return <Dialog className="integrations-panel" aria-labelledby="integrations-title" onCancel={onClose} onClose={onClose}>
     <header><div><p className="eyebrow">Your household workspace</p><h2 id="integrations-title">Integrations</h2></div><Button className="icon-button" aria-label="Close integrations" onClick={onClose}><Icon name="close" /></Button></header>
-    <p className="muted">Connect the accounts and services your assistants use. A saved connection is checked separately from its permissions.</p>
+    <p className="muted">Each assistant has its own connections. Connecting an account for one assistant doesn't give another assistant access.</p>
     {bots.length > 1 && <label className="integration-profile">Connections for<NativeSelect value={profile} onChange={e => setProfile(e.target.value)}>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>}
     {profile ? <IntegrationList key={profile} profile={profile} bots={bots} accountScope={accountScope} /> : <p>Create an assistant before connecting its services.</p>}
   </Dialog>;
@@ -131,7 +131,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
     </form>}
     {categories.map(category => <section className="integration-group" key={category}><h3>{categoryLabels[category] || category}</h3><div className="integration-cards">{catalog!.connections.filter(item => item.category === category).map(item => <article className="integration-card" key={item.id} data-status={item.status}>
       <div className="integration-card-heading"><h4>{item.name}</h4><span className="integration-status">{statusLabels[item.status]}</span></div>
-      {item.account && <p className="integration-account">{item.account}</p>}<p>{item.detail}</p>
+      {item.account && <p className="integration-account">{item.account}</p>}<p>{item.detail}</p>{item.uses && <p className="muted">{item.uses}</p>}
       <dl><div><dt>Managed by</dt><dd>{item.owner}</dd></div><div><dt>Assistants</dt><dd>{item.botIds.length ? item.botIds.map(id => bots.find(bot => bot.id === id)?.name || id).join(", ") : "This assistant"}</dd></div><div><dt>Last checked</dt><dd>{item.checkedAt ? <When value={item.checkedAt} /> : "Not checked yet"}</dd></div></dl>
       {item.permissions.length > 0 && <details><summary>Access & permissions</summary><ul>{item.permissions.map(permission => <li key={permission.id}>{permission.name}<span>{permission.granted === true ? "Granted" : permission.granted === false ? "Missing" : "Not checked"}</span></li>)}</ul></details>}
       {disconnect === item.id ? <div className="integration-confirmation"><p>Disconnect {item.name}? Assistants using it will lose access.</p><div className="actions"><Button className="danger" disabled={!!busy} onClick={() => void action(item.id, "disconnect")}>Disconnect</Button><Button disabled={!!busy} onClick={() => setDisconnect("")}>Keep connected</Button></div></div> : <div className="actions">

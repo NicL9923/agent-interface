@@ -4,6 +4,8 @@ export interface IntegrationField { key: string; label: string; kind: "text" | "
 export interface IntegrationConnection {
   id: string; name: string; category: IntegrationCategory; owner: string; profile: string;
   account?: string; status: IntegrationStatus; detail: string; checkedAt?: string;
+  /** How the assistant actually reaches this service, from add-ons that report it. */
+  uses?: string;
   permissions: { id: string; name: string; granted: boolean | null }[];
   actions: { connect: boolean; check: boolean; disconnect: boolean };
   setup: IntegrationField[]; capabilities: string[]; botIds: string[];

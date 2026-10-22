@@ -309,9 +309,11 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const event = (type:string,payload:Record<string,unknown>) => sockets[0].receive({method:'event',params:{session_id:'live-one',type,payload}});
     event('message.start', {});
     event('reasoning.delta', {text:'Exposed provider explanation.'});
-    event('thinking.delta', {text:'Still waiting for the provider…'});
+    event('status.update', {text:'Compressing context'});
+    event('thinking.delta', {text:'(⌐■_■) ruminating...'});
     const waiting = await runtime.conversation('shared');
-    expect(waiting.activity.detail).toBe('Still waiting for the provider…');
+    // The spinner line never replaces a real status.
+    expect(waiting.activity.detail).toBe('Compressing context');
     expect(waiting.messages.at(-1)?.reasoning).toBe('Exposed provider explanation.');
     event('tool.start', {tool_id:'call-one',name:'terminal',args:{command:'printf synthetic'}});
     event('message.delta', {text:'A streamed answer'});

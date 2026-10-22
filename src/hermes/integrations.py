@@ -176,26 +176,59 @@ def scopes_from(payload):
     return set(value.split() if isinstance(value, str) else value)
 
 
+GOOGLE_SKILL = Path("skills") / "productivity" / "google-workspace"
+
+
+def google_client(home, token_client_id):
+    """Names the OAuth client a saved grant came from, never its identifier."""
+    if not isinstance(token_client_id, str) or not token_client_id:
+        return "an unrecognized Google OAuth client"
+    candidates = [("household web client", os.environ.get("HERMES_AGENT_INTERFACE_GOOGLE_CLIENT_FILE")), (None, str(Path(home) / "google_client_secret.json"))]
+    for label, path in candidates:
+        if not path:
+            continue
+        try:
+            client = private_json(path)
+        except (ValueError, OSError):
+            continue
+        for kind, section in client.items():
+            if isinstance(section, dict) and section.get("client_id") == token_client_id:
+                name = label or ("web client" if kind == "web" else "personal Desktop client")
+                project = section.get("project_id")
+                return name + (" (Google project " + project + ")" if isinstance(project, str) and re.fullmatch(r"[a-z][a-z0-9-]{4,29}", project) else "")
+    return "an unrecognized Google OAuth client"
+
+
+def google_usage(home):
+    if (Path(home) / GOOGLE_SKILL).is_dir():
+        return "This assistant uses it through Hermes's Google Workspace skill. Each assistant has its own grant; another assistant's account doesn't carry over."
+    return "This assistant doesn't have Hermes's Google Workspace skill, so it can't use Google even when connected."
+
+
 def workspace(home, profile):
     token = Path(home) / "google_token.json"
+    uses = google_usage(home)
     if not token.exists():
-        return card("google_workspace", "Google Workspace", "productivity", profile,
+        detail = "No Google account is linked to this assistant. Connect to give it Gmail, Calendar and Drive." if (Path(home) / GOOGLE_SKILL).is_dir() else "Not connected to this Hermes profile."
+        return card("google_workspace", "Google Workspace", "productivity", profile, detail=detail, uses=uses,
                     capabilities=[label for label, _ in SCOPES.values()])
     try:
         payload = json.loads(token.read_text())
         granted = scopes_from(payload)
         permissions = [dict(id=key, name=name, granted=permission_granted(key, granted)) for key, (name, scope) in SCOPES.items()]
         # Unknown scope evidence is never a green grant.
-        missing = any(not p["granted"] for p in permissions)
+        missing = [p["name"] for p in permissions if not p["granted"]]
         status = "missing_permission" if missing else "configured"
-        detail = "Saved Google grant. Check verifies live access." if not missing else "Saved Google grant lacks some requested permissions. Reconnect to review consent."
+        listed = ", ".join(missing[:-1]) + " and " + missing[-1] if len(missing) > 1 else "".join(missing)
+        detail = "Saved Google grant. Check verifies live access." if not missing else "The saved Google grant doesn't include " + listed + ". Reconnect to add them; everything else keeps working."
         return card("google_workspace", "Google Workspace", "productivity", profile, status, detail,
-                    account=payload.get("account") if isinstance(payload.get("account"), str) else None,
+                    owner="Hermes, signed in with " + google_client(home, payload.get("client_id")), uses=uses,
+                    account=payload.get("account") if isinstance(payload.get("account"), str) and payload.get("account") else None,
                     permissions=permissions, capabilities=[label for label, _ in SCOPES.values()],
                     setup=[] if payload.get("account") else [dict(key="expectedAccount", label="Expected Google account email for this existing grant", kind="text", required=True)],
                     actions=dict(connect=True, check=True, disconnect=True))
     except (ValueError, OSError):
-        return card("google_workspace", "Google Workspace", "productivity", profile, "expired", "The saved Google grant cannot be read. Reconnect this profile.")
+        return card("google_workspace", "Google Workspace", "productivity", profile, "expired", "The saved Google grant cannot be read. Reconnect this profile.", uses=uses)
 
 
 def google_request():
@@ -236,7 +269,8 @@ def check_workspace(home, profile):
             elif probe.status_code == 403:
                 result.update(status="missing_permission", detail="Google refused Calendar access. Review granted permissions and whether the Calendar API is enabled.")
             elif probe.status_code == 200:
-                result.update(status="missing_permission" if any(not p["granted"] for p in result["permissions"]) else "connected", detail="Google accepted a live Calendar read. Permission indicators show the saved grant for other services.")
+                missing = [p["name"] for p in result["permissions"] if not p["granted"]]
+                result.update(status="missing_permission" if missing else "connected", detail="Google accepted a live Calendar read." + (" " + result["detail"] if missing else " Permission indicators show the saved grant for other services."))
             else:
                 result.update(status="unavailable", detail="Google could not complete the connection check. Retry later.")
     except ImportError:

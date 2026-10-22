@@ -3,6 +3,8 @@ export interface UpgradeRevision {
   revision: string;
   version?: string;
   notesUrl?: string;
+  /** ISO 8601 commit time of this revision, from workers that record it. */
+  committedAt?: string;
 }
 export interface UpgradeCheck {
   id: string;

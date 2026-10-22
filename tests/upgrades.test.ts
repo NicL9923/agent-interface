@@ -62,6 +62,21 @@ it("retains browser CSRF protections and accepts administrator native sessions w
   expect(installation.launch).toHaveBeenCalledTimes(1);
 });
 
+it("dates the running Hermes revision in bootstrap, and a bad date never invalidates the record", async () => {
+  const installation = await setup(), headers = await login(installation.app);
+  installation.runtime.status = async () => ({ connected: true, version: revision });
+  installation.runtime.capabilities = async () => ({ chat: { supported: true }, avatarMetadata: { supported: false } }) as Awaited<ReturnType<Runtime["capabilities"]>>;
+  const committedAt = "2026-10-15T22:07:17+00:00";
+  installation.save({ phase: "idle", current: { revision, committedAt }, checks: [], message: "Idle" });
+  expect((await installation.app.inject({ url: "/api/bootstrap", headers })).json().connection).toEqual({ connected: true, version: revision, revisionDate: committedAt });
+  expect((await installation.app.inject({ url: "/api/hermes/upgrade", headers })).json().current).toEqual({ revision, committedAt });
+  installation.save({ phase: "idle", current: { revision, committedAt: "yesterday-ish" }, checks: [], message: "Idle" });
+  const status = (await installation.app.inject({ url: "/api/hermes/upgrade", headers })).json();
+  expect(status).toMatchObject({ phase: "idle", current: { revision } });
+  expect(status.current.committedAt).toBeUndefined();
+  expect((await installation.app.inject({ url: "/api/bootstrap", headers })).json().connection.revisionDate).toBeUndefined();
+});
+
 it("labels a check as a check", async () => {
   const installation = await setup(), headers = await login(installation.app);
   const checked = await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/check", headers, payload: {} });
