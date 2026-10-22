@@ -2487,6 +2487,7 @@ extension NativeContractTests {
         XCTAssertNotNil(launched.offlineSavedAt)
         XCTAssertEqual(launched.conversation?.messages.map(\.id), OfflineLibrary.conversation(chat).messages.map(\.id))
         XCTAssertFalse(launched.canSend); XCTAssertFalse(launched.connected)
+        XCTAssertFalse(launched.householdConnected); XCTAssertTrue(launched.householdConnectionLost(offline: false))
         await launched.select("family")
         XCTAssertNotNil(launched.offlineSavedAt, "An uncached assistant still belongs to the restored offline roster")
         XCTAssertNil(launched.conversation)
@@ -2494,6 +2495,8 @@ extension NativeContractTests {
         server.setOffline(false)
         await launched.refreshBootstrap()
         XCTAssertFalse(launched.connected, "A roster read cannot authorize an unrevalidated cached chat")
+        // Home goes live with the roster, though the last chat opened still shows its saved copy.
+        XCTAssertTrue(launched.householdConnected); XCTAssertFalse(launched.householdConnectionLost(offline: false))
         await launched.refreshConversation()
         XCTAssertTrue(launched.connected); XCTAssertNil(launched.offlineSavedAt)
         _ = await launched.signOut()

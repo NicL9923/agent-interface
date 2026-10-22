@@ -45,7 +45,8 @@ struct RootView: View {
   private var household: some View {
     VStack(spacing: 0) {
       if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
-      if let date = store.offlineSavedAt {
+      // Only while the roster itself is the saved copy; a saved chat says so in the chat.
+      if let date = store.offlineSavedAt, !store.householdConnected {
         Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reconnecting…")
           .font(.caption).foregroundStyle(.secondary).padding(8)
       }
@@ -317,7 +318,7 @@ struct BotListView: View {
   /// The assistant a new home section is being named for.
   @State private var sectionFor: Bot?
   @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
-  private var lost: Bool { store.connectionLost(offline: reachability.offline) }
+  private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
   var body: some View {
@@ -419,7 +420,7 @@ struct BotListView: View {
       HStack(spacing: 7) {
         SyncSpinner(spinning: !reachability.offline)
         Text(reachability.offline ? "Offline" : "Reconnecting").font(.subheadline).foregroundStyle(Palette.muted)
-      }
+      }.fixedSize()
     }.buttonStyle(.plain).accessibilityIdentifier("homeSync")
       .accessibilityHint("Loaded conversations and drafts are kept. Tap to reconnect now.")
   }
@@ -480,7 +481,7 @@ struct BotListView: View {
       .swipeAction(isPinned(bot) ? "Unpin" : "Pin", symbol: isPinned(bot) ? "pin.slash" : "pin", enabled: canPin) { Task { await store.togglePin(bot.id) } }
   }
   private func isPinned(_ bot: Bot) -> Bool { store.bootstrap?.preferences.favorites.contains(bot.id) == true }
-  private var canPin: Bool { store.connected && !store.sessionExpired }
+  private var canPin: Bool { store.householdConnected }
   @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
     Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") {
       Task { await store.togglePin(bot.id) }
