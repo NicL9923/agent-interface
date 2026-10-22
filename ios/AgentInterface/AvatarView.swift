@@ -61,16 +61,27 @@ enum AvatarProp: String, CaseIterable, Equatable {
 }
 
 /// Pure motion model for the avatar rig. It mirrors src/components/avatar-motion.ts number
-/// for number. Time is seconds since the avatar entered its current state.
+/// for number. Time is seconds since the avatar entered its current state. Which named gestures
+/// play, and when, arrives as a `Plan` from `AvatarConductor`, which keeps any two bots from
+/// playing the same one at once.
 enum AvatarMotion {
   static let tau = Double.pi * 2
   static let celebration = 1.8
+  /// One working loop at an even pace: a scan, then a spin.
   static let workCycle = 3.8
   static let workSpin = 0.95
-  /// One thinking loop: ponder one way, glance the other, then a beat (an idea or a tumble).
-  static let thinkCycle = 6.4
+  /// One sweep of the working scan, which is also the usual wait between spins.
+  static let workScan = workCycle - workSpin
+  /// Pondering between thinking beats, and the beat itself: an idea or a tumble.
+  static let thinkPonder = 5.0
+  static let thinkBeat = 1.4
+  /// One thinking loop: ponder one way, glance the other, then a beat.
+  static let thinkCycle = thinkPonder + thinkBeat
+  /// The eyes glance toward the beat's side this long before the beat.
+  static let glanceLead = 1.8
   /// Seconds between idle gestures, on average.
   static let idleGesture = 9.0
+  static let idleGestureLength = 1.4
   /// Radius of the imaginary sphere the face is painted on, in body units.
   static let faceRadius = 42.0
   static let expressionTime = 0.09
@@ -122,6 +133,69 @@ enum AvatarMotion {
   }
   static let restingPose = Pose()
 
+  /// Named gestures. Idle avatars tilt, peek, hop or double take; working ones spin; thinking
+  /// ones end each loop in an idea or a tumble; a completion twirls or cheers; a failure shakes;
+  /// a block nudges its exclamation mark; and any state change can boop.
+  enum GestureKind: String, CaseIterable, Sendable {
+    case tilt, peek, hop, doubleTake, spin, idea, tumble, twirl, cheer, shake, nudge, boop
+
+    var length: Double {
+      switch self {
+      case .tilt, .peek, .hop, .doubleTake: AvatarMotion.idleGestureLength
+      case .spin: AvatarMotion.workSpin
+      case .idea, .tumble: AvatarMotion.thinkBeat
+      case .twirl, .cheer: AvatarMotion.celebration
+      case .shake, .boop: 0.45
+      case .nudge: 0.5
+      }
+    }
+    /// Gestures that read alike share a look: a working spin and a completion twirl both spin
+    /// with trails, a cheer is two hops, and a double take and an idea both pop wide eyes and
+    /// marks. Only one bot at a time may show a look.
+    var look: String {
+      switch self {
+      case .cheer: "hop"
+      case .doubleTake, .idea: "marks"
+      case .twirl: "spin"
+      default: rawValue
+      }
+    }
+  }
+  /// A granted gesture: what, toward which side (-1 left, 1 right), and when, in seconds since
+  /// state entry.
+  struct Gesture: Equatable, Sendable {
+    var kind: GestureKind
+    var side: Double
+    var start: Double
+  }
+  struct Plan: Equatable, Sendable {
+    /// The current or next gesture in this state.
+    var gesture: Gesture? = nil
+    /// The gesture before it, whose expression may still be easing out.
+    var previous: Gesture? = nil
+    /// When the state-change boop starts, if it plays at all.
+    var boop: Double? = nil
+    /// This bot's own offset and pace for its continuous loops, so bots never move in step.
+    var phase = 0.0
+    var tempo = 1.0
+  }
+  /// A lone avatar with no gestures, as in a still preview or a pure-model test.
+  static let soloPlan = Plan()
+  /// What one bot is doing in one state: when it entered the state, in seconds since the
+  /// reference date, and its plan. Every avatar of that bot in that state reads the same cue.
+  struct Cue: Equatable, Sendable {
+    var since: Double
+    var plan: Plan
+  }
+  /// The clock that drives a bot's continuous loops: wander, breath, scan, sway and blinks.
+  static func motionClock(_ t: Double, _ plan: Plan) -> Double { t * plan.tempo + 60 * plan.phase }
+  /// Seconds into `gesture` at t, or -1 when it is not playing then.
+  static func into(_ gesture: Gesture?, _ t: Double, _ kind: GestureKind? = nil) -> Double {
+    guard let gesture, kind == nil || gesture.kind == kind else { return -1 }
+    let u = t - gesture.start
+    return u >= 0 && u < gesture.kind.length ? u : -1
+  }
+
   /// Whether the drawing timeline can stop. Frozen states never tick; a failure
   /// ticks only while its entry shake and expression settle.
   static func timelinePaused(
@@ -167,82 +241,88 @@ enum AvatarMotion {
 
   /// Thinking: eyes shrink to dots and look up to one side, then dart to the other with the body
   /// following a beat later. Each loop ends in a beat: a squash and pop of wide eyes with
-  /// emphasis marks (an idea), or every other loop a hop that rolls the face over the top.
-  static func thinkPose(_ start: Pose, _ t: Double) -> Pose {
+  /// emphasis marks (an idea), or a hop that rolls the face over the top (a tumble). The beat's
+  /// side is where the eyes end up, and the next loop starts looking there.
+  static func thinkPose(_ start: Pose, _ t: Double, _ c: Double, _ beat: Gesture?) -> Pose {
     var pose = start
-    let k = floor(t / thinkCycle)
-    let u = t - k * thinkCycle
-    let even = k.truncatingRemainder(dividingBy: 2) == 0
-    // Sides alternate, so each loop starts where the last one looked.
-    let first = even ? 1.0 : -1.0
+    let side = beat?.side ?? 1
     // The eyes switch sides in 0.14 s; the head follows over 0.4 s.
-    let eyes = first * (1 - 2 * span(u, 3.2, 3.34))
-    let head = first * (1 - 2 * span(u, 3.26, 3.66))
-    let drift = sin(t * 1.1)
+    let glance = (beat?.start ?? 0) - glanceLead
+    func toward(_ from: Double, _ to: Double) -> Double {
+      beat == nil ? -1 : 2 * span(t, glance + from, glance + to) - 1
+    }
+    let eyes = side * toward(0, 0.14)
+    let head = side * toward(0.06, 0.46)
+    let drift = sin(c * 1.1)
     pose.gazeX = eyes * (0.5 + 0.12 * drift)
-    pose.gazeY = -0.8 + 0.08 * sin(t * 0.9)
+    pose.gazeY = -0.8 + 0.08 * sin(c * 0.9)
     pose.yaw = head * 0.2
     pose.roll = head * 5 + drift * 1.2
-    let b = sin(t * 2.1)
+    let b = sin(c * 2.1)
     pose.scaleY *= 1 + 0.016 * b
     pose.scaleX *= 1 - 0.01 * b
     pose.lift = -1.5 - b
+    let u = into(beat, t)
+    guard let beat, u >= 0 else { return pose }
     // Both beats start from a squash that gathers the body.
-    let squash = hump(u, 5.0, 5.42)
+    let squash = hump(u, 0, 0.42)
     pose.scaleY *= 1 - 0.08 * squash
     pose.scaleX *= 1 + 0.05 * squash
-    if even {
-      let pop = hump(u, 5.3, 5.85)
+    if beat.kind == .idea {
+      let pop = hump(u, 0.3, 0.85)
       pose.scaleY *= 1 + 0.07 * pop
       pose.scaleX *= 1 - 0.035 * pop
       pose.lift -= 4 * pop
       // The idea lands facing forward with wide eyes, marks on the side it was looking.
-      let forward = span(u, 5.25, 5.5) * (1 - span(u, 6.05, 6.4))
+      let forward = span(u, 0.25, 0.5) * (1 - span(u, 1.05, 1.4))
       pose.gazeX *= 1 - 0.8 * forward
       pose.gazeY += 0.55 * forward
       pose.yaw *= 1 - forward
       pose.roll *= 1 - 0.7 * forward
-      pose.eyeScale = u < 5.3 ? 1 : 1 + 0.22 * pow(hump(u, 5.3, 6.3), 0.6)
-      pose.ticks = u < 5.32 ? 0 : popIn((u - 5.32) / 0.3) * (1 - span(u, 5.95, 6.3))
-      pose.tickSide = -first
+      pose.eyeScale = u < 0.3 ? 1 : 1 + 0.22 * pow(hump(u, 0.3, 1.3), 0.6)
+      pose.ticks = u < 0.32 ? 0 : popIn((u - 0.32) / 0.3) * (1 - span(u, 0.95, 1.3))
+      pose.tickSide = side
     } else {
-      let s = clamp((u - 5.3) / 0.8)
+      let s = clamp((u - 0.3) / 0.8)
       pose.pitch = tau * easeInOut(s)
       pose.lift -= 3.5 * sin(Double.pi * s)
-      pose.gazeY *= 1 - hump(u, 5.3, 6.1)
+      pose.gazeY *= 1 - hump(u, 0.3, 1.1)
     }
     return pose
   }
 
-  /// A per-avatar offset, so avatars that settle together do not gesture in step.
+  /// A stable number per name, for motion that cannot go through the conductor, such as a
+  /// portrait's ring.
   static func motionSeed(_ name: String) -> Double {
     var seed = 0
     for unit in name.utf16 { seed = (seed * 31 + Int(unit)) % 997 }
     return Double(seed)
   }
+  /// A portrait ring's offset into its turn, as a fraction, and its pace, so rings never turn
+  /// in step.
+  static func ringOffset(_ name: String) -> (phase: Double, pace: Double) {
+    let seed = motionSeed(name)
+    return (hash(seed + 41), 0.9 + 0.2 * hash(seed + 43))
+  }
   /// Now and then an idle avatar does something small: a curious head tilt, a peek to one side,
   /// a hop, or a double take with emphasis marks. Each lasts about 1.4 s.
-  static func idleGesturePose(_ start: Pose, _ t: Double, seed: Double) -> Pose {
+  static func idleGesturePose(_ start: Pose, _ t: Double, _ gesture: Gesture?) -> Pose {
     var pose = start
-    let clock = t + seed
-    let j = floor(clock / idleGesture)
-    let begin = j * idleGesture + 3 + hash(j + 5) * 3
-    let g = clock - begin
-    // Nothing while the arrival settles, and nothing outside the gesture.
-    if t < 2 || g < 0 || g > 1.4 { return pose }
-    let side = hash(j + 11) < 0.5 ? -1.0 : 1.0
+    let g = into(gesture, t)
+    guard let gesture, g >= 0 else { return pose }
+    let side = gesture.side
     let e = span(g, 0, 0.25) * (1 - span(g, 1.05, 1.4))
-    switch Int(floor(hash(j + 17) * 4)) {
-    case 0:  // A curious tilt toward one side, eyes a little wider.
+    switch gesture.kind {
+    case .tilt:  // A curious tilt toward one side, eyes a little wider.
       pose.roll += side * 13 * e
       pose.gazeX += (side * 0.6 - pose.gazeX) * e
       pose.gazeY += (-0.3 - pose.gazeY) * e
       pose.eyeScale = 1 + 0.12 * e
-    case 1:  // A peek: the head turns a quarter so the far eye shrinks.
+    case .peek:  // A peek: the head turns a quarter so the far eye shrinks.
       pose.yaw += (side * 0.55 - pose.yaw) * e
       pose.gazeX += (side * 0.9 - pose.gazeX) * e
       pose.shiftX += side * 1.5 * e
-    case 2:  // A hop: gather, spring up, land.
+    case .hop:  // A hop: gather, spring up, land.
       let gather = hump(g, 0, 0.22) + hump(g, 0.62, 0.86)
       let air = hump(g, 0.18, 0.66)
       pose.scaleY *= 1 - 0.09 * gather + 0.06 * air
@@ -250,7 +330,7 @@ enum AvatarMotion {
       pose.lift -= 7 * air
       pose.eyeScale = 1 + 0.1 * air
       pose.blink = 1
-    default:  // A double take: a glance, back, then wide eyes and marks.
+    case .doubleTake:  // A double take: a glance, back, then wide eyes and marks.
       let glance = hump(g, 0, 0.3)
       pose.gazeX += (side * 0.9 - pose.gazeX) * glance
       pose.yaw += side * 0.25 * glance
@@ -262,12 +342,40 @@ enum AvatarMotion {
       pose.ticks = g < 0.36 ? 0 : popIn((g - 0.36) / 0.3) * (1 - span(g, 0.95, 1.3))
       pose.tickSide = side
       pose.blink = 1
+    default: break
     }
     return pose
   }
 
-  /// A short damped "boop" that acknowledges every state change.
-  static func arrival(_ t: Double) -> Double { 1 + 0.07 * exp(-t * 7) * sin(t * 24) }
+  /// A short damped "boop" that acknowledges a state change, starting `u` seconds ago.
+  static func arrival(_ u: Double) -> Double { u < 0 ? 1 : 1 + 0.07 * exp(-u * 7) * sin(u * 24) }
+
+  /// A completion's double spin with trails, marks popping at the end.
+  static func twirl(_ pose: inout Pose, _ u: Double) {
+    let s = u / celebration
+    pose.yaw = tau * 2 * easeOut(s)
+    pose.sweep = pose.yaw
+    pose.trails = s < 0.8 ? 1 : (1 - s) / 0.2
+    pose.lift += -7 * abs(sin(Double.pi * s * 2)) * (1 - s * 0.4)
+    pose.roll += 14 * sin(s * tau * 1.5) * (1 - s)
+    pose.scaleY *= 1 - 0.06 * sin(tau * 2 * s) * (1 - s)
+    pose.blink = 1
+    pose.ticks = s < 0.82 ? 0 : popIn((u - celebration * 0.82) / 0.3)
+  }
+  /// A completion's other celebration: two hops leaning one way then the other, marks on landing.
+  static func cheer(_ pose: inout Pose, _ u: Double, _ side: Double) {
+    let first = hump(u, 0.16, 0.56)
+    let second = hump(u, 0.68, 1.08)
+    let air = first + second
+    let gather = hump(u, 0, 0.2) + hump(u, 0.52, 0.72) + hump(u, 1.04, 1.24)
+    pose.scaleY *= 1 - 0.1 * gather + 0.07 * air
+    pose.scaleX *= 1 + 0.07 * gather - 0.035 * air
+    pose.lift -= 8 * air
+    pose.roll += side * 9 * (first - second)
+    pose.eyeScale = 1 + 0.14 * air
+    pose.blink = 1
+    pose.ticks = u < 1.1 ? 0 : popIn((u - 1.1) / 0.3)
+  }
 
   /// Where the held prop sits in avatar units, and its tilt in degrees.
   struct PropPlacement: Equatable {
@@ -322,14 +430,19 @@ enum AvatarMotion {
     return pose
   }
 
+  /// The pose at t seconds into `state`. `plan` says which named gestures this bot plays and
+  /// when, and the pace of its continuous loops; without one the avatar only runs its loops.
   static func pose(
-    _ state: ActivityState, _ t: Double, reduce: Bool, prop: AvatarProp? = nil, seed: Double = 0
+    _ state: ActivityState, _ t: Double, reduce: Bool, prop: AvatarProp? = nil,
+    plan: Plan = soloPlan
   ) -> Pose {
     if reduce || frozenStates.contains(state) { return restingPose }
-    let pop = arrival(t)
-    var pose = Pose(scaleX: pop, scaleY: pop, blink: blinkAt(t))
+    let c = motionClock(t, plan)
+    let g = plan.gesture
+    let pop = plan.boop.map { arrival(t - $0) } ?? 1
+    var pose = Pose(scaleX: pop, scaleY: pop, blink: blinkAt(c))
     func breathe(_ rate: Double, _ depth: Double) -> Double {
-      let b = sin(t * rate)
+      let b = sin(c * rate)
       pose.scaleY *= 1 + depth * b
       pose.scaleX *= 1 - depth * 0.6 * b
       return b
@@ -337,63 +450,62 @@ enum AvatarMotion {
     switch state {
     case .idle:
       let b = breathe(1.7, 0.012)
-      let w = wander(t)
+      let w = wander(c)
       // The eyes lead; the head turns and leans after them.
-      let lag = wander(t - 0.18)
+      let lag = wander(c - 0.18)
       pose.lift = -0.6 * b
-      pose.roll = sin(t * 0.55) * 1.6 + lag.x * 2.5
+      pose.roll = sin(c * 0.55) * 1.6 + lag.x * 2.5
       pose.gazeX = w.x
       pose.gazeY = w.y
       pose.yaw = lag.x * 0.2
-      return idleGesturePose(pose, t, seed: seed)
+      return idleGesturePose(pose, t, g)
     case .thinking:
-      return thinkPose(pose, t)
+      return thinkPose(pose, t, c, g)
     case .working:
-      if let prop { return propPose(pose, prop, t) }
-      let u = t.truncatingRemainder(dividingBy: workCycle)
-      let scanEnd = workCycle - workSpin
-      if u < scanEnd {
-        let scan = sin(tau * u / scanEnd)
-        pose.yaw = 0.6 * scan
-        pose.gazeX = 0.5 * scan
-        pose.lift = -abs(sin(t * 6.5)) * 1.6
-        pose.roll = sin(t * 6.5) * 1.2
-      } else {
-        let s = (u - scanEnd) / workSpin
-        pose.yaw = tau * easeInOut(s)
-        pose.sweep = pose.yaw
+      if let prop { return propPose(pose, prop, c) }
+      // The scan eases in, because this bot's scan may enter partway through a sweep.
+      let scan = sin(tau * c / workScan) * smoothstep(t / 0.5)
+      pose.yaw = 0.6 * scan
+      pose.gazeX = 0.5 * scan
+      pose.lift = -abs(sin(c * 6.5)) * 1.6
+      pose.roll = sin(c * 6.5) * 1.2
+      let u = into(g, t, .spin)
+      if u >= 0 {
+        // The scan hands over to the spin and takes back after it, so a spin can start anywhere.
+        let s = u / workSpin
+        let keep = 1 - span(u, 0, 0.2) * (1 - span(u, workSpin - 0.2, workSpin))
+        pose.sweep = tau * easeInOut(s)
+        pose.yaw = pose.sweep + pose.yaw * keep
+        pose.gazeX *= keep
+        pose.roll *= keep
         pose.trails = sin(Double.pi * s)
-        pose.lift = -3 * sin(Double.pi * s)
+        pose.lift = pose.lift * keep - 3 * sin(Double.pi * s)
         pose.blink = 1
       }
     case .waiting:
       let b = breathe(1.1, 0.018)
       pose.lift = 0.8 + 0.8 * b
-      pose.roll = sin(t * 0.4) * 2.5
-      pose.gazeX = sin(t * 0.35) * 0.4
+      pose.roll = sin(c * 0.4) * 2.5
+      pose.gazeX = sin(c * 0.35) * 0.4
       pose.gazeY = 0.6
     case .blocked:
-      let w = t.truncatingRemainder(dividingBy: 2.6)
-      pose.symbolTilt = w < 0.5 ? 9 * sin(w / 0.5 * tau * 2) * (1 - w / 0.5) : 0
+      let w = into(g, t, .nudge)
+      pose.symbolTilt = w < 0 ? 0 : 9 * sin(w / 0.5 * tau * 2) * (1 - w / 0.5)
     case .done:
-      if t < celebration {
-        let s = t / celebration
-        pose.yaw = tau * 2 * easeOut(s)
-        pose.sweep = pose.yaw
-        pose.trails = s < 0.8 ? 1 : (1 - s) / 0.2
-        pose.lift = -7 * abs(sin(Double.pi * s * 2)) * (1 - s * 0.4)
-        pose.roll = 14 * sin(s * tau * 1.5) * (1 - s)
-        pose.scaleY *= 1 - 0.06 * sin(tau * 2 * s) * (1 - s)
-        pose.blink = 1
-        pose.ticks = s < 0.82 ? 0 : popIn((t - celebration * 0.82) / 0.3)
-      } else {
-        pose.ticks = 1 - span(t, celebration + 0.3, celebration + 0.7)
-        let b = breathe(1.5, 0.012)
-        pose.lift = -0.5 * b
-        pose.roll = sin(t * 0.7) * 2
+      let b = breathe(1.5, 0.012)
+      pose.lift = -0.5 * b
+      pose.roll = sin(c * 0.7) * 2
+      // A celebration may wait its turn; one that never got a turn settles without marks.
+      let u = g.map { t - $0.start } ?? -1
+      pose.tickSide = g?.side ?? 1
+      if let g, u >= 0, u < celebration {
+        if g.kind == .cheer { cheer(&pose, u, g.side) } else { twirl(&pose, u) }
+      } else if u >= celebration {
+        pose.ticks = 1 - span(u, celebration + 0.3, celebration + 0.7)
       }
     case .failed:
-      pose.shiftX = t < 0.45 ? 3 * sin(t * 42) * (1 - t / 0.45) : 0
+      let u = into(g, t, .shake)
+      pose.shiftX = u < 0 ? 0 : 3 * sin(u * 42) * (1 - u / 0.45)
       pose.lift = 1.5 * smoothstep(t / 0.3)
       pose.scaleY *= 1 - 0.03 * smoothstep(t / 0.3)
       pose.blink = 1
@@ -414,23 +526,26 @@ enum AvatarMotion {
     /// 0 = the style's own eyes, 1 = small round dots, as when concentrating.
     var dot: Double
   }
-  /// Whether a thinking avatar is in the wide-eyed beat of an idea at `t`.
-  static func ideaBeat(at t: Double) -> Bool {
-    let u = t.truncatingRemainder(dividingBy: thinkCycle)
-    return floor(t / thinkCycle).truncatingRemainder(dividingBy: 2) == 0 && u > 5.2 && u < 6.1
+  /// Whether `beat` is an idea in its wide-eyed moment at `t`.
+  static func ideaBeat(_ beat: Gesture?, at t: Double) -> Bool {
+    guard let beat, beat.kind == .idea else { return false }
+    return t - beat.start > 0.2 && t - beat.start < 1.1
   }
-  static func expression(for state: ActivityState, at t: Double) -> Expression {
+  static func expression(for state: ActivityState, at t: Double, plan: Plan = soloPlan)
+    -> Expression
+  {
     switch state {
     case .thinking:
       // Dots while pondering; the idea beat opens them wide again.
-      let idea = ideaBeat(at: t)
+      let idea = ideaBeat(plan.gesture, at: t) || ideaBeat(plan.previous, at: t)
       return Expression(
         open: idea ? 1.1 : 1, tilt: 0, happy: 0, mouth: idea ? 0.9 : 0.1, dot: idea ? 0 : 1)
     case .working: return Expression(open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0)
     case .waiting: return Expression(open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0)
     case .blocked: return Expression(open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0)
     case .done:
-      return t < celebration * 0.75
+      // Excited until most of the way through a celebration, which may have waited its turn.
+      return t < (plan.gesture?.start ?? 0) + celebration * 0.75
         ? Expression(open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0)
         : Expression(open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0)
     case .failed: return Expression(open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0)
@@ -451,17 +566,16 @@ enum AvatarMotion {
       dot: current.dot + (target.dot - current.dot) * k)
   }
   /// Moments in (from, to) when a state's target expression changes: the done state's switch
-  /// to happy eyes, and each wide-eyed idea beat of a thinking loop.
-  static func expressionSwitches(_ state: ActivityState, from: Double, to: Double) -> [Double] {
+  /// to happy eyes, and the wide-eyed moments of the plan's idea beats.
+  static func expressionSwitches(
+    _ state: ActivityState, from: Double, to: Double, plan: Plan = soloPlan
+  ) -> [Double] {
     var edges: [Double] = []
     switch state {
-    case .done: edges = [celebration * 0.75]
+    case .done: edges = [(plan.gesture?.start ?? 0) + celebration * 0.75]
     case .thinking:
-      let loop = 2 * thinkCycle
-      var k = max(0, floor((from - 6.1) / loop))
-      while k * loop + 5.2 < to {
-        edges += [k * loop + 5.2, k * loop + 6.1]
-        k += 1
+      for beat in [plan.previous, plan.gesture] {
+        if let beat, beat.kind == .idea { edges += [beat.start + 0.2, beat.start + 1.1] }
       }
     default: break
     }
@@ -470,17 +584,17 @@ enum AvatarMotion {
   /// The closed form of repeatedly applying `approach` from `start` since the state change.
   /// The target holds between its switches, so each stretch approaches its own target. Only
   /// the last few seconds matter, because the approach forgets the start within a second.
-  static func expression(from start: Expression, toward state: ActivityState, after t: Double)
-    -> Expression
-  {
+  static func expression(
+    from start: Expression, toward state: ActivityState, after t: Double, plan: Plan = soloPlan
+  ) -> Expression {
     var from = 0.0
     var current = start
     if t > 4 {
       from = t - 4
-      current = expression(for: state, at: from)
+      current = expression(for: state, at: from, plan: plan)
     }
-    for edge in expressionSwitches(state, from: from, to: t) + [t] {
-      let target = expression(for: state, at: (from + edge) / 2)
+    for edge in expressionSwitches(state, from: from, to: t, plan: plan) + [t] {
+      let target = expression(for: state, at: (from + edge) / 2, plan: plan)
       current = approach(current, target, edge - from)
       from = edge
     }
@@ -628,6 +742,8 @@ enum AvatarMotion {
     /// Residual trails from the previous state keep sweeping while this one settles in.
     var carry = 0.0
     var carrySweep = 0.0
+    /// Whether `since` marks a state change rather than the view appearing.
+    var entered = false
     static func entering(_ state: ActivityState, at date: Date) -> Snapshot {
       Snapshot(
         state: state, since: date, expression: AvatarMotion.expression(for: state, at: 0),
@@ -636,6 +752,8 @@ enum AvatarMotion {
   }
   struct Frame {
     var t: Double
+    /// The bot's own loop clock, which also drives a held prop.
+    var clock = 0.0
     var pose: Pose
     var expression: Expression
     var morph: Morph
@@ -646,10 +764,12 @@ enum AvatarMotion {
     /// Seconds since the prop last changed, which drives its pop-in. Still avatars report 1.
     var propAge = 1.0
   }
-  /// `prop` is the tool the caller wants held and `propSince` when it last changed.
+  /// `prop` is the tool the caller wants held and `propSince` when it last changed. `cue` comes
+  /// from `AvatarConductor`; without one the avatar counts from its own state change and plays
+  /// no named gestures.
   static func frame(
     _ snapshot: Snapshot, at date: Date, still: Bool, prop: AvatarProp? = nil,
-    propSince: Date = .distantPast, seed: Double = 0
+    propSince: Date = .distantPast, cue: Cue? = nil
   ) -> Frame {
     let state = snapshot.state
     let held = state == .working ? prop : nil
@@ -658,11 +778,14 @@ enum AvatarMotion {
         t: 0, pose: restingPose, expression: expression(for: state, at: .infinity),
         morph: morphTarget(state), trailLevel: 0, sweep: 0, prop: held)
     }
-    let t = max(0, date.timeIntervalSince(snapshot.since))
-    let pose = self.pose(state, t, reduce: false, prop: held, seed: seed)
+    let since = cue?.since ?? snapshot.since.timeIntervalSinceReferenceDate
+    let plan = cue?.plan ?? soloPlan
+    let t = max(0, date.timeIntervalSinceReferenceDate - since)
+    let pose = self.pose(state, t, reduce: false, prop: held, plan: plan)
     let carry = snapshot.carry * (1 - smoothstep(t / 0.6))
     return Frame(
-      t: t, pose: pose, expression: expression(from: snapshot.expression, toward: state, after: t),
+      t: t, clock: motionClock(t, plan), pose: pose,
+      expression: expression(from: snapshot.expression, toward: state, after: t, plan: plan),
       morph: morph(from: snapshot.morph, toward: state, after: t),
       trailLevel: max(pose.trails, carry),
       sweep: pose.trails >= carry ? pose.sweep : snapshot.carrySweep + t * 7,
@@ -670,12 +793,12 @@ enum AvatarMotion {
   }
   static func next(
     _ snapshot: Snapshot, to state: ActivityState, at date: Date, still: Bool,
-    prop: AvatarProp? = nil, seed: Double = 0
+    prop: AvatarProp? = nil, cue: Cue? = nil
   ) -> Snapshot {
-    let current = frame(snapshot, at: date, still: still, prop: prop, seed: seed)
+    let current = frame(snapshot, at: date, still: still, prop: prop, cue: cue)
     return Snapshot(
       state: state, since: date, expression: current.expression, morph: current.morph,
-      carry: current.trailLevel, carrySweep: current.sweep)
+      carry: current.trailLevel, carrySweep: current.sweep, entered: true)
   }
 }
 
@@ -1320,7 +1443,7 @@ struct AvatarArtwork {
       if held.opacity > 0.001 {
         held.drawLayer { context in
           AvatarPropArt.draw(
-            context, prop: prop, t: frame.t, grow: AvatarMotion.popIn(frame.propAge / 0.4))
+            context, prop: prop, t: frame.clock, grow: AvatarMotion.popIn(frame.propAge / 0.4))
         }
       }
     }
@@ -1361,15 +1484,20 @@ struct AvatarView: View {
   @State private var settling = true
   @State private var changes = 0
   @State private var propSince = Date()
+  /// Stands in for a name, so unnamed avatars each count as their own bot.
+  @State private var instance = UUID().uuidString
+  /// The bot's name when the caller gave one; its avatars share gestures.
+  private let botName: String?
 
   init(
     avatar: AvatarConfig = AvatarConfig(), state: ActivityState = .idle, size: CGFloat = 48,
-    name: String = "Assistant", forceReducedMotion: Bool = false, prop: AvatarProp? = nil
+    name: String? = nil, forceReducedMotion: Bool = false, prop: AvatarProp? = nil
   ) {
     self.avatar = avatar
     self.state = state
     self.size = size
-    self.name = name
+    self.name = name ?? "Assistant"
+    botName = name
     self.forceReducedMotion = forceReducedMotion
     self.prop = prop
     _snapshot = State(initialValue: .entering(state, at: Date()))
@@ -1378,8 +1506,19 @@ struct AvatarView: View {
   private var reduceMotion: Bool { systemReduceMotion || forceReducedMotion }
   private var portrait: Bool { avatar.mode == "portrait" }
   private var heldProp: AvatarProp? { portrait ? nil : prop }
-  /// Offsets idle gestures so avatars that settle together do not move in step.
-  private var seed: Double { AvatarMotion.motionSeed(name) }
+  /// Who the conductor sees: the conductor keeps different bots from gesturing alike.
+  private var owner: String { botName ?? instance }
+  /// This bot's cue for `snapshot`'s state, or nil while the avatar is still.
+  private func cue(_ snapshot: AvatarMotion.Snapshot, still: Bool, at date: Date)
+    -> AvatarMotion.Cue?
+  {
+    still
+      ? nil
+      : AvatarConductor.shared.cue(
+        owner: owner, state: snapshot.state, since: snapshot.since.timeIntervalSinceReferenceDate,
+        entered: snapshot.entered, held: heldProp != nil,
+        now: date.timeIntervalSinceReferenceDate)
+  }
   private var geometry: String { avatar.geometry }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
@@ -1412,7 +1551,8 @@ struct AvatarView: View {
     .onChange(of: state) { old, new in
       let now = Date()
       snapshot = AvatarMotion.next(
-        snapshot, to: new, at: now, still: still(old), prop: heldProp, seed: seed)
+        snapshot, to: new, at: now, still: still(old), prop: heldProp,
+        cue: cue(snapshot, still: still(old), at: now))
       changes += 1
     }
     .onChange(of: prop) { propSince = Date() }
@@ -1443,12 +1583,13 @@ struct AvatarView: View {
       .animation(minimumInterval: size >= 56 ? 1 / 60 : 1 / 30, paused: paused)
     ) { timeline in
       let date = paused ? Date() : timeline.date
+      let isStill = still(state)
       let artwork = AvatarArtwork(
         avatar: avatar, state: state,
         frame: AvatarMotion.frame(
-          snapshot, at: date, still: still(state), prop: heldProp, propSince: propSince,
-          seed: seed),
-        still: still(state), body: bodyPath(at: date), bodyColor: bodyColor(at: date),
+          snapshot, at: date, still: isStill, prop: heldProp, propSince: propSince,
+          cue: cue(snapshot, still: isStill, at: date)),
+        still: isStill, body: bodyPath(at: date), bodyColor: bodyColor(at: date),
         size: Double(size))
       // Motion can reach past the 116-unit box (trails, hops), as the web SVG overflows.
       let pad = size * 0.2
@@ -1506,11 +1647,13 @@ struct AvatarView: View {
       TimelineView(
         .animation(minimumInterval: 1 / 30, paused: !spinning || !visible || scenePhase != .active)
       ) { timeline in
-        let period = state == .working ? 1.1 : 2.6
+        // Each bot's ring turns at its own offset and pace, so rings never turn in step.
+        let offset = AvatarMotion.ringOffset(owner)
+        let period = (state == .working ? 1.1 : 2.6) * offset.pace
         let turn =
           spinning
-          ? timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
-            / period : 0
+          ? (timeline.date.timeIntervalSinceReferenceDate / period + offset.phase)
+            .truncatingRemainder(dividingBy: 1) : 0
         ZStack {
           if state == .working {
             Circle().inset(by: width / 2).trim(from: 0, to: 0.32)

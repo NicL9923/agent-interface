@@ -226,24 +226,31 @@ final class AvatarMotionTests: XCTestCase {
       XCTAssertTrue(paused(state, settling: true), "\(state) never ticks")
     }
   }
+  /// A plan granting one gesture, as the conductor would.
+  private func plan(_ kind: M.GestureKind, _ start: Double) -> M.Plan {
+    M.Plan(gesture: M.Gesture(kind: kind, side: 1, start: start))
+  }
   func testWorkingKeepsTheFaceForwardUntilASpinTurnsItAway() {
-    let scanEnd = M.workCycle - M.workSpin
-    for t in samples(0, scanEnd) {
-      let pose = M.pose(.working, t, reduce: false)
+    let spinning = plan(.spin, M.workScan)
+    for t in samples(0, M.workScan) {
+      let pose = M.pose(.working, t, reduce: false, plan: spinning)
       XCTAssertTrue(M.project(0, yaw: pose.yaw).visible, "t=\(t)")
       XCTAssertEqual(pose.trails, 0)
     }
-    let spin = samples(scanEnd, M.workCycle).map { M.pose(.working, $0, reduce: false) }
+    let spin = samples(M.workScan, M.workCycle).map {
+      M.pose(.working, $0, reduce: false, plan: spinning)
+    }
     XCTAssertTrue(spin.contains { !M.project(0, yaw: $0.yaw).visible })
     XCTAssertGreaterThan(spin.map(\.trails).max() ?? 0, 0.9)
   }
   func testCompletionSettlesIntoACalmHappyFace() {
-    let celebrating = samples(0, M.celebration).map { M.pose(.done, $0, reduce: false) }
+    let twirl = plan(.twirl, 0)
+    let celebrating = samples(0, M.celebration).map { M.pose(.done, $0, reduce: false, plan: twirl) }
     XCTAssertEqual(celebrating.map(\.trails).max(), 1)
-    let after = M.pose(.done, M.celebration + 2, reduce: false)
+    let after = M.pose(.done, M.celebration + 2, reduce: false, plan: twirl)
     XCTAssertEqual(after.trails, 0)
     XCTAssertTrue(M.project(0, yaw: after.yaw).visible)
-    XCTAssertEqual(M.expression(for: .done, at: M.celebration + 2).happy, 1)
+    XCTAssertEqual(M.expression(for: .done, at: M.celebration + 2, plan: twirl).happy, 1)
     let start = M.expression(for: .working, at: 0)
     XCTAssertEqual(
       M.expression(from: start, toward: .done, after: M.celebration + 2).happy, 1, accuracy: 0.001)
@@ -275,10 +282,11 @@ final class AvatarMotionTests: XCTestCase {
   func testSmoothingIsContinuousAcrossStateChanges() {
     let now = Date()
     let working = M.Snapshot.entering(.working, at: now)
+    let cue = M.Cue(since: now.timeIntervalSinceReferenceDate, plan: plan(.spin, M.workScan))
     // Leave mid-spin: the trails carry over and fade instead of vanishing.
     let midSpin = now.addingTimeInterval(M.workCycle - M.workSpin / 2)
-    let before = M.frame(working, at: midSpin, still: false)
-    let waiting = M.next(working, to: .waiting, at: midSpin, still: false)
+    let before = M.frame(working, at: midSpin, still: false, cue: cue)
+    let waiting = M.next(working, to: .waiting, at: midSpin, still: false, cue: cue)
     let after = M.frame(waiting, at: midSpin, still: false)
     XCTAssertGreaterThan(before.trailLevel, 0.9)
     XCTAssertEqual(after.trailLevel, before.trailLevel, accuracy: 0.0001)
