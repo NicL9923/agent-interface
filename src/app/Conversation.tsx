@@ -142,7 +142,7 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}`}>
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
-            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
+            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} botId={selected.id} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy" role="status">
               <Shimmer text={`${selected.name} is ${action}...`} />
             </div>

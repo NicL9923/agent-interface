@@ -137,8 +137,7 @@ import XCTest
     XCTAssertTrue(created.waitForExistence(timeout: 10), app.debugDescription)
     try capture("after-create-home")
     created.tap()
-    XCTAssertTrue(app.buttons["Configure Barn cat"].waitForExistence(timeout: 10))
-    app.buttons["Configure Barn cat"].tap()
+    app.openAssistantSettings("Barn cat")
     XCTAssertTrue(app.buttons["Avatar"].waitForExistence(timeout: 5))
     app.buttons["Avatar"].tap()
     let savedFox = app.buttons["avatarTile.family.fox"]

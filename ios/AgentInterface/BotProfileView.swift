@@ -33,7 +33,7 @@ struct BotProfileView: View {
   }
   private var header: some View {
     VStack(spacing: 10) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, size: 104, name: bot.name)
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, size: 104, name: bot.name, botId: bot.id)
         .padding(.bottom, 4)
       Text(bot.name).font(.title2.bold()).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
       VStack(spacing: 3) {

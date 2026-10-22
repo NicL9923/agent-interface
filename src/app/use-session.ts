@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
 import { api, ApiError, changeStream, clearResponseCache, setCsrf, write } from "../client-api";
+import { preferenceQueue } from "./preference-queue";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -144,18 +145,17 @@ export function useSession(events: SessionEvents) {
       document.removeEventListener("visibilitychange", wake);
     };
   }, [boot?.user.id, auth, refresh]);
-  const savePreferences = async (value: Preferences) => {
-    const epoch = identityEpoch.current;
-    try {
-      const saved = await write<Preferences>("/preferences", value, "PATCH");
-      if (epoch !== identityEpoch.current) return;
-      setBoot((previous) =>
-        previous ? { ...previous, preferences: saved } : previous,
-      );
-    } catch (e) {
-      if (epoch === identityEpoch.current) handlers.current.onError((e as Error).message);
-    }
-  };
+  const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
+  preferences.current ??= preferenceQueue({
+    send: value => write<Preferences>("/preferences", value, "PATCH"),
+    apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
+    failed: error => handlers.current.onError(error.message),
+    account: () => identityEpoch.current,
+  });
+  const savePreferences = (value: Preferences) => preferences.current!.save(value);
+  /** Applies an edit to the newest preferences, including a save still on its way. */
+  const editPreferences = (edit: (value: Preferences) => Preferences) =>
+    preferences.current!.edit(edit, bootRef.current?.preferences);
   const signedIn = () => {
     nextIdentity();
     bootstrapRequest.current = null;
@@ -170,6 +170,6 @@ export function useSession(events: SessionEvents) {
   };
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
-    identityEpoch, refresh, reconnect, savePreferences, signedIn, signedOut,
+    identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
   };
 }

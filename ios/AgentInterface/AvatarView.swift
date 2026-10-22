@@ -1486,18 +1486,21 @@ struct AvatarView: View {
   @State private var propSince = Date()
   /// Stands in for a name, so unnamed avatars each count as their own bot.
   @State private var instance = UUID().uuidString
-  /// The bot's name when the caller gave one; its avatars share gestures.
+  /// The bot's name when the caller gave one; without a bot ID, avatars with it share gestures.
   private let botName: String?
+  /// The bot's stable ID. Two bots can share a name; their avatars must still move independently.
+  private let botId: String?
 
   init(
     avatar: AvatarConfig = AvatarConfig(), state: ActivityState = .idle, size: CGFloat = 48,
-    name: String? = nil, forceReducedMotion: Bool = false, prop: AvatarProp? = nil
+    name: String? = nil, botId: String? = nil, forceReducedMotion: Bool = false, prop: AvatarProp? = nil
   ) {
     self.avatar = avatar
     self.state = state
     self.size = size
     self.name = name ?? "Assistant"
     botName = name
+    self.botId = botId
     self.forceReducedMotion = forceReducedMotion
     self.prop = prop
     _snapshot = State(initialValue: .entering(state, at: Date()))
@@ -1507,7 +1510,13 @@ struct AvatarView: View {
   private var portrait: Bool { avatar.mode == "portrait" }
   private var heldProp: AvatarProp? { portrait ? nil : prop }
   /// Who the conductor sees: the conductor keeps different bots from gesturing alike.
-  private var owner: String { botName ?? instance }
+  private var owner: String { AvatarView.motionOwner(botId: botId, name: botName, instance: instance) }
+  /// Who the conductor sees: a bot's ID wins over its name; an avatar with neither is its own bot.
+  static func motionOwner(botId: String?, name: String?, instance: String) -> String {
+    if let botId { return "bot:" + botId }
+    if let name { return "name:" + name }
+    return "avatar-" + instance
+  }
   /// This bot's cue for `snapshot`'s state, or nil while the avatar is still.
   private func cue(_ snapshot: AvatarMotion.Snapshot, still: Bool, at date: Date)
     -> AvatarMotion.Cue?

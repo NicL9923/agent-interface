@@ -111,7 +111,7 @@ struct ConversationView: View {
     Button { profileOpen = true } label: {
       // The avatar's shape sits inside its frame with room to move, so no extra gap is needed.
       VStack(spacing: 0) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: headerState, size: 40, name: bot.name)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: headerState, size: 40, name: bot.name, botId: bot.id)
         Text(bot.name).font(.caption.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
       }.frame(maxWidth: 220).contentShape(Rectangle())
       // The bar does not grow with text, so the name stops at a size the bar can hold.
@@ -331,7 +331,7 @@ struct ConversationView: View {
   /// The tool the working avatar can hold, as the web picks it: the latest running call while connected.
   private var liveActivity: some View {
     HStack(alignment: .center, spacing: 12) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 52, name: bot.name,
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 52, name: bot.name, botId: bot.id,
         prop: store.connected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
       ShimmerText(
         text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),

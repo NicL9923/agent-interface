@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Avatar, faces, silhouette } from "../src/components/Avatar";
+import { Avatar, faces, motionOwner, silhouette } from "../src/components/Avatar";
 import { avatarShapes, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
 import { seasonalAvatar, seasonalChoices } from "../src/components/seasonal-avatars";
 
@@ -180,6 +180,13 @@ describe("avatar animation loop", () => {
     await render("blocked");
     expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Needs your help");
   });
+});
+
+it("keeps two bots that share a name apart in the motion conductor", () => {
+  expect(motionOwner("ranch", "Helper", "a")).not.toBe(motionOwner("kitchen", "Helper", "b"));
+  expect(motionOwner("ranch", "Helper", "a")).toBe(motionOwner("ranch", "Renamed", "b"));
+  expect(motionOwner(undefined, "Welcome 1", "a")).toBe(motionOwner(undefined, "Welcome 1", "b"));
+  expect(motionOwner(undefined, undefined, "a")).not.toBe(motionOwner(undefined, undefined, "b"));
 });
 
 describe("avatar silhouettes", () => {

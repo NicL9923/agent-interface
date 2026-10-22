@@ -710,10 +710,11 @@ struct BotSettingsView: View {
       await store.refreshBootstrap()
       savedAvatar = avatar
       notice = "Avatar saved"
-      // A retried avatar from creation finishes the job the Create button started.
+      // A retried avatar from creation finishes the job the Create button started, unless
+      // other edits made meanwhile still need saving.
       if avatarFailure != nil {
         avatarFailure = nil
-        closeSheet()
+        if !dirty { closeSheet() }
       }
     }
   }

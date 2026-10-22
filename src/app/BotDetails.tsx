@@ -61,7 +61,7 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
     </header>
     <div className="sheet-body">
       <div className="bot-details-hero">
-        <Avatar avatar={bot.avatar} state={avatarState === "done" ? "idle" : avatarState} size={112} name={bot.name} />
+        <Avatar avatar={bot.avatar} state={avatarState === "done" ? "idle" : avatarState} size={112} name={bot.name} botId={bot.id} />
         <h2 id={titleId} tabIndex={-1}>{bot.name}</h2>
         <p>{botSummary(bot)}</p>
         {bot.description && <p className="bot-details-description">{bot.description}</p>}

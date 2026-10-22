@@ -219,11 +219,20 @@ const morphTargets = (state: ActivityState) => ({
   bang: state === "blocked" ? 1 : 0,
 });
 
+/**
+ * Who the conductor sees. A bot's ID wins over its name, because two bots can share a name and
+ * must still move independently; an avatar with neither counts as its own bot.
+ */
+export function motionOwner(botId: string | undefined, name: string | undefined, instance: string) {
+  return botId !== undefined ? `bot:${botId}` : name !== undefined ? `name:${name}` : `avatar-${instance}`;
+}
+
 export function Avatar({
   avatar = defaultAvatar,
   state = "idle",
   size = 48,
   name,
+  botId,
   reducedMotion = false,
   showState = false,
   prop,
@@ -231,8 +240,10 @@ export function Avatar({
   avatar?: AvatarConfig;
   state?: ActivityState;
   size?: number;
-  /** The bot's name. Its avatars share gestures; unnamed avatars each count as their own bot. */
+  /** The bot's name, for its label. Without a `botId`, avatars with the same name share gestures. */
   name?: string;
+  /** The bot's stable ID. Two bots can share a name; their avatars must still move independently. */
+  botId?: string;
   reducedMotion?: boolean;
   showState?: boolean;
   /** A tool to hold while working, such as a magnifying glass during a search. */
@@ -252,7 +263,7 @@ export function Avatar({
   const id = useId().replace(/:/g, "");
   const label = name ?? "Assistant";
   // The conductor keeps different bots from gesturing alike; an unnamed avatar is its own bot.
-  const owner = name ?? `avatar-${id}`;
+  const owner = motionOwner(botId, name, id);
   const [, setFrame] = useState(0);
   // Mutable animation clock. Only commit-phase effects and frame callbacks write
   // it, so an interrupted or replayed render never disturbs the running motion.

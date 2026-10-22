@@ -121,6 +121,13 @@ final class AvatarConductorTests: XCTestCase {
     XCTAssertNotNil(header.plan.gesture)
   }
 
+  func testTwoBotsThatShareANameStayApart() {
+    XCTAssertNotEqual(AvatarView.motionOwner(botId: "ranch", name: "Helper", instance: "a"), AvatarView.motionOwner(botId: "kitchen", name: "Helper", instance: "b"))
+    XCTAssertEqual(AvatarView.motionOwner(botId: "ranch", name: "Helper", instance: "a"), AvatarView.motionOwner(botId: "ranch", name: "Renamed", instance: "b"))
+    XCTAssertEqual(AvatarView.motionOwner(botId: nil, name: "Welcome 1", instance: "a"), AvatarView.motionOwner(botId: nil, name: "Welcome 1", instance: "b"))
+    XCTAssertNotEqual(AvatarView.motionOwner(botId: nil, name: nil, instance: "a"), AvatarView.motionOwner(botId: nil, name: nil, instance: "b"))
+  }
+
   func testBotsOnScreenTogetherKeepTheirOwnPhaseAndPace() {
     let conductor = AvatarConductor()
     let plans = (0..<8).map {

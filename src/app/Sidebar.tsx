@@ -93,7 +93,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
                   onClick={() => onSelectBot(bot.id)}>
                   <span className="pinned-avatar">
                     {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
-                    <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} />
+                    <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} />
                     <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                   </span>
                   <span className="pinned-copy">

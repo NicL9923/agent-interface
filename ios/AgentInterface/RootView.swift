@@ -437,7 +437,7 @@ struct BotListView: View {
     return Button { open(bot) } label: {
       VStack(spacing: 8) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
-          size: sizeClass == .compact ? 92 : 60, name: bot.name)
+          size: sizeClass == .compact ? 92 : 60, name: bot.name, botId: bot.id)
           .overlay(alignment: .bottomTrailing) {
             Image(systemName: "pin.fill").font(.system(size: pinBadge)).padding(5)
               .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)

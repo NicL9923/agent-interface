@@ -132,12 +132,12 @@ export function App() {
   const avatarState = state === "done" ? "idle" : state;
   const open = (next: Panel) => setPanel(next);
   const detailsBot = panel?.kind === "details" ? boot.bots.find(bot => bot.id === panel.botId) : undefined;
-  const togglePin = (bot: Bot) => void session.savePreferences({
-    ...boot.preferences,
-    favorites: boot.preferences.favorites.includes(bot.id)
-      ? boot.preferences.favorites.filter(id => id !== bot.id)
-      : [...boot.preferences.favorites, bot.id],
-  });
+  const togglePin = (bot: Bot) => void session.editPreferences(preferences => ({
+    ...preferences,
+    favorites: preferences.favorites.includes(bot.id)
+      ? preferences.favorites.filter(id => id !== bot.id)
+      : [...preferences.favorites, bot.id],
+  }));
   return (
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} view={view} state={state} connectionLost={connectionLost} offline={offline}
@@ -147,7 +147,7 @@ export function App() {
         onSettings={() => open({ kind: "preferences" })}
         onPin={togglePin}
         onBotSettings={bot => open({ kind: "settings", bot })}
-        onMoveToSection={(bot, sectionId) => void session.savePreferences(moveBotToSection(boot.preferences, bot.id, sectionId))}
+        onMoveToSection={(bot, sectionId) => void session.editPreferences(preferences => moveBotToSection(preferences, bot.id, sectionId))}
         onNewSection={bot => open({ kind: "details", botId: bot.id, newSection: true })} />
       <main className="conversation-panel" inert={mobile && railOpen}>
         <ChatHeader view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
