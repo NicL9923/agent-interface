@@ -1,0 +1,10 @@
+{
+  "checkedAt": "2026-10-22T08:47:00.883Z",
+  "authenticatedBootstrap": true,
+  "nativeConnected": true,
+  "latestBuild": 11,
+  "updateUrl": "https://testflight.apple.com/v1/app/6823644380",
+  "release": "/home/nicolas/.local/share/agent-interface/releases/release-56a11444-20261022T084454Z",
+  "webBuild": "82b77e60c003a34a",
+  "temporarySessionRemoved": true
+}
