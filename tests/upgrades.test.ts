@@ -240,16 +240,17 @@ worker.Worker(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]).recovery(sys.argv
 it("starts the worker as its own systemd user unit when the app runs under systemd", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
   try {
-    expect(transientRunner({}, "/bin/sh")).toBeUndefined();
+    expect(transientRunner({}, "/bin/sh")).toBe(false);
     expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, "/bin/sh")).toBe("/bin/sh");
-    expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, join(directory, "missing"))).toBeUndefined();
+    expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, join(directory, "missing"))).toBe(false);
     const runner = join(directory, "systemd-run"), seen = join(directory, "argv");
     writeFileSync(runner, `#!/bin/sh\nprintf '%s\\n' "$@" > ${seen}\n`, { mode: 0o700 });
     const child = launchWorker({ python: "/py", workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py", runner);
     await new Promise(done => child.on("exit", done));
     const argv = readFileSync(seen, "utf8").trim().split("\n");
     const log = readdirSync(directory).find(name => name.startsWith("worker-launch-"))!;
-    expect(argv.slice(0, 3)).toEqual(["--user", "--collect", "--quiet"]);
+    expect(argv.slice(0, 5)).toEqual(["--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no"]);
+    expect(argv).toContain("--property=ExitType=cgroup");
     expect(argv).toContain("--property=UMask=0077");
     expect(argv).toContain(`--property=StandardOutput=append:${join(directory, log)}`);
     expect(argv).toContain("--setenv=LANG=C.UTF-8");
@@ -269,7 +270,7 @@ it("keeps each worker launch's startup output privately instead of discarding it
     const python = join(directory, "python");
     writeFileSync(python, "#!/bin/sh\necho \"Traceback: worker could not start $7\" >&2\nexit 3\n", { mode: 0o700 });
     const launch = async (action: string) => {
-      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py", undefined);
+      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py", false);
       return new Promise(done => child.on("exit", done));
     };
     expect(await launch("check")).toBe(3);

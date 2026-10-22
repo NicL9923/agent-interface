@@ -17,11 +17,11 @@ const LAUNCH_LOGS_KEPT = 10;
  * the app's child can never pass the browser probe. Under systemd the worker runs as its own
  * transient user unit instead, outside the app's namespace and cgroup.
  */
-export function transientRunner(env: NodeJS.ProcessEnv = process.env, runner = "/usr/bin/systemd-run") {
-  return env.INVOCATION_ID && env.XDG_RUNTIME_DIR && existsSync(runner) ? runner : undefined;
+export function transientRunner(env: NodeJS.ProcessEnv = process.env, runner = "/usr/bin/systemd-run"): string | false {
+  return env.INVOCATION_ID && env.XDG_RUNTIME_DIR && existsSync(runner) ? runner : false;
 }
 export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
-  script = resolve("scripts/hermes-upgrade-worker.py"), runner = transientRunner()) {
+  script = resolve("scripts/hermes-upgrade-worker.py"), runner: string | false = transientRunner()) {
   const directory = settings.stateDirectory;
   const logs = readdirSync(directory).filter(name => /^worker-launch-.+\.log$/.test(name))
     .map(name => ({ name, at: lstatSync(join(directory, name)).mtimeMs })).sort((a, b) => b.at - a.at);
@@ -34,8 +34,12 @@ export function launchWorker(settings: WorkerSettings, args: { action: string; o
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C.UTF-8" };
   try {
     if (!runner) return spawn(settings.python, argv, { detached: true, stdio: ["ignore", log, log], env });
-    const child = spawn(runner, ["--user", "--collect", "--quiet", `--unit=agent-interface-upgrade-${randomUUID()}`,
-      `--working-directory=${process.cwd()}`, "--property=UMask=0077",
+    // exec: systemd-run fails if Python itself cannot start. ExitType=cgroup: hooks the worker
+    // left behind keep running to their end instead of being killed when it exits, as they
+    // did as orphans before. Paths reach Python as written, with no `$` expansion.
+    const child = spawn(runner, ["--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no",
+      `--unit=agent-interface-upgrade-${randomUUID()}`, `--working-directory=${process.cwd()}`,
+      "--property=ExitType=cgroup", "--property=UMask=0077",
       `--property=StandardOutput=append:${logPath}`, `--property=StandardError=append:${logPath}`,
       ...Object.entries(env).map(([key, value]) => `--setenv=${key}=${value}`), "--", settings.python, ...argv],
     { stdio: ["ignore", log, log], env: { ...env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "" } });
