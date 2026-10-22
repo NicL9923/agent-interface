@@ -23,6 +23,16 @@ Pin assistants from a conversation header or by long-pressing an assistant. Pins
 appear as large avatars above the household links; the remaining list shows each
 assistant's latest message and date. Settings saves changes as you make them.
 
+New assistant is two short steps: name and look, with the full avatar editor and a
+live preview, then role and model. Create saves the assistant and then its avatar;
+if the avatar save fails, the sheet stays open on that assistant's Avatar settings
+with the chosen look and a retry. Portraits are added after creation. In Settings,
+**Following N assistants** opens one list of assistants to follow, and **Home
+sections** lists each section with its count. Tap a section to rename it, choose its
+assistants or delete it. An assistant belongs to one section, so choosing it moves it.
+Settings and Hermes updates show when the running and offered Hermes revisions were
+released, with the short commit hash as a detail.
+
 Long-press a settled assistant reply to copy the whole answer, share it, or save a reference. The conversation actions menu includes Find in loaded messages and pinning. Search opens a matching message when Hermes supplies a pointer, including after compression moves it to another history page.
 
 The **Today** screen shows recent canonical events, new replies, pending decisions,

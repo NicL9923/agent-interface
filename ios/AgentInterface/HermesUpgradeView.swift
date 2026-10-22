@@ -67,15 +67,32 @@ struct HermesUpgradeView: View {
         }
       }.padding(.vertical, 8)
       if let status, status.phase != "idle" { stepList(status) }
-      LabeledContent("Running now", value: status?.current?.displayVersion ?? store.bootstrap?.connection.version ?? "Checking…")
+      if let current = status?.current {
+        revisionRow("Running now", title: current.displayVersion, detail: current.displayDetail)
+      } else {
+        let connection = store.bootstrap?.connection
+        let date = HermesRevisionText.date(connection?.revisionDate)
+        revisionRow("Running now", title: connection?.version.map { HermesRevisionText.title(revision: $0, version: nil, date: date) } ?? "Checking…",
+          detail: connection?.hermesDetail)
+      }
       if let candidate = status?.candidate {
-        LabeledContent(status?.phase == "ready" ? "Checked update" : "Update", value: candidate.displayVersion)
+        revisionRow(status?.phase == "ready" ? "Checked update" : "Update", title: candidate.displayVersion, detail: candidate.displayDetail)
         if let notes = candidate.notesUrl, let url = URL(string: notes), url.scheme == "https" {
           Link("What's new", destination: url)
         }
       }
       if let status, !status.busyBots.isEmpty { Text(busyMessage(status)).foregroundStyle(Palette.attention) }
     }
+  }
+  /// A release date reads first; the short hash sits under it for anyone matching builds.
+  private func revisionRow(_ label: String, title: String, detail: String?) -> some View {
+    LabeledContent {
+      VStack(alignment: .trailing, spacing: 2) {
+        Text(title)
+        if let detail { Text(detail).font(.caption.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled) }
+      }
+    } label: { Text(label) }
+      .accessibilityElement(children: .combine)
   }
   private var placeholder: String {
     store.upgrade.busy ? "Getting the current version and update status…" : "Find the newest Hermes and test it before installing it."

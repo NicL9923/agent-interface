@@ -129,6 +129,11 @@
     nonisolated(unsafe) static var avatar: [String: Any] = [
       "mode": "geometric", "shape": "blob", "color": "#1084FE", "eyes": "oval", "accessory": "none",
     ]
+    /// Assistants made through New assistant, and how many of their avatar saves should fail.
+    nonisolated(unsafe) static var createdBots: [[String: Any]] = []
+    nonisolated(unsafe) static var avatarFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] == "1" ? 1 : 0
+    static let currentRevision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
+    static let candidateRevision = "8e1d4c7b2a9f6e3d0c5b8a7f4e1d2c3b6a9f0e8d"
     nonisolated(unsafe) static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
     nonisolated(unsafe) static var inference: [String: Any] = ["reasoning": "medium", "speed": "normal"]
     nonisolated(unsafe) static var ranchModel = (provider: "openrouter", model: "configured-model")
@@ -152,7 +157,7 @@
           "id": "personal", "name": "My assistant", "model": "configured-model", "shared": false,
           "ownerId": "native-test", "activity": "idle",
         ],
-      ]
+      ] + createdBots
     }
     nonisolated(unsafe) static let user: [String: Any] = [
       "id": "native-test", "name": "Local test member", "email": "test@localhost.invalid",
@@ -231,7 +236,7 @@
               "email": "two@localhost.invalid",
             ],
           ], "bots": Self.bots, "preferences": Self.preferences,
-          "connection": ["connected": true, "code": "ready", "version": "UI fixture"],
+          "connection": ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"],
           "csrfToken": NSNull(),
           "capabilities": Dictionary(
             uniqueKeysWithValues: [
@@ -432,10 +437,13 @@
         case "ready": fixtureMessage = "The candidate passed compatibility checks."
         default: fixtureMessage = "The server is \(phase) the fixture installation."
         }
+        // Real revisions are commit hashes with commit dates; the app leads with the date.
+        let oldRevision: [String: Any] = ["revision": Self.currentRevision, "committedAt": "2026-10-14T16:20:00Z"]
+        let newRevision: [String: Any] = ["revision": Self.candidateRevision, "committedAt": "2026-10-20T18:05:00Z", "notesUrl": "https://example.com/hermes/releases"]
         let upgrade: [String: Any] = [
           "available": true, "phase": phase,
-          "current": ["revision": phase == "succeeded" ? "fixture-new-revision" : "fixture-old-revision", "version": phase == "succeeded" ? "Fixture 2.0" : "Fixture 1.0"],
-          "candidate": ["revision": "fixture-new-revision", "version": "Fixture 2.0"],
+          "current": phase == "succeeded" ? newRevision : oldRevision,
+          "candidate": newRevision,
           "message": fixtureMessage,
           "checks": fixtureChecks,
           "canCheck": ["idle", "ready", "succeeded"].contains(phase),
@@ -453,7 +461,7 @@
         if method == "PUT" { Self.readPosition = body }
         object = Self.readPosition
       } else if path == "/api/connection/retry" {
-        object = ["connected": true, "code": "ready", "version": "UI fixture"]
+        object = ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"]
       } else if path.hasSuffix("/messages") {
         let id = body["requestId"] as? String ?? UUID().uuidString
         Self.messages.append([
@@ -498,6 +506,13 @@
           if method == "PATCH" { let favorites = Self.preferences["modelFavorites"]; Self.preferences = body; Self.preferences["modelFavorites"] = favorites }
           object = Self.preferences
         }
+      } else if path.hasSuffix("/avatar"), let index = Self.createdBots.firstIndex(where: { path.hasPrefix("/api/bots/\($0["id"] as? String ?? "")/") }) {
+        if Self.avatarFailures > 0 {
+          Self.avatarFailures -= 1; status = 503; object = ["error": "Fixture avatar save failed"]
+        } else {
+          Self.createdBots[index]["avatar"] = body
+          object = body
+        }
       } else if path.hasSuffix("/avatar") {
         Self.avatar = body
         object = body
@@ -535,8 +550,10 @@
         object = detail
       } else if path == "/api/bots", method == "POST" {
         var bot = body
-        bot["id"] = "created"
+        bot["id"] = "created-\(Self.createdBots.count + 1)"
         bot["activity"] = "idle"
+        bot.removeValue(forKey: "confirmModel")
+        Self.createdBots.append(bot)
         object = bot
       } else if path == "/api/models" {
         object = ["provider": "openrouter", "model": Self.ranchModel.model, "providers": [

@@ -2,8 +2,19 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BotSettingsView: View {
-  var bot: Bot?
-  var close: (() -> Void)? = nil
+  private let initialBot: Bot?
+  var close: (() -> Void)?
+  init(bot: Bot?, close: (() -> Void)? = nil) {
+    initialBot = bot
+    self.close = close
+  }
+  /// Set when creation succeeded but the avatar did not save, turning the sheet into that
+  /// assistant's settings so the chosen look can be retried instead of lost.
+  @State private var createdBot: Bot?
+  /// The assistant being edited: the one opened, or the one this sheet just created.
+  private var bot: Bot? { initialBot ?? createdBot }
+  @State private var creationStep = CreationStep.look
+  @State private var avatarFailure: String?
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var form = BotInput()
@@ -73,11 +84,10 @@ struct BotSettingsView: View {
     if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
     if tab == "Connections" {
       if let bot { IntegrationsView(botId: bot.id) }
-      else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
     } else if tab == "Logins" {
-      if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its Hermes logins.").padding(); Spacer() }
+      if let bot { VaultView(botId: bot.id) }
     } else if tab == "Memory" {
-      if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before viewing its Hermes memory.").padding(); Spacer() }
+      if let bot { MemoryDrawer(botId: bot.id) }
     } else { Form {
       switch tab {
       case "Details": details
@@ -91,6 +101,58 @@ struct BotSettingsView: View {
   var body: some View {
     NavigationStack { routinePresentations(editor) }
   }
+  enum CreationStep { case look, role }
+  /// Creation is two short steps in one sheet: name and look, then role and model. Tabs that need
+  /// an existing assistant stay hidden until it exists.
+  @ViewBuilder private var creationContent: some View {
+    if let error { ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal) }
+    Form {
+      creationHeader
+      Section { unavailable("botConfiguration") }
+      if creationStep == .look {
+        avatarPreview
+        nameSection
+        avatarControls
+        Section {
+          Button("Next: role and model") { creationStep = .role }.disabled(!nameReady)
+            .accessibilityIdentifier("creationNextBottom")
+        } footer: { if !nameReady { Text("Name the assistant to continue.") } }
+      } else {
+        roleSections
+        saveSection
+      }
+    }.id(creationStep) // Each step opens at its top, not at the last step's scroll position.
+      .householdListBackground().disabled(busy)
+  }
+  private var creationHeader: some View {
+    Section {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(creationStep == .look ? "Step 1 of 2" : "Step 2 of 2").font(.caption).foregroundStyle(.secondary)
+        Text(creationStep == .look ? "Name and look" : "Role and model").font(.title3.bold())
+          .accessibilityAddTraits(.isHeader)
+      }.accessibilityElement(children: .combine).accessibilityIdentifier("creationStep")
+    }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+  }
+  @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
+    ToolbarItem(placement: .cancellationAction) {
+      if bot == nil && creationStep == .role {
+        Button { creationStep = .look } label: { Label("Back", systemImage: "chevron.backward").labelStyle(.titleAndIcon) }
+          .disabled(busy).accessibilityIdentifier("creationBack")
+      } else {
+        Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
+      }
+    }
+    if bot == nil {
+      ToolbarItem(placement: .confirmationAction) {
+        if creationStep == .look {
+          Button("Next") { creationStep = .role }.disabled(!nameReady).accessibilityIdentifier("creationNext")
+        } else {
+          Button(progress.label("details", idle: "Create")) { saveBot() }.disabled(busy || !canSave)
+            .accessibilityIdentifier("creationCreate")
+        }
+      }
+    }
+  }
   /// A message belongs to the screen that produced it, so it does not follow you to another tab.
   private func selectTab(_ title: String) {
     tab = title
@@ -99,18 +161,18 @@ struct BotSettingsView: View {
   }
   private var editor: some View {
     VStack(spacing: 0) {
-      tabBar
-      if bot != nil && !detailLoaded {
-        if let error { ErrorBanner(message: error); Button("Retry settings") { Task { await loadTab() } } }
-        else { ProgressView("Loading assistant settings…") }
-      }
-      tabContent
-    }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
+      if bot == nil {
+        creationContent
+      } else {
+        tabBar
+        if !detailLoaded {
+          if let error { ErrorBanner(message: error); Button("Retry settings") { Task { await loadTab() } } }
+          else { ProgressView("Loading assistant settings…") }
         }
+        tabContent
       }
+    }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
+      .toolbar { editorToolbar }
       .onAppear {
         guard !initialized else { return }
         initialized = true
@@ -198,7 +260,12 @@ struct BotSettingsView: View {
     Section {
       unavailable("botConfiguration")
     }
-    nameAndInstructions
+    nameSection
+    roleSections
+    saveSection
+  }
+  @ViewBuilder private var roleSections: some View {
+    descriptionAndInstructions
     Section {
       Button(interactiveEnabled ? "Interactive replies enabled" : "Enable interactive replies") {
         form.instructions = (form.instructions.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + NativeInteractiveReplyInstructions)
@@ -230,12 +297,16 @@ struct BotSettingsView: View {
     } header: { Text("Enabled existing MCP servers") } footer: {
       Text("Only existing Hermes connections can be configured here.")
     }
+  }
+  private var nameReady: Bool { !form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  private var canSave: Bool {
+    store.supports("botConfiguration") && store.connected && nameReady
+      && !form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && form.instructions.count <= SettingsLimits.instructions
+  }
+  @ViewBuilder private var saveSection: some View {
     Section {
-      Button(progress.label("details", idle: bot == nil ? "Create assistant" : "Save changes")) { saveBot() }.disabled(
-        !store.supports("botConfiguration") || !store.connected
-          || form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || form.instructions.count > SettingsLimits.instructions)
+      Button(progress.label("details", idle: bot == nil ? "Create assistant" : "Save changes")) { saveBot() }.disabled(!canSave)
       if bot != nil {
         Button("Delete assistant", role: .destructive) { deleteConfirm = true }.disabled(
           !store.supports("botConfiguration") || !store.connected)
@@ -243,13 +314,15 @@ struct BotSettingsView: View {
     }
   }
   /// Split out of `details` so the type checker stays fast on slower CI machines.
-  @ViewBuilder private var nameAndInstructions: some View {
+  private var nameSection: some View {
     Section("Name") {
       TextField("Name", text: $form.name)
         .onChange(of: form.name) { _, value in
           if value.count > SettingsLimits.name { form.name = String(value.prefix(SettingsLimits.name)) }
         }
     }
+  }
+  @ViewBuilder private var descriptionAndInstructions: some View {
     Section("Description") { TextField("Description", text: $form.description, axis: .vertical).lineLimit(1...4) }
     Section {
       TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel("Assistant instructions")
@@ -267,16 +340,27 @@ struct BotSettingsView: View {
   }
   private var interactiveEnabled: Bool { form.instructions.contains(NativeInteractiveReplyInstructions) }
   @ViewBuilder private var avatarEditor: some View {
+    if let avatarFailure { avatarFailureSection(avatarFailure) }
+    avatarPreview
+    avatarControls
+  }
+  private var avatarPreview: some View {
+    Section {
+      AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name,
+        caption: bot == nil ? form.name : nil)
+    }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+  }
+  @ViewBuilder private var avatarControls: some View {
     Group {
       Section {
-        AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name)
-      }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
-      Section("Style") {
         Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
           Text("Geometric").tag("geometric")
           Text("Mascot").tag("mascot")
-          Text("Portrait").tag("portrait")
+          if bot != nil { Text("Portrait").tag("portrait") }
         }.pickerStyle(.segmented).accessibilityIdentifier("avatarStyle")
+      } header: { Text("Style") } footer: {
+        // A portrait is stored with the assistant, so it can only be added once it exists.
+        if bot == nil { Text("Want a portrait? Upload or generate one in Avatar settings after you create the assistant.") }
       }
       if avatar.mode == "portrait" {
         Section("Portrait") {
@@ -340,11 +424,21 @@ struct BotSettingsView: View {
           }
         }
       }
-      Section {
-        Button(progress.label("avatar", idle: "Save avatar")) { saveAvatar() }.disabled(
-          bot == nil || !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
-        if bot == nil { Text("Create the assistant before saving an avatar.").font(.footnote).foregroundStyle(.secondary) }
+      if bot != nil {
+        Section {
+          Button(progress.label("avatar", idle: "Save avatar")) { saveAvatar() }.disabled(
+            !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
+        }
       }
+    }
+  }
+  /// Creation went through but the look did not save: say so plainly and offer the retry here.
+  private func avatarFailureSection(_ message: String) -> some View {
+    Section {
+      Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.danger)
+        .accessibilityIdentifier("avatarFailure")
+      Button(progress.label("avatar", idle: "Retry saving avatar")) { saveAvatar() }
+        .disabled(busy || !store.connected).accessibilityIdentifier("retryAvatar")
     }
   }
   private func characterTiles(_ families: [(id: String, label: String)]) -> some View {
@@ -411,9 +505,7 @@ struct BotSettingsView: View {
   @ViewBuilder private func capabilities(_ kind: String) -> some View {
     Section {
       unavailable(kind)
-      if bot == nil {
-        Text("Create the assistant before configuring its capabilities.")
-      } else {
+      if bot != nil {
         let items = kind == "tools" ? tools : skills
         ForEach(items) { item in
           Toggle(
@@ -511,8 +603,6 @@ struct BotSettingsView: View {
       if routines.isEmpty && store.supports("routines") {
         Section { Text("No routines for \(bot.name).") }
       }
-    } else {
-      Section { Text("Create the assistant before adding routines.") }
     }
   }
   @ViewBuilder private func unavailable(_ key: String) -> some View {
@@ -568,6 +658,7 @@ struct BotSettingsView: View {
       return
     }
     personalConfirmed = personal
+    if bot == nil { createBot(confirmed: confirmed); return }
     action(progressKey: "details") {
       guard let api = store.api else { return }
       var value = form
@@ -579,19 +670,51 @@ struct BotSettingsView: View {
       await store.refreshBootstrap()
       savedForm = form
       notice = bot?.shared == true ? "Changes saved for both household members." : "Assistant saved."
-      if bot == nil { closeSheet() }
     }
+  }
+  /// Creates the assistant, then saves the look chosen on the first step. The server takes the
+  /// avatar separately, so a failed avatar save keeps this sheet open on the new assistant's
+  /// Avatar settings with the choice intact and a retry.
+  private func createBot(confirmed: Bool) {
+    action(progressKey: "details") {
+      guard let api = store.api else { return }
+      var value = form
+      value.confirmModel = confirmed
+      let created: Bot = try await api.write("/bots", value, method: "POST")
+      savedForm = form
+      do {
+        try await putAvatar(created.id, api)
+      } catch {
+        await store.refreshBootstrap()
+        detailLoaded = true
+        createdBot = created
+        tab = "Avatar"
+        avatarFailure = "\(created.name) was created, but its avatar wasn't saved yet."
+        self.error = error.localizedDescription
+        return
+      }
+      savedAvatar = avatar
+      await store.refreshBootstrap()
+      closeSheet()
+    }
+  }
+  private func putAvatar(_ id: String, _ api: APIClient) async throws {
+    var value = avatar
+    if value.mode == "mascot" { value.family = value.family ?? "sprout" }
+    let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", value, method: "PUT")
   }
   private func saveAvatar() {
     action(progressKey: "avatar") {
       guard let bot, let api = store.api else { return }
-      var value = avatar
-      if value.mode == "mascot" { value.family = value.family ?? "sprout" }
-      let _: AvatarConfig = try await api.write(
-        "/bots/\(APIClient.component(bot.id))/avatar", value, method: "PUT")
+      try await putAvatar(bot.id, api)
       await store.refreshBootstrap()
       savedAvatar = avatar
       notice = "Avatar saved"
+      // A retried avatar from creation finishes the job the Create button started.
+      if avatarFailure != nil {
+        avatarFailure = nil
+        closeSheet()
+      }
     }
   }
   private func generatePortrait() {
@@ -775,11 +898,18 @@ private struct AvatarStage: View {
   var avatar: AvatarConfig
   @Binding var state: ActivityState
   var name: String
+  /// The name as it is being typed, shown under the avatar while creating.
+  var caption: String? = nil
   @Environment(\.colorScheme) private var scheme
   private let states: [ActivityState] = [.idle, .thinking, .working, .waiting, .blocked, .done]
   var body: some View {
     VStack(spacing: 18) {
       AvatarView(avatar: avatar, state: state, size: 124, name: name).padding(.top, 12)
+      if let caption {
+        Text(caption.trimmingCharacters(in: .whitespaces).isEmpty ? "Your new assistant" : caption)
+          .font(.title3.weight(.semibold)).lineLimit(1).foregroundStyle(caption.isEmpty ? .secondary : .primary)
+          .accessibilityHidden(true)
+      }
       ChipFlow(spacing: 6) {
         ForEach(states, id: \.self) { option in
           let selected = option == state

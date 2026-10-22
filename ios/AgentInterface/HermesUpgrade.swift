@@ -79,3 +79,46 @@ final class HermesUpgrade {
     }
   }
 }
+
+/// People recognize a Hermes build by when it was made, not by its commit hash. The date leads;
+/// the short hash stays available as a quiet detail, and stands in when the server sends no date.
+enum HermesRevisionText {
+  static func shortHash(_ revision: String) -> String { String(revision.prefix(7)) }
+  /// "Oct 20, 2026", or nil when the date is missing or unreadable.
+  static func date(_ value: String?, locale: Locale = .autoupdatingCurrent, timeZone: TimeZone = .autoupdatingCurrent) -> String? {
+    guard let value, let date = ServerDate.parse(value) else { return nil }
+    var style = Date.FormatStyle(date: .abbreviated, time: .omitted, locale: locale)
+    style.timeZone = timeZone
+    return date.formatted(style)
+  }
+  /// The main label: "Released Oct 20, 2026", else the version, else the short hash.
+  static func title(revision: String, version: String?, date: String?) -> String {
+    if let date { return "Released \(date)" }
+    return version ?? shortHash(revision)
+  }
+  /// The quiet line under a dated title: the version, if any, and the short hash.
+  static func detail(revision: String, version: String?, date: String?) -> String? {
+    guard date != nil, !revision.isEmpty else { return nil }
+    return [version, shortHash(revision)].compactMap { $0 }.joined(separator: " · ")
+  }
+}
+
+extension UpgradeRevision {
+  var releaseDate: String? { HermesRevisionText.date(committedAt) }
+  var displayVersion: String { HermesRevisionText.title(revision: revision, version: version, date: releaseDate) }
+  var displayDetail: String? { HermesRevisionText.detail(revision: revision, version: version, date: releaseDate) }
+}
+
+extension RuntimeStatus {
+  /// The Settings footer line: "Hermes released Oct 20, 2026", or "Hermes 1a2b3c4" without a date.
+  var hermesLabel: String? {
+    guard let version, !version.isEmpty else { return nil }
+    if let date = HermesRevisionText.date(revisionDate) { return "Hermes released \(date)" }
+    return "Hermes \(HermesRevisionText.shortHash(version))"
+  }
+  /// The short hash under a dated footer line.
+  var hermesDetail: String? {
+    guard let version, !version.isEmpty, HermesRevisionText.date(revisionDate) != nil else { return nil }
+    return HermesRevisionText.shortHash(version)
+  }
+}
