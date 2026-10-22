@@ -33,12 +33,15 @@ extension XCUIElement {
   /// Waits until a tap can land: the element exists, has a frame and is hittable.
   @discardableResult
   func waitUntilHittable(timeout: TimeInterval = 10) -> Bool { poll(timeout) { hasFrame && isHittable } }
-  /// Taps once a tap can land. Use it for anything that appears after an action, such as a menu
-  /// item, a confirmation button or a row that loads.
+  /// Taps once the element has a frame and, within a short grace period, is hittable. Use it for
+  /// anything that appears after an action, such as a menu item, a confirmation button or a row
+  /// that loads. Some buttons, such as Discard edits beside a focused field, never report hittable
+  /// though a tap lands, so a missing frame fails the test but a missing hittable flag does not.
   func tapWhenReady(timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
-    guard waitUntilHittable(timeout: timeout) else {
-      XCTFail("\(self) never became hittable", file: file, line: line); return
+    guard waitForFrame(timeout: timeout) else {
+      XCTFail("\(self) never appeared with a frame", file: file, line: line); return
     }
+    waitUntilHittable(timeout: 2)
     tap()
   }
   @discardableResult
@@ -80,7 +83,7 @@ extension XCUIApplication {
       typeKey(key, modifierFlags: modifiers)
       if target.waitForExistence(timeout: timeout) { return }
     }
-    XCTFail("The \(key) shortcut never showed \(target)", file: file, line: line)
+    XCTFail("The \(key) shortcut never showed \(target) after \(attempts) tries\n\(debugDescription)", file: file, line: line)
   }
   /// Opens an assistant settings tab from the More menu. A menu can ignore a tap while it is still
   /// opening, as on a slower simulator, so the choice is repeated only while the menu stays open.
