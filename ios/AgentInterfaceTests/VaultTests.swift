@@ -91,13 +91,13 @@ private final class VaultProtocol: URLProtocol, @unchecked Sendable {
     do { _ = try await api().answerSecureRequest(botId: "bot", requestId: "request", answer: SecureRequestAnswer(request: request(), identifier: "fixture-parent", value: "fixture-password", cancel: false)); XCTFail("Expected upstream failure") }
     catch { XCTAssertFalse(error.localizedDescription.contains("fixture-password")); XCTAssertTrue(VaultSafety.uncertain(error)) }
   }
-  func testInputClearsOnSubmissionAndUncertainBindingCannotReplay() async {
+  func testInputClearsOnSubmissionAndUncertainBindingCannotReplay() async throws {
     let input = SecureRequestInput(), client = api(), key = UUID().uuidString
     VaultProtocol.status = 502; VaultProtocol.payload = #"{"error":"fixture-password"}"#
     input.bind(key); input.identifier = "fixture-parent"; input.value = "fixture-password"
     input.submit(api: client, botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: {})
     XCTAssertEqual(input.identifier, ""); XCTAssertEqual(input.value, "")
-    for _ in 0..<100 { if !input.busy { break }; try? await Task.sleep(for: .milliseconds(10)) }
+    try await until { !input.busy }
     XCTAssertTrue(input.blocked); XCTAssertTrue(SecureRequestOutcomes.uncertain.contains(key)); XCTAssertFalse(input.message?.contains("fixture-password") == true)
     let reopened = SecureRequestInput(); reopened.bind(key); XCTAssertTrue(reopened.blocked)
     reopened.bind(key + "new-epoch"); XCTAssertFalse(reopened.blocked)
@@ -113,7 +113,7 @@ private final class VaultProtocol: URLProtocol, @unchecked Sendable {
     input.sceneChanged(to: .background)
     XCTAssertEqual(input.identifier, ""); XCTAssertEqual(input.value, "")
   }
-  func testExpiredAndChangedRequestsRefreshWithoutReusingTheAnswer() async {
+  func testExpiredAndChangedRequestsRefreshWithoutReusingTheAnswer() async throws {
     for status in [200, 404, 409] {
       VaultProtocol.status = status
       VaultProtocol.payload = status == 200 ? #"{"status":"expired"}"# : #"{"error":"Request changed"}"#
@@ -121,38 +121,38 @@ private final class VaultProtocol: URLProtocol, @unchecked Sendable {
       var refreshes = 0
       input.bind(key); input.identifier = "fixture-parent"; input.value = "fixture-password"
       input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: { refreshes += 1 })
-      for _ in 0..<100 { if refreshes > 0 { break }; try? await Task.sleep(for: .milliseconds(10)) }
+      try await until { refreshes > 0 }
       XCTAssertEqual(refreshes, 1); XCTAssertTrue(input.blocked)
       XCTAssertEqual(input.identifier, ""); XCTAssertEqual(input.value, "")
       input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: { refreshes += 1 })
       XCTAssertEqual(refreshes, 1)
     }
   }
-  func testDefiniteBadFieldsAllowReentryWhileExpiredRequestRequiresRefresh() async {
+  func testDefiniteBadFieldsAllowReentryWhileExpiredRequestRequiresRefresh() async throws {
     for status in [400, 409] {
       let input = SecureRequestInput(), key = UUID().uuidString
       VaultProtocol.status = status; VaultProtocol.payload = #"{"error":"fixture-password"}"#
       input.bind(key); input.value = "fixture-password"; input.identifier = "fixture-parent"
       input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: {})
-      for _ in 0..<100 { if !input.busy { break }; try? await Task.sleep(for: .milliseconds(10)) }
+      try await until { !input.busy }
       XCTAssertEqual(input.blocked, status == 409); XCTAssertFalse(SecureRequestOutcomes.uncertain.contains(key)); XCTAssertEqual(input.value, "")
     }
   }
-  func testCurrentRequestTransportCancellationStopsBusyAndRequiresRefresh() async {
+  func testCurrentRequestTransportCancellationStopsBusyAndRequiresRefresh() async throws {
     VaultProtocol.cancelled = true
     let input = SecureRequestInput(), key = UUID().uuidString
     input.bind(key); input.identifier = "fixture-parent"; input.value = "fixture-password"
     input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { true }, refresh: {})
-    for _ in 0..<100 { if !input.busy { break }; try? await Task.sleep(for: .milliseconds(10)) }
+    try await until { !input.busy }
     XCTAssertFalse(input.busy); XCTAssertTrue(input.blocked); XCTAssertTrue(SecureRequestOutcomes.uncertain.contains(key))
     XCTAssertEqual(input.value, ""); XCTAssertTrue(input.message?.contains("Refresh") == true)
   }
-  func testLateResponseCannotReplaceInputAfterIdentityTeardown() async {
+  func testLateResponseCannotReplaceInputAfterIdentityTeardown() async throws {
     let input = SecureRequestInput(), key = UUID().uuidString
     input.bind(key); input.identifier = "fixture-parent"; input.value = "fixture-password"
     input.submit(api: api(), botId: "bot", requestId: "request", request: request(), key: key, cancel: false, current: { false }, refresh: {})
     input.teardown(); input.value = "new-identity-input"
-    for _ in 0..<100 { if !SecureRequestOutcomes.uncertain.contains(key) { break }; try? await Task.sleep(for: .milliseconds(10)) }
+    try await until { !SecureRequestOutcomes.uncertain.contains(key) }
     XCTAssertFalse(SecureRequestOutcomes.uncertain.contains(key)); XCTAssertNil(input.message)
     XCTAssertEqual(input.value, "new-identity-input"); XCTAssertFalse(input.busy); XCTAssertFalse(input.blocked)
   }

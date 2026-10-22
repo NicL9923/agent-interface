@@ -157,6 +157,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private(set) var offlineSavedAt: Date?
   @ObservationIgnored private var restoredRosterAt: Date?
   private let offlineWriter = OfflineLibraryWriter()
+  /// How long a changed offline snapshot waits before it is written; tests shorten it.
+  var offlineWriteDelay: Duration {
+    get { offlineWriter.delay }
+    set { offlineWriter.delay = newValue }
+  }
   @ObservationIgnored private var conversationCapturedAt: [String: Date] = [:]
   @ObservationIgnored private var recentChats: [String] = []
   private(set) var cachedChats: Set<String> = []
@@ -884,7 +889,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let token = UUID()
     scheduledDraftSave = token
     draftTask = Task {
-      try? await Task.sleep(for: .milliseconds(600))
+      try? await Task.sleep(for: Self.draftSaveDelay)
       guard !Task.isCancelled, self.scheduledDraftSave == token else { return }
       self.startDraftSave(botId: botId)
     }
@@ -1039,6 +1044,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   @ObservationIgnored private var draftPersistTask: Task<Void, Never>?
   static let draftPersistDelay: Duration = .milliseconds(300)
+  /// A typing pause this long saves the open draft to the server.
+  static let draftSaveDelay: Duration = .milliseconds(600)
   func send(reviewedUncertain: Bool = false) async {
     guard let api, let id = selectedBotId, !sending else { return }
     let submission: PendingSubmission
