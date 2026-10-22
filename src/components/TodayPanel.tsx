@@ -12,10 +12,12 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
+  // An unchanged recap revalidates as 304 and keeps its original generatedAt, so the check time is this client's.
+  const [checkedAt, setCheckedAt] = useState("");
   useEffect(() => {
     let current = true;
     async function refresh() {
-      try { const result = await api<TodayOverview>("/today"); if (current) { setOverview(result); setError(""); } }
+      try { const result = await api<TodayOverview>("/today"); if (current) { setOverview(result); setCheckedAt(new Date().toISOString()); setError(""); } }
       catch (e) { if (current) setError((e as Error).message); }
       finally { if (current) setLoading(false); }
     }
@@ -59,7 +61,7 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
       {!!files.length && <section className="today-section"><h3>Recent files</h3>{files.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
         <span className="today-row-copy"><strong>{item.botName}</strong><small>{item.files.slice(-3).map(file => file.name).join(" · ")}</small></span><span aria-hidden="true">›</span></button>)}</section>}
       {overview.unavailableBots.length > 0 && <p role="status" className="capability-note">Couldn't check {overview.unavailableBots.length} assistant{overview.unavailableBots.length === 1 ? "" : "s"}. Their current activity is unknown.</p>}
-      <p className="muted today-timestamp">Checked <When value={overview.generatedAt} inline /> · updates every 30 seconds</p>
+      <p className="muted today-timestamp">Checked <When value={checkedAt || overview.generatedAt} inline /> · updates every 30 seconds</p>
     </>}
   </div>;
 }

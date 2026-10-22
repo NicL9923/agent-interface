@@ -1,6 +1,6 @@
 import XCTest
 
-final class ExperienceFlowTests: XCTestCase {
+@MainActor final class ExperienceFlowTests: XCTestCase {
   func testInlineHtmlRunsLocalControlsAndResets() {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
@@ -25,7 +25,7 @@ final class ExperienceFlowTests: XCTestCase {
     app.launch(); return app
   }
   private func tab(_ name: String, app: XCUIApplication) {
-    app.buttons["settingsMore"].tap(); app.buttons[name].tap()
+    app.selectSettingsTab(name)
   }
   private func capture(_ app: XCUIApplication, name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)

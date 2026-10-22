@@ -184,6 +184,8 @@ An empty conversation on web and iOS offers a role discussion using the assistan
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 
+The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9.
+
 Assistant settings > **Memory** lets you inspect, correct and forget native
 Hermes profile memory. Existing conversations keep their memory snapshot until
 a new Hermes session starts. In **Details**, enable interactive replies to add
@@ -297,7 +299,7 @@ without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
-The [validation ledger](docs/ValidationLedger.md) distinguishes application tests,
+The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and
 acceptance that needs a physical phone or configured external service. Tests with
 a runtime double do not prove Hermes integration. Simulated push checks do not

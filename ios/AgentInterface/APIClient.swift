@@ -121,7 +121,7 @@ extension Data {
     }
     token = SecureToken.read(host: baseURL.absoluteString)
   }
-  static func component(_ value: String) -> String {
+  nonisolated static func component(_ value: String) -> String {
     value.addingPercentEncoding(
       withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_")))!
   }
@@ -153,9 +153,9 @@ extension Data {
     path: String, method: String = "GET", body: Data? = nil, contentType: String? = nil,
     authenticated: Bool = true
   ) async throws -> Data {
-    try await data(
+    try await exchange(
       path: path, method: method, body: body, contentType: contentType,
-      authenticated: authenticated, conditional: method == "GET")
+      authenticated: authenticated, conditional: method == "GET").data
   }
   private func request(path: String, method: String, contentType: String?, authenticated: Bool) throws -> URLRequest {
     var request = URLRequest(url: try url(path))
@@ -189,10 +189,11 @@ extension Data {
       code: object?["code"] as? String,
       confirmRequired: object?["confirmRequired"] as? Bool ?? false, body: data)
   }
-  private func data(
+  /// The body with its ETag: a 304 answers with the validated body and its tag.
+  private func exchange(
     path: String, method: String, body: Data?, contentType: String?, authenticated: Bool,
     conditional: Bool
-  ) async throws -> Data {
+  ) async throws -> (data: Data, etag: String?) {
     var request = try self.request(path: path, method: method, contentType: contentType, authenticated: authenticated)
     request.httpBody = body
     let sent = conditional ? validated[path] : nil
@@ -208,9 +209,9 @@ extension Data {
       // identity change while the request was in flight clears it; then ask again in full.
       if let sent, let current = validated[path], current.etag == sent.etag {
         remember(path, etag: current.etag, data: current.data)
-        return current.data
+        return (current.data, current.etag)
       }
-      return try await self.data(
+      return try await exchange(
         path: path, method: method, body: body, contentType: contentType,
         authenticated: authenticated, conditional: false)
     }
@@ -218,18 +219,16 @@ extension Data {
       let failure = Self.failure(response.statusCode, data)
       // An assistant turned private while this read ran; the server dropped it, so read once more.
       if method == "GET", conditional, response.statusCode == 503, failure.code == "assistants_changed" {
-        return try await self.data(
+        return try await exchange(
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: false)
       }
       throw failure
     }
-    if method == "GET", generation == validatedGeneration {
-      // Only JSON is kept; file downloads can be large and are never polled.
-      let json = response.mimeType == "application/json"
-      remember(path, etag: json ? response.value(forHTTPHeaderField: "ETag") : nil, data: data)
-    }
-    return data
+    // Only JSON is kept; file downloads can be large and are never polled.
+    let etag = method == "GET" && response.mimeType == "application/json" ? response.value(forHTTPHeaderField: "ETag") : nil
+    if method == "GET", generation == validatedGeneration { remember(path, etag: etag, data: data) }
+    return (data, etag)
   }
   /// Event streams stay open for hours, so they get their own session without the resource
   /// timeout. Tests that supply a session stream through it.
@@ -261,6 +260,15 @@ extension Data {
   }
   func get<T: Decodable>(_ path: String) async throws -> T {
     try Self.decode(await data(path: "/api" + path), from: "/api" + path)
+  }
+  /// A poll read that skips decoding when the response is the body the caller last applied, named
+  /// by its ETag, whether it came back as a 304 or in full. The value is nil then; otherwise it
+  /// comes with the ETag to pass next time. A server without ETags always decodes.
+  func changed<T: Decodable>(_ path: String, since applied: String?) async throws -> (value: T?, etag: String?) {
+    let response = try await exchange(
+      path: "/api" + path, method: "GET", body: nil, contentType: nil, authenticated: true, conditional: true)
+    if let applied, response.etag == applied { return (nil, applied) }
+    return (try Self.decode(response.data, from: "/api" + path), response.etag)
   }
   func publicGet<T: Decodable>(_ path: String) async throws -> T {
     try Self.decode(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
@@ -318,7 +326,7 @@ extension Data {
   /// Uploads one attachment. `progress` hears the share of the request body sent, from 0 to 1.
   func upload(
     botId: String, name: String, mime: String, data: Data,
-    progress: (@MainActor (Double) -> Void)? = nil
+    progress: (@MainActor @Sendable (Double) -> Void)? = nil
   ) async throws -> FileRef {
     guard UploadRules.mimeTypes.contains(mime) else {
       throw APIError(message: "Use \(UploadRules.kinds).", status: 415)
@@ -351,10 +359,10 @@ extension Data {
   }
 }
 
-/// Reports an upload's progress on the main actor.
-private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-  let report: @MainActor (Double) -> Void
-  init(report: @escaping @MainActor (Double) -> Void) { self.report = report }
+/// Reports an upload's progress on the main actor. Checked Sendable: its only state is immutable.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+  let report: @MainActor @Sendable (Double) -> Void
+  init(report: @escaping @MainActor @Sendable (Double) -> Void) { self.report = report }
   func urlSession(
     _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
     totalBytesSent: Int64, totalBytesExpectedToSend: Int64
@@ -365,9 +373,8 @@ private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @u
   }
 }
 
-private final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate,
-  @unchecked Sendable
-{
+/// Checked Sendable: URLSession calls it on its own queue, and its only state is an immutable URL.
+private final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
   let origin: URL
   init(origin: URL) { self.origin = origin }
   func urlSession(

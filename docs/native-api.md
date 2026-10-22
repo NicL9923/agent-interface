@@ -227,7 +227,7 @@ Web and native clients share these authenticated operations. See
 
 | Method and route | Body or response |
 | --- | --- |
-| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore` |
+| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore`. The ETag leaves out `generatedAt`, so an unchanged recap answers 304 and the client keeps the body it has; show your own check time |
 | `PUT /api/today/seen` | `{ "seenAt": "LOADED_GENERATED_AT", "frontier": "LOADED_FRONTIER" }`; advances only the returned page |
 | `GET /api/bots/:id/memory` | Native profile scope, document revisions, entries and character limits |
 | `PATCH /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entries": [{ "id": "EXISTING_ID", "text": "FACT" }] }`; target is `memory` or `user` |
@@ -239,6 +239,7 @@ Web and native clients share these authenticated operations. See
 | `POST /api/routines/preview` | `{ "botId": "ID", "schedule": "CRON_OR_NATIVE_SCHEDULE" }`; actual timezone and upcoming runs |
 | `POST /api/routines/:id/run` | `{ "requestId": "UUID" }`; durable native trial receipt |
 | `GET /api/routines/:id/runs/:requestId` | Exact trial result; rechecking does not execute another trial |
+| `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately |
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
@@ -282,6 +283,48 @@ removed when their native session expires or APNs reports an invalid token.
 Notification taps receive the existing relative `url` field such as `/?bot=ID`
 and the event `tag`. Resolve links against the configured application origin;
 reject external URLs. Oversized links are omitted instead of truncated.
+
+### Notification payload and actions
+
+Each iOS alert carries `aps.thread-id` set to the assistant ID, so iOS groups
+notifications per assistant. Alerts without an assistant, such as digests and
+host alerts, have none. The request sets `apns-collapse-id` to the `tag` when it is
+1 to 64 printable ASCII characters, or to the tag's base64url SHA-256 otherwise.
+Tags name one notification, so the collapse ID only replaces a repeated delivery
+of the same one. Clearing still matches the payload's `tag`.
+
+Approval requests set `aps.interruption-level` to `time-sensitive`. iOS honors it
+only when the app is signed with the Time Sensitive Notifications entitlement,
+and ignores it otherwise.
+
+Actionable alerts also name their account with `account`, the first 16 hex
+characters of SHA-256 of `wildbots-account:` and the user ID, and their
+assistant with `botId`:
+
+| Notification | `aps.category` | Extra fields |
+| --- | --- | --- |
+| Approval request from an add-on that reports its ID | `APPROVAL` | `botId`, `approvalId`, `account` |
+| Finished reply in a one-to-one chat | `REPLY` | `botId`, `account` |
+| Everything else, including routine results, digests and failures | none | none |
+
+`APPROVAL` offers Review and Decline, and both need the phone unlocked. The
+payload leaves out what the approval would run, because it can contain
+credentials, so approving from the notification would be blind: Review opens the
+chat, where the approval card shows it. Decline runs without opening the app. It
+calls `POST /api/bots/:id/approvals/:approvalId` with
+`{ "decision": "denied", "account": ACCOUNT }`, the request the approval card
+makes plus the account. The server answers 409 when the account is
+not the signed-in person's, or when the approval is no longer pending. The app
+sends a decision once and never retries it. When it does not go through, the app
+posts a local notification saying so, and tapping it opens the chat. `REPLY`
+offers a Reply text field. It opens the app and adds the text to that assistant's
+draft for review. While a send to that assistant is unsettled, the text waits, as
+Share inbox items do. It is never sent for the person.
+
+Grouping and actions are optional: when they would push the payload past 4000
+bytes, the actions go first, then the grouping. IDs over 200 bytes get neither.
+Older app builds ignore the new fields. Web Push payloads are unchanged, apart
+from approval events' new `approvalId`, which browsers ignore.
 
 ### Chat presence
 

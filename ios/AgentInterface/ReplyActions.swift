@@ -3,7 +3,7 @@ import SwiftUI
 /// Whole-answer actions also appear as named VoiceOver actions.
 struct ReplyActions: ViewModifier {
   var message: Message
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
   @State private var saving = false
   @State private var saved = false

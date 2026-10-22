@@ -2,8 +2,8 @@ import XCTest
 import UIKit
 
 /// Exercises parity behavior against the Debug-only transport, never a household server.
-final class ParityFlowTests: XCTestCase {
-  override func setUp() {
+@MainActor final class ParityFlowTests: XCTestCase {
+  override func setUp() async throws {
     continueAfterFailure = false
     if UIDevice.current.userInterfaceIdiom == .pad { XCUIDevice.shared.orientation = .landscapeLeft }
   }
@@ -17,6 +17,8 @@ final class ParityFlowTests: XCTestCase {
     return app
   }
   private func home(_ app: XCUIApplication) {
+    // iPhone keeps home in its Assistants tab; iPad brings back its sidebar.
+    if app.tabBars.buttons["Assistants"].exists { app.tabBars.buttons["Assistants"].tap() }
     if app.buttons["openSettings"].isHittable { return }
     if app.buttons["Show Sidebar"].exists { app.buttons["Show Sidebar"].tap() }
     else { app.navigationBars.buttons.firstMatch.tap() }
@@ -44,6 +46,24 @@ final class ParityFlowTests: XCTestCase {
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: close)
     waitForExpectations(timeout: 10)
     close.tap()
+  }
+  func testSwipingARowPinsItAndCommandShortcutsOpenAndFind() throws {
+    let app = launch(home: true)
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))
+    let preview = app.staticTexts["The north gate battery needs replacing."]
+    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5)); XCTAssertTrue(preview.exists)
+    // A pinned assistant leaves the list for the tiles above it, which show no preview.
+    app.buttons["bot.ranch"].swipeLeft()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: preview)
+    waitForExpectations(timeout: 5)
+    // The first pin opens with Cmd+1, and Cmd+F in that chat finds, keyboard ready.
+    app.typeKey("1", modifierFlags: .command)
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
+    app.typeKey("f", modifierFlags: .command)
+    let find = app.textFields["findConversation"]
+    XCTAssertTrue(find.waitForExistence(timeout: 5))
+    expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: find)
+    waitForExpectations(timeout: 5)
   }
   func testHomePinsSettingsAutosaveAndAdvancedComposer() throws {
     let app = launch(home: true)

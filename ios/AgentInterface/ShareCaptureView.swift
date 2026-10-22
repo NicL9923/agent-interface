@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ShareCaptureView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State var capture: SharedCapture
   @State private var botId = ""
@@ -10,7 +10,7 @@ struct ShareCaptureView: View {
   @State private var error: String?
   /// Add was pressed while a message to this assistant was still unsettled; it continues then.
   @State private var waitingForSend = false
-  private var held: Bool { !botId.isEmpty && store.holdsShared(botId) }
+  private var held: Bool { !botId.isEmpty && store.holdsAdditions(botId) }
   var body: some View {
     NavigationStack {
       Form {
@@ -36,17 +36,17 @@ struct ShareCaptureView: View {
     busy=true;defer { busy=false }
     await store.select(botId)
     guard scope==store.scope,store.selectedBotId==botId,store.draftReady else { error="Reconnect before importing this draft.";return }
-    // A message still on its way keeps this in the inbox until it settles.
-    if store.holdsShared(botId) { waitingForSend = true; return }
     guard store.draft.attachments.count + capture.files.count <= 10,store.draft.text.utf16.count + capture.text.utf16.count + 2 <= AppStore.maxMessageLength else { error="The combined draft is too large. Keep up to 10 attachments and 50,000 characters.";return }
     do {
       if !capture.text.isEmpty {
-        guard store.addShared(text:capture.text,botId:botId) else { waitingForSend = store.holdsShared(botId);return }
+        // Held with Siri's and notification text: it joins once a send on its way settles.
+        guard store.holdShared(capture.text,botId:botId) else { error="Sign in to the account that saved this draft.";return }
         capture.text="";try persist()
       }
+      // Files upload here, and wait in the inbox while a message is still on its way.
       while let name=capture.files.first {
         guard scope==store.scope,store.selectedBotId==botId else { throw APIError(message:"Return to this assistant to finish importing.",status:409) }
-        if store.holdsShared(botId) { waitingForSend = true; return }
+        if store.holdsAdditions(botId) { waitingForSend = true; return }
         guard let url=ShareInbox.fileURLs(capture).first,(try url.resourceValues(forKeys:[.fileSizeKey])).fileSize ?? 0 <= 20 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
         let data=try Data(contentsOf:url)
         // The same rules as the composer: any text format goes as plain text.
@@ -54,7 +54,7 @@ struct ShareCaptureView: View {
         let file=try await api.upload(botId:botId,name:name,mime:mime,data:data)
         guard scope==store.scope,store.selectedBotId==botId else { throw APIError(message:"The selected account or assistant changed. Review this draft again.",status:409) }
         // A send that began during the upload holds the file; it uploads again once that settles.
-        guard store.addShared(file:file,botId:botId) else { waitingForSend = store.holdsShared(botId);return }
+        guard store.addShared(file:file,botId:botId) else { waitingForSend = store.holdsAdditions(botId);return }
         capture.files.removeFirst();try persist()
       }
       ShareInbox.remove(capture);dismiss()

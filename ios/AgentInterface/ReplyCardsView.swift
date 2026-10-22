@@ -40,7 +40,28 @@ enum ReplyCards {
   }
   /// Splits a reply into prose, cards and, when `inlineUi` allows it, inline UI. Without it a
   /// wildbots-html fence stays a code block, as the web shows it outside assistant replies.
+  /// Messages render on every update, so results are reused like MarkdownCache's blocks.
   static func parse(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
+    let key = ((inlineUi ? "1" : "0") + text) as NSString
+    if let cached = parsed.object(forKey: key) { return cached.parts }
+    let parts = parseFresh(text, inlineUi: inlineUi)
+    // A large reply still renders, but cannot evict every ordinary answer from the cache.
+    if text.utf16.count <= 100_000 { parsed.setObject(Parsed(parts), forKey: key, cost: text.utf16.count * 2) }
+    return parts
+  }
+  private final class Parsed: NSObject {
+    let parts: [ReplyContentPart]
+    init(_ parts: [ReplyContentPart]) { self.parts = parts }
+  }
+  /// NSCache is thread-safe, and its entries are immutable.
+  nonisolated(unsafe) private static let parsed: NSCache<NSString, Parsed> = {
+    let cache = NSCache<NSString, Parsed>()
+    cache.countLimit = 128
+    cache.totalCostLimit = 4 * 1024 * 1024
+    return cache
+  }()
+  static func clearCache() { parsed.removeAllObjects() }
+  static func parseFresh(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
     guard text.utf16.count <= 200_000 else { return [.init(id: 0, markdown: text)] }
     var parts: [ReplyContentPart] = []
     var cursor = text.startIndex
@@ -67,7 +88,8 @@ enum ReplyCards {
   struct Fence { var whole: Range<String.Index>; var payload: Range<String.Index>; var language: String }
   // Scan all code fences so an example nested inside a longer fence stays code.
   static func fencedBlocks(_ text: String) -> [Fence] {
-    let opening = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)$")
+    // Most replies have no fence at all, and every opening needs three of a kind.
+    guard text.contains("```") || text.contains("~~~") else { return [] }
     var result: [Fence] = []
     var active: (start: String.Index, payload: String.Index, language: String, closing: NSRegularExpression)?
     var cursor = text.startIndex
@@ -83,12 +105,21 @@ enum ReplyCards {
         }
       } else if let match = opening.firstMatch(in: line, range: range), let delimiterRange = Range(match.range(at: 1), in: line), let languageRange = Range(match.range(at: 2), in: line) {
         let delimiter = String(line[delimiterRange])
-        let pattern = "^ {0,3}" + String(delimiter.first!) + "{" + String(delimiter.count) + ",}[ \t]*$"
-        active = (cursor, next, String(line[languageRange]).trimmingCharacters(in: .whitespaces), try! NSRegularExpression(pattern: pattern))
+        active = (cursor, next, String(line[languageRange]).trimmingCharacters(in: .whitespaces), closing(delimiter))
       }
       cursor = next
     }
     return result
+  }
+  private static let opening = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)$")
+  /// Closing patterns by opening fence, compiled once each. NSRegularExpression is thread-safe.
+  nonisolated(unsafe) private static let closings = NSCache<NSString, NSRegularExpression>()
+  private static func closing(_ delimiter: String) -> NSRegularExpression {
+    if let cached = closings.object(forKey: delimiter as NSString) { return cached }
+    let pattern = "^ {0,3}" + String(delimiter.first!) + "{" + String(delimiter.count) + ",}[ \t]*$"
+    let compiled = try! NSRegularExpression(pattern: pattern)
+    closings.setObject(compiled, forKey: delimiter as NSString)
+    return compiled
   }
   static func strictJSON(_ data: Data) -> Bool {
     guard data.count <= 100_000, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], Set(object.keys) == ["version", "cards"], let cards = object["cards"] as? [[String: Any]] else { return false }
@@ -152,7 +183,7 @@ struct ReplyContentView: View {
 struct InteractiveReplyCard: View {
   var card: ReplyCard
   var messageId: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()

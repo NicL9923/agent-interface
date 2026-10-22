@@ -2,12 +2,12 @@ import SwiftUI
 
 struct PreferencesView: View {
   var close: (() -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
   @State private var preferences = Preferences()
   @State private var sectionName = ""
-  @StateObject private var reachability = NetworkReachability()
+  @State private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
   private var saveFailed: Bool { store.preferencesSaveFailed }
   @State private var discardConfirm = false
@@ -272,6 +272,7 @@ struct PreferencesView: View {
     @State private var avatar = AvatarConfig()
     @State private var reduced = false
     @State private var matrixWidth: CGFloat = 353
+    @ScaledMetric(relativeTo: .caption2) private var specimenLabel: CGFloat = 9
     /// The web specimen's state matrix across every activity state.
     private let matrix: [(String, AvatarConfig)] = [
       ("Blob", AvatarConfig()),
@@ -311,7 +312,7 @@ struct PreferencesView: View {
               GridRow {
                 ForEach(ActivityState.allCases, id: \.self) { state in
                   Text(state.label.replacingOccurrences(of: " ", with: "\n"))
-                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(3)
+                    .font(.system(size: specimenLabel)).foregroundStyle(.secondary).lineLimit(3)
                     .minimumScaleFactor(0.5).multilineTextAlignment(.center).frame(width: cell)
                 }
               }

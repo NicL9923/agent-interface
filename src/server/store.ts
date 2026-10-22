@@ -830,6 +830,8 @@ export class Store {
         tag: event.id,
         kind: event.kind,
         botId: event.botId,
+        // Lets an iOS notification decide this approval. Without it the notification only opens the chat.
+        ...(event.kind === "approval" && typeof event.approvalId === "string" && event.approvalId ? { approvalId: event.approvalId } : {}),
         queuedAt: Date.now(),
       });
   }

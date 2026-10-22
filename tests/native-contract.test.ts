@@ -318,6 +318,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("group-create", "POST", "/api/groups", { requestId: ids.group, name: "Dinner team", botIds: ["household", "garden"] });
     await record("group-state", "GET", "/api/groups/room-dinner");
     await record("group-log", "GET", "/api/groups/room-dinner/log?since=0");
+    await record("group-log-state", "GET", "/api/groups/room-dinner/log?since=0&state=1");
     await record("group-message", "POST", "/api/groups/room-dinner/messages", { requestId: ids.groupMessage, threadId: "thread-1", text: "Plan dinners together" });
     await record("group-stop", "POST", "/api/groups/room-dinner/stop", { requestId: ids.groupStop });
     await record("group-approve", "POST", "/api/groups/room-dinner/approve", { taskId: "task-1", memberId: "household", generation: 1, choice: "once", requestId: "approval-request-1" });

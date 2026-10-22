@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
-import type { GroupCatalog, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
+import type { GroupCatalog, GroupPage, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 const id = z.string().min(1).max(200);
@@ -63,9 +63,11 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
   app.get('/api/groups/:roomId', async req => room(signedIn(req).id, z.object({ roomId: id }).parse(req.params).roomId));
   app.get('/api/groups/:roomId/log', async req => {
     const { roomId } = z.object({ roomId: id }).parse(req.params);
-    const { since } = z.object({ since: z.coerce.number().int().min(0).default(0) }).strict().parse(req.query);
-    await room(signedIn(req).id, roomId);
-    return request({ operation: 'log', roomId, since });
+    const { since, state } = z.object({ since: z.coerce.number().int().min(0).default(0), state: z.literal('1').optional() }).strict().parse(req.query);
+    // The access check already reads the room, so `state=1` returns it too: one poll, one Hermes state call.
+    const current = await room(signedIn(req).id, roomId);
+    const log = await request({ operation: 'log', roomId, since });
+    return state ? { ...log as GroupPage, state: current } : log;
   });
   app.post('/api/groups/:roomId/messages', async req => {
     const { roomId } = z.object({ roomId: id }).parse(req.params);

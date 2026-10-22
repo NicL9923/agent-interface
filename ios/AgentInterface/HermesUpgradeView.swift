@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct HermesUpgradeView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
   @State private var confirmedRevision: String?
   @State private var showInstallConfirmation = false
@@ -11,9 +11,9 @@ struct HermesUpgradeView: View {
   @State private var recoveryOperation: String?
   @State private var showRecoveryConfirmation = false
   @State private var detailsExpanded = false
-  private var status: UpgradeStatus? { store.upgradeStatus }
+  private var status: UpgradeStatus? { store.upgrade.status }
   /// Everything that must not be tapped while a request or recovery is unresolved.
-  private var locked: Bool { store.upgradeBusy || store.sessionExpired || store.upgradeInstallUncertain }
+  private var locked: Bool { store.upgrade.busy || store.sessionExpired || store.upgrade.installUncertain }
   var body: some View {
     Form {
       summarySection
@@ -23,20 +23,20 @@ struct HermesUpgradeView: View {
       detailsSection
     }.navigationTitle("Hermes updates").navigationBarTitleDisplayMode(.inline)
       .task(id: status?.inProgress == true) {
-        await store.refreshUpgrade()
+        await store.upgrade.refresh()
         while !Task.isCancelled {
           do {
-            try await Task.sleep(for: .seconds(store.upgradeStatus?.inProgress == true ? 2 : 15))
+            try await Task.sleep(for: .seconds(store.upgrade.status?.inProgress == true ? 2 : 15))
           } catch { return }
-          if scenePhase == .active { await store.refreshUpgrade() }
+          if scenePhase == .active { await store.upgrade.refresh() }
         }
       }
       .onChange(of: status?.stopped == true, initial: true) { _, stopped in if stopped { detailsExpanded = true } }
-      .refreshable { await store.refreshUpgrade() }
+      .refreshable { await store.upgrade.refresh() }
       .confirmationDialog("Update the household's Hermes installation?", isPresented: $showInstallConfirmation, titleVisibility: .visible) {
         Button("Install update") {
           guard let revision = confirmedRevision else { return }
-          Task { await store.installUpgrade(candidateRevision: revision) }
+          Task { await store.upgrade.install(candidateRevision: revision) }
         }
       } message: {
         Text("The server will update and verify Hermes. If verification fails, it will try to restore the previous version.")
@@ -48,7 +48,7 @@ struct HermesUpgradeView: View {
       ) {
         Button(recoveryAction == "cancel" ? "Yes, cancel update" : "Yes, restart Hermes", role: recoveryAction == "cancel" ? .destructive : nil) {
           guard let action = recoveryAction, let operationId = recoveryOperation else { return }
-          Task { await store.controlUpgrade(action, operationId: operationId) }
+          Task { await store.upgrade.control(action, operationId: operationId) }
         }
         Button("Keep current state", role: .cancel) {}
       }
@@ -61,8 +61,8 @@ struct HermesUpgradeView: View {
       VStack(alignment: .leading, spacing: 12) {
         Label(status?.title ?? "Hermes updates", systemImage: statusSymbol)
           .font(.title3.bold()).accessibilityAddTraits(.isHeader)
-        Text(status?.description(loading: store.upgradeBusy) ?? placeholder).foregroundStyle(.secondary)
-        if store.upgradeSubmitting || store.upgradeInstallUncertain || status?.inProgress == true {
+        Text(status?.description(loading: store.upgrade.busy) ?? placeholder).foregroundStyle(.secondary)
+        if store.upgrade.submitting || store.upgrade.installUncertain || status?.inProgress == true {
           ProgressView().accessibilityLabel(status?.title ?? "Working")
         }
       }.padding(.vertical, 8)
@@ -78,7 +78,7 @@ struct HermesUpgradeView: View {
     }
   }
   private var placeholder: String {
-    store.upgradeBusy ? "Getting the current version and update status…" : "Find the newest Hermes and test it before installing it."
+    store.upgrade.busy ? "Getting the current version and update status…" : "Find the newest Hermes and test it before installing it."
   }
   private func busyMessage(_ status: UpgradeStatus) -> String {
     let names = status.busyBots.map { id in store.bootstrap?.bots.first { $0.id == id }?.name ?? id }
@@ -103,13 +103,13 @@ struct HermesUpgradeView: View {
           confirmedRevision = candidate.revision
           showInstallConfirmation = true
         } else {
-          Task { await store.checkUpgrade() }
+          Task { await store.upgrade.check() }
         }
       } label: {
         HStack {
-          Text(status?.actionLabel(submitting: store.upgradeSubmitting, uncertain: store.upgradeInstallUncertain) ?? "Check for an update")
+          Text(status?.actionLabel(submitting: store.upgrade.submitting, uncertain: store.upgrade.installUncertain) ?? "Check for an update")
           Spacer()
-          if store.upgradeSubmitting || status?.inProgress == true { ProgressView() }
+          if store.upgrade.submitting || status?.inProgress == true { ProgressView() }
         }
       }.disabled(primaryDisabled)
         .accessibilityIdentifier(status?.installsNext == true ? "installHermesUpdate" : "checkHermesUpdate")
@@ -118,7 +118,7 @@ struct HermesUpgradeView: View {
           .disabled(locked).accessibilityIdentifier("stopHermesCheck")
       }
     } footer: {
-      Text(status?.actionHint(uncertain: store.upgradeInstallUncertain)
+      Text(status?.actionHint(uncertain: store.upgrade.installUncertain)
         ?? "A check finds the newest Hermes and tests it in a separate copy. Nothing is installed until you choose Install.")
     }
   }
@@ -145,14 +145,14 @@ struct HermesUpgradeView: View {
     }
   }
   @ViewBuilder private var errorSection: some View {
-    if let error = store.upgradeError {
+    if let error = store.upgrade.error {
       Section {
         Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-        Button("Refresh update status") { Task { await store.refreshUpgrade() } }
-          .disabled(store.upgradeBusy || store.sessionExpired)
+        Button("Refresh update status") { Task { await store.upgrade.refresh() } }
+          .disabled(store.upgrade.busy || store.sessionExpired)
           .accessibilityIdentifier("refreshHermesUpdate")
         if store.sessionExpired {
-          Button("Sign in again") { Task { await store.signIn(); await store.refreshUpgrade() } }
+          Button("Sign in again") { Task { await store.signIn(); await store.upgrade.refresh() } }
         }
       }
     }
@@ -194,7 +194,7 @@ struct HermesUpgradeView: View {
   }
   private func control(_ action: String) {
     guard let operationId = status?.operationId else { return }
-    Task { await store.controlUpgrade(action, operationId: operationId) }
+    Task { await store.upgrade.control(action, operationId: operationId) }
   }
   private var statusSymbol: String {
     switch status?.phase {

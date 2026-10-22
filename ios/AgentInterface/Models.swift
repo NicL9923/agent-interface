@@ -103,11 +103,11 @@ struct Preferences: Codable, Equatable {
   var sections: [BotSection] = []
   var followBots: [String] = []
 }
-struct Capability: Codable {
+struct Capability: Codable, Equatable {
   var supported: Bool
   var reason: String?
 }
-struct RuntimeStatus: Codable {
+struct RuntimeStatus: Codable, Equatable {
   var connected: Bool
   var code: String?
   var version: String?
@@ -116,7 +116,7 @@ struct RuntimeStatus: Codable {
   var retryAt: String?
   var lastConnectedAt: String?
 }
-struct Bot: Codable, Identifiable {
+struct Bot: Codable, Identifiable, Equatable {
   var id: String
   var name: String
   var description: String?
@@ -744,7 +744,8 @@ struct UpgradeInstallRequest: Encodable {
   var candidateRevision: String
   var requestId: String
 }
-struct Bootstrap: Codable {
+/// Equatable so an unchanged poll leaves the published value, and every view reading it, alone.
+struct Bootstrap: Codable, Equatable {
   var user: Member
   var household: [Member]
   var preferences: Preferences
@@ -790,7 +791,7 @@ struct Routine: Codable, Identifiable {
       id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [])
   }
 }
-struct Receipt: Codable {
+struct Receipt: Codable, Equatable {
   var requestId: String
   var status: String
   var runId: String?
@@ -925,11 +926,7 @@ struct SentEcho: Equatable {
     return draft.text == pending.text && draft.attachments == pending.attachments
   }
   private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-  private static func timestamp(_ date: Date) -> String {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.string(from: date)
-  }
+  private static func timestamp(_ date: Date) -> String { ServerDate.string(date) }
 }
 struct AuthConfig: Codable {
   var googleClientId: String?
@@ -951,11 +948,15 @@ struct PushDevice: Encodable {
   var token: String
 }
 enum ServerDate {
-  static func parse(_ value: String) -> Date? {
+  /// ISO8601DateFormatter is thread-safe, so one of each serves every parse instead of one per call.
+  nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
-  }
+    return formatter
+  }()
+  nonisolated(unsafe) private static let whole = ISO8601DateFormatter()
+  static func parse(_ value: String) -> Date? { fractional.date(from: value) ?? whole.date(from: value) }
+  static func string(_ date: Date) -> String { fractional.string(from: date) }
 }
 
 enum ConnectionAddress {

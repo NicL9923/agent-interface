@@ -173,7 +173,7 @@ extension APIClient {
 
 struct VaultView: View {
   var botId: String?
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedBot = ""
   @State private var catalog: ProfileVault?
@@ -338,7 +338,7 @@ private struct AddVaultLoginView: View {
   let identity: String
   var onSaved: () -> Void
   var onUncertain: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @State private var label = ""
@@ -398,13 +398,13 @@ private struct AddVaultLoginView: View {
 
 /// Only request bindings and outcome flags live here. Never credential values.
 @MainActor enum SecureRequestOutcomes { static var uncertain: Set<String> = [] }
-@MainActor final class SecureRequestInput: ObservableObject {
-  @Published var identifier = ""
-  @Published var value = ""
-  @Published var busy = false
-  @Published var message: String?
-  @Published var blocked = false
-  private var generation = UUID()
+@MainActor @Observable final class SecureRequestInput {
+  var identifier = ""
+  var value = ""
+  var busy = false
+  var message: String?
+  var blocked = false
+  @ObservationIgnored private var generation = UUID()
   func clear() { identifier = ""; value = "" }
   func sceneChanged(to phase: ScenePhase) { if phase == .background { clear() } }
   func teardown() { clear(); generation = UUID(); busy = false }
@@ -438,9 +438,9 @@ private struct AddVaultLoginView: View {
 struct SecureAttentionView: View {
   var request: Attention
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
-  @StateObject private var input = SecureRequestInput()
+  @State private var input = SecureRequestInput()
   private var key: String { [store.scope ?? "", botId, request.id, request.secure?.binding ?? ""].joined(separator: "|") }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {

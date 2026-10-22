@@ -3,10 +3,10 @@ import XCTest
 /// Captures a repeatable PNG tour of the Debug fixture for visual before/after review.
 /// Skipped unless the runner sets AGENT_INTERFACE_SCREENSHOT_DIR, which xcodebuild forwards
 /// from TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR. Run with .agents/tools/ios-screenshot-tour.sh.
-final class ScreenshotTourTests: XCTestCase {
+@MainActor final class ScreenshotTourTests: XCTestCase {
   private var directory: URL!
 
-  override func setUpWithError() throws {
+  override func setUp() async throws {
     let path = ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] ?? ""
     try XCTSkipUnless(!path.isEmpty, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
     directory = URL(fileURLWithPath: path, isDirectory: true)

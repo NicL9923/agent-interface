@@ -29,39 +29,42 @@
         let capture=SharedCapture(id:UUID().uuidString,scope:scope,botId:"ranch",text:"https://example.invalid/shared-page",files:[],createdAt:Date())
         try? JSONEncoder().encode(capture).write(to:root.appendingPathComponent(capture.id + ".json"),options:.atomic)
       }
-      if environment["AGENT_INTERFACE_UI_COORDINATION"] == "1" {
-        FixtureProtocol.messages = [
-          ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
-          ["id": "answer", "role": "assistant", "text": "Start with the bunnies, then choose one small task.\n\n- Top up hay.\n- Refresh water.", "origin": ["kind": "scheduled", "visibility": "conversation"]],
-          ["id": "dm", "role": "user", "text": "Message from 🤖 Planner (@planner): Peppers are covered.", "origin": ["kind": "agent", "visibility": "activity", "name": "Planner"]],
-          ["id": "child", "role": "user", "text": "Hay and pellets are stocked.", "origin": ["kind": "subagent", "visibility": "activity", "title": "Supply check completed"]],
-          ["id": "process", "role": "user", "text": "Inventory process exited successfully.", "origin": ["kind": "process", "visibility": "activity"]],
-          ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
-        ]
-      }
-      if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
-        // Enough turns for three history pages, with replies tall enough to scroll.
-        FixtureProtocol.messages = (1...60).flatMap { turn -> [[String: Any]] in
-          [["id": "prompt-\(turn)", "role": "user", "text": "Fixture question \(turn)"],
-           ["id": "reply-\(turn)", "role": "assistant", "text": "Fixture answer \(turn).\n\n" + Array(repeating: "A line of synthetic history so each turn takes some room.", count: 4).joined(separator: "\n\n")]]
+      // Seeded under the lock its requests take, so no request reads it half written.
+      FixtureProtocol.lock.withLock {
+        if environment["AGENT_INTERFACE_UI_COORDINATION"] == "1" {
+          FixtureProtocol.messages = [
+            ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
+            ["id": "answer", "role": "assistant", "text": "Start with the bunnies, then choose one small task.\n\n- Top up hay.\n- Refresh water.", "origin": ["kind": "scheduled", "visibility": "conversation"]],
+            ["id": "dm", "role": "user", "text": "Message from 🤖 Planner (@planner): Peppers are covered.", "origin": ["kind": "agent", "visibility": "activity", "name": "Planner"]],
+            ["id": "child", "role": "user", "text": "Hay and pellets are stocked.", "origin": ["kind": "subagent", "visibility": "activity", "title": "Supply check completed"]],
+            ["id": "process", "role": "user", "text": "Inventory process exited successfully.", "origin": ["kind": "process", "visibility": "activity"]],
+            ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
+          ]
         }
-      }
-      if environment["AGENT_INTERFACE_UI_MIXED_TOOL"] == "1" {
-        FixtureProtocol.preferences["presentation"] = "advanced"
-        FixtureProtocol.messages = [
-          ["id": "mixed", "role": "assistant", "text": "Fixture single visible reply", "reasoning": "Fixture grouped reasoning", "toolCall": ["id": "mixed-call", "name": "fixture_search", "status": "completed", "result": "Fixture tool result"]],
-          ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
-        ]
-      }
-      if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
-        FixtureProtocol.preferences["presentation"] = presentation
-        let output = (1...120).map { "Fixture output line \($0): synthetic tool details stay readable and scroll inside this receipt." }.joined(separator: "\n") + "\nEND OF FIXTURE OUTPUT"
-        FixtureProtocol.messages = [
-          ["id": "intro", "role": "assistant", "text": "Fixture tools have finished."],
-          ["id": "short-tool", "role": "tool", "text": "Short fixture tool result", "toolCall": ["id": "short-call", "name": "fixture_short", "status": "completed", "result": "Short fixture tool result"]],
-          ["id": "long-tool", "role": "tool", "text": output, "toolCall": ["id": "long-call", "name": "fixture_long", "status": "completed", "result": output]],
-          ["id": "final", "role": "assistant", "text": "Fixture final answer follows the tool results."],
-        ]
+        if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
+          // Enough turns for three history pages, with replies tall enough to scroll.
+          FixtureProtocol.messages = (1...60).flatMap { turn -> [[String: Any]] in
+            [["id": "prompt-\(turn)", "role": "user", "text": "Fixture question \(turn)"],
+             ["id": "reply-\(turn)", "role": "assistant", "text": "Fixture answer \(turn).\n\n" + Array(repeating: "A line of synthetic history so each turn takes some room.", count: 4).joined(separator: "\n\n")]]
+          }
+        }
+        if environment["AGENT_INTERFACE_UI_MIXED_TOOL"] == "1" {
+          FixtureProtocol.preferences["presentation"] = "advanced"
+          FixtureProtocol.messages = [
+            ["id": "mixed", "role": "assistant", "text": "Fixture single visible reply", "reasoning": "Fixture grouped reasoning", "toolCall": ["id": "mixed-call", "name": "fixture_search", "status": "completed", "result": "Fixture tool result"]],
+            ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
+          ]
+        }
+        if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
+          FixtureProtocol.preferences["presentation"] = presentation
+          let output = (1...120).map { "Fixture output line \($0): synthetic tool details stay readable and scroll inside this receipt." }.joined(separator: "\n") + "\nEND OF FIXTURE OUTPUT"
+          FixtureProtocol.messages = [
+            ["id": "intro", "role": "assistant", "text": "Fixture tools have finished."],
+            ["id": "short-tool", "role": "tool", "text": "Short fixture tool result", "toolCall": ["id": "short-call", "name": "fixture_short", "status": "completed", "result": "Short fixture tool result"]],
+            ["id": "long-tool", "role": "tool", "text": output, "toolCall": ["id": "long-call", "name": "fixture_long", "status": "completed", "result": output]],
+            ["id": "final", "role": "assistant", "text": "Fixture final answer follows the tool results."],
+          ]
+        }
       }
       if environment["AGENT_INTERFACE_UI_PUSH"] == "1" {
         // iOS permission starts undecided; Enable grants it, as tapping Allow would.
@@ -77,7 +80,9 @@
   }
   private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
-    static var messages: [[String: Any]] = [
+    // The fixture server's state. Unchecked because `lock` guards every access: requests read and
+    // write it only inside `startLoading`, and `configure` seeds it under the same lock.
+    nonisolated(unsafe) static var messages: [[String: Any]] = [
       [
         "id": "welcome", "role": "assistant",
         "text":
@@ -85,14 +90,14 @@
         "createdAt": "2026-09-30T12:30:00.125Z",
       ]
     ]
-    static var receipts: [String: [String: Any]] = [:]
-    static var draft: [String: Any] = ["text": "", "attachments": []]
-    static var readPosition: [String: Any] = [:]
-    static var preferences: [String: Any] = [
+    nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
+    nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
+    nonisolated(unsafe) static var readPosition: [String: Any] = [:]
+    nonisolated(unsafe) static var preferences: [String: Any] = [
       "startPage": "assistant", "presentation": "simple", "theme": "system", "favorites": [], "sections": [],
       "followBots": [],
     ]
-    static var items: [[String: Any]] = [
+    nonisolated(unsafe) static var items: [[String: Any]] = [
       [
         "id": "web", "name": "Web search",
         "description": "Search the web when current information matters.", "enabled": true,
@@ -102,30 +107,31 @@
         "enabled": false,
       ],
     ]
-    static var routines: [[String: Any]] = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" ? [["id": "trial", "botId": "ranch", "name": "Morning brief trial", "prompt": "Report today's tasks. Do not modify anything.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": []]] : []
-    static var trialRequestId: String?
-    static var trialCount = 0
-    static var groupRooms: [[String: Any]] = []
-    static var groupEvents: [[String: Any]] = []
-    static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
-    static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
-    static var secureIndex = 0
-    static var vaultUnlocked = false
-    static var sourceEnabled = true
-    static var todayFrontier = "0"
-    static var todaySince = "2026-09-30T13:30:00Z"
-    static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
-    static var upgradePhase = "idle"
-    static var upgradeOperation = "check"
-    static var integrationChecked = false
-    static var integrationDisconnected = false
-    static var upgradeReadsRemaining = 0
-    static var avatar: [String: Any] = [
+    nonisolated(unsafe) static var routines: [[String: Any]] = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" ? [["id": "trial", "botId": "ranch", "name": "Morning brief trial", "prompt": "Report today's tasks. Do not modify anything.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": []]] : []
+    nonisolated(unsafe) static var trialRequestId: String?
+    nonisolated(unsafe) static var trialCount = 0
+    nonisolated(unsafe) static var groupRooms: [[String: Any]] = []
+    nonisolated(unsafe) static var groupEvents: [[String: Any]] = []
+    static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+    nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
+    nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
+    nonisolated(unsafe) static var secureIndex = 0
+    nonisolated(unsafe) static var vaultUnlocked = false
+    nonisolated(unsafe) static var sourceEnabled = true
+    nonisolated(unsafe) static var todayFrontier = "0"
+    nonisolated(unsafe) static var todaySince = "2026-09-30T13:30:00Z"
+    nonisolated(unsafe) static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
+    nonisolated(unsafe) static var upgradePhase = "idle"
+    nonisolated(unsafe) static var upgradeOperation = "check"
+    nonisolated(unsafe) static var integrationChecked = false
+    nonisolated(unsafe) static var integrationDisconnected = false
+    nonisolated(unsafe) static var upgradeReadsRemaining = 0
+    nonisolated(unsafe) static var avatar: [String: Any] = [
       "mode": "geometric", "shape": "blob", "color": "#1084FE", "eyes": "oval", "accessory": "none",
     ]
-    static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
-    static var inference: [String: Any] = ["reasoning": "medium", "speed": "normal"]
-    static var ranchModel = (provider: "openrouter", model: "configured-model")
+    nonisolated(unsafe) static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
+    nonisolated(unsafe) static var inference: [String: Any] = ["reasoning": "medium", "speed": "normal"]
+    nonisolated(unsafe) static var ranchModel = (provider: "openrouter", model: "configured-model")
     static var bots: [[String: Any]] {
       [
         [
@@ -148,7 +154,7 @@
         ],
       ]
     }
-    static let user: [String: Any] = [
+    nonisolated(unsafe) static let user: [String: Any] = [
       "id": "native-test", "name": "Local test member", "email": "test@localhost.invalid",
     ]
     override class func canInit(with request: URLRequest) -> Bool {
@@ -334,8 +340,12 @@
         if path.hasSuffix("/messages") {
           let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"]]
           Self.groupEvents.append(event); object = ["accepted": true]
-        } else if path.hasSuffix("/log") { object = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false] }
-        else { object = ["room": Self.groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+        } else if path.hasSuffix("/log") {
+          var page: [String: Any] = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false]
+          // Like the app server, `state=1` brings the room state along.
+          if request.url?.query?.contains("state=1") == true { page["state"] = Self.groupState }
+          object = page
+        } else { object = Self.groupState }
       } else if path.contains("/routines/") && path.hasSuffix("/results") {
         object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
       } else if path.contains("/routines/") && path.contains("/results/") {

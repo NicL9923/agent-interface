@@ -1,6 +1,6 @@
 import XCTest
 
-final class DailyFlowTests: XCTestCase {
+@MainActor final class DailyFlowTests: XCTestCase {
   private func launch(missingTarget: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
@@ -18,11 +18,23 @@ final class DailyFlowTests: XCTestCase {
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
+  /// A full software keyboard covers the tab bar; a minimized one, as with a hardware keyboard, does
+  /// not. Puts it away with the gesture a person would use, and waits until the tab can be tapped.
+  private func uncover(_ tab: XCUIElement, with gesture: () -> Void) {
+    guard !tab.isHittable else { return }
+    gesture()
+    expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: tab); waitForExpectations(timeout: 5)
+  }
   func testTabsKeepDraftAndFindOpensMessageActions() throws {
     let app = launch()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
     composer.tap(); composer.typeText("Keep this draft")
+    // The transcript dismisses the keyboard interactively, so drag it down into the keyboard. Start low:
+    // a drag from the transcript's upper half leaves XCTest waiting a minute for the app to idle.
+    uncover(app.tabBars.buttons["Today"]) {
+      app.scrollViews["conversationTranscript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+    }
     app.tabBars.buttons["Today"].tap()
     XCTAssertTrue(app.staticTexts["Needs your attention"].waitForExistence(timeout: 5))
     try capture(app, "daily-today")
@@ -33,6 +45,7 @@ final class DailyFlowTests: XCTestCase {
     XCTAssertTrue(app.tabBars.buttons["Search"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Search conversations"].value as? String, "Retain this query")
     XCUIDevice.shared.orientation = .portrait
+    uncover(app.tabBars.buttons["Assistants"]) { app.textFields["Search conversations"].typeText("\n") }
     app.tabBars.buttons["Assistants"].tap()
     XCTAssertEqual(composer.value as? String, "Keep this draft")
     app.buttons["Conversation actions"].tap(); app.buttons["Find in conversation"].tap()

@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 struct BotSettingsView: View {
   var bot: Bot?
   var close: (() -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var form = BotInput()
   @State private var savedForm = BotInput()
@@ -272,7 +272,7 @@ struct BotSettingsView: View {
         AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name)
       }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
       Section("Style") {
-        Picker("Style", selection: Binding(get: { avatar.mode }, set: switchAvatarMode)) {
+        Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
           Text("Geometric").tag("geometric")
           Text("Mascot").tag("mascot")
           Text("Portrait").tag("portrait")
@@ -673,7 +673,7 @@ struct BotSettingsView: View {
 struct RoutineEditor: View {
   @State var routine: Routine
   var onSaved: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var busy = false
   @State private var error: String?

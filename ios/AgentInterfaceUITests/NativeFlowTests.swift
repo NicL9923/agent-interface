@@ -1,6 +1,6 @@
 import XCTest
 
-final class NativeFlowTests: XCTestCase {
+@MainActor final class NativeFlowTests: XCTestCase {
   private func app(fixture: Bool = true, catalogFailure: Bool = false, upgradeUncertain: Bool = false, liveActivity: Bool = false, upgradeFailed: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
@@ -171,7 +171,9 @@ final class NativeFlowTests: XCTestCase {
     screenshot(app, "Fixture native Hermes update ready")
     app.buttons["installHermesUpdate"].tap()
     XCTAssertTrue(app.staticTexts["Update the household's Hermes installation?"].waitForExistence(timeout: 5))
-    app.buttons.matching(identifier: "Install update").allElementsBoundByIndex.last?.tap()
+    // The dialog's own button: the one that opened it has the same label and stays in the tree behind it.
+    let install = app.sheets.buttons["Install update"]
+    XCTAssertTrue(install.waitForExistence(timeout: 5)); install.tap()
     XCTAssertTrue(app.buttons["refreshHermesUpdate"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["installHermesUpdate"].isEnabled)
     screenshot(app, "Fixture native uncertain Hermes update")
@@ -201,6 +203,18 @@ final class NativeFlowTests: XCTestCase {
     XCTAssertTrue(fast.waitForExistence(timeout: 5), app.debugDescription); fast.tap()
     expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["composerModel"])
     waitForExpectations(timeout: 10)
+  }
+  func testCommandPeriodAsksBeforeStoppingActiveWork() {
+    let app = app(liveActivity: true)
+    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))
+    XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
+    app.typeKey(".", modifierFlags: .command)
+    XCTAssertTrue(app.buttons["Stop work"].waitForExistence(timeout: 5), "The shortcut asks first")
+    // Tapping away dismisses the popover (iPad) or sheet (iPhone) without choosing.
+    app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["Stop work"])
+    waitForExpectations(timeout: 5)
+    XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response", "Dismissing the question stops nothing")
   }
   func testNativeLiveActivityShowsActualExposedDetails() {
     let app = app(liveActivity: true)
@@ -271,9 +285,8 @@ final class NativeFlowTests: XCTestCase {
     selectSettingsTab(app, "Connections")
     XCTAssertTrue(app.buttons["Disconnect"].waitForExistence(timeout: 10))
     app.buttons["Disconnect"].tap()
-    let confirm = app.buttons.matching(identifier: "Disconnect").allElementsBoundByIndex.last
-    XCTAssertNotNil(confirm)
-    confirm?.tap()
+    let confirm = app.sheets.buttons["Disconnect"]
+    XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
     XCTAssertTrue(app.staticTexts["Not connected"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.staticTexts["The connection change may have reached Hermes"].exists)
     screenshot(app, "Native connection removed after confirmation")
@@ -284,9 +297,7 @@ final class NativeFlowTests: XCTestCase {
     attachment.lifetime = .keepAlways
     add(attachment)
   }
-  private func selectSettingsTab(_ app: XCUIApplication, _ title: String) {
-    app.buttons["settingsMore"].tap()
-    XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
-    app.buttons[title].tap()
+  private func selectSettingsTab(_ app: XCUIApplication, _ title: String, line: UInt = #line) {
+    app.selectSettingsTab(title, line: line)
   }
 }

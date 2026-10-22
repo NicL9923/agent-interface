@@ -1,5 +1,9 @@
 # Validation ledger
 
+> This file is the frozen archive of entries through October 21, 2026. New entries
+> go in [`docs/ledger/`](ledger/README.md), one file each, so release PRs never
+> conflict here. Do not add entries to this file.
+
 ## October 21 app release f257cc0
 
 PR #167's native improvements and PR #168's qualification records are deployed at `f257cc090418e0c0f7cd67d8fd0426cddeff6979`. The release is live at `https://agentui.wildflowersranch.com`,

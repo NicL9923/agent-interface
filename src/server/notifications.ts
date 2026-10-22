@@ -3,7 +3,7 @@ import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
-import { createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
+import { accountMarker, createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 export type PushSender = (
@@ -155,6 +155,8 @@ export class BackgroundWorker {
         // tag and each endpoint's delivery receipts without exposing removed titles.
         const original = JSON.parse(item.payload);
         const deliveryPayload = original.url === '/?view=today' ? JSON.stringify({...original,title:`${item.items.length} assistant update${item.items.length===1?'':'s'}`,body:item.items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · ')}) : item.payload;
+        // Notification actions name the account they act for, so a phone signed in as someone else refuses them.
+        const nativePayload = JSON.stringify({...JSON.parse(deliveryPayload), account: accountMarker(item.user_id)});
         const subscriptions = this.send ? this.store.subscriptions(item.user_id) : [];
         const devices = this.sendApns && this.config.apns ? this.store.nativeDevices(item.user_id, this.config.apns.environment) : [];
         // Keep undelivered events durable until this person has a subscription.
@@ -188,7 +190,7 @@ export class BackgroundWorker {
           if (item.items.every(row => this.store.delivered(row.id, endpoint))) continue;
           if (!stillVisible()) { revoked = true; break; }
           try {
-            await this.sendApns!(device, deliveryPayload);
+            await this.sendApns!(device, nativePayload);
             for (const row of item.items) this.store.markDelivered(row.id, endpoint);
             this.push.success();
           } catch (error) {

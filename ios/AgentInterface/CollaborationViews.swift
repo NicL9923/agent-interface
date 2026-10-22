@@ -10,7 +10,7 @@ struct RoutineResultRow: Decodable, Identifiable {
 struct RoutineOutput: Decodable { var messages: [Message]; var previewOnly: Bool }
 struct RoutineResultsView: View {
   var botId: String; var routineId: String; var resultId: String?
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var rows: [RoutineResultRow] = []
   @State private var selected: String
@@ -126,7 +126,8 @@ enum GroupCreation {
   }
   static func failure(_ error: Error) -> String { error.localizedDescription + " Retry the saved request to check this room's creation." }
 }
-struct GroupPage: Decodable { var events: [GroupEvent]; var cursor: Int; var has_more: Bool }
+/// `state` comes with a log read that asks for it, from servers that support `state=1`.
+struct GroupPage: Decodable { var events: [GroupEvent]; var cursor: Int; var has_more: Bool; var state: GroupState? }
 struct GroupApproval: Decodable { var request_id: String?; var description: String?; var command: String? }
 struct GroupAction: Decodable, Identifiable {
   var kind: String; var task_id: String; var member_id: String?; var execution_generation: Int?; var request_id: String?; var approval: GroupApproval?
@@ -137,7 +138,7 @@ struct GroupState: Decodable { var room: GroupRoom; var driver_status: GroupDriv
 struct GroupDecision: Encodable { var taskId: String; var memberId: String; var generation: Int; var choice: String; var requestId: String }
 
 struct GroupChatsView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var catalog: GroupCatalog?
   @State private var error: String?
   @State private var creating = false
@@ -159,12 +160,7 @@ struct GroupChatsView: View {
       // Split-view reparenting can cancel a view task during a phone push, so the first read
       // does not depend on one; the poll below only keeps it fresh.
       .onAppear { pendingCreate = GroupCreation.pending(scope: store.scope); Task { await load() } }
-      .task(id: store.scope) {
-        while !Task.isCancelled {
-          do { try await Task.sleep(for: .seconds(15)) } catch { return }
-          await load()
-        }
-      }
+      .pollWhileActive(id: store.scope ?? "", every: .seconds(15)) { await load() }
       .onChange(of: store.scope) { _, scope in
         catalog = nil; opened = nil; pendingCreate = GroupCreation.pending(scope: scope)
         Task { await load() }
@@ -228,7 +224,7 @@ struct GroupChatsView: View {
 }
 struct GroupCreateView: View {
   var onCreated: (GroupRoom) -> Void = { _ in }
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var name = ""
   /// In the order they were chosen, which is the order Hermes receives.
@@ -271,7 +267,7 @@ struct GroupCreateView: View {
 }
 struct GroupConversationView: View {
   var room: GroupRoom; var canSend: Bool
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var state: GroupState?
   @State private var events: [GroupEvent] = []
@@ -284,6 +280,10 @@ struct GroupConversationView: View {
   @State private var busy = false
   /// Another member made one of its assistants personal, so this group is gone for this person.
   @State private var missing = false
+  /// The ETag of the log page applied last, so an unchanged poll skips decoding it again.
+  @State private var applied: String?
+  /// Cleared once an older server refuses a log read that asks for the room state too.
+  @State private var combined = true
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
   private var status: String {
@@ -333,11 +333,12 @@ struct GroupConversationView: View {
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
-      state = nil; events = []; cursor = 0; more = false
+      state = nil; events = []; cursor = 0; more = false; applied = nil
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
-      while !Task.isCancelled && !missing { await load(); do { try await Task.sleep(for: .seconds(3)) } catch { return } }
+      await load()
     }
+    .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: .seconds(3)) { if !missing { await load() } }
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -375,18 +376,32 @@ struct GroupConversationView: View {
     let member = room.members.first { $0.member_id == event.actor?.id || $0.member_id == event.payload.member_id }
     return member?.display_name ?? member?.profile ?? event.actor?.id ?? event.payload.member_id ?? "Assistant"
   }
+  /// One request a poll: the log brings the room state along, so the server reads it from Hermes once.
   private func load() async {
     guard let api = store.api else { return }; let scope = store.scope
     do {
+      if combined {
+        do {
+          let response: (value: GroupPage?, etag: String?) = try await api.changed("\(path)/log?since=\(cursor)&state=1", since: applied)
+          guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
+          // The page applied last time, unchanged: nothing to decode or redraw.
+          guard let page = response.value else { if error != nil { error = nil }; return }
+          if let value = page.state { apply(value, page); applied = response.etag; return }
+          combined = false
+        } catch let failure as APIError where failure.status == 400 { combined = false }
+      }
       let value: GroupState = try await api.get(path)
       let page: GroupPage = try await api.get("\(path)/log?since=\(cursor)")
       guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
-      state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor; more = page.has_more
+      apply(value, page)
     } catch {
       guard !Task.isCancelled, store.scope == scope else { return }
       if (error as? APIError)?.status == 404 { missing = true; state = nil; events = []; self.error = nil }
       else { self.error = error.localizedDescription }
     }
+  }
+  private func apply(_ value: GroupState, _ page: GroupPage) {
+    state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor; more = page.has_more
   }
   private func send() async {
     guard let api = store.api else { return }; let scope = store.scope
@@ -407,6 +422,6 @@ struct GroupConversationView: View {
   private func decide(_ action: GroupAction, _ choice: String) async {
     guard let api = store.api, let member = action.member_id, let generation = action.execution_generation, let request = action.request_id ?? action.approval?.request_id else { return }
     busy = true; defer { busy = false }
-    do { let _: GroupApproved = try await api.write(path + "/approve", GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)); await load() } catch { self.error = error.localizedDescription }
+    do { let _: GroupApproved = try await api.write(path + "/approve", GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)); store.buzz(.decided); await load() } catch { store.buzz(.failed); self.error = error.localizedDescription }
   }
 }

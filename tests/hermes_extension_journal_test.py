@@ -674,6 +674,28 @@ class DiscoveryTests(unittest.TestCase):
                 discover("tick", {"full": True})
                 self.assertEqual(ledger.call_count, 5)
 
+    def test_approval_events_name_their_native_request_for_notification_actions(self):
+        with FakeHermes([]) as hermes:
+            server = hermes.modules["tui_gateway.server"]
+            server._sessions["sid"] = {"session_key": "stored"}
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES('run','d','default','sid','stored','nicolas','e','run','Ask','[]',0,'accepted',0,1)")
+            server.write_json({"jsonrpc": "2.0", "id": "request:7", "method": "approval", "params": {"session_id": "sid", "command": "rm -rf build"}})
+            # A journal row from before approval identities, and one whose key belongs to another run, get none.
+            hermes.journal.event("default", "sid", "approval", "Approval requested", "run")
+            hermes.journal.event("default", "sid", "approval", "Approval requested", "run", event_key="other:approval:9")
+            hermes.journal.event("default", "sid", "completed", "Done", "run", event_key="run:completed:")
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = Mock(return_value=[]), Path(hermes.directory.name) / "executions.db"
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: []),
+                       "cron": cron, "cron.executions": executions}
+            with patch.dict(sys.modules, modules):
+                events = hermes.methods["agent-interface.discover"]("tick", {"cursor": "0"})["result"]["events"]
+        self.assertEqual([(event["kind"], event.get("approvalId")) for event in events],
+                         [("approval", "request:7"), ("approval", None), ("approval", None), ("completed", None)])
+
 
 if __name__ == "__main__":
     unittest.main()

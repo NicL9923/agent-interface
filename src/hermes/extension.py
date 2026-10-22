@@ -973,14 +973,19 @@ def install(path=None):
                 if key not in present:
                     del routine_scans[key]
         with journal.lock:
-            rows = journal.db.execute("SELECT id,profile,session_id,run_id,kind,title,body,occurred,routine_id FROM events WHERE id>? ORDER BY id LIMIT 250", (cursor,)).fetchall()
+            rows = journal.db.execute("SELECT id,profile,session_id,run_id,kind,title,body,occurred,routine_id,event_key FROM events WHERE id>? ORDER BY id LIMIT 250", (cursor,)).fetchall()
         ready = []
         for row in rows:
             if row[4] == "completed" and server._sessions.get(row[2], {}).get("running"):
                 # A turn boundary can precede queued guidance/goal continuation.
                 break
             ready.append(row)
-        events = [{"id": str(r[0]), "botId": r[1], "sessionId": r[2], "requestId": r[3], "runId": r[3], "routineId": r[8], "kind": r[4], "title": r[5], "body": r[6], "occurredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r[7]))} for r in ready]
+        def approval_id(row):
+            # The approval's native request ID, which its event identity ends with, lets a notification decide it.
+            prefix = f"{row[3]}:approval:"
+            return row[9][len(prefix):] if row[4] == "approval" and row[3] and isinstance(row[9], str) and row[9].startswith(prefix) and len(row[9]) > len(prefix) else None
+        events = [{"id": str(r[0]), "botId": r[1], "sessionId": r[2], "requestId": r[3], "runId": r[3], "routineId": r[8], "kind": r[4], "title": r[5], "body": r[6], "occurredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r[7])),
+                   **({"approvalId": approval_id(r)} if approval_id(r) else {})} for r in ready]
         return server._ok(rid, {"cursor": str(ready[-1][0] if ready else cursor), "events": events})
 
     from agent.skill_utils import ESSENTIAL_SKILLS

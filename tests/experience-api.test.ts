@@ -7,12 +7,14 @@ import { installAuth, hash } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installExperienceRoutes } from '../src/server/experience.js';
+import { installEtags } from '../src/server/etag.js';
 import type { Runtime } from '../src/shared/types.js';
 const origin = 'https://experience.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
-async function setup() {
+async function setup(etags = false) {
   const app = Fastify({ logger: false }); apps.push(app);
+  if (etags) installEtags(app);
   const store = new Store(':memory:');
   const config = loadConfig({ NODE_ENV: 'production', APP_ORIGIN: origin, APP_DATABASE: ':memory:', GOOGLE_CLIENT_ID: 'fixture', HOUSEHOLD_EMAILS: 'first@example.invalid,second@example.invalid' });
   await app.register(cookie); await installAuth(app, store, config);
@@ -60,6 +62,27 @@ it('builds Today from canonical activity and attention without hiding unavailabl
   expect((await s.app.inject({ url: '/api/today', headers: s.first })).json().since).toBe(since);
   expect((await s.app.inject({ url: '/api/today', headers: s.second })).json().since).not.toBe(since);
   expect((await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: new Date(Date.now() + 86400000).toISOString(), frontier: today.frontier } })).statusCode).toBe(400);
+});
+it('revalidates an unchanged Today as 304 although each read has a new check time', async () => {
+  const s = await setup(true);
+  const createdAt = new Date(Date.now() - 60_000).toISOString();
+  s.conversation.mockImplementation(async (id: string) => ({ botId: id, messages: [{ id: 'reply', role: 'assistant', text: 'Gate fixed', createdAt }], activity: { state: 'idle' }, approvals: [], attention: [], files: [] }) as never);
+  const fresh = (await s.app.inject({ url: '/api/today', headers: s.first })).json();
+  // Before a first catch-up the rolling day starts on a whole minute, so it holds still between polls.
+  expect(Date.parse(fresh.since) % 60_000).toBe(0);
+  await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: new Date(Date.now() - 3_600_000).toISOString(), frontier: fresh.frontier } });
+  const first = await s.app.inject({ url: '/api/today', headers: s.first });
+  const etag = first.headers.etag as string;
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const second = await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(second.json().generatedAt).not.toBe(first.json().generatedAt);
+  expect(second.headers.etag).toBe(etag);
+  const unchanged = await s.app.inject({ url: '/api/today', headers: { ...s.first, 'if-none-match': etag } });
+  expect(unchanged.statusCode).toBe(304); expect(unchanged.body).toBe('');
+  s.store.recordEvents([{ id: 'late', botId: 'ranch', kind: 'completed', title: 'Finished', occurredAt: new Date().toISOString() }], '1');
+  const changed = await s.app.inject({ url: '/api/today', headers: { ...s.first, 'if-none-match': etag } });
+  expect(changed.statusCode).toBe(200); expect(changed.headers.etag).not.toBe(etag);
+  expect(changed.json().events.map((event: { id: string }) => event.id)).toEqual(['late']);
 });
 it('keeps reply choices private and rejects nonexistent or forged card items', async () => {
   const s = await setup(), url = '/api/bots/ranch/messages/reply/cards/list/state';

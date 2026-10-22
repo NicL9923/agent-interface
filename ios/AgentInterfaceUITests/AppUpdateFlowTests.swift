@@ -1,6 +1,6 @@
 import XCTest
 
-final class AppUpdateFlowTests: XCTestCase {
+@MainActor final class AppUpdateFlowTests: XCTestCase {
   private func launch(update: Bool) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"

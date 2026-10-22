@@ -108,7 +108,7 @@ enum Artifacts {
 }
 
 struct ConversationFilesView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var kind = ArtifactKind.all
   @State private var search = ""
@@ -164,7 +164,7 @@ struct ConversationFilesView: View {
 /// One file: its name, then source, type and size as the web's list and detail show them.
 struct ArtifactRow: View {
   var artifact: Artifact
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.openURL) private var openURL
   var body: some View {
     let location = artifact.file.location(origin: store.api?.baseURL)

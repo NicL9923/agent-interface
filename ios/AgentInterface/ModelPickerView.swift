@@ -6,7 +6,7 @@ struct ModelCatalogSections: View {
   var selection: ModelChoice
   var disabled = false
   var choose: (ModelChoice) -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var providers: [ModelProviderInfo] = []
   @State private var expanded: Set<String> = []
   @State private var search = ""
@@ -143,7 +143,7 @@ struct ModelSelectionRow: View {
   var selection: ModelChoice
   var disabled = false
   var choose: (ModelChoice) -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var providerName: String?
   var body: some View {
     NavigationLink {
@@ -182,7 +182,7 @@ struct ModelCatalogPage: View {
 
 struct ComposerModelSheet: View {
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
   @State private var busy = false
