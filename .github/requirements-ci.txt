@@ -2,4 +2,4 @@
 # these current; the application's Python dependencies are in
 # scripts/spike/requirements.lock.txt.
 pip-audit==2.10.1
-ruff==0.17.0
+ruff==0.17.1
