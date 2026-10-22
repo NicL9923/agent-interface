@@ -105,14 +105,46 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(ServerDate.parse("not a date"))
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
-    for shape in AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted() {
+    for shape in AvatarGeometry.keys {
       let points = AvatarGeometry.points(shape)
       XCTAssertEqual(points.values.count, 144, shape)
       XCTAssertTrue(points.values.allSatisfy(\.isFinite), shape)
       XCTAssertGreaterThan(points.magnitudeSquared, 0)
-      XCTAssertNotNil(AvatarGeometry.faces[shape], shape)
       if shape != "blob" { XCTAssertNotEqual(AvatarGeometry.svg(shape), AvatarGeometry.svg("blob"), shape) }
     }
+    for shape in AvatarConfig.shapes + ["mascot"] { XCTAssertNotNil(AvatarGeometry.faces[shape], shape) }
+  }
+  func testCharactersWithoutTheirOwnHeadShareTheMascotHeadAndAnchor() {
+    for family in AvatarConfig.characterFamilies {
+      let own = CharacterAvatarArt.heads[family]
+      XCTAssertEqual(AvatarGeometry.svg(AvatarGeometry.characterKey(family)), own ?? AvatarGeometry.mascotHead, family)
+      let avatar = AvatarConfig(mode: "mascot", shape: nil, family: family)
+      let anchor = AvatarGeometry.anchor(for: avatar)
+      let expected = AvatarGeometry.characterFaces[family] ?? AvatarGeometry.faces["mascot"]!
+      XCTAssertEqual([anchor.cy, anchor.scale, anchor.top, anchor.hat], [expected.cy, expected.scale, expected.top, expected.hat], family)
+    }
+    XCTAssertEqual(
+      Set(AvatarConfig.characterFamilies.filter { CharacterAvatarArt.heads[$0] == nil }),
+      ["panda", "raccoon", "owl", "dinosaur", "eagle", "bat"])
+  }
+  func testCharacterGhostKeepsItsOwnSilhouetteNextToTheGeometricGhost() {
+    let character = AvatarConfig(mode: "mascot", shape: nil, family: "ghost")
+    let shape = AvatarConfig(shape: "ghost")
+    XCTAssertEqual(character.geometry, shape.geometry)
+    XCTAssertNotEqual(character.silhouette, shape.silhouette)
+    XCTAssertNotEqual(AvatarGeometry.svg(character.silhouette), AvatarGeometry.svg(shape.silhouette))
+    XCTAssertEqual(AvatarGeometry.anchor(for: shape).cy, 45)
+    XCTAssertEqual(AvatarGeometry.anchor(for: character).cy, 47)
+  }
+  func testCharacterInkHeadColorAndCheeksFollowTheirMarkings() {
+    XCTAssertEqual(CharacterAvatarArt.headColor("panda", "#292929"), "#FBF7EF")
+    XCTAssertEqual(CharacterAvatarArt.headColor("owl", "#97683D"), "#97683D")
+    // Dark eyes would vanish on the raccoon mask, and light ones on the owl's cream disc.
+    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor("raccoon", "#8C8F99"), mascot: true), "#fff3db")
+    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor("owl", "#292929"), mascot: true), "#2b201b")
+    XCTAssertEqual(CharacterAvatarArt.cheekless, ["pumpkin", "owl"])
+    XCTAssertNotNil(AvatarMotion.bodyEdge("#F2EEF8"))
+    XCTAssertNil(AvatarMotion.bodyEdge("#FF9800"))
   }
   func testSeasonalAvatarsDecodeAndKeepCustomizationWhenSelected() throws {
     for (family, color) in AvatarConfig.seasonalColors {
@@ -126,7 +158,9 @@ final class PresentationTests: XCTestCase {
       XCTAssertEqual(selected.accessory, "glasses")
       XCTAssertEqual(selected.eyeSpacing, 1.3)
       XCTAssertTrue(AvatarConfig.families.contains { $0.id == family })
-      XCTAssertNotEqual(AvatarGeometry.svg(family), AvatarGeometry.mascotHead)
+      XCTAssertEqual(
+        AvatarGeometry.svg(AvatarGeometry.characterKey(family)) != AvatarGeometry.mascotHead,
+        CharacterAvatarArt.heads[family] != nil, family)
     }
     let original = AvatarConfig(mode: "mascot", color: "#111111")
     XCTAssertEqual(original.selectingFamily("fox").color, "#111111")

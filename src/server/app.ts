@@ -1,4 +1,4 @@
-import { avatarShapes, reasoningLevels, serviceTiers } from "../shared/types.js";
+import { avatarShapes, mascotFamilies, reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -58,7 +58,7 @@ const avatar = z.discriminatedUnion("mode", [
   }),
   z.object({
     mode: z.literal("mascot"),
-    family: z.enum(["sprout", "fox", "bear", "pumpkin", "santa", "rudolph", "turkey", "bunny"]),
+    family: z.enum(mascotFamilies),
     color: z.string().regex(/^#[0-9a-f]{6}$/i),
     eyes: z.enum(["round", "oval", "visor", "spark"]),
     accessory: z.enum(["none", "hat", "glasses"]),

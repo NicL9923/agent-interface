@@ -721,6 +721,11 @@ enum AvatarMotion {
     func score(_ ink: String) -> Double { contrast(body, luminance(ink) ?? 0) }
     return score(preferred) >= 2 || score(preferred) >= score(other) ? preferred : other
   }
+  /// Very light bodies get a soft edge so they keep their shape on the light theme's cream surface.
+  static func bodyEdge(_ color: String) -> String? {
+    guard let body = luminance(color), body > 0.7 else { return nil }
+    return tint(color, -0.16)
+  }
   /// Mixes a hex color toward white (positive) or black (negative).
   static func tint(_ color: String, _ amount: Double) -> String {
     let hex = color.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
@@ -901,8 +906,16 @@ struct PointVector: Equatable {
 enum AvatarGeometry {
   static let mascotHead =
     "M50 14 C77 14 95 32 95 56 C95 81 76 95 50 95 C24 95 5 81 5 56 C5 32 23 14 50 14Z"
+  /// Characters get their own key because one of them, the ghost, shares a name with a shape.
+  static let characterPrefix = "character:"
+  static func characterKey(_ family: String) -> String { characterPrefix + family }
+  /// Everything a body outline can be keyed by.
+  static let keys: [String] =
+    AvatarConfig.shapes + ["mascot"] + AvatarConfig.characterFamilies.map(characterKey)
   static func svg(_ shape: String) -> String {
-    if let head = SeasonalAvatarArt.heads[shape] { return head }
+    if shape.hasPrefix(characterPrefix) {
+      return CharacterAvatarArt.heads[String(shape.dropFirst(characterPrefix.count))] ?? mascotHead
+    }
     return switch shape {
     case "mascot": mascotHead
     case "drop": "M50 7 C42 16 13 42 13 64 C13 87 29 95 50 95 C71 95 87 82 87 62 C87 39 61 17 50 7Z"
@@ -943,10 +956,8 @@ enum AvatarGeometry {
     default: "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z"
     }
   }
-  static let paths = Dictionary(
-    uniqueKeysWithValues: (AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted()).map { ($0, SVGPath.parse(svg($0))) })
-  static let cached = Dictionary(
-    uniqueKeysWithValues: (AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted()).map { ($0, points($0)) })
+  static let paths = Dictionary(uniqueKeysWithValues: keys.map { ($0, SVGPath.parse(svg($0))) })
+  static let cached = Dictionary(uniqueKeysWithValues: keys.map { ($0, points($0)) })
   static func path(_ shape: String) -> Path { paths[shape] ?? SVGPath.parse(svg(shape)) }
   static func sampled(_ shape: String) -> PointVector { cached[shape] ?? points(shape) }
   static func points(_ shape: String) -> PointVector {
@@ -1026,6 +1037,23 @@ enum AvatarGeometry {
     var top: Double
     var hat: Double
   }
+  /// Where a character's face sits, by family. Characters without one use the shared mascot anchor.
+  /// Listed before `faces` because the ghost is both a character and a shape.
+  static let characterFaces: [String: Anchor] = [
+    "cactus": Anchor(cy: 50, scale: 0.88, top: 10, hat: 0.7),
+    "pumpkin": Anchor(cy: 53, scale: 0.95, top: 18, hat: 0.75),
+    "ghost": Anchor(cy: 47, scale: 0.95, top: 12, hat: 0.8),
+    "leprechaun": Anchor(cy: 54, scale: 0.9, top: 22, hat: 0.75),
+    "santa": Anchor(cy: 51, scale: 0.9, top: 22, hat: 0.75),
+    "rudolph": Anchor(cy: 54, scale: 0.9, top: 25, hat: 0.7),
+    "turkey": Anchor(cy: 54, scale: 0.85, top: 30, hat: 0.65),
+    "bunny": Anchor(cy: 57, scale: 0.9, top: 31, hat: 0.65),
+    "snowman": Anchor(cy: 52, scale: 0.95, top: 13, hat: 0.8),
+  ]
+  static func anchor(for avatar: AvatarConfig) -> Anchor {
+    if let character = avatar.character { return characterFaces[character] ?? faces["mascot"]! }
+    return faces[avatar.geometry] ?? faces["blob"]!
+  }
   static let faces: [String: Anchor] = [
     "blob": Anchor(cy: 50, scale: 1, top: 3, hat: 1),
     "pebble": Anchor(cy: 50, scale: 1, top: 2, hat: 1),
@@ -1048,11 +1076,6 @@ enum AvatarGeometry {
     "flower": Anchor(cy: 51, scale: 0.85, top: 8, hat: 0.75),
     "sun": Anchor(cy: 50, scale: 0.85, top: 15, hat: 0.8),
     "mascot": Anchor(cy: 55, scale: 1, top: 15, hat: 0.82),
-    "pumpkin": Anchor(cy: 53, scale: 0.95, top: 18, hat: 0.75),
-    "santa": Anchor(cy: 51, scale: 0.9, top: 22, hat: 0.75),
-    "rudolph": Anchor(cy: 54, scale: 0.9, top: 25, hat: 0.7),
-    "turkey": Anchor(cy: 54, scale: 0.85, top: 30, hat: 0.65),
-    "bunny": Anchor(cy: 57, scale: 0.9, top: 31, hat: 0.65),
   ]
 }
 
@@ -1208,10 +1231,14 @@ struct AvatarArtwork {
     let color = Color(hex: colorHex)
     let eyes = avatar.eyes ?? "oval"
     let accessory = avatar.accessory ?? "none"
-    let geometry = avatar.geometry
-    let seasonal = mascot && AvatarConfig.seasonalColors[family] != nil
-    let anchor = AvatarGeometry.faces[geometry] ?? AvatarGeometry.faces["blob"]!
-    let inkHex = AvatarMotion.faceInk(colorHex, mascot: mascot)
+    let character = avatar.character
+    let anchor = AvatarGeometry.anchor(for: avatar)
+    let inkHex = AvatarMotion.faceInk(
+      character.map { CharacterAvatarArt.eyeSurroundColor($0, colorHex) } ?? colorHex, mascot: mascot)
+    // A panda's head is cream while its ears and eye patches take the chosen color.
+    let headHex = character.map { CharacterAvatarArt.headColor($0, colorHex) } ?? colorHex
+    let headFill = headHex == colorHex ? bodyColor : Color(hex: headHex)
+    let edge = AvatarMotion.bodyEdge(headHex)
     let ink = Color(hex: inkHex)
     let eyeScale = anchor.scale
     let eyeWidth = avatar.eyeWidth ?? 1
@@ -1227,12 +1254,12 @@ struct AvatarArtwork {
     let drawsPill = !(mascot && (eyes == "oval" || eyes == "round")) && !["spark", "visor", "round"].contains(eyes)
     let dotShrink = drawsPill ? 1 + 0.12 * face.dot : 1 - 0.3 * face.dot
     let pillHeight = 25 - 14 * face.dot
-    // A smaller extra hat leaves the seasonal character's ears, cap and antlers visible.
-    let hatAnchor: AvatarGeometry.Anchor = switch seasonal ? family : "" {
-    case "santa": .init(cy: anchor.cy, scale: anchor.scale, top: -3, hat: 0.45)
-    case "rudolph": .init(cy: anchor.cy, scale: anchor.scale, top: 24, hat: 0.45)
-    case "bunny": .init(cy: anchor.cy, scale: anchor.scale, top: 31, hat: 0.4)
-    default: anchor
+    // A smaller extra hat leaves a character's own cap, ears and antlers visible.
+    let hatAnchor: AvatarGeometry.Anchor
+    if let character, let hat = CharacterAvatarArt.hatAnchors[character] {
+      hatAnchor = .init(cy: anchor.cy, scale: anchor.scale, top: hat.top, hat: hat.hat)
+    } else {
+      hatAnchor = anchor
     }
     let round = StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
     func stroke(_ width: Double) -> StrokeStyle {
@@ -1279,7 +1306,7 @@ struct AvatarArtwork {
           }
         }
         trails(front: false)
-        if seasonal { SeasonalAvatarArt.back(layer, family: family, color: colorHex, yaw: pose.yaw) }
+        if let character { CharacterAvatarArt.back(layer, family: character, color: colorHex, yaw: pose.yaw) }
         if mascot && (family == "bear" || family == "fox") {
           let inner = Color(
             hex: AvatarMotion.tint(colorHex, family == "fox" ? -0.35 : 0.45))
@@ -1305,7 +1332,7 @@ struct AvatarArtwork {
           sprout.fill(AvatarArt.leafRight, with: .color(Color(hex: "#62b07a")))
           sprout.stroke(AvatarArt.veins, with: .color(Color(hex: "#a9d9b3")), style: stroke(1.2))
         }
-        layer.fill(body, with: .color(bodyColor))
+        layer.fill(body, with: .color(headFill))
 
         var faceLayer = layer
         faceLayer.clip(to: body)
@@ -1320,8 +1347,8 @@ struct AvatarArtwork {
           muzzle.scaleBy(x: center.scale, y: 1)
           muzzle.translateBy(x: -50, y: 0)
           let cream = Color(hex: "#fff3db")
-          if seasonal {
-            SeasonalAvatarArt.face(muzzle, family: family, color: colorHex, ink: ink, mouth: face.mouth, happy: face.happy)
+          if let character {
+            CharacterAvatarArt.face(muzzle, family: character, color: colorHex, ink: ink, mouth: face.mouth, happy: face.happy)
           } else {
             if family == "bear" { muzzle.fill(AvatarArt.ellipse(50, 71, 18, 13), with: .color(cream)) }
             if family == "fox" { muzzle.fill(AvatarArt.foxMuzzle, with: .color(cream)) }
@@ -1343,7 +1370,7 @@ struct AvatarArtwork {
             }
           }
         }
-        if mascot && roll.visible {
+        if mascot && roll.visible && !(character.map(CharacterAvatarArt.cheekless.contains) ?? false) {
           for direction in [-1.0, 1.0] {
             let p = AvatarMotion.project(direction * 27, yaw: pose.yaw)
             guard p.visible else { continue }
@@ -1362,6 +1389,11 @@ struct AvatarArtwork {
           let grow = AvatarMotion.perspective(p.scale) * pose.eyeScale * dotShrink
           var eye = faceLayer
           eye.translateBy(x: 50 + p.x, y: eyeY)
+          if let character {
+            CharacterAvatarArt.eyeSurround(
+              eye, family: character, side: side, color: colorHex, scaleX: p.scale * eyeScale,
+              scale: eyeScale)
+          }
           if face.happy < 0.999 {
             var shape = eye
             shape.opacity = 1 - face.happy
@@ -1416,7 +1448,10 @@ struct AvatarArtwork {
             control: CGPoint(x: 50 + center.x, y: eyeY - 5))
           faceLayer.stroke(bridge, with: .color(ink), style: stroke(2.5))
         }
-        if seasonal { SeasonalAvatarArt.front(layer, family: family, yaw: pose.yaw) }
+        if let edge {
+          layer.stroke(body, with: .color(Color(hex: edge)), style: StrokeStyle(lineWidth: 2.2))
+        }
+        if let character { CharacterAvatarArt.front(layer, family: character, yaw: pose.yaw) }
         if accessory == "hat" {
           var hat = layer
           hat.translateBy(x: 50, y: hatAnchor.top + 15 * hatAnchor.hat)
@@ -1528,7 +1563,7 @@ struct AvatarView: View {
         entered: snapshot.entered, held: heldProp != nil,
         now: date.timeIntervalSinceReferenceDate)
   }
-  private var geometry: String { avatar.geometry }
+  private var geometry: String { avatar.silhouette }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
   private func still(_ state: ActivityState) -> Bool {

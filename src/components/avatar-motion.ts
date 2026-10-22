@@ -602,6 +602,12 @@ export function faceInk(color: string, mascot = false) {
   return score(preferred) >= 2 || score(preferred) >= score(other) ? preferred : other;
 }
 
+/** Very light bodies get a soft edge so they keep their shape on the light theme's cream surface. */
+export function bodyEdge(color: string) {
+  const body = luminance(color);
+  return body !== null && body > 0.7 ? tint(color, -0.16) : null;
+}
+
 /** Mixes a hex color toward white (positive) or black (negative). */
 export function tint(color: string, amount: number) {
   const value = parseInt(color.replace("#", ""), 16);

@@ -1,13 +1,12 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import { avatarShapes, type Accessory, type ActivityState, type Avatar as AvatarConfig, type AvatarShape, type Eyes } from "../shared/types";
+import { avatarShapes, everydayFamilies, type Accessory, type ActivityState, type Avatar as AvatarConfig, type AvatarShape, type Eyes } from "../shared/types";
 import { Avatar, avatarColors, defaultAvatar, stateLabels } from "./Avatar";
 import "./avatar-editor.css";
-import { seasonalAvatar, seasonalChoices } from "./seasonal-avatars";
+import { seasonalAvatar, seasonalChoices } from "./character-avatars";
 
 type DrawnAvatar = Exclude<AvatarConfig, { mode: "portrait" }>;
 type Family = Extract<AvatarConfig, { mode: "mascot" }>["family"];
 
-const families: Family[] = ["bear", "fox", "sprout"];
 const eyeStyles: Eyes[] = ["oval", "round", "visor", "spark"];
 const accessories: Accessory[] = ["none", "hat", "glasses"];
 const previewStates: ActivityState[] = ["idle", "thinking", "working", "waiting", "blocked", "done"];
@@ -123,7 +122,7 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls }: {
             <fieldset className="choice-group">
               <legend>Character</legend>
               <div className="choice-grid">
-                {families.map((family) => (
+                {everydayFamilies.map((family) => (
                   <Choice key={family} group={`${id}-family`} label={title(family)}
                     checked={drawn.family === family} onSelect={() => update({ family })}>
                     <Avatar avatar={{ ...drawn, family, accessory: "none" }} size={44} reducedMotion />

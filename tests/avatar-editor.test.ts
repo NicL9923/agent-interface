@@ -4,7 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AvatarEditor } from "../src/components/AvatarEditor";
 import type { Avatar } from "../src/shared/types";
-import { seasonalChoices } from "../src/components/seasonal-avatars";
+import { seasonalChoices } from "../src/components/character-avatars";
+import { everydayFamilies } from "../src/shared/types";
 
 // jsdom has no SVG geometry, so the rig itself is covered by avatar-motion tests.
 vi.mock("../src/components/Avatar", async (original) => ({
@@ -49,6 +50,12 @@ describe("avatar editor", () => {
     expect(current).toMatchObject({ mode: "geometric", shape: "hex" });
     await choose("Mascot");
     expect(current).toMatchObject({ mode: "mascot", family, color });
+  });
+
+  it.each(everydayFamilies)("offers the %s character in your own color", async (family) => {
+    await choose("Mascot");
+    await choose(family[0].toUpperCase() + family.slice(1));
+    expect(current).toMatchObject({ mode: "mascot", family, color: "#FF309B", eyes: "visor", accessory: "hat" });
   });
 
   it("keeps color, eyes and accessory when switching to a mascot", async () => {

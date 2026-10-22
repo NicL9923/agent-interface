@@ -7,9 +7,21 @@ import {
   defaultAvatar,
   stateLabels,
 } from "./components/Avatar";
-import type { ActivityState, Avatar as AvatarConfig } from "./shared/types";
+import { everydayFamilies, type ActivityState, type Avatar as AvatarConfig, type MascotFamily } from "./shared/types";
 import "./avatar-specimen.css";
-import { seasonalAvatar, seasonalChoices } from "./components/seasonal-avatars";
+import { seasonalAvatar, seasonalChoices } from "./components/character-avatars";
+const everydayColors: Record<(typeof everydayFamilies)[number], string> = {
+  bear: "#FF9800",
+  fox: "#FF6700",
+  sprout: "#00BCA6",
+  panda: "#292929",
+  raccoon: "#8C8F99",
+  owl: "#97683D",
+  cactus: "#00BCA6",
+  dinosaur: "#9159FE",
+};
+const everyday = (family: MascotFamily & keyof typeof everydayColors): Extract<AvatarConfig, { mode: "mascot" }> =>
+  ({ mode: "mascot", family, color: everydayColors[family], eyes: "oval", accessory: "none" });
 const portrait =
   "data:image/svg+xml," +
   encodeURIComponent(
@@ -20,9 +32,10 @@ const matrix: [string, AvatarConfig][] = [
   ["Triangle", { ...defaultAvatar, shape: "triangle", color: "#FF309B", eyes: "visor" }],
   ["Drop", { ...defaultAvatar, shape: "drop", color: "#97683D", accessory: "hat" }],
   ["Hex", { ...defaultAvatar, shape: "hex", color: "#9159FE", accessory: "glasses" }],
-  ["Bear", { mode: "mascot", family: "bear", color: "#FF9800", eyes: "round", accessory: "none" }],
-  ["Fox", { mode: "mascot", family: "fox", color: "#FF6700", eyes: "oval", accessory: "none" }],
-  ["Sprout", { mode: "mascot", family: "sprout", color: "#00BCA6", eyes: "oval", accessory: "hat" }],
+  ["Bear", { ...everyday("bear"), eyes: "round" }],
+  ["Fox", everyday("fox")],
+  ["Sprout", { ...everyday("sprout"), accessory: "hat" }],
+  ...everydayFamilies.slice(3).map((family): [string, AvatarConfig] => [family[0].toUpperCase() + family.slice(1), everyday(family)]),
   ["Portrait", { mode: "portrait", src: portrait, origin: "uploaded" }],
   ...seasonalChoices.map(({ family, label }): [string, AvatarConfig] => [label, seasonalAvatar(family)]),
 ];
@@ -176,31 +189,9 @@ function Specimen() {
           character approach.
         </p>
         <div className="spec-shapes">
-          {(["sprout", "fox", "bear"] as const).map((family, i) => (
-            <button
-              key={family}
-              onClick={() =>
-                setAvatar({
-                  mode: "mascot",
-                  family,
-                  color: avatarColors[i],
-                  eyes: "oval",
-                  accessory: "none",
-                })
-              }
-            >
-              <Avatar
-                avatar={{
-                  mode: "mascot",
-                  family,
-                  color: avatarColors[i],
-                  eyes: "oval",
-                  accessory: "none",
-                }}
-                size={90}
-                state={state}
-                reducedMotion={reduce}
-              />
+          {everydayFamilies.map((family) => (
+            <button key={family} onClick={() => setAvatar(everyday(family))}>
+              <Avatar avatar={everyday(family)} size={90} state={state} reducedMotion={reduce} />
               <span>{family}</span>
             </button>
           ))}

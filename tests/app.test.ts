@@ -9,6 +9,7 @@ import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
+import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
 const origin = "http://127.0.0.1:3000";
@@ -235,7 +236,7 @@ describe("default roster detail fallback", () => {
   }
 });
 describe("authentication and household state", () => {
-  it("saves seasonal avatars through native metadata and round-trips them through household presentation", async () => {
+  it("saves every mascot character through native metadata and round-trips it through household presentation", async () => {
     const fake = runtimeDouble();
     let nativeAvatar: Avatar | undefined;
     const originalList = fake.runtime.listBots;
@@ -244,7 +245,7 @@ describe("authentication and household state", () => {
     const { app } = await createApp(config(), fake.runtime, { background: false });
     try {
       const headers = await login(app);
-      for (const family of ["pumpkin", "santa", "rudolph", "turkey", "bunny"] as const) {
+      for (const family of mascotFamilies) {
         const value: Avatar = { mode: "mascot", family, color: "#FF9800", eyes: "round", accessory: "none", eyeWidth: 1.1 };
         const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/avatar", headers, payload: value });
         expect(saved.statusCode).toBe(200);

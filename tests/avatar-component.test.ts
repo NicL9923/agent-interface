@@ -5,8 +5,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Avatar, faces, motionOwner, silhouette } from "../src/components/Avatar";
-import { avatarShapes, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
-import { seasonalAvatar, seasonalChoices } from "../src/components/seasonal-avatars";
+import { avatarShapes, everydayFamilies, mascotFamilies, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
+import {
+  characterAnchors,
+  characterHatAnchors,
+  characterHeads,
+  cheekless,
+  isCharacter,
+  isSeasonal,
+  seasonalAvatar,
+  seasonalChoices,
+} from "../src/components/character-avatars";
+
+/** Every character drawn by the character module, in its everyday or seasonal colors. */
+const characters = mascotFamilies.filter(isCharacter).map((family) => ({
+  family,
+  avatar: isSeasonal(family)
+    ? seasonalAvatar(family)
+    : { mode: "mascot", family, color: "#97683D", eyes: "round", accessory: "none" } as AvatarConfig,
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -69,10 +86,10 @@ afterEach(() => {
 });
 
 describe("avatar animation loop", () => {
-  it.each(seasonalChoices)("animates the $label character while working", async ({ family }) => {
-    await render("working", seasonalAvatar(family));
+  it.each(characters)("animates the $family character while working", async ({ family, avatar }) => {
+    await render("working", avatar);
     expect(container.querySelector('[role="img"]')?.getAttribute("data-family")).toBe(family);
-    expect(container.querySelector("[data-seasonal-feature]")).not.toBeNull();
+    expect(container.querySelector("[data-character-feature]")).not.toBeNull();
     const before = svg();
     await advance(1);
     expect(svg()).not.toBe(before);
@@ -117,13 +134,13 @@ describe("avatar animation loop", () => {
     expect([image.getAttribute("loading"), image.getAttribute("decoding")]).toEqual(["lazy", "async"]);
   });
 
-  it.each(seasonalChoices)("keeps the $label character visible and still under reduced motion", async ({ family }) => {
+  it.each(characters)("keeps the $family character visible and still under reduced motion", async ({ avatar }) => {
     reduceMotion = true;
-    await render("thinking", seasonalAvatar(family));
+    await render("thinking", avatar);
     const before = svg();
     await advance(1);
     expect(svg()).toBe(before);
-    expect(container.querySelector("[data-seasonal-feature]")).not.toBeNull();
+    expect(container.querySelector("[data-character-feature]")).not.toBeNull();
     expect(frames.size).toBe(0);
     expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Thinking");
   });
@@ -208,7 +225,62 @@ describe("avatar silhouettes", () => {
     // Morphing samples one continuous outline; native parses only absolute M L H V Q C Z.
     expect(nativePath).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
     if (shape !== "circle") expect(nativePath).toBe(d);
-    const anchor = swift.match(new RegExp(`"${shape}": Anchor\\(cy: ([\\d.]+), scale: ([\\d.]+), top: ([\\d.]+), hat: ([\\d.]+)\\)`))!;
+    // Characters keep their own table, so the ghost character and the ghost shape can differ.
+    const anchor = swift.slice(swift.indexOf("static let faces:")).match(new RegExp(`"${shape}": Anchor\\(cy: ([\\d.]+), scale: ([\\d.]+), top: ([\\d.]+), hat: ([\\d.]+)\\)`))!;
     expect(anchor.slice(1).map(Number)).toEqual(Object.values(faces[shape]));
+  });
+});
+
+describe("mascot characters", () => {
+  const native = (file: string) => readFileSync(resolve("ios/AgentInterface", file), "utf8");
+  const swiftList = (source: string, name: string) =>
+    [...source.match(new RegExp(`static let ${name}[^=]*= \\[([^\\]]*)\\]`))![1].matchAll(/\("(\w+)", "([^"]+)"\)/g)]
+      .map((m) => [m[1], m[2]]);
+
+  it("lists the same everyday and seasonal characters natively, with the same labels and colors", () => {
+    const models = native("Models.swift");
+    expect(swiftList(models, "everydayFamilies")).toEqual(everydayFamilies.map((family) => [family, family[0].toUpperCase() + family.slice(1)]));
+    expect(swiftList(models, "seasonalFamilies")).toEqual(seasonalChoices.map(({ family, label }) => [family, label]));
+    const colors = models.match(/static let seasonalColors = \[([^\]]*)\]/)![1];
+    expect(Object.fromEntries([...colors.matchAll(/"(\w+)": "(#[0-9A-F]{6})"/gi)].map((m) => [m[1], m[2]])))
+      .toEqual(Object.fromEntries(seasonalChoices.map(({ family, color }) => [family, color])));
+  });
+
+  it("draws the same heads, faces, hat positions and cheeks natively", () => {
+    const art = native("CharacterAvatarArt.swift");
+    const view = native("AvatarView.swift");
+    const heads = art.match(/static let heads: \[String: String\] = \[([^\]]*)\]/)![1];
+    expect(Object.fromEntries([...heads.matchAll(/"(\w+)": "([^"]+)"/g)].map((m) => [m[1], m[2]]))).toEqual(characterHeads);
+    const faces = view.match(/static let characterFaces: \[String: Anchor\] = \[([^\]]*)\]/)![1];
+    expect(Object.fromEntries([...faces.matchAll(/"(\w+)": Anchor\(cy: ([\d.]+), scale: ([\d.]+), top: ([\d.]+), hat: ([\d.]+)\)/g)]
+      .map((m) => [m[1], { cy: Number(m[2]), scale: Number(m[3]), top: Number(m[4]), hat: Number(m[5]) }]))).toEqual(characterAnchors);
+    const hats = art.match(/static let hatAnchors[^=]*= \[([^\]]*)\]/)![1];
+    expect(Object.fromEntries([...hats.matchAll(/"(\w+)": \(top: (-?[\d.]+), hat: ([\d.]+)\)/g)].map((m) => [m[1], { top: Number(m[2]), hat: Number(m[3]) }])))
+      .toEqual(characterHatAnchors);
+    const cheeks = art.match(/static let cheekless: Set<String> = \[([^\]]*)\]/)![1];
+    expect([...cheeks.matchAll(/"(\w+)"/g)].map((m) => m[1]).sort()).toEqual([...cheekless].sort());
+  });
+
+  it.each(Object.entries(characterHeads))("outlines %s as one closed native-parseable path", (_family, d) => {
+    expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
+  });
+
+  it("edges very light heads so they hold their shape on the cream surface", async () => {
+    const edges = () => [...container.querySelectorAll("svg path[fill='none'][stroke-width='2.2']")];
+    await render("idle", seasonalAvatar("ghost"));
+    expect(edges()).toHaveLength(1);
+    await render("idle", { mode: "mascot", family: "panda", color: "#292929", eyes: "round", accessory: "none" });
+    expect(edges()).toHaveLength(1);
+    await render("idle", seasonalAvatar("pumpkin"));
+    expect(edges()).toHaveLength(0);
+  });
+
+  it("gives each eye surround ink that contrasts with it", async () => {
+    await render("idle", { mode: "mascot", family: "raccoon", color: "#8C8F99", eyes: "round", accessory: "none" });
+    expect(container.querySelector("[data-character-feature='mask']")).not.toBeNull();
+    expect(container.querySelector("g[fill='#fff3db']")).not.toBeNull();
+    await render("idle", { mode: "mascot", family: "owl", color: "#292929", eyes: "round", accessory: "none" });
+    expect(container.querySelectorAll("[data-character-feature='facial-disc']")).toHaveLength(2);
+    expect(container.querySelector("g[fill='#2b201b']")).not.toBeNull();
   });
 });

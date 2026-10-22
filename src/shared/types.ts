@@ -37,6 +37,24 @@ export const avatarShapes = [
   "sun",
 ] as const;
 export type AvatarShape = (typeof avatarShapes)[number];
+/** Mascot characters in picker order. ios/AgentInterface/Models.swift mirrors both lists. */
+export const everydayFamilies = ["bear", "fox", "sprout", "panda", "raccoon", "owl", "cactus", "dinosaur"] as const;
+/** Listed under their own "Seasonal" heading, in calendar order from spring. */
+export const seasonalFamilies = [
+  "leprechaun",
+  "bunny",
+  "eagle",
+  "pumpkin",
+  "bat",
+  "ghost",
+  "turkey",
+  "santa",
+  "rudolph",
+  "snowman",
+] as const;
+export const mascotFamilies = [...everydayFamilies, ...seasonalFamilies] as const;
+export type MascotFamily = (typeof mascotFamilies)[number];
+export type SeasonalFamily = (typeof seasonalFamilies)[number];
 export type Eyes = "round" | "oval" | "visor" | "spark";
 export type Accessory = "none" | "hat" | "glasses";
 export type Avatar =
@@ -52,7 +70,7 @@ export type Avatar =
     }
   | {
       mode: "mascot";
-      family: "sprout" | "fox" | "bear" | "pumpkin" | "santa" | "rudolph" | "turkey" | "bunny";
+      family: MascotFamily;
       color: string;
       eyes: Eyes;
       accessory: Accessory;

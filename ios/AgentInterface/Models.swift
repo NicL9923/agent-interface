@@ -47,22 +47,39 @@ struct AvatarConfig: Codable, Equatable {
     "flower", "sun",
   ]
   static let everydayFamilies: [(id: String, label: String)] = [
-    ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"),
+    ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"), ("panda", "Panda"),
+    ("raccoon", "Raccoon"), ("owl", "Owl"), ("cactus", "Cactus"), ("dinosaur", "Dinosaur"),
   ]
-  /// Listed under their own "Seasonal" heading, like the web editor.
+  /// Listed under their own "Seasonal" heading, in calendar order from spring, like the web editor.
   static let seasonalFamilies: [(id: String, label: String)] = [
-    ("pumpkin", "Pumpkin"), ("santa", "Santa"), ("rudolph", "Rudolph"),
-    ("turkey", "Turkey"), ("bunny", "Easter Bunny"),
+    ("leprechaun", "Leprechaun"), ("bunny", "Easter Bunny"), ("eagle", "Bald Eagle"),
+    ("pumpkin", "Pumpkin"), ("bat", "Bat"), ("ghost", "Ghost"), ("turkey", "Turkey"),
+    ("santa", "Santa"), ("rudolph", "Rudolph"), ("snowman", "Snowman"),
   ]
   static var families: [(id: String, label: String)] { everydayFamilies + seasonalFamilies }
   static let seasonalColors = [
-    "pumpkin": "#FF9800", "santa": "#F2B08B", "rudolph": "#97683D",
-    "turkey": "#97683D", "bunny": "#F5E9D8",
+    "leprechaun": "#F2B08B", "bunny": "#F5E9D8", "eagle": "#F7F3EA", "pumpkin": "#FF9800",
+    "bat": "#5E4B8B", "ghost": "#F2EEF8", "turkey": "#97683D", "santa": "#F2B08B",
+    "rudolph": "#97683D", "snowman": "#F4F8FB",
   ]
+  /// Bear, fox and sprout are drawn by AvatarArtwork itself; every later mascot is a character.
+  static let characterFamilies: [String] = families.map(\.id).filter {
+    !["bear", "fox", "sprout"].contains($0)
+  }
+  /// The character a mascot avatar draws, if its family is one.
+  var character: String? {
+    guard mode == "mascot", let family, Self.characterFamilies.contains(family) else { return nil }
+    return family
+  }
   var geometry: String {
     if mode == "geometric" { return shape ?? "blob" }
-    if let family, Self.seasonalColors[family] != nil { return family }
-    return "mascot"
+    return character ?? "mascot"
+  }
+  /// The key of the body outline. A character named like a geometric shape, the ghost, still
+  /// gets its own silhouette.
+  var silhouette: String {
+    if mode == "geometric" { return shape ?? "blob" }
+    return character.map(AvatarGeometry.characterKey) ?? "mascot"
   }
   func selectingFamily(_ family: String) -> AvatarConfig {
     var next = self
