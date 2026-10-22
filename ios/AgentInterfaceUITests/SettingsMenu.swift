@@ -7,7 +7,10 @@ extension XCUIApplication {
     let more = buttons["settingsMore"], item = buttons[title]
     more.tap()
     XCTAssertTrue(item.waitForExistence(timeout: 5), "The More menu lists \(title)", file: file, line: line)
-    for _ in 0..<3 where item.isHittable {
+    let hittable = NSPredicate(format: "hittable == true")
+    for _ in 0..<3 {
+      // The item can exist while it still animates in, so wait until a tap can land on it.
+      guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)], timeout: 5) == .completed else { break }
       item.tap()
       let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: more)
       if XCTWaiter.wait(for: [selected], timeout: 2) == .completed { return }

@@ -193,11 +193,12 @@ enum VoiceState: Equatable {
       }
     }
   }
-  // Recorders and players are not Sendable, so only their identity crosses to the main actor.
+  // Recorders and players are not Sendable, so the callbacks carry them in a `Sent` box, which keeps them
+  // alive for the comparison: a stale callback can never match a newer object at a reused address.
   nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-    let finished = ObjectIdentifier(recorder)
+    let finished = Sent(recorder)
     Task { @MainActor in
-      guard self.recorder.map(ObjectIdentifier.init) == finished else { return }
+      guard self.recorder === finished.value else { return }
       let data = self.file.flatMap { try? Data(contentsOf: $0) }
       self.releaseRecorder()
       guard !self.discarded, self.state == .recording else { return }
@@ -210,9 +211,9 @@ enum VoiceState: Equatable {
     }
   }
   nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-    let failed = ObjectIdentifier(recorder)
+    let failed = Sent(recorder)
     Task { @MainActor in
-      guard self.recorder.map(ObjectIdentifier.init) == failed else { return }
+      guard self.recorder === failed.value else { return }
       self.cancel()
       self.error = "The microphone stopped recording. Try recording again. Your draft is kept."
     }
@@ -332,17 +333,17 @@ enum VoiceState: Equatable {
     }
   }
   nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    let finished = ObjectIdentifier(player)
+    let finished = Sent(player)
     Task { @MainActor in
-      guard self.player.map(ObjectIdentifier.init) == finished, self.state == .speaking else { return }
+      guard self.player === finished.value, self.state == .speaking else { return }
       self.state = .idle
       self.deactivateSession()
     }
   }
   nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-    let failed = ObjectIdentifier(player)
+    let failed = Sent(player)
     Task { @MainActor in
-      guard self.player.map(ObjectIdentifier.init) == failed else { return }
+      guard self.player === failed.value else { return }
       self.releaseAudio()
       self.playable = false
       self.state = .idle
@@ -459,4 +460,11 @@ extension APIClient {
     body.append(audio); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
     return try JSONDecoder().decode(VoiceTranscript.self, from: await data(path: "/api/bots/\(Self.component(botId))/voice/transcribe", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)"))
   }
+}
+
+/// A delegate callback's audio object, taken to the main actor only to compare its identity there.
+/// Nothing reads or changes it off the main actor, so sending it is safe.
+private struct Sent<Value: AnyObject>: @unchecked Sendable {
+  let value: Value
+  init(_ value: Value) { self.value = value }
 }

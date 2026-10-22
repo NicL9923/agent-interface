@@ -435,10 +435,12 @@ private final class NativeMockServer: @unchecked Sendable {
         value.makeClient = { _ in api }
         return value
     }
-    /// Waits for a condition with a deadline, so a slower host gets time without a fixed sleep.
-    private func until(_ condition: () -> Bool) async throws {
+    /// Waits for a condition with a deadline, so a slower host gets time without a fixed sleep. Fails the
+    /// test when the deadline passes first.
+    private func until(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         let deadline = ContinuousClock.now + .seconds(10)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(condition(), "Timed out waiting for the condition", file: file, line: line)
     }
     private func clean(_ server: NativeMockServer, _ store: AppStore? = nil) {
         store?.suspend()
