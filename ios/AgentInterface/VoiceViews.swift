@@ -193,9 +193,11 @@ enum VoiceState: Equatable {
       }
     }
   }
+  // Recorders and players are not Sendable, so only their identity crosses to the main actor.
   nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+    let finished = ObjectIdentifier(recorder)
     Task { @MainActor in
-      guard self.recorder === recorder else { return }
+      guard self.recorder.map(ObjectIdentifier.init) == finished else { return }
       let data = self.file.flatMap { try? Data(contentsOf: $0) }
       self.releaseRecorder()
       guard !self.discarded, self.state == .recording else { return }
@@ -208,8 +210,9 @@ enum VoiceState: Equatable {
     }
   }
   nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+    let failed = ObjectIdentifier(recorder)
     Task { @MainActor in
-      guard self.recorder === recorder else { return }
+      guard self.recorder.map(ObjectIdentifier.init) == failed else { return }
       self.cancel()
       self.error = "The microphone stopped recording. Try recording again. Your draft is kept."
     }
@@ -329,15 +332,17 @@ enum VoiceState: Equatable {
     }
   }
   nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    let finished = ObjectIdentifier(player)
     Task { @MainActor in
-      guard self.player === player, self.state == .speaking else { return }
+      guard self.player.map(ObjectIdentifier.init) == finished, self.state == .speaking else { return }
       self.state = .idle
       self.deactivateSession()
     }
   }
   nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+    let failed = ObjectIdentifier(player)
     Task { @MainActor in
-      guard self.player === player else { return }
+      guard self.player.map(ObjectIdentifier.init) == failed else { return }
       self.releaseAudio()
       self.playable = false
       self.state = .idle
