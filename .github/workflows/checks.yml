@@ -65,8 +65,36 @@ jobs:
           sudo apt-get install -y tmux
       - name: Run Python tests
         run: python scripts/run-python-tests.py
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Decide whether the native tests are needed
+        id: scope
+        # Release records and other documentation-only pull requests cannot change the app, so
+        # they skip the slow macOS job. Pushes to main and every other change still run it.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        # A failed diff fails this job, and renames list both paths, so nothing is skipped by accident.
+        run: |
+          native=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            files=$(git diff --name-only --no-renames "$BASE"...HEAD)
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then native=false; fi
+          fi
+          echo "native=$native" >> "$GITHUB_OUTPUT"
   native:
     name: iOS unit tests
+    needs: scope
+    # Skips only on an explicit docs-only answer; a failed or missing scope still runs the tests.
+    if: ${{ !cancelled() && needs.scope.outputs.native != 'false' }}
     runs-on: macos-26
     timeout-minutes: 30
     steps:
