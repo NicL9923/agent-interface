@@ -211,7 +211,7 @@ const connections = [
   ['search', 'Web search', 'providers', 'not_connected', undefined, 'Configure a search provider for current information.'],
   ['images', 'Image generation', 'providers', 'configured', undefined, 'An image provider is configured. Generation has not been checked.'],
 ].map(([id, name, category, status, account, detail]) => ({ id, name, category, status, account, detail, owner: category === 'devices' ? 'This iPhone' : 'Hermes', profile: 'ranch', botIds: ['ranch'], setup: id === 'homeassistant' ? [{ key: 'url', label: 'Server address', kind: 'url', required: true }, { key: 'token', label: 'Access token', kind: 'secret', required: true }] : [], permissions: id === 'workspace' ? [{ id: 'drive', name: 'Drive files', granted: true }, { id: 'gmail', name: 'Gmail', granted: true }] : [], capabilities: [], checkedAt: ['connected', 'expired', 'unavailable', 'missing_permission'].includes(status) ? '2026-10-01T17:00:00Z' : undefined, actions: { connect: !['files', 'apple', 'vps'].includes(id), check: !['files', 'apple'].includes(id), disconnect: status === 'connected' } }));
-let upgrade = { available: true, phase: 'failed', current: { revision: 'oldrevision', version: '2026.9' }, candidate: { revision: 'newrevision', version: '2026.10' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
+let upgrade = { available: true, phase: 'failed', current: { revision: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', committedAt: '2026-09-18T16:20:00Z' }, candidate: { revision: '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432', committedAt: '2026-10-20T15:05:00Z', notesUrl: 'https://example.invalid/hermes/notes' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
 const flows = new Map();
 const pushRegistrations = new Set();
 // Computer fixture streams are simulations. They never open a shell or contact a desktop.
@@ -230,7 +230,8 @@ const json = (response, data, status = 200) => { response.writeHead(status, { 'C
 const server = createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
-  let body = {}, raw = Buffer.alloc(0); if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); raw = Buffer.concat(chunks); try { body = JSON.parse(raw); } catch {} }
+  // A browser that closes mid-request must not take the fixture down.
+  let body = {}, raw = Buffer.alloc(0); if (request.method !== 'GET') { const chunks = []; try { for await (const chunk of request) chunks.push(chunk); } catch { return; } raw = Buffer.concat(chunks); try { body = JSON.parse(raw); } catch {} }
   if (url.pathname === '/preview-fixture.js') { response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/javascript' }); return response.end(fixtureScript); }
   if (url.pathname.startsWith('/api/')) {
     const path = url.pathname.slice(4);
@@ -249,8 +250,23 @@ const server = createServer(async (request, response) => {
     if(path.startsWith('/saved/')) { const index=savedItems.findIndex(item=>item.id===path.split('/').at(-1));if(index>=0)savedItems.splice(index,1);return json(response,{ok:true}); }
     if(path.endsWith('/starters')) return json(response,[{id:'meals',title:'Plan dinners',prompt:'Help me plan five easy dinners. Ask about our preferences and budget first.'},{id:'document',title:'Explain a document',prompt:'Help me understand the document I attach. Summarize the key points.'},{id:'server',title:'Check a server',prompt:'Review my server health. Confirm the server and connection first; inspect only.'}]);
     if(path==='/automations') return json(response,{routines:routines.map(row=>({...row,nextRunAt:new Date(Date.now()+3600000).toISOString(),lastStatus:'delivery_failed',lastDeliveryError:'Fixture: recipient destination unavailable'})),usage:bots.map(bot=>({botId:bot.id,days:30,sessions:4,inputTokens:1200,outputTokens:400,actualCost:null,estimatedCost:0.02,partial:true})),unavailableBots:[]});
+    // Creating adds a fixture assistant; PREVIEW_AVATAR_FAILURE=1 fails its first avatar save so Retry can be checked.
+    if (path === '/bots' && request.method === 'POST') {
+      const id = String(body.name || 'assistant').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'assistant';
+      if (bots.some(bot => bot.id === id)) return json(response, { error: 'An assistant with this name already exists. Choose another name.' }, 409);
+      const bot = { id, name: body.name, description: body.description, instructions: body.instructions, model: body.model, provider: body.provider, shared: body.shared, ownerId: body.shared ? undefined : 'preview', activity: 'idle', enabledMcpServers: [] };
+      bots.push(bot); conversations[id] = { messages: [] };
+      return json(response, bot);
+    }
+    const avatarMatch = /^\/bots\/([^/]+)\/avatar$/.exec(path);
+    if (avatarMatch && request.method === 'PUT') {
+      const bot = bots.find(item => item.id === decodeURIComponent(avatarMatch[1]));
+      if (!bot) return json(response, { error: 'Unknown fixture assistant.' }, 404);
+      if (process.env.PREVIEW_AVATAR_FAILURE === '1' && !bot.avatarFailed) { bot.avatarFailed = true; return json(response, { error: 'Fixture: Hermes is restarting.' }, 503); }
+      bot.avatar = body; return json(response, bot.avatar);
+    }
     if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: [] });
-    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
     const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
     if (experiencePath && !signedIn) return json(response, { error: 'Sign in to use the preview fixture.' }, 401);

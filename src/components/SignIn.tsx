@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, write } from "../client-api";
 import { Avatar } from "./Avatar";
+import { Button } from "./ui/button";
+import { NativeSelect } from "./ui/native-select";
 import { SetupCommand } from "./ConnectionPanel";
 import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
 import "./sign-in.css";
@@ -79,49 +81,50 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
     return () => { live = false; };
   }, [config?.googleClientId, attempt]);
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
-  return <main className="welcome sign-in">
-    <p className="eyebrow">WildBots</p>
+  return <main className={`welcome sign-in${needsSetup ? " needs-setup" : ""}`}>
+    <header className="sign-in-brand"><span className="brand-mark" aria-hidden="true">w.</span>WildBots</header>
+    {/* One centered column on every screen: who is waiting, then one way in. */}
     <div className="sign-in-content">
       <div className="sign-in-intro">
         <AvatarTrio />
         <h1>{needsSetup ? "Let's get your household ready." : "Your assistants are waiting."}</h1>
         <p>{needsSetup
           ? "Set up this installation once. Then everyone can sign in and return to the same conversations."
-          : "Sign in to return to your household conversations."}</p>
+          : "Sign in to pick up your household conversations right where you left them."}</p>
       </div>
-      <div className="sign-in-access">
-    {!config && !configError && <p role="status">Checking sign-in…</p>}
-    {needsSetup && <div className="sign-in-setup">
-      <h2>Start on the computer running this app</h2>
-      <p>Open the WildBots project folder and run the guided setup:</p>
-      <SetupCommand />
-      <p>It checks Hermes and saves your connection privately. Choose Google sign-in for the household, or local test accounts for development.</p>
-      <p className="muted">After saving, restart the app. This page will pick up the new settings automatically.</p>
-      <button onClick={() => setAttempt(value => value + 1)}>Check setup again</button>
-    </div>}
-    <div ref={google} className="google-sign-in" aria-busy={googleLoading || busy} />
-    {googleLoading && <p role="status">Loading Google sign-in…</p>}
-    {busy && <p role="status">Signing you in…</p>}
-    {config?.localDevAuth && <form onSubmit={event => {
-      event.preventDefault();
-      if (busy) return;
-      setBusy(true); setError("");
-      void write("/auth/local", { member }).then(() => success.current())
-        .catch(e => setError(e.message)).finally(() => setBusy(false));
-    }}>
-      <label>Local household member
-        <select value={member} onChange={event => setMember(event.target.value)}>
-          <option value="one">Household member one</option>
-          <option value="two">Household member two</option>
-        </select>
-      </label>
-      <button className="primary" disabled={busy}>Enter local workspace</button>
-      <p className="muted">Local test accounts are enabled on this computer.</p>
-    </form>}
-    {(error || configError) && <div className="sign-in-error">
-      <p role="alert">{error || configError}</p>
-      <button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</button>
-    </div>}
+      <div className="sign-in-access" aria-busy={!config && !configError}>
+        {!config && !configError && <p className="sign-in-status" role="status">Checking sign-in…</p>}
+        {needsSetup && <div className="sign-in-setup">
+          <h2>Start on the computer running this app</h2>
+          <p>Open the WildBots project folder and run the guided setup:</p>
+          <SetupCommand />
+          <p>It checks Hermes and saves your connection privately. Choose Google sign-in for the household, or local test accounts for development.</p>
+          <p className="muted">After saving, restart the app. This page will pick up the new settings automatically.</p>
+          <Button className="primary" onClick={() => setAttempt(value => value + 1)}>Check setup again</Button>
+        </div>}
+        <div ref={google} className="google-sign-in" aria-busy={googleLoading || busy} />
+        {googleLoading && <p className="sign-in-status" role="status">Loading Google sign-in…</p>}
+        {busy && <p className="sign-in-status" role="status">Signing you in…</p>}
+        {config?.localDevAuth && <form onSubmit={event => {
+          event.preventDefault();
+          if (busy) return;
+          setBusy(true); setError("");
+          void write("/auth/local", { member }).then(() => success.current())
+            .catch(e => setError(e.message)).finally(() => setBusy(false));
+        }}>
+          <label>Sign in as
+            <NativeSelect value={member} onChange={event => setMember(event.target.value)}>
+              <option value="one">Household member one</option>
+              <option value="two">Household member two</option>
+            </NativeSelect>
+          </label>
+          <Button type="submit" className="primary" disabled={busy}>Enter local workspace</Button>
+          <p className="sign-in-note">Local test accounts are turned on for this computer.</p>
+        </form>}
+        {(error || configError) && <div className="sign-in-error">
+          <p role="alert">{error || configError}</p>
+          <Button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</Button>
+        </div>}
       </div>
     </div>
   </main>;

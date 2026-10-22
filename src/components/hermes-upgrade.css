@@ -24,6 +24,8 @@
 .upgrade-versions > div { flex: 1; min-width: 0; }
 .upgrade-versions dt { color: var(--muted); font-size: 11px; margin-bottom: 7px; }
 .upgrade-versions dd { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.upgrade-revision { display: block; margin-top: 4px; font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.upgrade-revision a { color: inherit; }
 .upgrade-work-block { font-size: 13px; color: var(--muted); }
 .upgrade-error { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
 .upgrade-action > .primary { width: 100%; min-height: 46px; }

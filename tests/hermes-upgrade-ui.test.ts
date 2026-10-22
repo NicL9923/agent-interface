@@ -43,6 +43,19 @@ const qualified = (): UpgradeStatus => ({ ...status, phase: "ready", candidate: 
   message: "The update passed qualification.", canInstall: true, checks: [{ id: "contract", label: "Connection contract", status: "passed" }] });
 
 describe("Hermes updates", () => {
+  it("names revisions by commit date, keeping the short hash as a quiet notes link", async () => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    status = { ...qualified(), current: { revision: hash, committedAt: "2026-10-20T15:00:00Z" },
+      candidate: { revision: "fedcba9876543210fedcba9876543210fedcba98", notesUrl: "https://example.test/notes" } };
+    await render();
+    const [current, candidate] = [...container.querySelectorAll(".upgrade-versions dd")];
+    expect(current.textContent).toBe(`${new Date("2026-10-20T15:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}0123456`);
+    expect(current.querySelector(".upgrade-revision")?.textContent).toBe("0123456");
+    // Without a date, the short hash is all there is, and it still links to the notes.
+    expect(candidate.textContent).toBe("fedcba9");
+    expect(candidate.querySelector("a")?.getAttribute("href")).toBe("https://example.test/notes");
+  });
+
   it("checks without installing, then installs only the qualified candidate after a second click", async () => {
     vi.mocked(write).mockImplementation(async path => {
       status = path.endsWith("/check") ? qualified() : { ...status, phase: "installing", canCheck: false, canInstall: false };

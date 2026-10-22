@@ -350,12 +350,12 @@ describe("closing with unsaved edits", () => {
     rail.remove();
   });
 
-  it("prefers the conversation's settings button when the opener was never focused", async () => {
+  it("prefers the conversation's assistant button when the opener was never focused", async () => {
     const rail = document.createElement("nav");
     rail.className = "bot-rail";
     rail.innerHTML = '<button aria-label="Settings"></button>';
     const header = document.createElement("header");
-    header.innerHTML = '<button aria-label="Edit assistant"></button>';
+    header.innerHTML = '<button class="chat-identity"></button>';
     document.body.append(rail, header);
     await act(async () => root.unmount());
     (document.activeElement as HTMLElement).blur();
@@ -372,7 +372,7 @@ describe("closing with unsaved edits", () => {
     rail.innerHTML = '<button aria-label="Settings"></button>';
     const main = document.createElement("main");
     main.setAttribute("inert", "");
-    main.innerHTML = '<button aria-label="Edit assistant"></button>';
+    main.innerHTML = '<button class="chat-identity"></button>';
     document.body.append(rail, main);
     await act(async () => root.unmount());
     (document.activeElement as HTMLElement).blur();
@@ -550,5 +550,78 @@ describe("lean roster settings", () => {
     const payload = vi.mocked(write).mock.calls.at(-1)![1];
     expect(payload).not.toHaveProperty("enabledTools");
     expect(payload).not.toHaveProperty("enabledSkills");
+  });
+});
+
+describe("creating an assistant", () => {
+  const created: Bot = { id: "ranch-hand", name: "Ranch hand", shared: true, model: "test", activity: "idle", instructions: "" };
+  const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent === text);
+  const title = () => container.querySelector("#assistant-settings-title")?.textContent;
+  const type = (value: string) => act(async () => {
+    const input = container.querySelector<HTMLInputElement>("#create-name")!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const choose = (label: string) => act(async () => Array.from(container.querySelectorAll("label"))
+    .find(item => item.textContent?.trim() === label)!.querySelector("input")!.click());
+  beforeEach(async () => {
+    await act(async () => root.render(createElement(BotSettings, { bot: "new", bootstrap, onClose, onSaved })));
+  });
+  const toRole = async (name = "Ranch hand") => {
+    await type(name);
+    await choose("Mascot");
+    await act(async () => button("Next: role and model")!.click());
+  };
+
+  it("starts with name and look, and hides sections that need an existing assistant", async () => {
+    expect(title()).toBe("Name and look");
+    expect(container.querySelector('[aria-label="Settings sections"]')).toBeNull();
+    expect(container.textContent).not.toContain("Create the assistant before");
+    await act(async () => button("Next: role and model")!.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Give your assistant a name.");
+    await type(" shared ");
+    await act(async () => button("Next: role and model")!.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("An assistant with this name already exists. Choose another name.");
+    expect(title()).toBe("Name and look");
+    await toRole();
+    expect(title()).toBe("Role and model");
+    await act(async () => button("Back")!.click());
+    // Going back keeps every choice.
+    expect(container.querySelector<HTMLInputElement>("#create-name")!.value).toBe("Ranch hand");
+    expect(Array.from(container.querySelectorAll("label")).find(item => item.textContent?.trim() === "Mascot")!.querySelector("input")!.checked).toBe(true);
+  });
+
+  it("creates the assistant, then saves the chosen avatar, then closes", async () => {
+    vi.mocked(write).mockImplementation(async <T,>(path: string) => (path === "/bots" ? created : {}) as T);
+    await toRole();
+    await act(async () => button("Create assistant")!.click());
+    expect(vi.mocked(write).mock.calls.map(([path, , method]) => [path, method])).toEqual([["/bots", undefined], ["/bots/ranch-hand/avatar", "PUT"]]);
+    expect(vi.mocked(write).mock.calls[0][1]).toMatchObject({ name: "Ranch hand", model: "test" });
+    expect(vi.mocked(write).mock.calls[1][1]).toMatchObject({ mode: "mascot" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("keeps the avatar to retry, editing the created assistant, when only the avatar fails", async () => {
+    let avatarFails = true;
+    vi.mocked(write).mockImplementation(async <T,>(path: string) => {
+      if (path === "/bots") return created as T;
+      if (avatarFails) throw new Error("Hermes is restarting.");
+      return {} as T;
+    });
+    await toRole();
+    await act(async () => button("Create assistant")!.click());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalled();
+    expect(title()).toBe("Ranch hand");
+    expect(container.querySelector(".avatar-failure")?.textContent).toContain("Ranch hand was created, but its avatar didn't save: Hermes is restarting.");
+    // Now it exists, so its sections appear, opened on the avatar it still needs.
+    expect(container.querySelector('[aria-label="Settings sections"] [aria-current="page"]')?.textContent).toBe("avatar");
+    avatarFails = false;
+    await act(async () => button("Retry avatar")!.click());
+    expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots")).toHaveLength(1);
+    expect(vi.mocked(write).mock.lastCall).toEqual(["/bots/ranch-hand/avatar", expect.objectContaining({ mode: "mascot" }), "PUT"]);
+    expect(container.querySelector(".avatar-failure")).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Avatar saved");
   });
 });
