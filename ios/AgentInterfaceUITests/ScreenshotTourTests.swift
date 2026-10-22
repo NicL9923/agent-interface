@@ -44,10 +44,16 @@ import XCTest
     app.buttons["Close"].tap()
 
     app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
     try capture("02-conversation")
+    app.textViews["messageComposer"].tap()
+    XCTAssertTrue(app.buttons["hideKeyboard"].waitForExistence(timeout: 5))
+    try capture("02c-composer-focused")
+    app.buttons["hideKeyboard"].tap()
 
-    app.buttons["Configure Ranch hand"].tap()
+    app.openBotProfile("Ranch hand")
+    try capture("02b-assistant-card")
+    app.buttons["profileSettings"].tap()
     XCTAssertTrue(app.buttons["Avatar"].waitForExistence(timeout: 5))
     app.buttons["Avatar"].tap()
     XCTAssertTrue(app.buttons["previewState.idle"].waitForExistence(timeout: 5))
@@ -125,8 +131,10 @@ import XCTest
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
     try capture("14-home-dark")
     app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
     try capture("15-conversation-dark")
+    app.openBotProfile("Ranch hand")
+    try capture("15b-assistant-card-dark")
 
     // A fresh launch with the working fixture shows the activity avatar and live activity row.
     app.terminate()
@@ -144,10 +152,19 @@ import XCTest
     fresh.launch()
     XCTAssertTrue(fresh.textFields["serverAddress"].waitForExistence(timeout: 15))
     try capture("00-sign-in")
+
+    // The chat header and card at a large accessibility text size.
+    fresh.terminate()
+    app = launch(textSize: "UICTContentSizeCategoryAccessibilityL")
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+    try capture("20-conversation-large-text")
+    app.openBotProfile("Ranch hand")
+    try capture("20b-assistant-card-large-text")
   }
 
-  private func launch(liveActivity: Bool = false) -> XCUIApplication {
+  private func launch(liveActivity: Bool = false, textSize: String? = nil) -> XCUIApplication {
     let app = XCUIApplication()
+    if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()

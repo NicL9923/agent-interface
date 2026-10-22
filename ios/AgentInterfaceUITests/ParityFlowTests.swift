@@ -17,8 +17,7 @@ import UIKit
     return app
   }
   private func home(_ app: XCUIApplication) {
-    // iPhone keeps home in its Assistants tab; iPad brings back its sidebar.
-    if app.tabBars.buttons["Assistants"].exists { app.tabBars.buttons["Assistants"].tap() }
+    // iPhone goes back to home, the root of its stack; iPad brings back its sidebar.
     if app.buttons["openSettings"].isHittable { return }
     if app.buttons["Show Sidebar"].exists { app.buttons["Show Sidebar"].tap() }
     else { app.navigationBars.buttons.firstMatch.tap() }
@@ -96,9 +95,12 @@ import UIKit
     try capture("home-dark")
     app.buttons["bot.ranch"].tap()
     XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
-    app.buttons["Conversation actions"].tap()
-    XCTAssertTrue(app.buttons["Unpin assistant"].exists)
-    app.buttons["Unpin assistant"].tap()
+    app.openBotProfile("Ranch hand")
+    XCTAssertEqual(app.buttons["profilePin"].label, "Unpin")
+    app.buttons["profilePin"].tap()
+    expectation(for: NSPredicate(format: "label == %@", "Pin"), evaluatedWith: app.buttons["profilePin"])
+    waitForExpectations(timeout: 5)
+    app.buttons["closeBotProfile"].tap()
     try capture("conversation-dark")
     app.buttons["composerModel"].tap()
     XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 10))
@@ -120,17 +122,46 @@ import UIKit
     XCTAssertGreaterThan(composer.frame.width, 240, "Advanced tools must not squeeze the input")
     try capture("composer-typing")
   }
+  func testAssistantCardFollowsAndMovesIntoANewHomeSection() throws {
+    let app = launch()
+    app.openBotProfile("Ranch hand")
+    try capture("assistant-card")
+    let follow = app.switches["followBot"]
+    XCTAssertEqual(follow.value as? String, "0")
+    // The row's middle is its label, which a toggle ignores; tap the switch itself.
+    follow.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+    expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: follow)
+    waitForExpectations(timeout: 5)
+    let section = app.buttons["homeSection"]
+    XCTAssertTrue(section.waitForExistence(timeout: 5), app.debugDescription)
+    section.tap()
+    let new = app.buttons["New section…"]
+    XCTAssertTrue(new.waitForExistence(timeout: 5), app.debugDescription)
+    new.tap()
+    let name = app.alerts.textFields.firstMatch
+    XCTAssertTrue(name.waitForExistence(timeout: 5))
+    name.typeText("Around the house")
+    app.alerts.buttons["Add"].tap()
+    expectation(for: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Around the house", "Around the house"), evaluatedWith: section)
+    waitForExpectations(timeout: 5)
+    app.buttons["closeBotProfile"].tap()
+    home(app)
+    // Home lists the assistant under its new section, once.
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Around the house")).firstMatch.waitForExistence(timeout: 5))
+    XCTAssertEqual(app.buttons.matching(identifier: "bot.ranch").count, 1)
+    try capture("home-section")
+  }
   func testAssistantCatalogAndUnsavedChangesAreProtected() throws {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     let name = app.textFields["Name"]
     name.tap(); name.typeText(" edited")
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
     app.buttons["Discard changes"].tap()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 5))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
+    app.openAssistantSettings("Ranch hand")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Name"].value as? String, "Ranch hand")
     XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
@@ -274,6 +305,7 @@ import UIKit
     app.buttons["bot.ranch"].tap()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
     try capture("conversation-light")
+    app.openBotProfile("Ranch hand")
     app.buttons["conversationFiles"].tap()
     XCTAssertTrue(app.staticTexts["No artifacts yet"].waitForExistence(timeout: 5))
     try capture("artifacts-empty")

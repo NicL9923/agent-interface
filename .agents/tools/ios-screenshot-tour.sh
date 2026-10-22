@@ -13,10 +13,11 @@ cd "$repo_dir"
 mkdir -p .private
 result_path=".private/ios-screenshots-$(date -u +%Y%m%dT%H%M%SZ)-$$.xcresult"
 # xcodebuild forwards TEST_RUNNER_-prefixed variables to the UI test runner without the prefix.
+# Concurrent runs need separate derived data; IOS_DERIVED_DATA selects it, as in validate-ios.sh.
 TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR="$output_dir" \
 xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
   -destination "platform=iOS Simulator,id=$simulator_id" \
-  -derivedDataPath .private/ios-build \
+  -derivedDataPath "${IOS_DERIVED_DATA:-.private/ios-build}" \
   -resultBundlePath "$result_path" CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= -parallel-testing-enabled NO \
   -only-testing:AgentInterfaceUITests/ScreenshotTourTests test

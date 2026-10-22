@@ -87,6 +87,7 @@ struct LaunchStateView: View {
 enum WelcomeCopy {
   static let heading = "Your assistants,\nin one familiar place."
   static func status(unavailable: Bool) -> String { unavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…" }
+  static let connectDetail = "Enter the server address your self-hoster gave you. Your assistants and their work stay on that server."
   static let signInHeading = "Your assistants are waiting."
   static let signInDetail = "Sign in to return to your household conversations."
   static let checkingSignIn = "Checking sign-in…"

@@ -64,7 +64,7 @@ import XCTest
     composer.typeText("Remember the fence inspection")
     app.buttons["sendMessage"].tap()
     XCTAssertTrue(app.staticTexts["Remember the fence inspection"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    app.openAssistantSettings("Ranch hand")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     selectSettingsTab(app, "Tools")
     XCTAssertTrue(
@@ -82,7 +82,7 @@ import XCTest
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     XCTAssertTrue(app.buttons["bot.kitchen"].waitForExistence(timeout: 5))
     app.buttons["bot.kitchen"].tap()
-    XCTAssertTrue(app.buttons["Configure Kitchen companion"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.chatHeader("Kitchen companion").waitForExistence(timeout: 5))
     XCTAssertFalse(
       app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "unreadable response"))
         .firstMatch.exists)
@@ -93,8 +93,8 @@ import XCTest
   }
   func testFailedCapabilityCatalogCannotDisableExistingTools() {
     let app = app(catalogFailure: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     selectSettingsTab(app, "Tools")
     XCTAssertTrue(app.buttons["Retry loading tools"].waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["Save tools"].isEnabled)
@@ -102,8 +102,8 @@ import XCTest
   }
   func testSeasonalAvatarChoicesSaveAndRemainSelected() {
     let app = app()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     app.buttons["Avatar"].tap()
     app.buttons["Mascot"].tap()
     func scrollTo(_ button: XCUIElement, up: Bool) {
@@ -124,7 +124,7 @@ import XCTest
       app.buttons["Save avatar"].tap()
       XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 5))
       app.buttons["Close"].tap()
-      app.buttons["Configure Ranch hand"].tap()
+      app.openAssistantSettings("Ranch hand")
       app.buttons["Avatar"].tap()
       scrollTo(app.buttons["avatarTile.family.\(family)"], up: true)
       XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].isSelected)
@@ -132,8 +132,8 @@ import XCTest
   }
   func testSettingsOverflowSelectsEverySectionAndKeepsAvatarVisible() {
     let app = app()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     let more = app.buttons["settingsMore"]
     for title in ["Connections", "Tools", "Skills", "Routines"] {
       XCTAssertTrue(app.buttons["Details"].isHittable)
@@ -150,7 +150,7 @@ import XCTest
   }
   func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
     let app = app(upgradeUncertain: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["Settings"].tap()
     for _ in 0..<5 {
@@ -230,8 +230,8 @@ import XCTest
   }
   func testNativeConnectionsCheckAndApplePermissionDenial() {
     let app = app()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     selectSettingsTab(app, "Connections")
     XCTAssertTrue(app.staticTexts["Configured · not checked"].waitForExistence(timeout: 10))
     app.buttons.matching(identifier: "Check connection").firstMatch.tap()
@@ -260,7 +260,7 @@ import XCTest
   }
   func testNativeFailedUpdateOffersGuardedRecovery() {
     let app = app(upgradeFailed: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["Settings"].tap()
     for _ in 0..<6 { if app.buttons["Hermes updates"].isHittable { break }; app.swipeUp() }
@@ -280,8 +280,8 @@ import XCTest
   }
   func testNativeDisconnectRefreshesAfterTheHermesFlowResponse() {
     let app = app()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     selectSettingsTab(app, "Connections")
     XCTAssertTrue(app.buttons["Disconnect"].waitForExistence(timeout: 10))
     app.buttons["Disconnect"].tap()
