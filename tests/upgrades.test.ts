@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import { HermesUpgrades, launchWorker } from "../src/server/upgrades.js";
+import { HermesUpgrades, launchWorker, transientRunner } from "../src/server/upgrades.js";
 import type { ActivityState, Runtime } from "../src/shared/types.js";
 
 const origin = "http://127.0.0.1:3000", revision = "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6";
@@ -237,13 +237,39 @@ worker.Worker(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]).recovery(sys.argv
   expect(installation.upgrades.maintenance()).toBe(false);
 });
 
+it("starts the worker as its own systemd user unit when the app runs under systemd", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
+  try {
+    expect(transientRunner({}, "/bin/sh")).toBeUndefined();
+    expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, "/bin/sh")).toBe("/bin/sh");
+    expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, join(directory, "missing"))).toBeUndefined();
+    const runner = join(directory, "systemd-run"), seen = join(directory, "argv");
+    writeFileSync(runner, `#!/bin/sh\nprintf '%s\\n' "$@" > ${seen}\n`, { mode: 0o700 });
+    const child = launchWorker({ python: "/py", workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py", runner);
+    await new Promise(done => child.on("exit", done));
+    const argv = readFileSync(seen, "utf8").trim().split("\n");
+    const log = readdirSync(directory).find(name => name.startsWith("worker-launch-"))!;
+    expect(argv.slice(0, 3)).toEqual(["--user", "--collect", "--quiet"]);
+    expect(argv).toContain("--property=UMask=0077");
+    expect(argv).toContain(`--property=StandardOutput=append:${join(directory, log)}`);
+    expect(argv).toContain("--setenv=LANG=C.UTF-8");
+    expect(argv.slice(argv.indexOf("--") + 1)).toEqual(["/py", "/worker.py", "--config", "/config.json", "--state-dir", directory, "--action", "check", "--operation-id", "op"]);
+    // A refused unit is a worker that never started.
+    const refusing = join(directory, "refusing-systemd-run");
+    writeFileSync(refusing, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+    const refused = launchWorker({ python: "/py", workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py", refusing);
+    const error = await new Promise<Error>(done => refused.on("error", done));
+    expect(error.message).toBe("systemd-run exited with 1");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 it("keeps each worker launch's startup output privately instead of discarding it", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
   try {
     const python = join(directory, "python");
     writeFileSync(python, "#!/bin/sh\necho \"Traceback: worker could not start $7\" >&2\nexit 3\n", { mode: 0o700 });
     const launch = async (action: string) => {
-      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py");
+      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py", undefined);
       return new Promise(done => child.on("exit", done));
     };
     expect(await launch("check")).toBe(3);
