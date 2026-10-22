@@ -6,7 +6,6 @@ struct PreferencesView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
   @State private var preferences = Preferences()
-  @State private var sectionName = ""
   @State private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
   private var saveFailed: Bool { store.preferencesSaveFailed }
@@ -32,7 +31,7 @@ struct PreferencesView: View {
             HermesUpgradeView()
           } label: {
             settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
-              detail: store.connected ? "Connected" + (store.bootstrap?.connection.version.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
+              detail: store.connected ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
               status: store.connected ? Palette.accent : Palette.attention)
           }.accessibilityIdentifier("Hermes updates")
           if let url = try? store.api?.url("/?computer=1") {
@@ -83,35 +82,19 @@ struct PreferencesView: View {
             DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
             DatePicker("Until", selection: quietTime(start: false), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
           }
+          if !bots.isEmpty { followRow }
         } header: { Text("Notifications") } footer: {
           if preferences.notifications?.quietStart != nil {
             Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
           }
         }.disabled(store.sessionExpired)
-        if !(store.bootstrap?.bots.isEmpty ?? true) {
+        if !bots.isEmpty {
           Section {
-            ForEach(store.bootstrap?.bots ?? []) { bot in
-              Toggle(isOn: membership(bot.id, \Preferences.followBots)) {
-                HStack(spacing: 10) {
-                  AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: bot.name, forceReducedMotion: true)
-                  Text(bot.name)
-                }
-              }
-            }
-          } header: { Text("Follow all activity") } footer: {
-            Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
+            HomeSectionRows(preferences: $preferences, bots: bots)
+          } header: { Text("Home sections") } footer: {
+            Text("Group assistants on home. Each assistant can be in one section.")
           }.disabled(store.sessionExpired)
         }
-        ForEach(Array(preferences.sections.enumerated()), id: \.element.id) { index, section in sectionEditor(section, first: index == 0) }
-        Section {
-          HStack {
-            TextField("New section, like Around the house", text: $sectionName).accessibilityLabel("New section name")
-            Button("Add") {
-              preferences.sections.append(BotSection(id: UUID().uuidString, name: sectionName.trimmingCharacters(in: .whitespacesAndNewlines), botIds: []))
-              sectionName = ""
-            }.buttonStyle(.borderless).disabled(sectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || preferences.sections.count >= 30)
-          }
-        } header: { if preferences.sections.isEmpty { Text("Home sections") } }.disabled(store.sessionExpired)
         Section {
           if store.sessionExpired { Button("Sign in again") { Task { await store.signIn() } } }
           Button("Sign out", role: .destructive) { signOutConfirm = true }
@@ -124,7 +107,10 @@ struct PreferencesView: View {
           VStack(spacing: 6) {
             Text("w.").font(.largeTitle.bold()).foregroundStyle(Palette.accent)
             Text("WildBots").font(.headline)
-            if let version = store.bootstrap?.connection.version { Text("Hermes \(version)").font(.caption).foregroundStyle(.secondary) }
+            if let label = store.bootstrap?.connection.hermesLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
+            if let detail = store.bootstrap?.connection.hermesDetail {
+              Text(detail).font(.caption2.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
+            }
           }.frame(maxWidth: .infinity).padding(.vertical, 12)
         }.listRowBackground(Color.clear)
         }.listRowBackground(Palette.raised(scheme))
@@ -209,20 +195,17 @@ struct PreferencesView: View {
       preferences.notifications = settings
     })
   }
-  private func membership(_ id: String, _ keyPath: WritableKeyPath<Preferences, [String]>)
-    -> Binding<Bool>
-  {
-    Binding(
-      get: { preferences[keyPath: keyPath].contains(id) },
-      set: {
-        if $0 {
-          if !preferences[keyPath: keyPath].contains(id) {
-            preferences[keyPath: keyPath].append(id)
-          }
-        } else {
-          preferences[keyPath: keyPath].removeAll { $0 == id }
-        }
-      })
+  private var bots: [Bot] { store.bootstrap?.bots ?? [] }
+  /// One summary row instead of a switch per assistant; the list it opens is a single multi-select.
+  private var followRow: some View {
+    NavigationLink {
+      FollowedAssistantsView(preferences: $preferences, bots: bots)
+    } label: {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(HomeSummary.following(bots.filter { preferences.isFollowing($0.id) }.count))
+        Text("All of their activity, not just shared tasks").font(.caption).foregroundStyle(.secondary)
+      }
+    }.accessibilityIdentifier("followedAssistants")
   }
   private var defaultPicker: some View {
     let selection = Binding<String>(
@@ -232,38 +215,6 @@ struct PreferencesView: View {
       Text("First assistant").tag("")
       ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) }
     }
-  }
-  private func sectionEditor(_ section: BotSection, first: Bool) -> some View {
-    Section {
-      HStack {
-        Text(section.name.isEmpty ? "Untitled section" : section.name).fontWeight(.medium)
-        Spacer(minLength: 8)
-        Button { preferences.sections.removeAll { $0.id == section.id } } label: { Image(systemName: "xmark") }
-          .buttonStyle(.borderless).accessibilityLabel("Remove section \(section.name)")
-      }
-      ForEach(store.bootstrap?.bots ?? []) { bot in
-        Toggle(isOn: sectionMembership(section.id, bot.id)) {
-          HStack(spacing: 10) {
-            AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: bot.name, forceReducedMotion: true)
-            Text(bot.name)
-          }
-        }
-      }
-    } header: { if first { Text("Home sections") } }.disabled(store.sessionExpired)
-  }
-  private func sectionMembership(_ sectionId: String, _ botId: String) -> Binding<Bool> {
-    Binding(
-      get: { preferences.sections.first { $0.id == sectionId }?.botIds.contains(botId) == true },
-      set: { selected in
-        guard let index = preferences.sections.firstIndex(where: { $0.id == sectionId }) else {
-          return
-        }
-        if selected {
-          preferences.sections[index].botIds.append(botId)
-        } else {
-          preferences.sections[index].botIds.removeAll { $0 == botId }
-        }
-      })
   }
 }
 
