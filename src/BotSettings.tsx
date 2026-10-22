@@ -56,7 +56,12 @@ function LoadedBotSettings({
   onDeleted?: (botId: string) => void;
   onOpenRoutine?: (botId: string, routineId: string) => void;
 }) {
-  const existing = bot === "new" ? null : bot;
+  // Creating saves the assistant and then its avatar. Once it exists, this same sheet edits it,
+  // so an avatar that failed to save is still here to retry.
+  const [created, setCreated] = useState<Bot | null>(null);
+  const existing = created ?? (bot === "new" ? null : bot);
+  const [step, setStep] = useState<"look" | "role">("look");
+  const [avatarFailure, setAvatarFailure] = useState("");
   const [tab, setTab] = useState("details");
   const compactSettings = useCompactSettings();
   const overflowMenu = useRef<HTMLDetailsElement>(null);
@@ -149,6 +154,8 @@ function LoadedBotSettings({
   const progress = (key: string) => saving === key ? "saving" : saved === key ? "saved" : undefined;
   const errorBanner = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (error) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [error]);
+  // Each creation step, and the created assistant's first view, starts at the top, where its message is.
+  useEffect(() => { dialog.current?.querySelector(".settings-content")?.scrollTo?.(0, 0); }, [step, created]);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (!existing) return;
@@ -203,9 +210,45 @@ function LoadedBotSettings({
       if (key) setSaving(null);
     }
   };
+  const createBot = async (submitted: BotInput, confirmed: boolean) => {
+    setBusy(true); setError(""); setNotice(""); setSaving("details");
+    let saved: Bot;
+    try {
+      saved = await write<Bot>("/bots", { ...submitted, confirmModel: confirmed });
+      setConfirmModel(false);
+    } catch (e) {
+      setError((e as Error).message);
+      if (e instanceof ApiError && e.confirmRequired) setConfirmModel(true);
+      setBusy(false); setSaving(null);
+      return;
+    }
+    const chosen = avatar;
+    // Portraits are stored with the assistant, so a portrait is added once it exists.
+    const portraitNext = chosen.mode === "portrait" && !chosen.src;
+    let failure = "";
+    if (!portraitNext) {
+      try { await write(`/bots/${encodeURIComponent(saved.id)}/avatar`, chosen, "PUT"); }
+      catch (e) { failure = (e as Error).message || "The avatar could not be saved."; }
+    }
+    setBusy(false); setSaving(null);
+    onSaved();
+    if (!failure && !portraitNext) return onClose();
+    setCreated(saved);
+    setBaseline({ form: submitted, avatar: saved.avatar || defaultAvatar });
+    setTab("avatar");
+    if (failure) setAvatarFailure(failure);
+    else setNotice(`${saved.name} is ready. Upload or generate its portrait here, then save it.`);
+  };
+  const saveAvatar = () => void run(async () => {
+    const submitted = avatar;
+    await write(`/bots/${encodeURIComponent(existing!.id)}/avatar`, submitted, "PUT");
+    setBaseline((current) => ({ ...current, avatar: submitted }));
+    setAvatarFailure("");
+  }, "Avatar saved", "avatar");
   const saveBot = (confirmed = false, personal = personalConfirmed) => {
     if (loading) return;
     const submitted = form;
+    if (!existing) return createBot(submitted, confirmed);
     if (existing && !submitted.shared && !(existing.shared === false && existing.ownerId) && !personal) {
       setConfirmPersonal(true);
       return;
@@ -215,15 +258,14 @@ function LoadedBotSettings({
     return run(
       async () => {
         await write(
-          existing ? `/bots/${encodeURIComponent(existing.id)}` : "/bots",
-          { ...submitted, confirmModel: confirmed, ...(existing && personal ? { confirmPrivate: true } : {}) },
-          existing ? "PATCH" : "POST",
+          `/bots/${encodeURIComponent(existing.id)}`,
+          { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}) },
+          "PATCH",
         );
         setConfirmModel(false);
         setBaseline((current) => ({ ...current, form: submitted }));
-        if (!existing) onClose();
       },
-      existing?.shared
+      existing.shared
         ? "Changes saved for both household members."
         : "Assistant saved.",
       "details",
@@ -274,7 +316,7 @@ function LoadedBotSettings({
   return (
     <Dialog
       ref={dialog}
-      fallbackFocus={() => ["[aria-label='Edit assistant']", ".bot-rail [aria-label='Settings']", "[aria-label='Back to assistants']"]
+      fallbackFocus={() => [".chat-identity", ".bot-rail [aria-label='Settings']", "[aria-label='Back to assistants']"]
         .map(selector => document.querySelector<HTMLElement>(selector))
         .find(control => control && !control.closest("[inert]")) ?? null}
       className="settings-dialog"
@@ -295,8 +337,8 @@ function LoadedBotSettings({
     >
       <header>
         <div>
-          <p className="eyebrow">Assistant settings</p>
-          <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || "New assistant"}</h2>
+          <p className="eyebrow">{existing ? "Assistant settings" : `New assistant · Step ${step === "look" ? 1 : 2} of 2`}</p>
+          <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || (step === "look" ? "Name and look" : "Role and model")}</h2>
         </div>
         <Button
           className="icon-button"
@@ -313,7 +355,8 @@ function LoadedBotSettings({
           loading.retry();
         }}>Retry settings</Button>}
       </> : <>
-      <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
+      {/* Sections that need the assistant to exist appear once it does. */}
+      {existing && <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
         {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
           <Button
             type="button"
@@ -342,7 +385,7 @@ function LoadedBotSettings({
               aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</Button>)}
           </div>
         </details>}
-      </nav>
+      </nav>}
       <div className="settings-content">
         {error && (
           <p ref={errorBanner} className="form-error" role="alert">
@@ -395,7 +438,43 @@ function LoadedBotSettings({
             </div>
           </div>
         )}
-        {tab === "details" && (
+        {avatarFailure && existing && (
+          <div className="capability-note avatar-failure" role="alert">
+            <p>{existing.name} was created, but its avatar didn't save: {avatarFailure} Your choice is still here.</p>
+            <div className="actions">
+              <Button type="button" className="primary" disabled={busy} onClick={saveAvatar}>Retry avatar</Button>
+            </div>
+          </div>
+        )}
+        {!existing && step === "look" && (
+          <form className="create-look" onSubmit={(e) => {
+            e.preventDefault();
+            const name = form.name.trim();
+            const taken = bootstrap.bots.some((item) => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+            if (!name || taken) {
+              setError(name ? "An assistant with this name already exists. Choose another name." : "Give your assistant a name.");
+              dialog.current?.querySelector<HTMLInputElement>("#create-name")?.focus();
+              return;
+            }
+            setError("");
+            setStep("role");
+            dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
+          }}>
+            {unavailable("botConfiguration")}
+            <label>
+              Name
+              <Input id="create-name" maxLength={100} autoComplete="off" placeholder="Like Ranch hand or Homework helper"
+                value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); setError(""); }} />
+            </label>
+            <AvatarEditor avatar={avatar} onChange={setAvatar} name={form.name.trim() || "New assistant"}
+              portraitControls={avatar.mode === "portrait" && <p className="muted">
+                Portraits are stored with the assistant, so you'll upload or generate one right after you create it.</p>} />
+            <div className="actions sticky-actions">
+              <Button type="submit" className="primary" disabled={!bootstrap.capabilities.botConfiguration.supported}>Next: role and model</Button>
+            </div>
+          </form>
+        )}
+        {(existing ? tab === "details" : step === "role") && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -403,7 +482,7 @@ function LoadedBotSettings({
             }}
           >
             {unavailable("botConfiguration")}
-            <label>
+            {existing && <label>
               Name
               <Input
                 required
@@ -411,7 +490,7 @@ function LoadedBotSettings({
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
-            </label>
+            </label>}
             <label>
               Description
               <Input
@@ -488,8 +567,13 @@ function LoadedBotSettings({
                   busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
-                <SaveProgress state={progress("details")} label={existing ? "Save changes" : "Create assistant"} />
+                {existing ? <SaveProgress state={progress("details")} label="Save changes" />
+                  : busy ? <><Icon name="spinner" className="spin" size={16} />Creating…</> : "Create assistant"}
               </Button>
+              {!existing && <Button type="button" disabled={busy} onClick={() => {
+                setStep("look"); setError(""); setConfirmModel(false);
+                dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
+              }}>Back</Button>}
               {existing && (
                 <DeleteBot
                   bot={existing}
@@ -509,7 +593,7 @@ function LoadedBotSettings({
             </div>
           </form>
         )}
-        {tab === "avatar" && (
+        {existing && tab === "avatar" && (
           <>
             <AvatarEditor
               avatar={avatar}
@@ -526,11 +610,7 @@ function LoadedBotSettings({
                     <Input
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
-                      disabled={
-                        !existing ||
-                        busy ||
-                        !bootstrap.capabilities.uploads.supported
-                      }
+                      disabled={busy || !bootstrap.capabilities.uploads.supported}
                       onChange={(e) => void uploadPortrait(e.target.files?.[0])}
                     />
                   </label>
@@ -546,16 +626,11 @@ function LoadedBotSettings({
                     />
                   </label>
                   <Button
-                    disabled={
-                      !existing ||
-                      busy ||
-                      !prompt.trim() ||
-                      !bootstrap.capabilities.portraitGeneration.supported
-                    }
+                    disabled={busy || !prompt.trim() || !bootstrap.capabilities.portraitGeneration.supported}
                     onClick={() =>
                       void run(async () => {
                         const result = await write<FileRef>(
-                          `/bots/${encodeURIComponent(existing!.id)}/portrait`,
+                          `/bots/${encodeURIComponent(existing.id)}/portrait`,
                           { prompt },
                         );
                         setAvatar({
@@ -574,46 +649,20 @@ function LoadedBotSettings({
                 </>
               )}
             />
-            {!existing && (
-              <p className="muted">
-                Create the assistant before saving an avatar.
-              </p>
-            )}
             <div className="actions sticky-actions">
               <Button
                 className="primary with-progress"
-                disabled={
-                  !existing ||
-                  busy ||
-                  (avatar.mode === "portrait" && !avatar.src)
-                }
-                onClick={() =>
-                  void run(
-                    async () => {
-                      const submitted = avatar;
-                      await write(
-                        `/bots/${encodeURIComponent(existing!.id)}/avatar`,
-                        submitted,
-                        "PUT",
-                      );
-                      setBaseline((current) => ({ ...current, avatar: submitted }));
-                    },
-                    "Avatar saved",
-                    "avatar",
-                  )
-                }
+                disabled={busy || (avatar.mode === "portrait" && !avatar.src)}
+                onClick={saveAvatar}
               >
                 <SaveProgress state={progress("avatar")} label="Save avatar" />
               </Button>
             </div>
           </>
         )}
-        {(tab === "tools" || tab === "skills") && (
+        {existing && (tab === "tools" || tab === "skills") && (
           <>
             {unavailable(tab)}
-            {!existing ? (
-              <p>Create the assistant before configuring its capabilities.</p>
-            ) : (
               <>
                 {bootstrap.capabilities[tab].supported && !catalogReady && (
                   catalog?.tab === tab && catalog.status === "error" ? (
@@ -685,18 +734,14 @@ function LoadedBotSettings({
                   <SaveProgress state={progress(tab)} label={`Save ${tab}`} />
                 </Button>
               </>
-            )}
           </>
         )}
-        {tab === "connections" && (existing ? <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} /> : <p>Create the assistant before connecting its services.</p>)}
-        {tab === "memory" && (existing ? <MemoryPanel key={existing.id} botId={existing.id} /> : <p>Create the assistant before viewing its Hermes memory.</p>)}
-        {tab === "logins" && (existing ? <VaultPanel key={existing.id} botId={existing.id} /> : <p>Create the assistant before managing its Hermes logins.</p>)}
-        {tab === "routines" && (
+        {existing && tab === "connections" && <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
+        {existing && tab === "memory" && <MemoryPanel key={existing.id} botId={existing.id} />}
+        {existing && tab === "logins" && <VaultPanel key={existing.id} botId={existing.id} />}
+        {existing && tab === "routines" && (
           <>
             {unavailable("routines")}
-            {!existing ? (
-              <p>Create the assistant before adding routines.</p>
-            ) : (
               <RoutineManager
                 onOpenRoutine={onOpenRoutine}
                 botId={existing.id}
@@ -705,7 +750,6 @@ function LoadedBotSettings({
                 bootstrap={bootstrap}
                 report={setError}
               />
-            )}
           </>
         )}
       </div>
