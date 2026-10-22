@@ -132,6 +132,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored private var eventBotId: String?
   @ObservationIgnored private var streamHeardAt: ContinuousClock.Instant?
   @ObservationIgnored private(set) var conversationRefreshedAt: ContinuousClock.Instant?
+  /// Conversation reads started and not yet finished; tests wait for none before moving time.
+  @ObservationIgnored private(set) var conversationReadsInFlight = 0
   @ObservationIgnored private var conversationRefreshing = false
   /// Conversation reads overlap: polls, change notices, selection and pull to refresh each start
   /// one. A response older than one already applied is dropped, so it cannot undo newer state.
@@ -729,6 +731,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       ?? "turns=\(Self.historyPageTurns)"
     conversationReads += 1
     let read = conversationReads
+    conversationReadsInFlight += 1
+    defer { conversationReadsInFlight -= 1 }
     // A draft still to load or to save again needs the conversation's copy applied every time.
     let skippable = draftReady && !(draft.dirty == true && settled(id))
     do {
@@ -772,6 +776,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     defer { loadingEarlier = false }
     conversationReads += 1
     let read = conversationReads
+    conversationReadsInFlight += 1
+    defer { conversationReadsInFlight -= 1 }
     do {
       let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))

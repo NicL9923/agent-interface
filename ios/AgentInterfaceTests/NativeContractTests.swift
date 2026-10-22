@@ -1276,9 +1276,9 @@ private final class NativeMockServer: @unchecked Sendable {
         let polls = { server.conversationQueries.count }
         server.serveEventStreams()
         _ = await value.pollOnce()
-        // Every read the connect started must be applied before fake time moves, or a late one
-        // would be stamped with a later clock.
-        try await until { server.requestCount("/api/bots/bot/events") == 1 && polls() >= 2 && value.conversationRefreshedAt == time }
+        // Every read the connect started must finish before fake time moves, or a late one would
+        // be stamped with a later clock.
+        try await until { server.requestCount("/api/bots/bot/events") == 1 && polls() >= 2 && value.conversationReadsInFlight == 0 }
         XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
         let connected = polls()
         XCTAssertGreaterThanOrEqual(connected, 2, "Connecting reads the conversation, since earlier notices were lost")
@@ -1287,7 +1287,7 @@ private final class NativeMockServer: @unchecked Sendable {
         server.notifyChange()
         // The read must be applied, not just sent, before the clock moves on, or its refresh time
         // would be stamped with the later clock and the slow poll below would be skipped.
-        try await until { polls() >= connected + 1 && value.conversationRefreshedAt == time }
+        try await until { polls() >= connected + 1 && value.conversationReadsInFlight == 0 }
         XCTAssertEqual(polls(), connected + 1, "A change notice reads the conversation")
         time += .seconds(30); _ = await value.pollOnce()
         XCTAssertEqual(polls(), connected + 2, "A slow poll still covers a stream that failed unnoticed")
