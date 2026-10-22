@@ -20,7 +20,7 @@ import XCTest
   }
   /// Back to home, the root of the iPhone's one navigation stack.
   private func home(_ app: XCUIApplication) {
-    if app.buttons["openSettings"].isHittable { return }
+    if app.buttons["openSettings"].canTap { return }
     let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))

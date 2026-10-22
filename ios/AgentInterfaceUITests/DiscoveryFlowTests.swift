@@ -21,7 +21,7 @@ import XCTest
     expectation(for:NSPredicate(format:"hittable == true"),evaluatedWith:saved);waitForExpectations(timeout:10)
     XCTAssertTrue(app.descendants(matching:.any)["savedReplyMarker-history-saved"].exists,app.debugDescription)
     XCTAssertEqual(app.descendants(matching:.any).matching(NSPredicate(format:"identifier BEGINSWITH %@","savedReplyMarker-")).count,1)
-    for _ in 0..<20 where !app.staticTexts["Fixture: five easy dinners."].isHittable { app.swipeDown() }
+    for _ in 0..<20 where !app.staticTexts["Fixture: five easy dinners."].canTap { app.swipeDown() }
     XCTAssertTrue(app.staticTexts["Use **only** pantry staples"].exists,app.debugDescription)
     XCTAssertTrue(app.staticTexts["Kitchen companion → Ranch hand"].exists,app.debugDescription)
     let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="Native saved reply history";attachment.lifetime = .keepAlways;add(attachment)
@@ -37,7 +37,7 @@ import XCTest
     // The hit opens at its matching reply, below the fold; saving the conversation is at the top.
     let match=app.staticTexts["Fixture saved reply: brisket on Sunday."]
     expectation(for:NSPredicate(format:"hittable == true"),evaluatedWith:match);waitForExpectations(timeout:10)
-    for _ in 0..<20 where !app.buttons["Save conversation"].isHittable { app.swipeDown() }
+    for _ in 0..<20 where !app.buttons["Save conversation"].canTap { app.swipeDown() }
     XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].exists,app.debugDescription);app.buttons["Save conversation"].tap()
     XCTAssertTrue(app.staticTexts["Saved. Find it in Saved items."].waitForExistence(timeout:5));app.buttons["Back to results"].tap()
     app.buttons["Saved items"].tap();XCTAssertTrue(app.buttons["savedItem-saved-1"].waitForExistence(timeout:5))

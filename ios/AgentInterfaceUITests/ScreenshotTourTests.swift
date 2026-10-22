@@ -118,7 +118,7 @@ import XCTest
     app.buttons["Close"].tap()
     openPreferences(app)
     let theme = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Appearance")).firstMatch
-    XCTAssertTrue(theme.waitForExistence(timeout: 5) && theme.isHittable, app.debugDescription)
+    XCTAssertTrue(theme.waitForExistence(timeout: 5) && theme.canTap, app.debugDescription)
     theme.tap()
     let dark = app.descendants(matching: .any).matching(NSPredicate(
       format: "label == %@ AND elementType IN %@", "Dark",
@@ -200,10 +200,10 @@ import XCTest
 
   private func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
     for _ in 0..<8 {
-      if element.exists && element.isHittable { return }
+      if element.exists && element.canTap { return }
       if up { app.swipeUp() } else { app.swipeDown() }
     }
-    XCTAssertTrue(element.isHittable, "\(element) never became hittable")
+    XCTAssertTrue(element.canTap, "\(element) never became hittable")
   }
 
   /// Waits for transitions to settle, then writes the full-screen PNG and attaches it to the result.

@@ -26,11 +26,11 @@ import XCTest
   }
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
     for _ in 0..<10 {
-      if element.exists && element.isHittable { return }
+      if element.exists && element.canTap { return }
       let surface = app.collectionViews.firstMatch
       if up { surface.swipeUp(velocity: .slow) } else { surface.swipeDown(velocity: .slow) }
     }
-    XCTAssertTrue(element.isHittable, "\(element) never became hittable")
+    XCTAssertTrue(element.canTap, "\(element) never became hittable")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
@@ -127,7 +127,7 @@ import XCTest
     app.buttons["creationNext"].tap()
     XCTAssertTrue(app.buttons["creationCreate"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["creationBack"].exists)
-    XCTAssertTrue(app.staticTexts["Step 2 of 2"].isHittable || app.descendants(matching: .any)["creationStep"].isHittable, "Step 2 opens at its top")
+    XCTAssertTrue(app.staticTexts["Step 2 of 2"].canTap || app.descendants(matching: .any)["creationStep"].canTap, "Step 2 opens at its top")
     try capture("after-create-role")
     app.buttons["creationCreate"].tap()
     let created = app.buttons["bot.created-1"]

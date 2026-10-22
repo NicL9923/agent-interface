@@ -34,7 +34,7 @@ import XCTest
       XCTAssertTrue(app.buttons[group].exists, "Missing activity group: " + group)
     }
     let scheduled = app.buttons["Scheduled jobs"]
-    for _ in 0..<4 { if scheduled.isHittable { break }; app.swipeUp() }
+    for _ in 0..<4 { if scheduled.canTap { break }; app.swipeUp() }
     scheduled.tap()
     app.buttons["Bunny care"].tapWhenReady()
     XCTAssertTrue(handoff.waitForExistence(timeout: 5))
@@ -106,10 +106,10 @@ import XCTest
     app.buttons["Mascot"].tapWhenReady()
     func scrollTo(_ button: XCUIElement, up: Bool) {
       for _ in 0..<8 {
-        if button.exists && button.isHittable { return }
+        if button.exists && button.canTap { return }
         if up { app.swipeUp() } else { app.swipeDown() }
       }
-      XCTAssertTrue(button.isHittable)
+      XCTAssertTrue(button.canTap)
     }
     for family in ["pumpkin", "santa", "rudolph", "turkey", "bunny"] {
       let choice = app.buttons["avatarTile.family.\(family)"]
@@ -152,7 +152,7 @@ import XCTest
     if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["Settings"].tap()
     for _ in 0..<5 {
-      if app.buttons["Hermes updates"].isHittable { break }
+      if app.buttons["Hermes updates"].canTap { break }
       app.swipeUp()
     }
     app.buttons["Hermes updates"].tap()
@@ -235,7 +235,7 @@ import XCTest
     XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 10))
     screenshot(app, "Native integration accounts fixture")
     for _ in 0..<6 {
-      if app.buttons["Apple Calendar & Reminders"].isHittable { break }
+      if app.buttons["Apple Calendar & Reminders"].canTap { break }
       app.swipeUp()
     }
     app.buttons["Apple Calendar & Reminders"].tap()
@@ -262,7 +262,7 @@ import XCTest
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["Settings"].tap()
-    for _ in 0..<6 { if app.buttons["Hermes updates"].isHittable { break }; app.swipeUp() }
+    for _ in 0..<6 { if app.buttons["Hermes updates"].canTap { break }; app.swipeUp() }
     app.buttons["Hermes updates"].tap()
     XCTAssertTrue(app.buttons["restartHermesService"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["The update couldn't finish"].exists)

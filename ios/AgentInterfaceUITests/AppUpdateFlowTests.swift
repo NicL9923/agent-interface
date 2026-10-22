@@ -25,8 +25,8 @@ import XCTest
     add(home)
     app.buttons["Settings"].tap()
     let update = app.buttons["preferencesUpdateButton"]
-    for _ in 0..<8 where !update.isHittable { app.swipeUp() }
-    XCTAssertTrue(update.isHittable)
+    for _ in 0..<8 where !update.canTap { app.swipeUp() }
+    XCTAssertTrue(update.canTap)
     XCTAssertTrue(app.staticTexts["Update available"].exists)
   }
   func testNoBannerWithoutANewerBuild() {

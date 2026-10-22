@@ -20,7 +20,7 @@ import XCTest
     XCTAssertTrue(field.waitForExistence(timeout: 5)); field.typeWhenFocused(value)
   }
   private func reveal(_ button: XCUIElement, app: XCUIApplication, container: XCUIElement? = nil) {
-    for _ in 0..<5 { if button.isHittable { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
+    for _ in 0..<5 { if button.canTap { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
   }
   func testProfileLoginAddRemoveAndAvailableExternalSourceUnlock() {
     let app = launch()

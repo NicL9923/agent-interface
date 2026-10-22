@@ -55,7 +55,7 @@ import XCTest
         "Let's discuss your role."]
       XCTAssertTrue(welcome.waitForExistence(timeout: 15))
       XCTAssertTrue(
-        welcome.isHittable, "The empty welcome must be visible without manually scrolling.")
+        welcome.canTap, "The empty welcome must be visible without manually scrolling.")
       capture(app, "Empty canonical conversation after switching from a long chat")
       let heading = app.staticTexts["A quieter start to the day"]
       XCTAssertFalse(heading.exists, "The test must start with an empty canonical conversation.")
@@ -72,10 +72,10 @@ import XCTest
         app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "unreadable response"))
           .firstMatch.exists)
       reveal(heading, in: app, direction: .down)
-      XCTAssertTrue(heading.isHittable)
+      XCTAssertTrue(heading.canTap)
       capture(app, "Current canonical reply, opening and task list")
       reveal(finalParagraph, in: app, direction: .up)
-      XCTAssertTrue(finalParagraph.isHittable)
+      XCTAssertTrue(finalParagraph.canTap)
       capture(app, "Current canonical reply, table and code")
 
       app.buttons["botProfile"].tap()
@@ -115,11 +115,11 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, direction: Direction) {
       for _ in 0..<8 {
-        if element.exists && element.isHittable { return }
+        if element.exists && element.canTap { return }
         if direction == .up { app.swipeUp() } else { app.swipeDown() }
       }
       XCTAssertTrue(
-        element.exists && element.isHittable,
+        element.exists && element.canTap,
         "The expected current reply or control must be visible.")
     }
 

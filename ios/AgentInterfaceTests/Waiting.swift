@@ -29,6 +29,21 @@ func until(_ condition: () -> Bool, timeout: Duration = waitDeadline, isolation:
 /// an absence check (nothing may happen in the window), a production timer it outlasts, or simulated
 /// latency. Anything else belongs in `until`.
 final class FixedWaitRuleTests: XCTestCase {
+    /// `isHittable` throws, failing the test, while an element has no hit point, as when a menu or
+    /// sheet animates in on a slow runner. UI tests use `canTap` or `waitUntilHittable` instead.
+    func testUITestsNeverAskIsHittableDirectly() throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("AgentInterfaceUITests")
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "UITestSupport.swift" }
+        XCTAssertFalse(files.isEmpty, "The UI test sources are readable from \(directory.path)")
+        let direct = try files.flatMap { file in
+            try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n").enumerated()
+                .filter { $0.element.contains(".isHittable") }.map { "\(file.lastPathComponent):\($0.offset + 1)" }
+        }
+        XCTAssertEqual(direct, [], "Use `canTap` or `waitUntilHittable()` instead of `isHittable`.")
+    }
+
     func testEveryFixedSleepSaysWhyItIsNotABoundedWait() throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)

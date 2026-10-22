@@ -68,7 +68,7 @@ import XCTest
   func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openToday"].isHittable {
+    if !app.buttons["openToday"].canTap {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     }
@@ -96,7 +96,7 @@ import XCTest
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
     let message = { (text: String) in app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
-    for _ in 0..<5 { if app.buttons["Try once"].isHittable { break }; app.collectionViews.firstMatch.swipeUp() }
+    for _ in 0..<5 { if app.buttons["Try once"].canTap { break }; app.collectionViews.firstMatch.swipeUp() }
     app.buttons["Try once"].tap()
     XCTAssertTrue(app.buttons["Check run status"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Try once"].exists)
@@ -124,7 +124,7 @@ import XCTest
     capture(app, name: "Native routine saved output")
     app.terminate(); app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openGroups"].isHittable { app.navigationBars.buttons.firstMatch.tap() }
+    if !app.buttons["openGroups"].canTap { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["openGroups"].tap()
     let newGroup = app.buttons["New group"]
     XCTAssertTrue(newGroup.waitForExistence(timeout: 5))
@@ -148,7 +148,7 @@ import XCTest
   func testTodayAcknowledgesEachReturnedPageWithoutDroppingLateImports() {
     let app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openToday"].isHittable {
+    if !app.buttons["openToday"].canTap {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     }

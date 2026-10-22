@@ -30,9 +30,12 @@ extension XCUIElement {
   var hasFrame: Bool { exists && frame.minX.isFinite && !frame.isEmpty }
   @discardableResult
   func waitForFrame(timeout: TimeInterval = 10) -> Bool { poll(timeout) { hasFrame } }
+  /// Whether a tap can land now. Use it instead of `isHittable`, which fails the test outright,
+  /// rather than answering false, while the element has no hit point yet.
+  var canTap: Bool { hasFrame && isHittable }
   /// Waits until a tap can land: the element exists, has a frame and is hittable.
   @discardableResult
-  func waitUntilHittable(timeout: TimeInterval = 10) -> Bool { poll(timeout) { hasFrame && isHittable } }
+  func waitUntilHittable(timeout: TimeInterval = 10) -> Bool { poll(timeout) { canTap } }
   /// Taps once the element has a frame and, within a short grace period, is hittable. Use it for
   /// anything that appears after an action, such as a menu item, a confirmation button or a row
   /// that loads. Some buttons, such as Discard edits beside a focused field, never report hittable

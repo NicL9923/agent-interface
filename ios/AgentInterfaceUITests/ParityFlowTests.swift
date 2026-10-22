@@ -18,7 +18,7 @@ import UIKit
   }
   private func home(_ app: XCUIApplication) {
     // iPhone goes back to home, the root of its stack; iPad brings back its sidebar.
-    if app.buttons["openSettings"].isHittable { return }
+    if app.buttons["openSettings"].canTap { return }
     if app.buttons["Show Sidebar"].exists { app.buttons["Show Sidebar"].tap() }
     else { app.navigationBars.buttons.firstMatch.tap() }
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
@@ -34,11 +34,11 @@ import UIKit
   private func scroll(_ app: XCUIApplication, to element: XCUIElement, up: Bool = true) {
     let surface = app.collectionViews.firstMatch
     for _ in 0..<8 {
-      if element.exists && element.isHittable { return }
+      if element.exists && element.canTap { return }
       if surface.exists { if up { surface.swipeUp() } else { surface.swipeDown() } }
       else { if up { app.swipeUp() } else { app.swipeDown() } }
     }
-    XCTAssertTrue(element.isHittable, app.debugDescription)
+    XCTAssertTrue(element.canTap, app.debugDescription)
   }
   private func closeSettings(_ app: XCUIApplication) {
     let close = app.buttons["Close"]
