@@ -48,11 +48,24 @@ Tour dwell durations were verified in the article implementation. They are demo 
 
 The article's thinking morph is intentionally distinct from applying a generic dot loader to all activity. The source combines springs, expression changes, shape interpolation, depth geometry and trails. Our implementation uses simpler independent SVG geometry and keeps the character visible during thinking, as requested for inline conversation activity. It does not copy the proprietary motion engine and is not claimed to be pixel-identical. Working needs review in motion, not only a screenshot, because a rear-face frame legitimately has no visible eyes.
 
-Every state change also gets a short damped scale "boop". Expressions such as
+A state change, not a mount, also gets a short damped scale "boop". Expressions such as
 eye openness, tilt, happy eyes and mascot mouth curve ease over about 90 ms
 instead of snapping. The motion model is a pure module,
 `src/components/avatar-motion.ts`, which tests cover. The native client mirrors
 the original rig; the visible thinking character is a web treatment.
+
+No two bots play the same animation at once. A conductor
+(`src/components/avatar-conductor.ts`, mirrored by `AvatarConductor.swift`) books
+every named gesture: idle tilt, peek, hop and double take; the working spin; the
+thinking idea and tumble beats; the done twirl or cheer; the failed shake; the
+blocked nudge; and the boop. Gestures that read alike share a look (spin and
+twirl, hop and cheer, double take and idea), and only one bot holds a look at a
+time, with 0.3 s between turns. An idle bot picks the look least recently seen on
+another bot; a spin or beat that cannot fit waits, so the scan or ponder runs
+longer. A completion bumps filler that has not started and celebrates within
+2.1 s or skips the celebration. Avatars of the same bot, keyed by name, share one
+cue. Each bot on screen also gets its own phase and pace for its continuous loops,
+so bots never wander, scan or sway in step.
 
 ## Additional backend states
 

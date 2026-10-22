@@ -8,19 +8,23 @@ import {
   expressionFor,
   faceInk,
   frozenStates,
-  motionSeed,
+  motionClock,
   orbitArcs,
   perspective,
   pitchEyes,
   popIn,
   project,
   propMotion,
+  ringOffset,
   smoothstep,
+  soloPlan,
   tickMarks,
   tint,
   type AvatarProp,
   type Expression,
+  type MotionPlan,
 } from "./avatar-motion";
+import { avatarConductor } from "./avatar-conductor";
 import "./avatar.css";
 import { isSeasonal, seasonalAnchors, seasonalHeads, SeasonalBack, SeasonalFace, SeasonalFront } from "./seasonal-avatars";
 
@@ -219,7 +223,7 @@ export function Avatar({
   avatar = defaultAvatar,
   state = "idle",
   size = 48,
-  name = "Assistant",
+  name,
   reducedMotion = false,
   showState = false,
   prop,
@@ -227,6 +231,7 @@ export function Avatar({
   avatar?: AvatarConfig;
   state?: ActivityState;
   size?: number;
+  /** The bot's name. Its avatars share gestures; unnamed avatars each count as their own bot. */
   name?: string;
   reducedMotion?: boolean;
   showState?: boolean;
@@ -244,14 +249,19 @@ export function Avatar({
     return () => observer.disconnect();
   }, []);
   const reduce = useReducedMotion(reducedMotion);
-  const seed = motionSeed(name);
   const id = useId().replace(/:/g, "");
+  const label = name ?? "Assistant";
+  // The conductor keeps different bots from gesturing alike; an unnamed avatar is its own bot.
+  const owner = name ?? `avatar-${id}`;
   const [, setFrame] = useState(0);
   // Mutable animation clock. Only commit-phase effects and frame callbacks write
   // it, so an interrupted or replayed render never disturbs the running motion.
   const motion = useRef({
     state,
     since: performance.now(),
+    /** Whether `since` marks a state change rather than the mount. */
+    entered: false,
+    plan: soloPlan as MotionPlan,
     elapsed: 0,
     level: 0,
     sweep: 0,
@@ -276,6 +286,7 @@ export function Avatar({
       ...clock,
       state,
       since: performance.now(),
+      entered: true,
       elapsed: 0,
       carry: clock.level,
       carrySweep: clock.sweep,
@@ -296,10 +307,12 @@ export function Avatar({
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       const clock = motion.current;
-      const t = (now - clock.since) / 1000;
-      const trail = trailsAt(avatarPose(state, t, false, clock.prop, seed), t, clock.carry, clock.carrySweep);
-      motion.current = { ...clock, elapsed: t, now, ...trail };
-      expression.current = approach(expression.current, expressionFor(state, t), dt);
+      const cue = avatarConductor.cue(owner, state, clock.since / 1000, clock.entered, !!clock.prop, now / 1000);
+      const { plan } = cue;
+      const t = Math.max(0, now / 1000 - cue.since);
+      const trail = trailsAt(avatarPose(state, t, false, clock.prop, plan), t, clock.carry, clock.carrySweep);
+      motion.current = { ...clock, elapsed: t, now, plan, ...trail };
+      expression.current = approach(expression.current, expressionFor(state, t, plan), dt);
       const targets = morphTargets(state);
       const k = 1 - Math.exp(-dt / 0.13);
       morph.current = {
@@ -308,7 +321,7 @@ export function Avatar({
       const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
       // Committed inside this frame's callback; scheduled React work would land in a second frame, and each costs a restyle.
       flushSync(() => setFrame((f) => f + 1));
-      if (!animatesAt(state, t) && !settling) return;
+      if (!animatesAt(state, t, plan) && !settling) return;
       // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
       // asking for every display refresh makes the page restyle on each one even when nothing paints.
       if (size >= 56) frame = requestAnimationFrame(tick);
@@ -316,14 +329,15 @@ export function Avatar({
     };
     frame = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(frame); clearTimeout(wake); };
-  }, [state, still, size, seed]);
+  }, [state, still, size, owner]);
 
   // A state that has not committed yet renders from its first frame.
   const clock = motion.current;
   const fresh = clock.state !== state;
   const t = still || fresh ? 0 : clock.elapsed;
+  const plan = still || fresh ? soloPlan : clock.plan;
   const held = state === "working" && avatar.mode !== "portrait" ? prop : undefined;
-  const pose = avatarPose(state, t, still, held, seed);
+  const pose = avatarPose(state, t, still, held, plan);
   const { level: trailLevel, sweep } = still
     ? { level: 0, sweep: 0 }
     : fresh
@@ -534,7 +548,7 @@ export function Avatar({
   const propAge = still ? 1 : clock.prop !== prop ? 0 : (clock.now - clock.propSince) / 1000;
   const heldProp = held && (
     <g className="avatar-prop" data-prop={held} opacity={smoothstep(propAge / 0.2)}>
-      <PropArt prop={held} t={t} grow={popIn(propAge / 0.4)} />
+      <PropArt prop={held} t={motionClock(t, plan)} grow={popIn(propAge / 0.4)} />
     </g>
   );
   // Emphasis marks are lost at list sizes, so only larger avatars draw them.
@@ -550,6 +564,8 @@ export function Avatar({
     `translate(50 94) scale(${pose.scaleX * (1 - 0.3 * bang)} ${pose.scaleY}) translate(-50 -94)`,
     `translate(50 50) scale(${bodyScale}) translate(-50 -50)`,
   ].join(" ");
+  // A portrait's ring turns at this bot's own offset and pace.
+  const ring = avatar.mode === "portrait" ? ringOffset(owner) : null;
   const badge = avatar.mode === "portrait"
     ? state !== "idle" && state !== "thinking" && state !== "working"
     : ["disconnected", "failed", "interrupted", "done"].includes(state);
@@ -557,12 +573,17 @@ export function Avatar({
     <span
       ref={wrapper}
       className={`avatar-wrap avatar-${avatar.mode}`}
-      style={{ width: size, height: size, ["--avatar-size" as string]: `${size}px` }}
+      style={{
+        width: size,
+        height: size,
+        ["--avatar-size" as string]: `${size}px`,
+        ...(ring && { ["--avatar-ring-phase" as string]: ring.phase.toFixed(3), ["--avatar-ring-pace" as string]: ring.pace.toFixed(3) }),
+      }}
       data-state={state}
       data-family={mascot?.family}
       data-reduced-motion={reduce}
       role="img"
-      aria-label={`${name}: ${stateLabels[state]}`}
+      aria-label={`${label}: ${stateLabels[state]}`}
     >
       {avatar.mode === "portrait" ? (
         <>
