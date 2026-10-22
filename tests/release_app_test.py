@@ -516,17 +516,24 @@ class HostPrograms(unittest.TestCase):
         live = (self.host.base / "current").resolve()
         now = time.time()
         names = [f"release-old-{index:02}" for index in range(14)]
+        week = 8 * 86400
         for index, name in enumerate(names):
-            (releases / name).mkdir(); os.utime(releases / name, (now - 10000 + index, now - 10000 + index))
-        os.utime(live, (now - 20000, now - 20000))
+            (releases / name).mkdir(); os.utime(releases / name, (now - week + index, now - week + index))
+        os.utime(live, (now - 2 * week, now - 2 * week))
+        # A stage another session is still qualifying: old directory, fresh operation.
+        (self.host.base / "operations/release-old-05").mkdir(parents=True)
         operation = self.host.base / "operations" / live.name
         operation.mkdir(parents=True, exist_ok=True)
         (operation / "deploy-config.json").write_text(json.dumps({"previous": str(releases / "release-old-00")}))
-        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": 3})
+        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": 3, "minAgeDays": 7})
         self.assertEqual(code, 0, error)
         left = sorted(path.name for path in releases.iterdir())
-        self.assertEqual(left, sorted({live.name, "release-old-00", "release-old-11", "release-old-12", "release-old-13"}))
-        self.assertEqual(sorted(json.loads(output)["removed"]), names[1:11])
+        self.assertEqual(left, sorted({live.name, "release-old-00", "release-old-05", "release-old-11", "release-old-12", "release-old-13"}))
+        self.assertEqual(sorted(json.loads(output)["removed"]), [name for name in names[1:11] if name != "release-old-05"])
+        # Recent releases beyond the newest few stay until they are a week old.
+        (releases / "release-recent").mkdir(); os.utime(releases / "release-recent", (now - 86400, now - 86400))
+        for name in ("release-old-11", "release-old-12", "release-old-13"): os.utime(releases / name, (now, now))
+        self.assertEqual(json.loads(run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": 3, "minAgeDays": 7})[1])["removed"], [])
 
     def test_discard_removes_only_an_unactivated_release(self):
         release = self.host.base / "releases/release-new"

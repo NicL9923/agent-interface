@@ -287,7 +287,10 @@ finish({"current": str((base / "current").resolve()), "workerSha256": sha(base /
 """
 
 # Releases kept beyond the live one and the rollback target its deploy configuration names.
+# Older ones are removed only after a week untouched, so a stage another session is still
+# preparing or qualifying is never removed under it.
 RELEASES_KEPT = 10
+RELEASE_MIN_AGE_DAYS = 7
 REMOTE_PRUNE = """
 import re
 base = Path(PAYLOAD["appBase"]); releases = base / "releases"
@@ -299,7 +302,12 @@ if config.exists():
     keep |= {(releases / name).resolve() for name in re.findall(r"releases/(release-[A-Za-z0-9._-]+)", config.read_text())}
 dirs = sorted((p for p in releases.iterdir() if p.is_dir() and not p.is_symlink()), key=lambda p: p.stat().st_mtime, reverse=True)
 keep |= {p.resolve() for p in dirs[:PAYLOAD["keep"]]}
-removed = [p.name for p in dirs if p.resolve() not in keep]
+import time
+def touched(path):
+    operation = base / "operations" / path.name
+    return max(path.stat().st_mtime, operation.stat().st_mtime if operation.exists() else 0)
+cutoff = time.time() - PAYLOAD["minAgeDays"] * 86400
+removed = [p.name for p in dirs if p.resolve() not in keep and touched(p) < cutoff]
 for name in removed: shutil.rmtree(releases / name)
 finish({"removed": removed, "kept": len(dirs) - len(removed)})
 """
@@ -617,7 +625,7 @@ def activate(args):
 def prune_releases(manifest):
     """Remove old release builds so the host keeps room for Hermes update checks; never fails a release."""
     try:
-        pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT})
+        pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT, "minAgeDays": RELEASE_MIN_AGE_DAYS})
         print(f"Removed {len(pruned['removed'])} old releases; kept {pruned['kept']}.")
     except (SystemExit, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
         print(f"Warning: old releases were not pruned: {error}", file=sys.stderr)

@@ -82,17 +82,19 @@ jobs:
         # they skip the slow macOS job. Pushes to main and every other change still run it.
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+        # A failed diff fails this job, and renames list both paths, so nothing is skipped by accident.
         run: |
-          if [ "${{ github.event_name }}" = pull_request ] \
-            && ! git diff --name-only "$BASE"...HEAD | grep -qvE '^docs/|\.md$'; then
-            echo "native=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "native=true" >> "$GITHUB_OUTPUT"
+          native=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            files=$(git diff --name-only --no-renames "$BASE"...HEAD)
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then native=false; fi
           fi
+          echo "native=$native" >> "$GITHUB_OUTPUT"
   native:
     name: iOS unit tests
     needs: scope
-    if: needs.scope.outputs.native == 'true'
+    # Skips only on an explicit docs-only answer; a failed or missing scope still runs the tests.
+    if: ${{ !cancelled() && needs.scope.outputs.native != 'false' }}
     runs-on: macos-26
     timeout-minutes: 30
     steps:
