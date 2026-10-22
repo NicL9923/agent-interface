@@ -297,9 +297,7 @@ import XCTest
     attachment.lifetime = .keepAlways
     add(attachment)
   }
-  private func selectSettingsTab(_ app: XCUIApplication, _ title: String) {
-    app.buttons["settingsMore"].tap()
-    XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
-    app.buttons[title].tap()
+  private func selectSettingsTab(_ app: XCUIApplication, _ title: String, line: UInt = #line) {
+    app.selectSettingsTab(title, line: line)
   }
 }
