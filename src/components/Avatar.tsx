@@ -381,6 +381,8 @@ export function Avatar({
   const bodyPath = useShapeTransition((character && characterHeads[character]) || silhouette(geometry), reduce);
   const ink = faceInk(character ? eyeSurroundColor(character, color) : color, !!mascot);
   const headFill = character ? headColor(character, color) : color;
+  // Glasses sit mostly on the head, so they contrast with it rather than with an eye patch.
+  const frameInk = headFill === color ? ink : faceInk(headFill, !!mascot);
   const edge = bodyEdge(headFill);
   const eyeScale = anchor.scale;
   const eyeWidth = avatar.mode === "portrait" ? 1 : avatar.eyeWidth ?? 1;
@@ -464,7 +466,7 @@ export function Avatar({
             rx={12.5 * eyeScale * p.scale}
             ry={12.5 * eyeScale}
             fill="none"
-            stroke={ink}
+            stroke={frameInk}
             strokeWidth="2.5"
           />
         )}
@@ -475,7 +477,7 @@ export function Avatar({
     <path
       d={`M${50 + center.x - 4 * center.scale} ${eyeY - 2} Q${50 + center.x} ${eyeY - 5} ${50 + center.x + 4 * center.scale} ${eyeY - 2}`}
       fill="none"
-      stroke={ink}
+      stroke={frameInk}
       strokeWidth="2.5"
       strokeLinecap="round"
     />

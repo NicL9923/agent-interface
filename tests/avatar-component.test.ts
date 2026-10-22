@@ -275,6 +275,14 @@ describe("mascot characters", () => {
     expect(edges()).toHaveLength(0);
   });
 
+  it("draws a black panda's glasses dark against its white face while its eyes stay light on the patches", async () => {
+    await render("idle", { mode: "mascot", family: "panda", color: "#292929", eyes: "round", accessory: "glasses" });
+    expect(container.querySelector("g[fill='#fff3db']")).not.toBeNull();
+    const frames = [...container.querySelectorAll("ellipse[fill='none'][stroke-width='2.5'], path[fill='none'][stroke-width='2.5']")];
+    expect(frames).toHaveLength(3);
+    expect(frames.every((frame) => frame.getAttribute("stroke") === "#2b201b")).toBe(true);
+  });
+
   it("gives each eye surround ink that contrasts with it", async () => {
     await render("idle", { mode: "mascot", family: "raccoon", color: "#8C8F99", eyes: "round", accessory: "none" });
     expect(container.querySelector("[data-character-feature='mask']")).not.toBeNull();

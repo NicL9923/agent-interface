@@ -1240,6 +1240,8 @@ struct AvatarArtwork {
     let headFill = headHex == colorHex ? bodyColor : Color(hex: headHex)
     let edge = AvatarMotion.bodyEdge(headHex)
     let ink = Color(hex: inkHex)
+    // Glasses sit mostly on the head, so they contrast with it rather than with an eye patch.
+    let frameInk = headHex == colorHex ? ink : Color(hex: AvatarMotion.faceInk(headHex, mascot: mascot))
     let eyeScale = anchor.scale
     let eyeWidth = avatar.eyeWidth ?? 1
     let eyeHeight = avatar.eyeHeight ?? 1
@@ -1437,7 +1439,7 @@ struct AvatarArtwork {
           if accessory == "glasses" {
             eye.stroke(
               AvatarArt.ellipse(0, 0, 12.5 * eyeScale * p.scale, 12.5 * eyeScale),
-              with: .color(ink), lineWidth: 2.5)
+              with: .color(frameInk), lineWidth: 2.5)
           }
         }
         if accessory == "glasses" && center.visible && roll.visible {
@@ -1446,7 +1448,7 @@ struct AvatarArtwork {
           bridge.addQuadCurve(
             to: CGPoint(x: 50 + center.x + 4 * center.scale, y: eyeY - 2),
             control: CGPoint(x: 50 + center.x, y: eyeY - 5))
-          faceLayer.stroke(bridge, with: .color(ink), style: stroke(2.5))
+          faceLayer.stroke(bridge, with: .color(frameInk), style: stroke(2.5))
         }
         if let edge {
           layer.stroke(body, with: .color(Color(hex: edge)), style: StrokeStyle(lineWidth: 2.2))
