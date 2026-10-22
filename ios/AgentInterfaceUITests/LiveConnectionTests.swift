@@ -45,8 +45,10 @@ import XCTest
       XCTAssertTrue(name.waitForExistence(timeout: 10))
       name.tap()
       name.typeText(botName)
-      let create = app.collectionViews.buttons["Create assistant"]
-      reveal(create, in: app, direction: .up)
+      // Creation is two steps: name and look, then role and model.
+      app.buttons["creationNext"].tap()
+      let create = app.buttons["creationCreate"]
+      XCTAssertTrue(create.waitForExistence(timeout: 5))
       create.tap()
       let newBot = app.buttons.containing(.staticText, identifier: botName).firstMatch
       XCTAssertTrue(newBot.waitForExistence(timeout: 20))
