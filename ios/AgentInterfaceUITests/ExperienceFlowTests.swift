@@ -39,7 +39,7 @@ import XCTest
     let checked = NSPredicate(format: "value == %@", "Checked")
     expectation(for: checked, evaluatedWith: milk); waitForExpectations(timeout: 5)
     capture(app, name: "Native interactive checklist")
-    app.buttons["Configure Ranch hand"].tap(); tab("Memory", app: app)
+    app.openAssistantSettings("Ranch hand"); tab("Memory", app: app)
     XCTAssertTrue(app.staticTexts["What Hermes remembers"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Profile: default.")).firstMatch.exists)
     app.buttons["Forget…"].tap(); app.buttons["Forget entry"].tap()
@@ -66,7 +66,7 @@ import XCTest
   }
   func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     if !app.buttons["openToday"].isHittable {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
@@ -91,8 +91,8 @@ import XCTest
   }
   func testUncertainRoutineTrialChecksReceiptBeforeFreshRun() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
     let message = { (text: String) in app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
     for _ in 0..<5 { if app.buttons["Try once"].isHittable { break }; app.collectionViews.firstMatch.swipeUp() }
     app.buttons["Try once"].tap()
@@ -115,13 +115,13 @@ import XCTest
   }
   func testRoutineResultsAndGroupCreationMessaging() {
     var app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
     app.buttons["View results"].firstMatch.tap()
     XCTAssertTrue(app.staticTexts["Fixture saved routine output: the pasture gate is closed."].waitForExistence(timeout: 5))
     capture(app, name: "Native routine saved output")
     app.terminate(); app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     if !app.buttons["openGroups"].isHittable { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["openGroups"].tap()
     let newGroup = app.buttons["New group"]
@@ -145,7 +145,7 @@ import XCTest
 
   func testTodayAcknowledgesEachReturnedPageWithoutDroppingLateImports() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     if !app.buttons["openToday"].isHittable {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }

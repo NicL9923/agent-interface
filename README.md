@@ -273,7 +273,7 @@ working/thinking animation and supports the existing eye and accessory controls.
 Choosing a seasonal character applies its default color and preserves your other
 customization. All five use original artwork.
 
-Open Artifacts in the conversation header to browse that assistant's generated
+Open Artifacts from the assistant's details (tap its name in the conversation header) to browse its generated
 outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.

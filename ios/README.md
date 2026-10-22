@@ -16,14 +16,21 @@ app server's shared desktop and VPS terminal in the system browser. The browser
 uses its own household sign-in; the native session token is never passed in the
 URL. This keeps the native client free of embedded browser and terminal views.
 
-On iPhone, the Assistants, Today and Search tabs keep their navigation state and drafts as you switch. Group chats stay under Assistants. iPad keeps its sidebar.
+On iPhone, home is the root of one navigation stack: Today, Group chats and Search push from it, and a chat opened from Today or Search goes back there. Drafts are kept as you move around. iPad keeps its sidebar.
 
-Home opens with an account button for **Settings**, Search, and New assistant.
-Pin assistants from a conversation header or by long-pressing an assistant. Pins
-appear as large avatars above the household links; the remaining list shows each
-assistant's latest message and date. Settings saves changes as you make them.
+Home opens with your avatar for **Settings**, Search, and New assistant.
+Pin assistants from their card or by long-pressing an assistant, which also offers
+**Move to section**. Pins appear as large animated avatars above the household
+links; the remaining list shows each assistant's latest message and date. Settings
+saves changes as you make them.
 
-Long-press a settled assistant reply to copy the whole answer, share it, or save a reference. The conversation actions menu includes Find in loaded messages and pinning. Search opens a matching message when Hermes supplies a pointer, including after compression moves it to another history page.
+A conversation's header shows only the back button and the assistant's live avatar
+and name. Tap it for the assistant's card: Find in loaded messages, Pin, Artifacts
+and Settings, plus **Notify me about all activity** and its **Home section**. An
+assistant sits in at most one section. Cmd+F still opens Find. While typing, the
+keyboard button beside Send or a tap on the transcript puts the keyboard away.
+
+Long-press a settled assistant reply to copy the whole answer, share it, or save a reference. Search opens a matching message when Hermes supplies a pointer, including after compression moves it to another history page.
 
 The **Today** screen shows recent canonical events, new replies, pending decisions,
 and current work. **Mark caught up** saves the signed-in account's recap position

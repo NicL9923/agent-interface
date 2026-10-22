@@ -73,6 +73,53 @@ import XCTest
     XCTAssertEqual(HomeCopy.emptyTitle, "Welcome home")
     XCTAssertEqual(HomeCopy.emptySubtitle, "Your assistants will appear here when Hermes is connected.")
   }
+  // MARK: Home sections and following, from the assistant card
+  private func sections(_ pairs: (String, [String])...) -> Preferences {
+    var preferences = Preferences()
+    preferences.sections = pairs.map { BotSection(id: $0.0, name: $0.0.capitalized, botIds: $0.1) }
+    return preferences
+  }
+  func testMovingAnAssistantKeepsItInOneSection() {
+    // A saved list can already hold a bot twice, as the old per-section toggles allowed.
+    let start = sections(("house", ["ranch", "kitchen"]), ("garden", ["ranch"]))
+    let moved = start.moving("ranch", toSection: "garden")
+    XCTAssertEqual(moved.sections.map(\.botIds), [["kitchen"], ["ranch"]])
+    XCTAssertEqual(moved.homeSectionId(of: "ranch"), "garden")
+    XCTAssertEqual(moved.moving("ranch", toSection: "garden"), moved, "Moving to the current section changes nothing")
+    let out = moved.moving("ranch", toSection: nil)
+    XCTAssertNil(out.homeSectionId(of: "ranch"))
+    XCTAssertEqual(out.sections.map(\.botIds), [["kitchen"], []], "Leaving a section keeps the section and the others in it")
+    XCTAssertEqual(start.moving("ranch", toSection: "missing").sections.flatMap(\.botIds), ["kitchen"], "A section deleted elsewhere just takes it out")
+  }
+  func testANewSectionIsNamedOnceAndReusesAMatchingName() throws {
+    let start = sections(("house", ["kitchen"]))
+    let created = try XCTUnwrap(start.moving("ranch", toNewSection: "  Around the yard  ", id: "yard"))
+    XCTAssertEqual(created.sections.last, BotSection(id: "yard", name: "Around the yard", botIds: ["ranch"]))
+    let reused = try XCTUnwrap(start.moving("ranch", toNewSection: "HOUSE", id: "duplicate"))
+    XCTAssertEqual(reused.sections.map(\.id), ["house"])
+    XCTAssertEqual(reused.homeSectionId(of: "ranch"), "house")
+    XCTAssertNil(start.moving("ranch", toNewSection: " \n "))
+    XCTAssertEqual(start.moving("ranch", toNewSection: String(repeating: "x", count: 140), id: "long")?.sections.last?.name.count, 100)
+    var full = Preferences()
+    full.sections = (0..<Preferences.maxSections).map { BotSection(id: "\($0)", name: "Section \($0)", botIds: []) }
+    XCTAssertNil(full.moving("ranch", toNewSection: "One more"), "The server accepts at most 30 sections")
+    XCTAssertEqual(full.moving("ranch", toNewSection: "section 3")?.homeSectionId(of: "ranch"), "3", "An existing name still works when full")
+  }
+  func testFollowingAddsAnAssistantOnce() {
+    var preferences = Preferences()
+    preferences.followBots = ["kitchen"]
+    let on = preferences.following("ranch", true).following("ranch", true)
+    XCTAssertEqual(on.followBots, ["kitchen", "ranch"])
+    XCTAssertEqual(on.following("ranch", false).followBots, ["kitchen"])
+  }
+  @MainActor func testCardChangesShowBeforeTheSaveReturns() throws {
+    let value = try store()
+    value.homeFollow("ranch", true)
+    XCTAssertTrue(value.homeMove("ranch", toNewSection: "Around the yard"))
+    XCTAssertTrue(value.homeFollows("ranch"))
+    XCTAssertEqual(value.homePreferences?.sections.first?.name, "Around the yard")
+    XCTAssertNotNil(value.homeSectionId(of: "ranch"))
+  }
   @MainActor func testBlockedAssistantSetupAlwaysSaysWhy() throws {
     XCTAssertNil(try store().assistantSetupBlock)
     XCTAssertEqual(try store(connected: false).assistantSetupBlock, "Assistant setup is unavailable while Hermes is disconnected.")

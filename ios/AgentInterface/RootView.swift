@@ -2,6 +2,8 @@ import Network
 import SwiftUI
 
 enum HomeDestination { case conversation, today, groups, find }
+/// A screen pushed over home on iPhone. Home is the stack's root; everything else is one push away.
+enum HomeRoute: Hashable { case chat, today, groups, search }
 
 struct RootView: View {
   @Environment(AppStore.self) private var store
@@ -12,8 +14,7 @@ struct RootView: View {
   @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
   @Environment(\.scenePhase) private var scenePhase
-  @State private var tab = "assistants"
-  @State private var assistantPath: [String] = []
+  @State private var path: [HomeRoute] = []
   @State private var initialScope: String?
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
@@ -33,10 +34,10 @@ struct RootView: View {
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
     .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
     // Initial too: a notification or Siri can ask before this view first appears.
-    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; tab = "today"; compactColumn = .detail } }
+    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; path = [.today]; compactColumn = .detail } }
     .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
     .onChange(of: store.conversationRequest, initial: true) { _, request in
-      if request != nil { destination = .conversation; tab = "assistants"; assistantPath = ["chat"]; compactColumn = .detail }
+      if request != nil { destination = .conversation; openChat(); compactColumn = .detail }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
   }
@@ -88,48 +89,53 @@ struct RootView: View {
     let preferences = store.bootstrap?.preferences
     let today = (preferences?.startPage == "today" || preferences?.startPage != "assistant" && preferences?.defaultBotId == nil) && store.routineResult == nil
     destination = today ? .today : .conversation
-    tab = today ? "today" : "assistants"
-    assistantPath = []
+    path = today ? [.today] : []
     compactColumn = .sidebar
   }
   private func left(_ id: String) {
     if settingsBot?.id == id { settingsBot = nil }
     if store.routineResult?.botId == id { store.routineResult = nil }
     // Only a person looking at its conversation is taken home; Today and the other views stay.
-    if UIDevice.current.userInterfaceIdiom == .phone { assistantPath.removeAll { $0 == "chat" } }
+    if UIDevice.current.userInterfaceIdiom == .phone { path.removeAll { $0 == .chat } }
     if destination == .conversation { compactColumn = .sidebar }
     // Handled: losing the same assistant again later is a new change.
     store.leftBotId = nil
   }
   private func accountChanged() {
     destination = .conversation
-    tab = "assistants"
-    assistantPath = []
+    path = []
     preferencesOpen = false
     settingsBot = nil
     creatingBot = false
     store.openedFile = nil
     store.routineResult = nil
   }
+  /// iPhone: one stack rooted at home. Home's links replace whatever was pushed, so a double tap
+  /// cannot stack the same screen twice.
   private var compactNavigation: some View {
-    TabView(selection: $tab) {
-      NavigationStack(path: $assistantPath) {
-        BotListView(destination: destination, openPreferences: { preferencesOpen = true },
-          edit: { settingsBot = $0 }, create: { creatingBot = true },
-          openBot: { destination = .conversation; assistantPath = ["chat"] },
-          openToday: { tab = "today" }, openGroups: { assistantPath = ["groups"] },
-          openDiscovery: { tab = "search" })
-          .navigationDestination(for: String.self) { route in
-            if route == "groups" { GroupChatsView() }
-            else if let bot = store.bot { ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id) }
-          }
-      }.tabItem { Label("Assistants", systemImage: "bubble.left.and.bubble.right") }.tag("assistants")
-      NavigationStack {
-        TodayView(openBot: { tab = "assistants"; assistantPath = ["chat"]; destination = .conversation })
-      }.tabItem { Label("Today", systemImage: "calendar") }.tag("today")
-      NavigationStack { DiscoveryView() }
-        .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag("search")
+    NavigationStack(path: $path) {
+      BotListView(destination: destination, openPreferences: { preferencesOpen = true },
+        edit: { settingsBot = $0 }, create: { creatingBot = true },
+        openBot: { destination = .conversation; path = [.chat] },
+        openToday: { path = [.today] }, openGroups: { path = [.groups] },
+        openDiscovery: { path = [.search] })
+        .navigationDestination(for: HomeRoute.self) { route in pushed(route) }
     }
+  }
+  @ViewBuilder private func pushed(_ route: HomeRoute) -> some View {
+    switch route {
+    case .today: TodayView(openBot: { destination = .conversation; openChat() })
+    case .groups: GroupChatsView()
+    case .search: DiscoveryView()
+    case .chat: if let bot = store.bot { ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id) }
+    }
+  }
+  /// A chat opens over the screen that asked for it, so Back returns to Today or the search
+  /// results. Only one chat is ever in the stack; opening another replaces it.
+  private func openChat() {
+    var next = path.filter { $0 != .chat }
+    next.append(.chat)
+    if next != path { path = next }
   }
   /// Hardware keyboard shortcuts that belong to home. An open chat takes Find and Stop itself.
   private func run(_ command: KeyboardCommand) {
@@ -141,7 +147,7 @@ struct RootView: View {
     case .find:
       guard store.viewingBotId == nil else { return }
       store.searchFocusPending = true
-      destination = .find; tab = "search"; compactColumn = .detail
+      destination = .find; path = [.search]; compactColumn = .detail
     case .stop: break
     }
   }
@@ -171,84 +177,94 @@ private struct RootSheets: ViewModifier {
       }
   }
 }
+/// The first screen and the sign-in screen. It keeps the launch screen's centered composition, so
+/// moving from one to the other does not jump: the household of avatars, one heading, one primary
+/// action, and everything else quiet below it.
 struct ConnectionView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @FocusState private var addressFocused: Bool
   var body: some View {
-    NavigationStack {
+    GeometryReader { proxy in
       ScrollView {
-        VStack(alignment: .leading, spacing: 24) {
-          AvatarTrio().padding(.top, 28)
-          VStack(alignment: .leading, spacing: 8) {
-            Text(store.api == nil ? WelcomeCopy.heading.replacingOccurrences(of: "\n", with: " ") : WelcomeCopy.signInHeading)
-              .font(.largeTitle.bold())
-            Text(
-              store.api == nil
-                ? "Connect to the WildBots app server your self-hoster set up. Your assistants and their work stay on that server."
-                : WelcomeCopy.signInDetail
-            ).foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+          Spacer(minLength: 24)
+          hero
+          Spacer(minLength: 32).frame(maxHeight: 48)
+          VStack(spacing: 14) {
+            if store.api == nil { connectForm } else { signInActions }
+            if let error = store.error { ErrorBanner(message: error, dismiss: { store.error = nil }) }
           }
-          if store.api == nil {
-            VStack(alignment: .leading, spacing: 10) {
-              Text("App server address").font(.headline)
-              TextField("https://assistants.example.com", text: Bindable(store).host).textContentType(.URL)
-                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .padding(14).background(
-                  Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12)
-                ).accessibilityIdentifier("serverAddress")
-              Button {
-                Task { await store.connect() }
-              } label: {
-                HStack {
-                  if store.loading { ProgressView() }
-                  Text(store.loading ? "Checking server…" : "Connect to server").frame(
-                    maxWidth: .infinity)
-                }
-              }.buttonStyle(.borderedProminent).controlSize(.large).disabled(
-                store.loading || store.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              ).accessibilityIdentifier("connectServer")
-            }
-          } else {
-            Label(store.host, systemImage: "server.rack").font(.footnote).textSelection(.enabled)
-            if store.authConfig == nil && store.error == nil {
-              Text(WelcomeCopy.checkingSignIn).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("checkingSignIn")
-            }
-            Button {
-              Task { await store.signIn() }
-            } label: {
-              HStack {
-                if store.signingIn { ProgressView() }
-                Text(store.signingIn ? "Signing in…" : "Sign in to your household").frame(
-                  maxWidth: .infinity)
-              }
-            }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.signingIn)
-              .accessibilityIdentifier("householdSignIn")
-            Button {
-              Task { await store.restore() }
-            } label: {
-              HStack {
-                if store.restoring { ProgressView() }
-                Text(store.restoring ? "Checking server…" : "Retry connection").frame(
-                  maxWidth: .infinity)
-              }
-            }.buttonStyle(.bordered).controlSize(.large).disabled(store.restoring || store.signingIn)
-              .accessibilityIdentifier("retryConnection")
-            if store.authConfig?.localDevAuth == true {
-              Text(
-                "This development server also offers local test accounts in the sign-in browser."
-              ).font(.footnote).foregroundStyle(.secondary)
-            }
-            ChangeServerButton()
-          }
-          if let error = store.error { ErrorBanner(message: error, dismiss: { store.error = nil }) }
-          Text(
-            "Provider credentials and the Hermes gateway token are configured by the self-hoster on the server."
-          ).font(.footnote).foregroundStyle(.secondary)
-        }.padding(24).frame(maxWidth: 560)
-      }.frame(maxWidth: .infinity).background(Palette.surface(scheme)).navigationTitle(
-        "WildBots"
-      ).navigationBarTitleDisplayMode(.inline)
+          Spacer(minLength: 32)
+          Text("Your self-hoster keeps provider keys and the Hermes connection on the server, not on this device.")
+            .font(.footnote).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
+        }.padding(.horizontal, 28).padding(.vertical, 16).frame(maxWidth: 440)
+          .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+      }.scrollDismissesKeyboard(.interactively)
+    }.background(Palette.surface(scheme)).accessibilityIdentifier("connectionView")
+  }
+  private var hero: some View {
+    VStack(spacing: 18) {
+      Text("WildBots").font(.caption.weight(.semibold)).tracking(1.4).textCase(.uppercase).foregroundStyle(Palette.muted)
+      AvatarTrio()
+      Text(store.api == nil ? WelcomeCopy.heading : WelcomeCopy.signInHeading)
+        .font(.largeTitle.bold()).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
+      Text(store.api == nil ? WelcomeCopy.connectDetail : WelcomeCopy.signInDetail)
+        .foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
     }
+  }
+  private var connectForm: some View {
+    VStack(spacing: 14) {
+      TextField("App server address", text: Bindable(store).host, prompt: Text("assistants.example.com"))
+        .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+        .submitLabel(.go).focused($addressFocused).onSubmit(connect)
+        .padding(.horizontal, 16).frame(minHeight: 52)
+        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(addressFocused ? Palette.accent : Palette.line, lineWidth: 1))
+        .accessibilityLabel("App server address").accessibilityIdentifier("serverAddress")
+      primaryButton(store.loading ? "Checking server…" : "Continue", busy: store.loading, action: connect)
+        .disabled(store.loading || hostEmpty).accessibilityIdentifier("connectServer")
+    }
+  }
+  @ViewBuilder private var signInActions: some View {
+    primaryButton(store.signingIn ? "Signing in…" : "Sign in to your household", busy: store.signingIn) {
+      Task { await store.signIn() }
+    }.disabled(store.signingIn).accessibilityIdentifier("householdSignIn")
+    if store.authConfig == nil && store.error == nil {
+      Text(WelcomeCopy.checkingSignIn).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("checkingSignIn")
+    }
+    if store.authConfig?.localDevAuth == true {
+      Text("This development server also offers local test accounts in the sign-in browser.")
+        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+    }
+    // The server, and the two ways to recover from a wrong or sleeping one, in one quiet line.
+    VStack(spacing: 6) {
+      Label(store.host, systemImage: "server.rack").font(.footnote).foregroundStyle(.secondary)
+        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+      HStack(spacing: 18) {
+        Button { Task { await store.restore() } } label: {
+          HStack(spacing: 6) {
+            if store.restoring { ProgressView().controlSize(.mini) }
+            Text(store.restoring ? "Checking…" : "Retry connection")
+          }
+        }.disabled(store.restoring || store.signingIn).accessibilityIdentifier("retryConnection")
+        ChangeServerButton()
+      }.font(.footnote.weight(.medium)).tint(Palette.accent)
+    }.padding(.top, 6)
+  }
+  private func primaryButton(_ title: String, busy: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      HStack(spacing: 8) {
+        if busy { ProgressView().tint(.white) }
+        Text(title).fontWeight(.semibold)
+      }.frame(maxWidth: .infinity, minHeight: 30)
+    }.buttonStyle(.borderedProminent).controlSize(.large).buttonBorderShape(.capsule).tint(Palette.accent)
+  }
+  private var hostEmpty: Bool { store.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  private func connect() {
+    guard !hostEmpty, !store.loading else { return }
+    Task { await store.connect() }
   }
 }
 struct ErrorBanner: View {
@@ -298,6 +314,8 @@ struct BotListView: View {
   var openDiscovery: () -> Void
   private let reachability = NetworkReachability.shared
   @State private var checkingConnection = false
+  /// The assistant a new home section is being named for.
+  @State private var sectionFor: Bot?
   @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
   private var lost: Bool { store.connectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
@@ -348,16 +366,8 @@ struct BotListView: View {
     }.background(homeBackground)
       .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline).homeTitleHidden()
       .toolbarBackground(homeBackground, for: .navigationBar)
+      .bareToolbarItem(.topBarLeading) { accountButton }
       .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button(action: openPreferences) {
-            AccountAvatar(member: store.bootstrap?.user, size: 40)
-              .overlay(alignment: .bottomTrailing) {
-                Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
-                  .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
-              }
-          }.accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
-        }
         if lost {
           ToolbarItem(placement: .topBarLeading) { syncPill }
         }
@@ -369,6 +379,17 @@ struct BotListView: View {
             .accessibilityIdentifier("newAssistant")
         }
       }.refreshable { await store.refreshBootstrap() }
+      .newSectionAlert(for: $sectionFor)
+  }
+  /// The person's own avatar is the button, with the connection dot on it; no capsule around it.
+  private var accountButton: some View {
+    Button(action: openPreferences) {
+      AccountAvatar(member: store.bootstrap?.user, size: 40)
+        .overlay(alignment: .bottomTrailing) {
+          Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
+            .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
+        }.contentShape(Circle())
+    }.buttonStyle(.plain).accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
   }
   /// Home while there are no assistants: the setup panel if Hermes is out of reach, else the web's empty list.
   @ViewBuilder private var emptyHome: some View {
@@ -416,7 +437,7 @@ struct BotListView: View {
     return Button { open(bot) } label: {
       VStack(spacing: 8) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
-          size: sizeClass == .compact ? 92 : 60, name: bot.name, forceReducedMotion: true)
+          size: sizeClass == .compact ? 92 : 60, name: bot.name)
           .overlay(alignment: .bottomTrailing) {
             Image(systemName: "pin.fill").font(.system(size: pinBadge)).padding(5)
               .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
@@ -463,6 +484,9 @@ struct BotListView: View {
   @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
     Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") {
       Task { await store.togglePin(bot.id) }
+    }.disabled(!canPin)
+    Menu("Move to section", systemImage: "rectangle.stack") {
+      HomeSectionPicker(botId: bot.id) { sectionFor = bot }
     }.disabled(!canPin)
     Button("Assistant settings", systemImage: "gearshape") { edit(bot) }
   }
@@ -527,6 +551,17 @@ extension View {
   /// Home has no title in the web app; the string stays as the name of the back button on pushed screens.
   @ViewBuilder func homeTitleHidden() -> some View {
     if #available(iOS 26, *) { toolbar(removing: .title) } else { self }
+  }
+  /// A toolbar item that draws its own shape, without the Liquid Glass capsule iOS 26 puts around
+  /// bar buttons. The check sits here, not in a toolbar builder, because a toolbar builder's
+  /// availability branch is only safe from iOS 17.5.
+  @ViewBuilder func bareToolbarItem<Content: View>(_ placement: ToolbarItemPlacement, @ViewBuilder _ content: () -> Content) -> some View {
+    let item = content()
+    if #available(iOS 26, *) {
+      toolbar { ToolbarItem(placement: placement) { item }.sharedBackgroundVisibility(.hidden) }
+    } else {
+      toolbar { ToolbarItem(placement: placement) { item } }
+    }
   }
   /// The web's two-line view header: title over a one-line subtitle, with the title kept for navigation and accessibility.
   func viewHeader(_ title: String, _ subtitle: String) -> some View {

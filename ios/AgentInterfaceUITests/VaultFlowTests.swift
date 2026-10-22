@@ -24,7 +24,7 @@ import XCTest
   }
   func testProfileLoginAddRemoveAndAvailableExternalSourceUnlock() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
     app.selectSettingsTab("Logins")
     XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Fixture school portal"].exists)
@@ -47,7 +47,7 @@ import XCTest
   }
   func testFailedUnlockKeepsTheSheetOpenWithItsErrorAndLocksVaultActionsUntilReload() {
     let app = launch(unlockFails: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
     app.selectSettingsTab("Logins")
     XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
     let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
@@ -73,7 +73,7 @@ import XCTest
   }
   func testAddLoginExplainsABadAddressBeforeSaving() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
     app.selectSettingsTab("Logins")
     XCTAssertTrue(app.buttons["vault.add"].waitForExistence(timeout: 5)); app.buttons["vault.add"].tap()
     field("vault.loginOrigin", app: app, value: "library.example.test")
@@ -84,7 +84,7 @@ import XCTest
   }
   func testCancelledAddRequiresReviewOfPotentiallySavedLogin() {
     let app = launch(cancelledAdd: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
     app.selectSettingsTab("Logins")
     XCTAssertTrue(app.buttons["vault.add"].waitForExistence(timeout: 5)); app.buttons["vault.add"].tap()
     field("vault.loginLabel", app: app, value: "Fixture library")

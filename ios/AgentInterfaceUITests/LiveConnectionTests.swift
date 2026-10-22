@@ -79,9 +79,9 @@ import XCTest
       XCTAssertTrue(finalParagraph.isHittable)
       capture(app, "Current canonical reply, table and code")
 
-      let configure = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Configure "))
-        .firstMatch
-      configure.tap()
+      app.buttons["botProfile"].tap()
+      XCTAssertTrue(app.buttons["profileSettings"].waitForExistence(timeout: 10))
+      app.buttons["profileSettings"].tap()
       XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
       app.selectSettingsTab("Tools")
       // The full Hermes catalog extends beyond the viewport. Its first switch

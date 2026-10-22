@@ -104,8 +104,16 @@ struct ComposerView: View {
       if store.bootstrap?.preferences.presentation == "advanced" { modelButton }
       VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : latestReply, disabled: voiceDisabled)
       Spacer(minLength: 0)
+      if focused { hideKeyboardButton }
       sendButton
     }
+  }
+  /// Always there while typing, so the keyboard can be put away without finding a spot to drag.
+  private var hideKeyboardButton: some View {
+    Button { focused = false } label: {
+      Image(systemName: "keyboard.chevron.compact.down").font(.body).frame(width: 44, height: 44)
+    }.foregroundStyle(Palette.muted).accessibilityLabel("Hide keyboard").accessibilityIdentifier("hideKeyboard")
+      .transition(.opacity)
   }
   private var attachMenu: some View {
     let unavailable = store.attachUnavailable(bot.id)
