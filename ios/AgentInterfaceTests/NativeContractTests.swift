@@ -435,6 +435,11 @@ private final class NativeMockServer: @unchecked Sendable {
         value.makeClient = { _ in api }
         return value
     }
+    /// Waits for a condition with a deadline, so a slower host gets time without a fixed sleep.
+    private func until(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+    }
     private func clean(_ server: NativeMockServer, _ store: AppStore? = nil) {
         store?.suspend()
         for user in ["one", "two"] {
@@ -1258,18 +1263,23 @@ private final class NativeMockServer: @unchecked Sendable {
         server.startRun("live-run")
         server.serveEventStreams()
         _ = await value.pollOnce()
-        try await Task.sleep(for: .milliseconds(200))
+        // Both streams are open and their connect refreshes have been asked for.
+        try await until {
+            server.requestCount("/api/events") == 1 && server.requestCount("/api/bots/bot/events") == 1
+                && server.requestCount("/api/bootstrap") == 2 && server.conversationQueries.count >= 2
+        }
         XCTAssertEqual(server.requests.first { $0.url?.path == "/api/bootstrap" }?.url?.query, "roster=lean")
         let reads = server.conversationQueries.count
         server.notifyInflight()
-        try await Task.sleep(for: .milliseconds(200))
+        try await until { value.conversation?.messages.last?.text == "Live native reply" }
         XCTAssertEqual(value.conversation?.messages.last?.text, "Live native reply")
         XCTAssertEqual(value.conversation?.activity.runId, "live-run")
         XCTAssertEqual(server.conversationQueries.count, reads)
         let bootstraps = server.requestCount("/api/bootstrap")
         server.notifyRoster()
-        try await Task.sleep(for: .milliseconds(200))
+        try await until { server.requestCount("/api/bootstrap") > bootstraps }
         XCTAssertEqual(server.requestCount("/api/bootstrap"), bootstraps + 1)
+        XCTAssertEqual(server.conversationQueries.count, reads, "Neither notice reads the conversation")
     }
 
     func testALiveChangeStreamReplacesFastConversationPollingLikeTheWeb() async throws {
