@@ -53,11 +53,12 @@ export function useSession(events: SessionEvents) {
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
-        // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
-        const unchanged = lastBootstrap.current === next;
-        lastBootstrap.current = next;
         // A save that overlapped this read may be newer than its preferences; keep the saved copy.
         const stalePreferences = !preferences.current?.fresh(marked);
+        // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
+        // A read whose preferences were held back is not remembered, so the next one reconciles them.
+        const unchanged = lastBootstrap.current === next;
+        lastBootstrap.current = stalePreferences ? null : next;
         setBoot((previous) => unchanged && previous ? previous : { ...next,
           bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
             ? previous.bots : next.bots,
