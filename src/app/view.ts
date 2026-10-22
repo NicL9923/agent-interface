@@ -5,6 +5,7 @@ export type View = "conversation" | "today" | "groups" | "find";
 export type Panel =
   | { kind: "preferences" | "integrations" | "upgrade" | "computer" }
   | { kind: "settings"; bot: Bot | "new" }
+  | { kind: "details"; botId: string; newSection?: boolean }
   | { kind: "routine"; botId: string; routineId: string; resultId?: string };
 const views: View[] = ["today", "groups", "find"];
 export function initialView(): View {

@@ -32,6 +32,7 @@ beforeEach(() => {
     connectionLost: false, offline: false, mobile: false, open: true, update: null,
     onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(),
     onSettings: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
+    onMoveToSection: vi.fn(), onNewSection: vi.fn(),
   };
 });
 afterEach(async () => {
@@ -91,7 +92,8 @@ it("opens the assistant menu by keyboard, navigates its actions, and restores ro
   await key(row, "F10", true);
   await settleFocus();
   expect(document.body.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Ranch hand");
-  const [unpin, settings] = menuItems();
+  const [unpin, move, settings] = menuItems();
+  expect(move.textContent).toBe("Move to section");
   await key(document.activeElement!, "ArrowDown");
   expect(document.activeElement).toBe(unpin);
   await key(unpin, "End");
@@ -112,7 +114,7 @@ it("opens a right-click menu for its own assistant and invokes its settings", as
   const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
   await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
   await settleFocus();
-  await act(async () => menuItems()[1].click());
+  await act(async () => menuItems()[2].click());
   expect(props.onBotSettings).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
   expect(document.body.querySelector('[role="menu"]')).toBeNull();
@@ -137,5 +139,28 @@ it("opens on a held touch, cancels a scrolling touch, and suppresses selection a
   expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
   await touch("touchend", 30, 40);
   await act(async () => row.click());
+  expect(props.onSelectBot).not.toHaveBeenCalled();
+});
+
+it("moves an assistant to one home section from its menu, or starts a new section for it", async () => {
+  props.boot.preferences = { ...props.boot.preferences, sections: [{ id: "house", name: "Around the house", botIds: ["garden"] }] };
+  await render();
+  const openSubmenu = async () => {
+    const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
+    await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
+    await settleFocus();
+    await act(async () => menuItems().find(item => item.textContent === "Move to section")!.click());
+    await settleFocus();
+  };
+  await openSubmenu();
+  const choices = [...document.body.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
+  expect(choices.map(item => [item.textContent, item.getAttribute("aria-checked")])).toEqual([["None", "false"], ["✓Around the house", "true"]]);
+  await act(async () => choices[0].click());
+  expect(props.onMoveToSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1], null);
+  await settleFocus();
+  expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  await openSubmenu();
+  await act(async () => menuItems().find(item => item.textContent === "New section…")!.click());
+  expect(props.onNewSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
 });

@@ -30,11 +30,17 @@
   color: var(--ink);
   flex-shrink: 0;
 }
+/* The account avatar is the button itself: no frame around the initials or photo. */
 .home-account {
-  font-size: 14px;
+  border: 0;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 15px;
   font-weight: 650;
   letter-spacing: 0.3px;
 }
+.home-account:hover:enabled { background: var(--accent-soft); filter: brightness(0.97); }
+.home-account:has(img) { background: transparent; }
 .home-account img {
   width: 100%;
   height: 100%;
@@ -224,7 +230,11 @@
   text-align: left;
   font-size: 14px;
 }
-.bot-menu [data-highlighted] { background: var(--accent-soft); color: var(--accent); }
+.bot-menu [data-highlighted],
+.bot-menu [data-popup-open] { background: var(--accent-soft); color: var(--accent); }
+.bot-menu-more { margin-left: auto; color: var(--muted); }
+.bot-menu .menu-check { display: inline-grid; place-items: center; width: 16px; color: var(--accent); font-weight: 650; }
+.bot-menu [data-slot="menu-separator"] { height: 1px; margin: 6px 8px; background: var(--line); }
 @keyframes bot-menu-in { from { opacity: 0; transform: scale(0.96); } }
 
 /* Settings: grouped rows in a sheet. */
@@ -397,9 +407,106 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .settings-notifications h3 { margin: 0; font-size: 15px; font-weight: 400; }
 .settings-notifications .notification-toggle { flex-direction: row; align-items: center; gap: 10px; margin: 0; color: var(--muted); font-size: 13px; }
 .settings-notifications p { margin: 6px 0 0; font-size: 12px; }
-.section-title .icon-button { margin: -6px -8px -6px 0; }
-.section-add input { flex: 1; border: 0; background: transparent; padding: 6px 0; }
-.section-add button { padding: 7px 14px; border-radius: 999px; }
+/* A row that is also its own card keeps the card's surface. */
+.settings-group.settings-row { margin-bottom: 22px; background: var(--raised); }
+.settings-intro { margin: 0 16px 14px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.section-row { padding: 0 8px 0 0; gap: 0; }
+.section-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  min-height: inherit;
+  padding: 10px 12px 10px 16px;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  text-align: left;
+}
+.section-open:hover:enabled { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+.section-order { display: flex; gap: 2px; padding-left: 4px; border-left: 1px solid var(--line); }
+.section-order .icon-button { width: 36px; height: 36px; }
+/* The add field reads as a field, and Add is a real button, never a greyed-out one. */
+.section-add input {
+  flex: 1;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: inherit;
+}
+.section-add input[aria-invalid="true"] { border-color: var(--danger); }
+.section-add button { flex-shrink: 0; padding: 8px 16px; border-radius: 999px; }
+.settings-footnote .form-error { color: var(--danger); }
+.settings-sheet input.choice-check {
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+.settings-sheet input.choice-check:checked { border-color: var(--accent); background: var(--accent); }
+.settings-sheet input.choice-check:checked::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 3px;
+  width: 6px;
+  height: 11px;
+  border: solid var(--surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.bot-choice { cursor: pointer; }
+
+/* Assistant details: a contact card with quick actions. */
+.bot-details .sheet-header { min-height: 56px; }
+.bot-details-hero { display: grid; justify-items: center; gap: 6px; padding: 0 12px 22px; text-align: center; }
+.bot-details-hero .avatar-wrap { margin-bottom: 10px; }
+.bot-details-hero h2 { margin: 0; font-size: 24px; outline: none; overflow-wrap: anywhere; }
+.bot-details-hero p { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.bot-details-hero .bot-details-description { margin-top: 6px; color: var(--ink); font-size: 14px; }
+.bot-details-actions { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 10px; margin: 0 0 22px; }
+.bot-details-actions > button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: auto;
+  min-height: 72px;
+  padding: 12px 8px 10px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 13px;
+}
+.bot-details-actions > button:hover:enabled { background: var(--accent-soft); }
+.bot-details-actions > button.on { color: var(--accent); }
+.bot-details-actions .icon { color: var(--accent); }
+.bot-details-actions .artifacts-count {
+  position: absolute;
+  top: 8px;
+  right: calc(50% - 26px);
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 10px;
+  font-weight: 650;
+}
+.bot-details .section-add { padding-top: 6px; }
 .settings-footer {
   display: grid;
   justify-items: center;

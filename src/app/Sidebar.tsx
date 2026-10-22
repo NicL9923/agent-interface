@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { Button } from "../components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/ui/context-menu";
-import type { ActivityState, Bootstrap, Bot } from "../shared/types";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuRadioGroup, ContextMenuRadioItem, ContextMenuSeparator, ContextMenuSubmenu, ContextMenuSubmenuContent, ContextMenuSubmenuTrigger, ContextMenuTrigger } from "../components/ui/context-menu";
+import type { ActivityState, Bootstrap, Bot, Preferences } from "../shared/types";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { useMinute } from "../components/When";
@@ -10,12 +10,13 @@ import { formatListDate } from "../time";
 import type { View } from "./view";
 import type { AppUpdate } from "./use-browser";
 import { UpdateNotice } from "./UpdateNotice";
+import { sectionOf } from "./preferences-editing";
 import "./home.css";
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase() || "?";
 
 /** Home: pinned assistants up top, then everyone else with their latest message. */
-export function Sidebar({ boot, botId, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings }: {
+export function Sidebar({ boot, botId, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings, onMoveToSection, onNewSection }: {
   boot: Bootstrap;
   botId: string;
   view: View;
@@ -31,6 +32,8 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
   onSettings(): void;
   onPin(bot: Bot): void;
   onBotSettings(bot: Bot): void;
+  onMoveToSection(bot: Bot, sectionId: string | null): void;
+  onNewSection(bot: Bot): void;
 }) {
   const prefs = boot.preferences;
   const pinned = prefs.favorites.map(id => boot.bots.find(bot => bot.id === id)).filter((bot): bot is Bot => !!bot);
@@ -44,7 +47,8 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
     const botState = activity(bot);
     const working = !connectionLost && botState !== "idle" && botState !== "done";
     return <li key={bot.id}>
-      <BotMenu bot={bot} pinned={prefs.favorites.includes(bot.id)} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}>
+      <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
+        onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
         <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
           onClick={() => onSelectBot(bot.id)}>
           <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion />
@@ -83,11 +87,13 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
             const botState = activity(bot);
             const showActivity = botState !== "idle" && botState !== "done";
             return <li key={bot.id}>
-              <BotMenu bot={bot} pinned onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}>
+              <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
+                onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
                 <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
                   onClick={() => onSelectBot(bot.id)}>
                   <span className="pinned-avatar">
-                    <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} reducedMotion />
+                    {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
+                    <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} />
                     <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                   </span>
                   <span className="pinned-copy">
@@ -131,9 +137,11 @@ function ListDate({ value }: { value: string }) {
   return <time dateTime={value}>{formatListDate(value)}</time>;
 }
 
-function BotMenu({ bot, pinned, onPin, onSettings, children }: {
-  bot: Bot; pinned: boolean; onPin(): void; onSettings(): void; children: ReactElement;
+function BotMenu({ bot, preferences, onPin, onSettings, onMove, onNewSection, children }: {
+  bot: Bot; preferences: Preferences; onPin(): void; onSettings(): void; onMove(sectionId: string | null): void; onNewSection(): void; children: ReactElement;
 }) {
+  const pinned = preferences.favorites.includes(bot.id);
+  const current = sectionOf(preferences, bot.id)?.id ?? "";
   const trigger = useRef<HTMLDivElement>(null);
   const [keyboardAnchor, setKeyboardAnchor] = useState(false);
   const suppressTouchClick = useRef(false);
@@ -156,6 +164,17 @@ function BotMenu({ bot, pinned, onPin, onSettings, children }: {
     <ContextMenuContent className="bot-menu" aria-label={bot.name} finalFocus={trigger}
       positionerProps={{ collisionPadding: 12, ...(keyboardAnchor ? { anchor: trigger } : {}) }}>
       <ContextMenuItem onClick={onPin}><Icon name="pin" size={16} />{pinned ? "Unpin" : "Pin to top"}</ContextMenuItem>
+      <ContextMenuSubmenu>
+        <ContextMenuSubmenuTrigger><Icon name="folder" size={16} />Move to section<Icon name="chevron" size={14} className="bot-menu-more" /></ContextMenuSubmenuTrigger>
+        <ContextMenuSubmenuContent className="bot-menu" aria-label="Home section">
+          <ContextMenuRadioGroup value={current} onValueChange={value => onMove(value ? String(value) : null)}>
+            <ContextMenuRadioItem value="">None</ContextMenuRadioItem>
+            {preferences.sections.map(section => <ContextMenuRadioItem key={section.id} value={section.id}>{section.name}</ContextMenuRadioItem>)}
+          </ContextMenuRadioGroup>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={onNewSection}><Icon name="plus" size={16} />New section…</ContextMenuItem>
+        </ContextMenuSubmenuContent>
+      </ContextMenuSubmenu>
       <ContextMenuItem onClick={onSettings}><Icon name="gear" size={16} />Assistant settings</ContextMenuItem>
     </ContextMenuContent>
   </ContextMenu>;

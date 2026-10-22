@@ -7,6 +7,7 @@ export const RoutineResults = lazy(() => import("../components/RoutineResults").
 export const IntegrationsPanel = lazy(() => import("../components/IntegrationsPanel").then(module => ({ default: module.IntegrationsPanel })));
 export const ComputerPanel = lazy(() => import("../components/ComputerPanel").then(module => ({ default: module.ComputerPanel })));
 export const HermesUpgradePanel = lazy(() => import("../components/HermesUpgradePanel").then(module => ({ default: module.HermesUpgradePanel })));
+export const BotDetails = lazy(() => import("./BotDetails").then(module => ({ default: module.BotDetails })));
 export const PreferencesDialog = lazy(() => import("./PreferencesDialog").then(module => ({ default: module.PreferencesDialog })));
 export const ComposerModelPicker = lazy(() => import("../components/ComposerModelPicker").then(module => ({ default: module.ComposerModelPicker })));
 export const DiscoveryPanel = lazy(() => import("../components/DiscoveryPanel").then(module => ({ default: module.DiscoveryPanel })));
