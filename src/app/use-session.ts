@@ -39,6 +39,7 @@ export function useSession(events: SessionEvents) {
   const refresh = useCallback((): Promise<Bootstrap | null> => {
     if (bootstrapRequest.current) return bootstrapRequest.current;
     const epoch = identityEpoch.current;
+    const marked = preferences.current?.mark() ?? -1;
     const request = (async () => {
       try {
         const next = await api<Bootstrap>("/bootstrap?roster=lean");
@@ -55,9 +56,12 @@ export function useSession(events: SessionEvents) {
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
         const unchanged = lastBootstrap.current === next;
         lastBootstrap.current = next;
+        // A save that overlapped this read may be newer than its preferences; keep the saved copy.
+        const stalePreferences = !preferences.current?.fresh(marked);
         setBoot((previous) => unchanged && previous ? previous : { ...next,
           bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
             ? previous.bots : next.bots,
+          preferences: stalePreferences && previous?.user.id === next.user.id ? previous.preferences : next.preferences,
         });
         setAuth(false);
         setAppUnavailable(false);
@@ -151,7 +155,6 @@ export function useSession(events: SessionEvents) {
     send: ({ modelFavorites: _, ...value }) => write<Preferences>("/preferences", value, "PATCH"),
     apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
     failed: error => handlers.current.onError(error.message),
-    reload: () => void refresh(),
     account: () => identityEpoch.current,
   });
   const savePreferences = (value: Preferences) => preferences.current!.save(value);
