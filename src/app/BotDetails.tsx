@@ -10,7 +10,7 @@ import { NativeSelect } from "../components/ui/native-select";
 import { botSummary } from "./ChatHeader";
 import { addSection, checkSectionName, moveBotToSection, sectionOf, setFollowing } from "./preferences-editing";
 import type { SavedConversation } from "./storage";
-import { usePreferenceEdits } from "./use-preference-edits";
+import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
 
 const newSectionValue = "\u0000new";
@@ -19,7 +19,7 @@ const newSectionValue = "\u0000new";
  * One assistant's card, like a contact in a messaging app: who it is, quick actions,
  * and the per-assistant home and notification choices.
  */
-export function BotDetails({ boot, bot, avatarState, conversation, connectionLost, startNewSection, savePreferences, onSettings, onClose }: {
+export function BotDetails({ boot, bot, avatarState, conversation, connectionLost, startNewSection, editPreferences, onSettings, onClose }: {
   boot: Bootstrap;
   bot: Bot;
   avatarState: ActivityState;
@@ -28,12 +28,12 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
   connectionLost: boolean;
   /** Opens with the new section field ready, as from the home menu. */
   startNewSection?: boolean;
-  savePreferences(value: Preferences): Promise<void>;
+  editPreferences(edit: PreferenceEdit): Promise<void>;
   onSettings(bot: Bot): void;
   onClose(): void;
 }) {
   const titleId = useId();
-  const [prefs, commit] = usePreferenceEdits(boot.preferences, savePreferences);
+  const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
   const pinned = prefs.favorites.includes(bot.id);
   const following = prefs.followBots.includes(bot.id);
   const section = sectionOf(prefs, bot.id);

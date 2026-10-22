@@ -147,7 +147,8 @@ export function useSession(events: SessionEvents) {
   }, [boot?.user.id, auth, refresh]);
   const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
   preferences.current ??= preferenceQueue({
-    send: value => write<Preferences>("/preferences", value, "PATCH"),
+    // Model stars have their own endpoint; leaving them out keeps the server's current list.
+    send: ({ modelFavorites: _, ...value }) => write<Preferences>("/preferences", value, "PATCH"),
     apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
     failed: error => handlers.current.onError(error.message),
     account: () => identityEpoch.current,

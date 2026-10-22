@@ -190,7 +190,7 @@ export function App() {
           <BotDetails key={`${boot.user.id}:${detailsBot.id}`} boot={boot} bot={detailsBot}
             avatarState={detailsBot.id === botId ? avatarState : connectionLost ? "disconnected" : detailsBot.activity}
             conversation={conversation} connectionLost={connectionLost} startNewSection={panel.newSection}
-            savePreferences={session.savePreferences}
+            editPreferences={session.editPreferences}
             onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
         </Loading>
       )}
@@ -201,7 +201,7 @@ export function App() {
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (
         <Loading>
-          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} savePreferences={session.savePreferences}
+          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
             onClose={() => closePanels("preferences")} onSignOut={signOut}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}

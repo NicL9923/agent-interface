@@ -14,7 +14,7 @@ import type { InstallEvent } from "./use-browser";
 import { hermesVersionLabel, revisionDate } from "./hermes-version";
 import { addSection, checkSectionName, moveSection, removeSection, renameSection, sectionOf, setFollowing, setSectionBots } from "./preferences-editing";
 import type { Section } from "./preferences-editing";
-import { usePreferenceEdits } from "./use-preference-edits";
+import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
 
 type Page = { kind: "main" } | { kind: "following" } | { kind: "section"; id: string };
@@ -22,11 +22,11 @@ type Commit = (edit: (value: Preferences) => Preferences) => void;
 const assistants = (count: number) => count === 1 ? "1 assistant" : `${count} assistants`;
 
 /** Account and app settings as grouped rows, opened from the home screen's account button. */
-export function PreferencesDialog({ boot, connectionLost, offline, savePreferences, notifications, installEvent, notice, onClose, onSignOut, onComputer, onIntegrations, onUpgrade }: {
+export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, onClose, onSignOut, onComputer, onIntegrations, onUpgrade }: {
   boot: Bootstrap;
   connectionLost: boolean;
   offline: boolean;
-  savePreferences(value: Preferences): Promise<void>;
+  editPreferences(edit: PreferenceEdit): Promise<void>;
   notifications: ReturnType<typeof useDeviceNotifications>;
   installEvent: InstallEvent | null;
   notice: string;
@@ -36,7 +36,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, savePreferenc
   onIntegrations(): void;
   onUpgrade(): void;
 }) {
-  const [prefs, commit] = usePreferenceEdits(boot.preferences, savePreferences);
+  const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
   const bots = boot.bots;
   const save = (update: Partial<Preferences>) => commit(value => ({ ...value, ...update }));
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;

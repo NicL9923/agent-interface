@@ -40,7 +40,9 @@ beforeEach(() => {
     } as Bootstrap,
     connectionLost: false, offline: false,
     // Saves resolve only when the test says so, like a slow network.
-    savePreferences: vi.fn((value: Preferences) => { saved.push(value); return new Promise<void>(() => {}); }),
+    // Like the session's queue, each edit applies to the newest value; saves resolve only
+    // when the test says so, like a slow network.
+    editPreferences: vi.fn((edit: (value: Preferences) => Preferences) => { saved.push(edit(saved.at(-1) ?? props.boot.preferences)); return new Promise<void>(() => {}); }),
     notifications: { busy: false } as ComponentProps<typeof PreferencesDialog>["notifications"],
     installEvent: null, notice: "",
     onClose: vi.fn(), onSignOut: vi.fn(), onComputer: vi.fn(), onIntegrations: vi.fn(), onUpgrade: vi.fn(),
@@ -67,7 +69,7 @@ describe("home sections", () => {
     const add = button("Add");
     expect(add.disabled).toBe(false);
     await act(async () => add.click());
-    expect(props.savePreferences).not.toHaveBeenCalled();
+    expect(props.editPreferences).not.toHaveBeenCalled();
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Enter a section name.");
     expect(document.activeElement).toBe(container.querySelector('[aria-label="New section name"]'));
     await typeInto(container.querySelector('[aria-label="New section name"]')!, "  Chores ");
@@ -101,7 +103,7 @@ describe("home sections", () => {
     await typeInto(name, "around the HOUSE");
     await act(async () => button("Rename").click());
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("You already have a section called around the HOUSE.");
-    expect(props.savePreferences).not.toHaveBeenCalled();
+    expect(props.editPreferences).not.toHaveBeenCalled();
     await typeInto(name, "Family");
     await act(async () => button("Rename").click());
     expect(saved.at(-1)!.sections[1]).toEqual({ id: "kids", name: "Family", botIds: [] });

@@ -31,7 +31,8 @@ beforeEach(() => {
       bots: [bot],
     } as Bootstrap,
     bot, avatarState: "working", conversation: null, connectionLost: false,
-    savePreferences: vi.fn(async (value: Preferences) => { saved.push(value); }),
+    // Like the session's queue: each edit applies to the newest value.
+    editPreferences: vi.fn(async (edit: (value: Preferences) => Preferences) => { saved.push(edit(saved.at(-1) ?? props.boot.preferences)); }),
     onSettings: vi.fn(), onClose: vi.fn(),
   };
 });
@@ -83,5 +84,5 @@ it("opens ready to name a new section when the home menu asks for one", async ()
   expect(document.activeElement).toBe(container.querySelector('[aria-label="New section name"]'));
   await act(async () => container.querySelector<HTMLFormElement>(".section-add")!.requestSubmit());
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("Enter a section name.");
-  expect(props.savePreferences).not.toHaveBeenCalled();
+  expect(props.editPreferences).not.toHaveBeenCalled();
 });

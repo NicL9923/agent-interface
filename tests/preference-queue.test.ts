@@ -36,3 +36,27 @@ it("reports a failure, keeps later saves going, and drops saves queued for anoth
   expect(send.mock.calls.map(([value]) => value.favorites)).toEqual([["bad"], ["new account"]]);
   expect(applied.map(value => value.favorites)).toEqual([["new account"]]);
 });
+
+it("never carries one account's queued preferences into another account's edit", async () => {
+  let account = 1;
+  const reply = deferred(), sent: Preferences[] = [];
+  const queue = preferenceQueue({ send: value => { sent.push(value); return sent.length === 1 ? reply.promise : Promise.resolve(value); }, apply: vi.fn(), failed: vi.fn(), account: () => account });
+  void queue.edit(value => ({ ...value, favorites: ["first account pin"] }), base);
+  account = 2;
+  const theirs = { ...base, followBots: ["their follow"] };
+  const edit = queue.edit(value => ({ ...value, favorites: ["second account pin"] }), theirs);
+  reply.resolve(sent[0]);
+  await edit;
+  expect(sent.at(-1)).toEqual({ ...theirs, favorites: ["second account pin"] });
+});
+
+it("shows what the server confirmed when a later save fails, so the next edit keeps it", async () => {
+  const applied: Preferences[] = [], sent: Preferences[] = [];
+  const send = async (value: Preferences) => { sent.push(value); if (value.favorites.includes("b")) throw new Error("Refused"); return value; };
+  const queue = preferenceQueue({ send, apply: value => applied.push(value), failed: vi.fn(), account: () => 1 });
+  void queue.edit(value => ({ ...value, favorites: ["a"] }), base);
+  await queue.edit(value => ({ ...value, favorites: [...value.favorites, "b"] }), base);
+  expect(applied.map(value => value.favorites)).toEqual([["a"]]);
+  await queue.edit(value => ({ ...value, favorites: [...value.favorites, "c"] }), applied.at(-1));
+  expect(sent.at(-1)?.favorites).toEqual(["a", "c"]);
+});
