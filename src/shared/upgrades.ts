@@ -3,6 +3,8 @@ export interface UpgradeRevision {
   revision: string;
   version?: string;
   notesUrl?: string;
+  /** When this revision was committed (ISO 8601); clients show it instead of the hash. */
+  committedAt?: string;
 }
 export interface UpgradeCheck {
   id: string;
