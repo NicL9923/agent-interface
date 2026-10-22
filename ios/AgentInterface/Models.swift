@@ -115,6 +115,8 @@ struct RuntimeStatus: Codable, Equatable {
   var address: String?
   var retryAt: String?
   var lastConnectedAt: String?
+  /// When the running Hermes revision was committed (ISO 8601). Older servers omit it.
+  var revisionDate: String?
 }
 struct Bot: Codable, Identifiable, Equatable {
   var id: String
@@ -615,7 +617,8 @@ struct UpgradeRevision: Codable {
   var revision: String
   var version: String?
   var notesUrl: String?
-  var displayVersion: String { version ?? String(revision.prefix(12)) }
+  /// When this revision was committed (ISO 8601). Older servers omit it.
+  var committedAt: String?
 }
 struct UpgradeCheck: Codable, Identifiable {
   var id: String
@@ -997,7 +1000,7 @@ extension Preferences {
     var groups: [AssistantGroup] = []
     for section in sections {
       let rows = unpinned.filter { section.botIds.contains($0.id) && seen.insert($0.id).inserted }
-      if !rows.isEmpty { groups.append(AssistantGroup(id: "section:" + section.id, title: section.name, bots: rows)) }
+      if !rows.isEmpty { groups.append(AssistantGroup(id: "section:" + section.id, title: section.displayName, bots: rows)) }
     }
     let remaining = unpinned.filter { !seen.contains($0.id) }
     if !remaining.isEmpty {
