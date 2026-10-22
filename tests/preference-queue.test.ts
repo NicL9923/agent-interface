@@ -8,7 +8,7 @@ const deferred = () => { let resolve!: (value: Preferences) => void, reject!: (e
 it("sends one save at a time, builds each edit on the last, and shows only the newest", async () => {
   const replies = [deferred(), deferred()];
   const sent: Preferences[] = [], applied: Preferences[] = [];
-  const queue = preferenceQueue({ send: value => { sent.push(value); return replies[sent.length - 1].promise; }, apply: value => applied.push(value), failed: vi.fn(), account: () => 1 });
+  const queue = preferenceQueue({ send: value => { sent.push(value); return replies[sent.length - 1].promise; }, apply: value => applied.push(value), failed: vi.fn(), reload: vi.fn(), account: () => 1 });
   const first = queue.edit(value => ({ ...value, favorites: ["a"] }), base);
   const second = queue.edit(value => ({ ...value, favorites: [...value.favorites, "b"] }), base);
   await Promise.resolve();
@@ -26,7 +26,7 @@ it("reports a failure, keeps later saves going, and drops saves queued for anoth
   let account = 1;
   const failed = vi.fn(), applied: Preferences[] = [];
   const send = vi.fn(async (value: Preferences) => { if (value.favorites.includes("bad")) throw new Error("Refused"); return value; });
-  const queue = preferenceQueue({ send, apply: value => applied.push(value), failed, account: () => account });
+  const queue = preferenceQueue({ send, apply: value => applied.push(value), failed, reload: vi.fn(), account: () => account });
   await queue.save({ ...base, favorites: ["bad"] });
   expect(failed).toHaveBeenCalledWith(expect.objectContaining({ message: "Refused" }));
   const stale = queue.save({ ...base, favorites: ["old account"] });
@@ -40,7 +40,7 @@ it("reports a failure, keeps later saves going, and drops saves queued for anoth
 it("never carries one account's queued preferences into another account's edit", async () => {
   let account = 1;
   const reply = deferred(), sent: Preferences[] = [];
-  const queue = preferenceQueue({ send: value => { sent.push(value); return sent.length === 1 ? reply.promise : Promise.resolve(value); }, apply: vi.fn(), failed: vi.fn(), account: () => account });
+  const queue = preferenceQueue({ send: value => { sent.push(value); return sent.length === 1 ? reply.promise : Promise.resolve(value); }, apply: vi.fn(), failed: vi.fn(), reload: vi.fn(), account: () => account });
   void queue.edit(value => ({ ...value, favorites: ["first account pin"] }), base);
   account = 2;
   const theirs = { ...base, followBots: ["their follow"] };
@@ -50,13 +50,15 @@ it("never carries one account's queued preferences into another account's edit",
   expect(sent.at(-1)).toEqual({ ...theirs, favorites: ["second account pin"] });
 });
 
-it("shows what the server confirmed when a later save fails, so the next edit keeps it", async () => {
-  const applied: Preferences[] = [], sent: Preferences[] = [];
+it("reloads the server's copy when the newest save fails, since an earlier one may have landed", async () => {
+  const applied: Preferences[] = [], sent: Preferences[] = [], reload = vi.fn();
   const send = async (value: Preferences) => { sent.push(value); if (value.favorites.includes("b")) throw new Error("Refused"); return value; };
-  const queue = preferenceQueue({ send, apply: value => applied.push(value), failed: vi.fn(), account: () => 1 });
+  const queue = preferenceQueue({ send, apply: value => applied.push(value), failed: vi.fn(), reload, account: () => 1 });
   void queue.edit(value => ({ ...value, favorites: ["a"] }), base);
   await queue.edit(value => ({ ...value, favorites: [...value.favorites, "b"] }), base);
-  expect(applied.map(value => value.favorites)).toEqual([["a"]]);
-  await queue.edit(value => ({ ...value, favorites: [...value.favorites, "c"] }), applied.at(-1));
-  expect(sent.at(-1)?.favorites).toEqual(["a", "c"]);
+  expect(applied).toEqual([]);
+  expect(reload).toHaveBeenCalledTimes(1);
+  // With nothing queued, the next edit builds on the screen's (reloaded) value.
+  await queue.edit(value => ({ ...value, favorites: [...value.favorites, "c"] }), { ...base, favorites: ["a", "from phone"] });
+  expect(sent.at(-1)?.favorites).toEqual(["a", "from phone", "c"]);
 });

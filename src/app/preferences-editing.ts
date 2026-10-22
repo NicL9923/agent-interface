@@ -57,7 +57,11 @@ export function checkSectionName(preferences: Preferences, name: string, exceptI
 }
 
 /** Adds a section at the end. With a bot, that bot moves into it. */
-export function addSection(preferences: Preferences, name: string, botId?: string, id: string = newSectionId()): Preferences {
+/**
+ * Takes the new section's ID rather than making one: an edit can run twice, once on screen and
+ * once in the save queue, and both runs must name the same section.
+ */
+export function addSection(preferences: Preferences, name: string, id: string, botId?: string): Preferences {
   const added = { ...preferences, sections: [...preferences.sections, { id, name: name.trim(), botIds: [] }] };
   return botId ? moveBotToSection(added, botId, id) : added;
 }

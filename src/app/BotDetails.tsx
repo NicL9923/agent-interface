@@ -8,7 +8,7 @@ import { Dialog } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
 import { botSummary } from "./ChatHeader";
-import { addSection, checkSectionName, moveBotToSection, sectionOf, setFollowing } from "./preferences-editing";
+import { addSection, checkSectionName, moveBotToSection, newSectionId, sectionOf, setFollowing } from "./preferences-editing";
 import type { SavedConversation } from "./storage";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
@@ -51,7 +51,8 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
   const create = () => {
     const checked = checkSectionName(prefs, name);
     if ("error" in checked) { setNameError(checked.error); nameField.current?.focus(); return; }
-    commit(value => addSection(value, checked.name, bot.id));
+    const id = newSectionId();
+    commit(value => addSection(value, checked.name, id, bot.id));
     setCreating(false); setName(""); setNameError("");
   };
   return <Dialog className="settings-sheet bot-details" aria-labelledby={titleId} initialFocus={startNewSection ? "[aria-label='New section name']" : `#${CSS.escape(titleId)}`}

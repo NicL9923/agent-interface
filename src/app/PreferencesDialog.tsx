@@ -12,7 +12,7 @@ import { NotificationSettings } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import type { InstallEvent } from "./use-browser";
 import { hermesVersionLabel, revisionDate } from "./hermes-version";
-import { addSection, checkSectionName, moveSection, removeSection, renameSection, sectionOf, setFollowing, setSectionBots } from "./preferences-editing";
+import { addSection, checkSectionName, moveSection, newSectionId, removeSection, renameSection, sectionOf, setFollowing, setSectionBots } from "./preferences-editing";
 import type { Section } from "./preferences-editing";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
@@ -224,7 +224,8 @@ function SectionList({ preferences, bots, commit, onOpen }: { preferences: Prefe
         event.preventDefault();
         const checked = checkSectionName(preferences, name);
         if ("error" in checked) { setError(checked.error); field.current?.focus(); return; }
-        commit(value => addSection(value, checked.name));
+        const id = newSectionId();
+        commit(value => addSection(value, checked.name, id));
         setName(""); setError("");
       }}>
         <span className="row-icon"><Icon name="plus" size={18} /></span>

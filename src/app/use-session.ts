@@ -151,6 +151,7 @@ export function useSession(events: SessionEvents) {
     send: ({ modelFavorites: _, ...value }) => write<Preferences>("/preferences", value, "PATCH"),
     apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
     failed: error => handlers.current.onError(error.message),
+    reload: () => void refresh(),
     account: () => identityEpoch.current,
   });
   const savePreferences = (value: Preferences) => preferences.current!.save(value);

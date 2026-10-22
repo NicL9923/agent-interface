@@ -44,9 +44,8 @@ describe("sections", () => {
   });
 
   it("adds a section with a fresh id, and can move a bot into it at once", () => {
-    const added = addSection(prefs([house]), "  Kids ", "ranch", "new");
+    const added = addSection(prefs([house]), "  Kids ", "new", "ranch");
     expect(added.sections).toEqual([{ ...house, botIds: ["kitchen"] }, { id: "new", name: "Kids", botIds: ["ranch"] }]);
-    expect(addSection(prefs([]), "Kids").sections[0].id).toBeTruthy();
   });
 
   it("checks names for blanks, length and duplicates", () => {
