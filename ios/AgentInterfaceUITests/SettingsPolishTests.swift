@@ -26,11 +26,11 @@ import XCTest
   }
   private func reveal(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
     for _ in 0..<10 {
-      if element.exists && element.isHittable { return }
+      if element.exists && element.canTap { return }
       let surface = app.collectionViews.firstMatch
       if up { surface.swipeUp(velocity: .slow) } else { surface.swipeDown(velocity: .slow) }
     }
-    XCTAssertTrue(element.isHittable, "\(element) never became hittable")
+    XCTAssertTrue(element.canTap, "\(element) never became hittable")
   }
   private func waitFor(_ format: String, _ element: XCUIElement, timeout: TimeInterval = 5) {
     expectation(for: NSPredicate(format: format), evaluatedWith: element)
@@ -60,24 +60,22 @@ import XCTest
     XCTAssertFalse(app.buttons["addSection"].exists)
     try capture("after-settings-home")
     follow.tap()
-    app.buttons["assistantCheck.ranch"].tap()
+    app.buttons["assistantCheck.ranch"].tapWhenReady()
     waitFor("selected == true", app.buttons["assistantCheck.ranch"])
-    app.buttons["assistantCheck.kitchen"].tap()
+    app.buttons["assistantCheck.kitchen"].tapWhenReady()
     try capture("after-follow-list")
     back(app)
     waitFor("label CONTAINS 'Following 2 assistants'", follow)
     XCTAssertTrue(follow.label.contains("Following 2 assistants"), follow.label)
 
     reveal(app, name)
-    name.tap()
-    name.typeText("Around the house")
+    name.typeWhenFocused("Around the house")
     XCTAssertTrue(app.buttons["addSection"].waitForExistence(timeout: 3))
     try capture("after-section-typed")
     app.buttons["addSection"].tap()
     XCTAssertTrue(section(app, "Around the house").waitForExistence(timeout: 5))
     // Return adds too.
-    name.tap()
-    name.typeText("Kids\n")
+    name.typeWhenFocused("Kids\n")
     XCTAssertTrue(section(app, "Kids").waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["reorderSections"].exists)
 
@@ -88,7 +86,7 @@ import XCTest
     waitFor("selected == true", app.buttons["assistantCheck.kitchen"])
     back(app)
     reveal(app, section(app, "Kids"))
-    XCTAssertTrue(section(app, "Around the house").label.contains("2 assistants"), section(app, "Around the house").label)
+    waitFor("label CONTAINS '2 assistants'", section(app, "Around the house"))
 
     // Choosing an assistant that is already elsewhere moves it; it is never in two sections.
     section(app, "Kids").tap()
@@ -100,8 +98,8 @@ import XCTest
     waitFor("selected == true", ranch)
     back(app)
     reveal(app, section(app, "Kids"))
-    XCTAssertTrue(section(app, "Around the house").label.contains("1 assistant"), section(app, "Around the house").label)
-    XCTAssertTrue(section(app, "Kids").label.contains("1 assistant"), section(app, "Kids").label)
+    waitFor("label CONTAINS '1 assistant'", section(app, "Around the house"))
+    waitFor("label CONTAINS '1 assistant'", section(app, "Kids"))
     try capture("after-settings-sections")
 
     app.buttons["Close"].tap()
@@ -119,9 +117,8 @@ import XCTest
     XCTAssertFalse(app.buttons["Portrait"].exists)
     XCTAssertFalse(app.buttons["creationNext"].isEnabled)
     let name = app.textFields["Name"]
-    name.tap()
-    name.typeText("Barn cat\n")
-    app.buttons["Mascot"].tap()
+    name.typeWhenFocused("Barn cat\n")
+    app.buttons["Mascot"].tapWhenReady()
     let fox = app.buttons["avatarTile.family.fox"]
     reveal(app, fox)
     fox.tap()
@@ -130,7 +127,7 @@ import XCTest
     app.buttons["creationNext"].tap()
     XCTAssertTrue(app.buttons["creationCreate"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["creationBack"].exists)
-    XCTAssertTrue(app.staticTexts["Step 2 of 2"].isHittable || app.descendants(matching: .any)["creationStep"].isHittable, "Step 2 opens at its top")
+    XCTAssertTrue(app.staticTexts["Step 2 of 2"].canTap || app.descendants(matching: .any)["creationStep"].canTap, "Step 2 opens at its top")
     try capture("after-create-role")
     app.buttons["creationCreate"].tap()
     let created = app.buttons["bot.created-1"]
@@ -142,7 +139,7 @@ import XCTest
     app.buttons["Avatar"].tap()
     let savedFox = app.buttons["avatarTile.family.fox"]
     reveal(app, savedFox)
-    XCTAssertTrue(savedFox.isSelected, "The look chosen while creating is the saved avatar")
+    XCTAssertTrue(savedFox.wait(until: "selected == true"), "The look chosen while creating is the saved avatar")
   }
 
   func testAFailedAvatarSaveKeepsTheNewAssistantOpenWithRetry() throws {
@@ -150,16 +147,15 @@ import XCTest
     app.buttons["New assistant"].tap()
     let name = app.textFields["Name"]
     XCTAssertTrue(name.waitForExistence(timeout: 5))
-    name.tap()
-    name.typeText("Feed tracker")
-    app.buttons["Mascot"].tap()
-    app.buttons["creationNext"].tap()
-    app.buttons["creationCreate"].tap()
+    name.typeWhenFocused("Feed tracker")
+    app.buttons["Mascot"].tapWhenReady()
+    app.buttons["creationNext"].tapWhenReady()
+    app.buttons["creationCreate"].tapWhenReady()
     let failure = app.staticTexts["Feed tracker was created, but its avatar wasn't saved yet."]
     XCTAssertTrue(failure.waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.staticTexts["Fixture avatar save failed"].exists, "The server's reason is shown too")
     // The sheet now edits the created assistant, its chosen look intact.
-    XCTAssertTrue(app.navigationBars["Feed tracker"].exists)
+    XCTAssertTrue(app.navigationBars["Feed tracker"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["settingsMore"].exists)
     XCTAssertTrue(app.buttons["Mascot"].isSelected)
     try capture("after-create-avatar-failed")
@@ -170,7 +166,7 @@ import XCTest
   func testHermesShowsReleaseDatesWithTheHashAsDetail() throws {
     let app = launch()
     openSettings(app)
-    XCTAssertTrue(app.buttons["Hermes updates"].label.contains("Hermes released Oct 14, 2026"), app.buttons["Hermes updates"].label)
+    waitFor("label CONTAINS 'Hermes released Oct 14, 2026'", app.buttons["Hermes updates"])
     let footer = app.staticTexts["Hermes released Oct 14, 2026"]
     reveal(app, footer)
     XCTAssertTrue(app.staticTexts["3f9c2a7"].exists)

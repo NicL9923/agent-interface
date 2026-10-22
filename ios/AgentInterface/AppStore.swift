@@ -131,7 +131,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored private var eventTask: Task<Void, Never>?
   @ObservationIgnored private var eventBotId: String?
   @ObservationIgnored private var streamHeardAt: ContinuousClock.Instant?
-  @ObservationIgnored private var conversationRefreshedAt: ContinuousClock.Instant?
+  @ObservationIgnored private(set) var conversationRefreshedAt: ContinuousClock.Instant?
+  /// Conversation reads started and not yet finished; tests wait for none before moving time.
+  @ObservationIgnored private(set) var conversationReadsInFlight = 0
   @ObservationIgnored private var conversationRefreshing = false
   /// Conversation reads overlap: polls, change notices, selection and pull to refresh each start
   /// one. A response older than one already applied is dropped, so it cannot undo newer state.
@@ -157,6 +159,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private(set) var offlineSavedAt: Date?
   @ObservationIgnored private var restoredRosterAt: Date?
   private let offlineWriter = OfflineLibraryWriter()
+  /// How long a changed offline snapshot waits before it is written; tests shorten it.
+  var offlineWriteDelay: Duration {
+    get { offlineWriter.delay }
+    set { offlineWriter.delay = newValue }
+  }
   @ObservationIgnored private var conversationCapturedAt: [String: Date] = [:]
   @ObservationIgnored private var recentChats: [String] = []
   private(set) var cachedChats: Set<String> = []
@@ -724,6 +731,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       ?? "turns=\(Self.historyPageTurns)"
     conversationReads += 1
     let read = conversationReads
+    conversationReadsInFlight += 1
+    defer { conversationReadsInFlight -= 1 }
     // A draft still to load or to save again needs the conversation's copy applied every time.
     let skippable = draftReady && !(draft.dirty == true && settled(id))
     do {
@@ -767,6 +776,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     defer { loadingEarlier = false }
     conversationReads += 1
     let read = conversationReads
+    conversationReadsInFlight += 1
+    defer { conversationReadsInFlight -= 1 }
     do {
       let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))
@@ -884,7 +895,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let token = UUID()
     scheduledDraftSave = token
     draftTask = Task {
-      try? await Task.sleep(for: .milliseconds(600))
+      try? await Task.sleep(for: Self.draftSaveDelay)
       guard !Task.isCancelled, self.scheduledDraftSave == token else { return }
       self.startDraftSave(botId: botId)
     }
@@ -1039,6 +1050,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   @ObservationIgnored private var draftPersistTask: Task<Void, Never>?
   static let draftPersistDelay: Duration = .milliseconds(300)
+  /// A typing pause this long saves the open draft to the server.
+  static let draftSaveDelay: Duration = .milliseconds(600)
   func send(reviewedUncertain: Bool = false) async {
     guard let api, let id = selectedBotId, !sending else { return }
     let submission: PendingSubmission

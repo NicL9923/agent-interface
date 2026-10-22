@@ -1,12 +1,15 @@
 name: iOS UI tests
 
-# The fixture UI tests are slow, so pull requests opt in with the ui-tests label.
+# The native checks run on the Mac mini that builds and ships the app, with its Xcode and iOS
+# (`.agents/tools/validate-ios.sh`). GitHub's macOS image runs an older Xcode and iOS than the one
+# we ship with, so this stays a manual tool for a rare second opinion, never a gate.
 on:
-  schedule:
-    - cron: "43 8 * * *"
   workflow_dispatch:
-  pull_request:
-    types: [labeled, synchronize]
+    inputs:
+      only:
+        description: "Test classes or Class/testMethod names, comma-separated (empty runs the whole suite)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -14,12 +17,6 @@ permissions:
 jobs:
   ui:
     name: iOS UI tests
-    # A pull request runs only while it carries the label; adding any other label does nothing.
-    if: >-
-      github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'ui-tests') &&
-       (github.event.action == 'synchronize' || github.event.label.name == 'ui-tests'))
-    # On the job, not the workflow, so a skipped run for another label never cancels a running one.
     concurrency:
       group: ui-tests-${{ github.ref }}
       cancel-in-progress: true
@@ -43,13 +40,24 @@ jobs:
         # Ad hoc simulator signing, as in .agents/tools/validate-ios.sh. LiveConnectionTests
         # compiles out without LIVE_HERMES_UI_TESTS, so it needs no exclusion here. The
         # screenshot tour skips itself unless asked for evidence, and is excluded to say so.
+        # A manual run can name just the tests it needs, so checking one fix takes minutes:
+        #   gh workflow run "iOS UI tests" --ref BRANCH -f only=VaultFlowTests,DailyFlowTests/testSearchOpensTheMatchingReply
+        env:
+          ONLY: ${{ inputs.only }}
         run: |
+          if ! [[ "$ONLY" =~ ^[A-Za-z0-9_/,]*$ ]]; then echo "only: use letters, digits, _, / and commas" >&2; exit 1; fi
+          selection=(-only-testing:AgentInterfaceUITests)
+          if [ -n "$ONLY" ]; then
+            selection=()
+            IFS=, read -ra tests <<< "$ONLY"
+            for test in "${tests[@]}"; do [ -n "$test" ] && selection+=("-only-testing:AgentInterfaceUITests/$test"); done
+          fi
           simulator=$(bash ios/tools/ci-simulator.sh)
           xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
             -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath build/ios \
             -resultBundlePath build/ui-tests.xcresult \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
-            -parallel-testing-enabled NO -only-testing:AgentInterfaceUITests \
+            -parallel-testing-enabled NO "${selection[@]}" \
             -skip-testing:AgentInterfaceUITests/ScreenshotTourTests test
       - name: Keep the result bundle
         if: failure()

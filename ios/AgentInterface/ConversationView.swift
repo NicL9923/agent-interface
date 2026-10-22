@@ -87,7 +87,12 @@ struct ConversationView: View {
     .findShortcut(botId: bot.id, open: openFind)
   }
   @ViewBuilder private var banners: some View {
-    if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
+    // Home is live but this chat is still the copy saved on the device: say so, with its age,
+    // until it reloads; Hermes itself is reachable, so the reconnect card would mislead.
+    if let date = store.offlineSavedAt, store.householdConnected, !reachability.offline {
+      Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reloading this chat…")
+        .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("chatSavedCopy")
+    } else if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
     if let error = store.error {
       ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(.bottom, 8)
     }

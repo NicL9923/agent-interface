@@ -11,8 +11,7 @@ import XCTest
       app.launch()
       let address = app.textFields["serverAddress"]
       XCTAssertTrue(address.waitForExistence(timeout: 10))
-      address.tap()
-      address.typeText("http://127.0.0.1:3004")
+      address.typeWhenFocused("http://127.0.0.1:3004")
       app.buttons["connectServer"].tap()
       let signIn = app.buttons["householdSignIn"]
       XCTAssertTrue(signIn.waitForExistence(timeout: 15))
@@ -43,8 +42,7 @@ import XCTest
       app.buttons["New assistant"].tap()
       let name = app.textFields["Name"]
       XCTAssertTrue(name.waitForExistence(timeout: 10))
-      name.tap()
-      name.typeText(botName)
+      name.typeWhenFocused(botName)
       // Creation is two steps: name and look, then role and model.
       app.buttons["creationNext"].tap()
       let create = app.buttons["creationCreate"]
@@ -57,13 +55,12 @@ import XCTest
         "Let's discuss your role."]
       XCTAssertTrue(welcome.waitForExistence(timeout: 15))
       XCTAssertTrue(
-        welcome.isHittable, "The empty welcome must be visible without manually scrolling.")
+        welcome.canTap, "The empty welcome must be visible without manually scrolling.")
       capture(app, "Empty canonical conversation after switching from a long chat")
       let heading = app.staticTexts["A quieter start to the day"]
       XCTAssertFalse(heading.exists, "The test must start with an empty canonical conversation.")
       let prompt = "Native iOS connection check \(checkID). Show a markdown formatting example."
-      composer.tap()
-      composer.typeText(prompt)
+      composer.typeWhenFocused(prompt)
       app.buttons["sendMessage"].tap()
       XCTAssertTrue(app.staticTexts[prompt].waitForExistence(timeout: 20))
       // The final paragraph proves the current canonical response is complete.
@@ -75,10 +72,10 @@ import XCTest
         app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "unreadable response"))
           .firstMatch.exists)
       reveal(heading, in: app, direction: .down)
-      XCTAssertTrue(heading.isHittable)
+      XCTAssertTrue(heading.canTap)
       capture(app, "Current canonical reply, opening and task list")
       reveal(finalParagraph, in: app, direction: .up)
-      XCTAssertTrue(finalParagraph.isHittable)
+      XCTAssertTrue(finalParagraph.canTap)
       capture(app, "Current canonical reply, table and code")
 
       app.buttons["botProfile"].tap()
@@ -118,11 +115,11 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, direction: Direction) {
       for _ in 0..<8 {
-        if element.exists && element.isHittable { return }
+        if element.exists && element.canTap { return }
         if direction == .up { app.swipeUp() } else { app.swipeDown() }
       }
       XCTAssertTrue(
-        element.exists && element.isHittable,
+        element.exists && element.canTap,
         "The expected current reply or control must be visible.")
     }
 

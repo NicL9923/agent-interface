@@ -6,7 +6,7 @@ extension AppStore {
   /// The preferences as the person last set them, including a save still on its way.
   var homePreferences: Preferences? { preferencesDraft ?? bootstrap?.preferences }
   /// Saving preferences needs a live, signed-in connection, like pinning.
-  var homeCanOrganize: Bool { connected && !sessionExpired }
+  var homeCanOrganize: Bool { householdConnected }
   func homeSectionId(of botId: String) -> String? { homePreferences?.section(of: botId)?.id }
   func homeFollows(_ botId: String) -> Bool { homePreferences?.followBots.contains(botId) == true }
   func homeMove(_ botId: String, toSection sectionId: String?) {

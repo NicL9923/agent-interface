@@ -9,7 +9,8 @@ import XCTest
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     app.launch()
     let compare = app.webViews.buttons["Compare supply"]
-    XCTAssertTrue(compare.waitForExistence(timeout: 15), app.debugDescription)
+    // A web view's first load on CI's simulator can take well over 15 seconds.
+    XCTAssertTrue(compare.waitForExistence(timeout: 40), app.debugDescription)
     compare.tap()
     XCTAssertTrue(app.webViews.staticTexts["40 days"].waitForExistence(timeout: 5))
     capture(app, name: "Native inline UI expanded")
@@ -42,24 +43,24 @@ import XCTest
     app.openAssistantSettings("Ranch hand"); tab("Memory", app: app)
     XCTAssertTrue(app.staticTexts["What Hermes remembers"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Profile: default.")).firstMatch.exists)
-    app.buttons["Forget…"].tap(); app.buttons["Forget entry"].tap()
+    app.buttons["Forget…"].tap(); app.buttons["Forget entry"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Saved in Hermes."].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Nothing saved here yet."].exists)
     XCTAssertFalse(app.buttons["Save memories"].isEnabled)
     app.buttons["Add memory"].tap()
-    let fact = app.descendants(matching: .any).matching(identifier: "memoryEntry.1").firstMatch; fact.tap(); fact.typeText("Prefers the south pasture")
-    app.buttons["Discard edits"].tap()
+    let fact = app.descendants(matching: .any).matching(identifier: "memoryEntry.1").firstMatch; fact.typeWhenFocused("Prefers the south pasture")
+    app.buttons["Discard edits"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Nothing saved here yet."].waitForExistence(timeout: 5))
     app.buttons["Add memory"].tap()
-    fact.tap(); fact.typeText("Prefers the south pasture")
-    app.buttons["Save memories"].tap()
+    fact.typeWhenFocused("Prefers the south pasture")
+    app.buttons["Save memories"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Saved in Hermes."].waitForExistence(timeout: 5))
     XCTAssertTrue(fact.exists); XCTAssertFalse(app.buttons["Discard edits"].exists)
     XCTAssertFalse(app.staticTexts["Nothing saved here yet."].exists)
     capture(app, name: "Native profile memory")
     tab("Routines", app: app)
     XCTAssertTrue(app.buttons["routineTemplate.morning"].waitForExistence(timeout: 5)); app.buttons["routineTemplate.morning"].tap()
-    app.collectionViews["routineEditorForm"].buttons["Preview schedule"].tap()
+    app.collectionViews["routineEditorForm"].buttons["Preview schedule"].tapWhenReady()
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "America/Chicago")).firstMatch.waitForExistence(timeout: 5))
     app.collectionViews["routineEditorForm"].swipeUp()
     capture(app, name: "Native routine timezone preview")
@@ -67,7 +68,7 @@ import XCTest
   func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openToday"].isHittable {
+    if !app.buttons["openToday"].canTap {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     }
@@ -86,6 +87,7 @@ import XCTest
     // As on the web, stopping transcribes at once and the text joins the draft, with no review step.
     XCTAssertTrue(app.staticTexts["Added to your draft. Review it before sending."].waitForExistence(timeout: 5))
     let composer = app.textViews["messageComposer"]
+    composer.wait(until: "value == %@", "Fixture transcript: check the north gate.")
     XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
     XCTAssertTrue(app.buttons["Record voice"].exists)
   }
@@ -94,7 +96,7 @@ import XCTest
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
     let message = { (text: String) in app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
-    for _ in 0..<5 { if app.buttons["Try once"].isHittable { break }; app.collectionViews.firstMatch.swipeUp() }
+    for _ in 0..<5 { if app.buttons["Try once"].canTap { break }; app.collectionViews.firstMatch.swipeUp() }
     app.buttons["Try once"].tap()
     XCTAssertTrue(app.buttons["Check run status"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Try once"].exists)
@@ -117,27 +119,27 @@ import XCTest
     var app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
-    app.buttons["View results"].firstMatch.tap()
+    app.buttons["View results"].firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture saved routine output: the pasture gate is closed."].waitForExistence(timeout: 5))
     capture(app, name: "Native routine saved output")
     app.terminate(); app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openGroups"].isHittable { app.navigationBars.buttons.firstMatch.tap() }
+    if !app.buttons["openGroups"].canTap { app.navigationBars.buttons.firstMatch.tap() }
     app.buttons["openGroups"].tap()
     let newGroup = app.buttons["New group"]
     XCTAssertTrue(newGroup.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: newGroup); waitForExpectations(timeout: 5)
     newGroup.tap()
     XCTAssertTrue(app.textFields["Group name"].waitForExistence(timeout: 5), app.debugDescription)
-    app.textFields["Group name"].tap(); app.textFields["Group name"].typeText("Gate planning")
+    app.textFields["Group name"].typeWhenFocused("Gate planning")
     app.switches["Ranch hand"].switches.firstMatch.tap(); app.switches["Kitchen companion"].switches.firstMatch.tap()
-    XCTAssertEqual(app.switches["Ranch hand"].value as? String, "1")
-    XCTAssertEqual(app.switches["Kitchen companion"].value as? String, "1")
-    XCTAssertTrue(app.buttons["Create group"].isEnabled)
+    XCTAssertTrue(app.switches["Ranch hand"].wait(until: "value == %@", "1"), "Ranch hand joins the group")
+    XCTAssertTrue(app.switches["Kitchen companion"].wait(until: "value == %@", "1"), "Kitchen companion joins the group")
+    XCTAssertTrue(app.buttons["Create group"].wait(until: "enabled == true"))
     app.buttons["Create group"].tap()
     // The new room opens by itself, as on the web.
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
-    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.tap(); composer.typeText("Check the gate together")
+    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.typeWhenFocused("Check the gate together")
     app.buttons["Send to group"].tap()
     XCTAssertTrue(app.staticTexts["Check the gate together"].waitForExistence(timeout: 5))
     capture(app, name: "Native group discussion")
@@ -146,7 +148,7 @@ import XCTest
   func testTodayAcknowledgesEachReturnedPageWithoutDroppingLateImports() {
     let app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openToday"].isHittable {
+    if !app.buttons["openToday"].canTap {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     }
@@ -157,7 +159,7 @@ import XCTest
     XCTAssertTrue(app.staticTexts["More recorded results are waiting. Mark this page caught up to load the next page."].exists)
     app.collectionViews["todayOverview"].swipeUp(); marker.tap()
     XCTAssertTrue(app.staticTexts["Fixture late imported completion"].waitForExistence(timeout: 5))
-    XCTAssertEqual(marker.label, "Mark caught up")
+    XCTAssertTrue(marker.wait(until: "label == %@", "Mark caught up"), marker.label)
     capture(app, name: "Native Today preserves late imported event")
     marker.tap()
     let cleared = NSPredicate(format: "exists == false")

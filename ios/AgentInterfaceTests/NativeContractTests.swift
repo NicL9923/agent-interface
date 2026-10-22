@@ -187,11 +187,7 @@ private final class NativeMockServer: @unchecked Sendable {
     func delayResponse(_ path: String) { _ = lock.withLock { delayedPaths.insert(path) } }
     func releaseResponse(_ path: String) { lock.withLock { delayed.removeValue(forKey: path) }?() }
     func waitForDelayed(_ path: String) async throws {
-        for _ in 0..<200 {
-            if lock.withLock({ delayed[path] != nil }) { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw URLError(.timedOut)
+        guard try await eventually({ lock.withLock { delayed[path] != nil } }) else { throw URLError(.timedOut) }
     }
     func release(_ path: String) {
         let pending = lock.withLock { () -> NativeMockProtocol? in
@@ -200,11 +196,7 @@ private final class NativeMockServer: @unchecked Sendable {
         if let pending { finish(pending) }
     }
     func waitForHeld(_ path: String) async throws {
-        for _ in 0..<200 {
-            if lock.withLock({ held[path] != nil }) { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw URLError(.timedOut)
+        guard try await eventually({ lock.withLock { held[path] != nil } }) else { throw URLError(.timedOut) }
     }
     func bootstrapData() -> Data {
         let (isConnected, hidden, extra) = lock.withLock { (connected, botHidden, extraBot) }
@@ -435,13 +427,6 @@ private final class NativeMockServer: @unchecked Sendable {
         value.makeClient = { _ in api }
         return value
     }
-    /// Waits for a condition with a deadline, so a slower host gets time without a fixed sleep. Fails the
-    /// test when the deadline passes first.
-    private func until(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        XCTAssertTrue(condition(), "Timed out waiting for the condition", file: file, line: line)
-    }
     private func clean(_ server: NativeMockServer, _ store: AppStore? = nil) {
         store?.suspend()
         for user in ["one", "two"] {
@@ -631,7 +616,7 @@ private final class NativeMockServer: @unchecked Sendable {
             XCTAssertEqual(value.selectedBotId, "family", source)
             let second = arrive("Second")
             // The second arrives while the first chat open still waits on its read.
-            for _ in 0..<200 where value.additions.count < 2 && !value.draft.text.contains("Second") { try await Task.sleep(for: .milliseconds(10)) }
+            try await until { value.additions.count >= 2 || value.draft.text.contains("Second") }
             server.release(path)
             await first.value; await second.value
             await value.deliverAdditions()
@@ -660,10 +645,9 @@ private final class NativeMockServer: @unchecked Sendable {
             XCTAssertEqual(value.draft.text, "Send this\n\nAlso bring rope", source)
             XCTAssertTrue(value.additions.isEmpty, source)
             XCTAssertNil(UserDefaults.standard.data(forKey: value.key("draftAdditions")!), source)
-            try await Task.sleep(for: .milliseconds(900))
-            let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == "/api/bots/bot/draft" }
-            XCTAssertEqual(saved.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text,
-                "Send this\n\nAlso bring rope", "It saves like any draft edit")
+            let saved = { server.draftSaves().last?.text }
+            try await until { saved() == "Send this\n\nAlso bring rope" }
+            XCTAssertEqual(saved(), "Send this\n\nAlso bring rope", "It saves like any draft edit")
             value.suspend()
         }
     }
@@ -735,7 +719,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.deviceNotifications = DeviceNotificationState()
         await controller.synchronize()
         server.release(path); await turningOff.value
-        try await Task.sleep(for: .milliseconds(200))
+        try await until { value.deviceNotifications == .enabledState }
         XCTAssertEqual(value.deviceNotifications, .enabledState, "The new account's own state replaces Checking")
     }
     func testEnableDuringACleanupSyncEndsRegistered() async throws {
@@ -819,7 +803,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.queuePreferences(second)
         XCTAssertTrue(value.preferencesSaving)
         server.release("/api/preferences")
-        for _ in 0..<200 { if !value.preferencesSaving { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try await until { !value.preferencesSaving }
         XCTAssertFalse(value.preferencesSaving); XCTAssertFalse(value.preferencesSaveFailed)
         XCTAssertEqual(value.bootstrap?.preferences.theme, "dark")
         XCTAssertEqual(value.bootstrap?.preferences.presentation, "advanced")
@@ -950,7 +934,8 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.send()
         XCTAssertNil(value.pending); XCTAssertEqual(value.receipt?.status, "accepted")
         XCTAssertEqual(value.draft.text, ""); XCTAssertEqual(value.draft.dirty, false)
-        try await Task.sleep(for: .milliseconds(800))
+        // Absence check: outlasts the typing pause that would save the cleared draft.
+        try await Task.sleep(for: AppStore.draftSaveDelay + .milliseconds(300))
         XCTAssertEqual(server.requests.filter { $0.httpMethod == "POST" && $0.url?.path.hasSuffix("/messages") == true }.count, 1)
         XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path.hasSuffix("/draft") == true }.isEmpty)
     }
@@ -1289,15 +1274,20 @@ private final class NativeMockServer: @unchecked Sendable {
         var time = ContinuousClock.now
         value.now = { time }
         let polls = { server.conversationQueries.count }
-        let settle = { try await Task.sleep(for: .milliseconds(150)) }
         server.serveEventStreams()
-        _ = await value.pollOnce(); try await settle()
+        _ = await value.pollOnce()
+        // Every read the connect started must finish before fake time moves, or a late one would
+        // be stamped with a later clock.
+        try await until { server.requestCount("/api/bots/bot/events") == 1 && polls() >= 2 && value.conversationReadsInFlight == 0 }
         XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
         let connected = polls()
         XCTAssertGreaterThanOrEqual(connected, 2, "Connecting reads the conversation, since earlier notices were lost")
         for _ in 0..<10 { time += .seconds(1.5); _ = await value.pollOnce() }
         XCTAssertEqual(polls(), connected, "A live stream replaces the 1.5 second conversation poll")
-        server.notifyChange(); try await settle()
+        server.notifyChange()
+        // The read must be applied, not just sent, before the clock moves on, or its refresh time
+        // would be stamped with the later clock and the slow poll below would be skipped.
+        try await until { polls() >= connected + 1 && value.conversationReadsInFlight == 0 }
         XCTAssertEqual(polls(), connected + 1, "A change notice reads the conversation")
         time += .seconds(30); _ = await value.pollOnce()
         XCTAssertEqual(polls(), connected + 2, "A slow poll still covers a stream that failed unnoticed")
@@ -1335,19 +1325,23 @@ private final class NativeMockServer: @unchecked Sendable {
         let server = NativeMockServer(), value = try store(server)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         value.offlineLibraryRoot = root
+        value.offlineWriteDelay = .milliseconds(200)
         defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
         server.serveEventStreams()
-        _ = await value.pollOnce(); try await Task.sleep(for: .milliseconds(150))
+        _ = await value.pollOnce()
+        try await until { server.requestCount("/api/bots/bot/events") == 1 && server.conversationQueries.count >= 2 }
         let reads = server.conversationQueries.count
         UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), forKey: "connection.expiry.\(server.origin.absoluteString)")
         defer { UserDefaults.standard.removeObject(forKey: "connection.expiry.\(server.origin.absoluteString)") }
         let continues = await value.pollOnce()
         XCTAssertFalse(continues); XCTAssertTrue(value.sessionExpired)
+        // Absence check: a live stream would read within this window.
         server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(server.conversationQueries.count, reads, "The stream ends with polling, so no read follows a notice")
         await value.refreshConversation()
         value.suspend()
-        try await Task.sleep(for: .milliseconds(5300))
+        // Absence check: outlasts the shortened offline write delay three times over.
+        try await Task.sleep(for: .milliseconds(600))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "An expiring session recreated its purged snapshot")
     }
 
@@ -1400,20 +1394,25 @@ private final class NativeMockServer: @unchecked Sendable {
         // Home, Today or Search: the selected assistant stays selected, but nobody is reading it.
         value.conversationShown("bot", false)
         for _ in 0..<4 { _ = await value.pollOnce(); time += .seconds(60) }
+        // Absence check: no read or stream starts for the chat that is off screen.
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(reads(), before, "Before this change each pass read the whole loaded history again")
         XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 0)
         XCTAssertEqual(checks(), 4, "An unconfirmed send is still checked while its chat is closed")
         // Back on screen, as after switching tabs: read at once, and follow its stream again.
-        value.startPolling(); try await Task.sleep(for: .milliseconds(150))
-        value.conversationShown("bot", true); try await Task.sleep(for: .milliseconds(200))
+        // The first pass ends with the next due check, so it can no longer read the chat itself.
+        value.startPolling(); try await until { checks() == 5 }
+        value.conversationShown("bot", true)
+        try await until { reads() >= before + 2 && server.requestCount("/api/bots/bot/events") == 1 }
         XCTAssertEqual(reads(), before + 2, "Returning reads now, and the new stream's connection reads once more")
         XCTAssertEqual(server.requestCount("/api/bots/bot/events"), 1)
         XCTAssertEqual(value.followedBotId, "bot")
         // Opening a chat reads it itself; its view arriving adds no read.
+        // Absence check: lets a read still in flight land before counting from here.
         value.conversationShown("bot", false); try await Task.sleep(for: .milliseconds(100))
         let opened = reads()
-        await value.select("bot"); value.conversationShown("bot", true); try await Task.sleep(for: .milliseconds(200))
+        await value.select("bot"); value.conversationShown("bot", true)
+        try await until { reads() >= opened + 2 }
         XCTAssertEqual(reads(), opened + 2, "One read to open it and one for its stream connecting")
     }
 
@@ -1440,10 +1439,15 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.reconcilePending()
         XCTAssertEqual(checks(), expected + 1, "A retry is checked at once")
         // A change notice from its conversation asks again at once too.
-        server.serveEventStreams(); _ = await value.pollOnce(); try await Task.sleep(for: .milliseconds(150))
+        server.serveEventStreams(); _ = await value.pollOnce()
+        try await until { server.requestCount("/api/bots/bot/events") == 1 }
+        // Absence check: the connection, once handled, must not count as a change notice.
+        try await Task.sleep(for: .milliseconds(150))
         await value.reconcilePending()
         XCTAssertEqual(checks(), expected + 1, "Connecting the stream is not a change notice")
-        server.notifyChange(); try await Task.sleep(for: .milliseconds(150))
+        // A notice frees the check before it asks for the conversation, so that read means it was heard.
+        let heard = server.conversationQueries.count
+        server.notifyChange(); try await until { server.conversationQueries.count > heard }
         await value.reconcilePending()
         XCTAssertEqual(checks(), expected + 2)
         server.answerSubmissions("accepted"); time += .seconds(60); await value.reconcilePending()
@@ -1504,8 +1508,7 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(changes, ["draft": 1], "Before this change each keystroke published four times")
         XCTAssertNil(stored(), "Typing waits for a pause before encoding the draft")
         value.updateDraft(Draft(text: "Feed the horses at six", attachments: []))
-        try await Task.sleep(for: AppStore.draftPersistDelay + .milliseconds(150))
-        XCTAssertEqual(stored(), "Feed the horses at six")
+        try await until { stored() == "Feed the horses at six" }
         value.updateDraft(Draft(text: "Feed the horses tonight", attachments: []))
         value.suspend()
         XCTAssertEqual(stored(), "Feed the horses tonight", "Leaving the app writes it at once")
@@ -1536,9 +1539,8 @@ private final class NativeMockServer: @unchecked Sendable {
         let host = UIHostingController(rootView: Probe(phase: .background, counter: counter))
         window.rootViewController = host; window.isHidden = false
         defer { window.isHidden = true }
-        let reaches = { (count: Int) in
-            for _ in 0..<100 where counter.count < count { try await Task.sleep(for: .milliseconds(10)) }
-        }
+        let reaches = { (count: Int) in try await until { counter.count >= count } }
+        // Absence check: two 250 ms intervals pass in the background without a poll.
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(counter.count, 0, "Nothing polls in the background")
         host.rootView = Probe(phase: .active, counter: counter)
@@ -1547,9 +1549,10 @@ private final class NativeMockServer: @unchecked Sendable {
         try await reaches(3)
         XCTAssertGreaterThanOrEqual(counter.count, 3, "Active, it polls on its interval")
         host.rootView = Probe(phase: .inactive, counter: counter)
+        // Absence check: once the inactive phase renders, three 250 ms intervals pass without a poll.
         try await Task.sleep(for: .milliseconds(100))
         let paused = counter.count
-        try await Task.sleep(for: .milliseconds(800))
+        try await Task.sleep(for: .milliseconds(800)) // Absence check, as above.
         XCTAssertEqual(counter.count, paused, "Inactive, it waits")
     }
 
@@ -1558,6 +1561,7 @@ private final class NativeMockServer: @unchecked Sendable {
         let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 4, height: 4)) }
         var fetches = 0
         let fetch: @MainActor () async throws -> Data = {
+            // Latency: a slow download, so the second load arrives while the first is in flight.
             fetches += 1; try await Task.sleep(for: .milliseconds(100)); return png
         }
         let key = "coalesce:\(UUID().uuidString)" as NSString
@@ -1568,7 +1572,7 @@ private final class NativeMockServer: @unchecked Sendable {
         // A row that scrolled away stops its download; the next one starts its own.
         let other = "abandon:\(UUID().uuidString)" as NSString
         let leaving = Task { try await loads.image(other, fetch: fetch) }
-        try await Task.sleep(for: .milliseconds(20)); leaving.cancel()
+        try await until { fetches == 2 }; leaving.cancel()
         _ = try? await leaving.value
         let returning = try await loads.image(other, fetch: fetch)
         XCTAssertEqual(fetches, 3); XCTAssertNotNil(returning)
@@ -1680,7 +1684,7 @@ private final class NativeMockServer: @unchecked Sendable {
         server.release(path); await reopen.value
         XCTAssertEqual(value.draft.text, "Lost message"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
         XCTAssertTrue(value.draftReady); XCTAssertTrue(value.canSend)
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { value.draft.dirty == false }
         let sync = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == path }
         XCTAssertEqual(sync.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, "Lost message", "The recovered draft is synced to the server")
         XCTAssertEqual(value.draft.dirty, false, "A successful sync clears dirty so newer web drafts can load again")
@@ -1697,7 +1701,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Old unsent text"); XCTAssertTrue(value.draftReady)
-        try await Task.sleep(for: .milliseconds(300))
+        try await until { !server.draftSaves().isEmpty }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Old unsent text", baseRevision: 1)], "Saved on its base, so a changed server copy refuses it")
     }
 
@@ -1709,9 +1713,10 @@ private final class NativeMockServer: @unchecked Sendable {
         value.updateDraft(Draft(text: "AB", attachments: []))
         try await server.waitForHeld(path)
         value.updateDraft(Draft(text: "A", attachments: []))
-        try await Task.sleep(for: .milliseconds(800))
+        // Timer: the revert's typing pause passes while the older save is still held.
+        try await Task.sleep(for: AppStore.draftSaveDelay + .milliseconds(200))
         server.release(path)
-        try await Task.sleep(for: .milliseconds(300))
+        try await until { server.draftRecord()?["text"] as? String == "A" && value.draft.dirty == false }
         await value.refreshConversation()
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "A", "Another device sees the revert")
         XCTAssertEqual(value.draft.dirty, false)
@@ -1728,7 +1733,7 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.select("bot")
         XCTAssertEqual(value.draft, Draft(text: "", attachments: [], dirty: false, baseRevision: 2, baseHash: Draft.contentHash("", [])))
         value.updateDraft(Draft(text: "Fresh", attachments: []))
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { server.draftRecord()?["text"] as? String == "Fresh" && value.draft.dirty == false }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Fresh", baseRevision: 2)], "The sent text is never saved back")
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "Fresh")
     }
@@ -1742,7 +1747,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Offline note")
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { server.draftRecord()?["text"] as? String == "Offline note" }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Offline note", baseRevision: 2)])
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "Offline note")
     }
@@ -1753,17 +1758,17 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft = Draft(baseRevision: 0)
         value.updateDraft(Draft(text: "Pick up feed", attachments: []))
         await value.select("other")
-        try await Task.sleep(for: .milliseconds(200))
+        let cached = { UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) } }
+        try await until { cached()?.dirty == false }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Pick up feed", baseRevision: 0)])
-        let cached = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
-        XCTAssertEqual(cached?.dirty, false); XCTAssertEqual(cached?.baseRevision, 1)
+        XCTAssertEqual(cached()?.dirty, false); XCTAssertEqual(cached()?.baseRevision, 1)
         // Another device sends the saved text.
         server.otherDevice(sends: "Pick up feed")
         await value.select("bot")
         XCTAssertEqual(value.draft.text, ""); XCTAssertEqual(value.draft.baseRevision, 2)
         value.updateDraft(Draft(text: "Before leaving", attachments: []))
         value.suspend()
-        try await Task.sleep(for: .milliseconds(200))
+        try await until { server.draftSaves().last?.text == "Before leaving" && value.draft.dirty == false }
         XCTAssertEqual(server.draftSaves().last, .init(text: "Before leaving", baseRevision: 2))
         XCTAssertEqual(value.draft.dirty, false)
     }
@@ -1774,7 +1779,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft = Draft(text: "Start", attachments: [], dirty: false, baseRevision: 1)
         server.otherDevice(edits: "Phone words")
         value.updateDraft(Draft(text: "Typed here", attachments: []))
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { server.draftRecord()?["revision"] as? Int == 3 && value.draft.dirty == false }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Typed here", baseRevision: 1), .init(text: "Typed here", baseRevision: 2)])
         XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 3)
         XCTAssertEqual(value.draft, Draft(text: "Typed here", attachments: [], dirty: false, baseRevision: 3, baseHash: Draft.contentHash("Typed here", [])))
@@ -1792,10 +1797,12 @@ private final class NativeMockServer: @unchecked Sendable {
         value.updateDraft(Draft(text: "A", attachments: []))
         try await server.waitForHeld(path)
         value.updateDraft(Draft(text: "AB", attachments: []))
-        try await Task.sleep(for: .milliseconds(700))
+        // Timer: the AB edit's typing pause passes while the first save is still held.
+        try await Task.sleep(for: AppStore.draftSaveDelay + .milliseconds(100))
         await value.select("other")
-        try await Task.sleep(for: .milliseconds(200))
+        try await until { server.draftSaves().contains { $0.text == "AB" } }
         server.failHeld(path)
+        // Absence check: the older save's failure must not undo the newer text.
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
     }
@@ -1809,15 +1816,17 @@ private final class NativeMockServer: @unchecked Sendable {
         server.versionDrafts(); server.failDraftSaves()
         value.draft = Draft(baseRevision: 0, baseHash: Draft.contentHash("", []))
         value.updateDraft(Draft(text: "A", attachments: []))
-        try await Task.sleep(for: .milliseconds(700))
+        // The failure is reported once its backoff is set, so the polls below run inside it.
+        try await until { server.draftSaves().count == 1 && value.error != nil }
         XCTAssertEqual(server.draftSaves().count, 1)
+        // Absence check: polls inside the backoff never retry.
         for _ in 0..<3 { await value.refreshConversation(); try await Task.sleep(for: .milliseconds(80)) }
         XCTAssertEqual(server.draftSaves().count, 1, "Polls do not retry before the backoff")
         // The retry task's own sleep may already have fired against the held clock, so a poll
         // after the backoff proves the boundary; the timer path is covered by the test above.
         time += .seconds(1)
         await value.refreshConversation()
-        for _ in 0..<50 where server.draftSaves().count < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        try await until { server.draftSaves().count >= 2 }
         XCTAssertEqual(server.draftSaves().count, 2, "A poll after the backoff retries once")
     }
 
@@ -1833,7 +1842,7 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.draft.baseRevision, 1, "Adopted the send's clear")
         value.updateDraft(Draft(text: "B", attachments: []))
         await value.select("other")
-        try await Task.sleep(for: .milliseconds(200))
+        try await until { server.draftSaves().last?.text == "B" }
         XCTAssertEqual(server.draftSaves().last?.text, "B", "Leaving sends the new edit")
         server.failHeld(path)
     }
@@ -1846,14 +1855,13 @@ private final class NativeMockServer: @unchecked Sendable {
         value.updateDraft(Draft(text: "A", attachments: []))
         try await server.waitForHeld(path)
         value.updateDraft(Draft(text: "AB", attachments: []))
-        try await Task.sleep(for: .milliseconds(700))
+        // Timer: the AB edit's typing pause passes while the first save is still held.
+        try await Task.sleep(for: AppStore.draftSaveDelay + .milliseconds(100))
         server.failHeld(path)
+        // Absence check: well inside the 1 s retry backoff, nothing is saved.
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.draftRecord()?["revision"] as? Int, 0, "Nothing saved yet")
-        let deadline = ContinuousClock.now + .seconds(10)
-        while value.draft.dirty != false, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        try await until { value.draft.dirty == false }
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "AB")
         XCTAssertEqual(value.draft.dirty, false)
     }
@@ -1870,6 +1878,7 @@ private final class NativeMockServer: @unchecked Sendable {
         try await server.waitForDelayed(sendPath)
         XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent", "Accepted while its receipt is still on the way")
         server.release(draftPath)
+        // Absence check: a retry of the stale save would follow its 409 at once.
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.draftSaves().count, 1, "The stale save's 409 is not retried")
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "")
@@ -1884,7 +1893,7 @@ private final class NativeMockServer: @unchecked Sendable {
         await value.send()
         XCTAssertEqual(server.draftRecord()?["reason"] as? String, "sent")
         value.updateDraft(Draft(text: "Second message", attachments: []))
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { server.draftRecord()?["text"] as? String == "Second message" && value.draft.dirty == false }
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "Second message")
         XCTAssertEqual(value.draft.text, "Second message"); XCTAssertEqual(value.draft.dirty, false)
     }
@@ -1898,7 +1907,7 @@ private final class NativeMockServer: @unchecked Sendable {
         // Typed again, word for word: new work, told apart from the sent copy by its edit.
         value.editComposer { $0.text = "Send this" }
         XCTAssertFalse(value.draft.isSentCopy)
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { server.draftRecord()?["text"] as? String == "Send this" && value.draft.dirty == false }
         await value.refreshConversation()
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "Send this")
         XCTAssertEqual(value.draft.text, "Send this")
@@ -1919,7 +1928,7 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(value.composerDraft.text, "Send this")
         server.releaseResponse(sendPath); await sending.value
         XCTAssertEqual(value.draft.text, "Send this", "Acceptance empties only the copy that was sent")
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { server.draftRecord()?["text"] as? String == "Send this" && value.draft.dirty == false }
         await value.refreshConversation()
         XCTAssertEqual(server.draftRecord()?["text"] as? String, "Send this")
         XCTAssertEqual(value.draft.text, "Send this")
@@ -1964,7 +1973,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.discardUnconfirmedSubmission()
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Lost message")
-        try await Task.sleep(for: .milliseconds(900))
+        try await until { UserDefaults.standard.data(forKey: value.key("recovered", "bot")!) == nil }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Lost message", baseRevision: 3)])
         XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!))
     }
@@ -2014,7 +2023,7 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(server.requestCount("/api/bots/bot/uploads"), 0)
         // The next poll finds the connection back and starts the queued file without being asked.
         let polling = await value.pollOnce(); XCTAssertTrue(polling)
-        for _ in 0..<200 where !value.uploads.items.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        try await until { value.uploads.items.isEmpty }
         XCTAssertTrue(value.uploads.items.isEmpty); XCTAssertEqual(value.draft.attachments.count, 1)
         XCTAssertEqual(server.requestCount("/api/bots/bot/messages"), 0)
     }
@@ -2154,7 +2163,7 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertEqual(voice.state, .idle); XCTAssertTrue(server.requests.isEmpty)
         voice.speak(Message(id: "reply-1", role: "assistant", text: "The gate is closed."))
         XCTAssertEqual(voice.state, .preparing); XCTAssertEqual(voice.error, "")
-        for _ in 0..<300 where voice.state == .preparing { try await Task.sleep(for: .milliseconds(10)) }
+        try await until { voice.state != .preparing }
         XCTAssertEqual(voice.state, .speaking, voice.error)
         let speak = try XCTUnwrap(server.requests.first { $0.url?.path == "/api/bots/bot/voice/speak" })
         XCTAssertEqual(speak.httpMethod, "POST")
@@ -2477,10 +2486,12 @@ extension NativeContractTests {
         defer { UserDefaults.standard.removeObject(forKey: expiryKey) }
         server.setOffline(true)
         let launched = launchedStore(server, token: "synthetic-native-session"); launched.offlineLibraryRoot = root
+        launched.offlineWriteDelay = .milliseconds(200)
         await launched.restore(); launched.suspend()
         XCTAssertNotNil(launched.offlineSavedAt)
         XCTAssertEqual(launched.conversation?.messages.map(\.id), OfflineLibrary.conversation(chat).messages.map(\.id))
         XCTAssertFalse(launched.canSend); XCTAssertFalse(launched.connected)
+        XCTAssertFalse(launched.householdConnected); XCTAssertTrue(launched.householdConnectionLost(offline: false))
         await launched.select("family")
         XCTAssertNotNil(launched.offlineSavedAt, "An uncached assistant still belongs to the restored offline roster")
         XCTAssertNil(launched.conversation)
@@ -2488,10 +2499,13 @@ extension NativeContractTests {
         server.setOffline(false)
         await launched.refreshBootstrap()
         XCTAssertFalse(launched.connected, "A roster read cannot authorize an unrevalidated cached chat")
+        // Home goes live with the roster, though the last chat opened still shows its saved copy.
+        XCTAssertTrue(launched.householdConnected); XCTAssertFalse(launched.householdConnectionLost(offline: false))
         await launched.refreshConversation()
         XCTAssertTrue(launched.connected); XCTAssertNil(launched.offlineSavedAt)
         _ = await launched.signOut()
-        try await Task.sleep(for: .milliseconds(5300))
+        // Absence check: outlasts the shortened offline write delay three times over.
+        try await Task.sleep(for: .milliseconds(600))
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "A delayed write recreated a signed-out snapshot")
     }
 }
@@ -2525,15 +2539,16 @@ extension NativeContractTests {
     func testSnapshotWriterPersistsInBackgroundAndSkipsUnchangedPolls() async throws {
         let server = NativeMockServer(), value = try store(server)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        value.offlineLibraryRoot = root
+        value.offlineLibraryRoot = root; value.offlineWriteDelay = .milliseconds(200)
         defer { try? FileManager.default.removeItem(at: root); clean(server, value) }
         await value.refreshConversation(); value.suspend()
         let url = OfflineLibrary.url(origin: server.origin.absoluteString, token: "synthetic-native-session", root: root)
-        for _ in 0..<200 where !FileManager.default.fileExists(atPath: url.path) { try await Task.sleep(for: .milliseconds(10)) }
+        try await until { FileManager.default.fileExists(atPath: url.path) }
         let original = try Data(contentsOf: url)
         XCTAssertNotNil(OfflineLibrary.read(url))
         await value.refreshBootstrap()
-        try await Task.sleep(for: .milliseconds(5300))
+        // Absence check: outlasts the shortened offline write delay three times over.
+        try await Task.sleep(for: .milliseconds(600))
         XCTAssertEqual(try Data(contentsOf: url), original, "An unchanged poll rewrote the snapshot")
         _ = await value.signOut()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
@@ -2633,6 +2648,7 @@ extension NativeContractTests {
         value.queueAsk(AskRequest(botId: "family", text: "Too late", scope: value.scope ?? "", at: Date().addingTimeInterval(0.5 - AskRequest.patience)))
         let delivering = Task { await value.deliverAdditions() }
         try await server.waitForHeld(path)
+        // Timer: the Ask's last half second of patience runs out while the chat's read is held.
         try await Task.sleep(for: .milliseconds(700))
         server.release(path); await delivering.value
         await value.deliverAdditions()

@@ -96,12 +96,14 @@ struct OfflineLibrary: Codable {
 @MainActor final class OfflineLibraryWriter {
   private let disk = Disk()
   private var pending: Task<Void, Never>?
+  /// The debounce for a changed snapshot, so frequent polls write at most once per pause.
+  var delay: Duration = .seconds(5)
   func replace(_ snapshot: OfflineLibrary, at url: URL, immediately: Bool = false) {
     pending?.cancel()
     let ticket = disk.advance()
-    let disk = disk
+    let disk = disk, delay = delay
     pending = Task {
-      if !immediately { try? await Task.sleep(for: .seconds(5)) }
+      if !immediately { try? await Task.sleep(for: delay) }
       guard !Task.isCancelled else { return }
       await Task.detached(priority: .utility) { disk.write(snapshot, at: url, ticket: ticket, force: immediately) }.value
     }

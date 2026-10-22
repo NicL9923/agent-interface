@@ -19,9 +19,14 @@ extension AppStore {
   /// The web's `connectionLost`: Hermes or the app cannot be reached, or the device is offline.
   /// An expired sign-in is a different state with its own prompt.
   func connectionLost(offline: Bool) -> Bool { offline || (!connected && !sessionExpired) }
+  /// The household as a whole: Hermes and the app answer and the sign-in holds. Unlike
+  /// `connected`, a chat still showing its saved copy does not count, so home goes live as
+  /// soon as the roster does, even when the last chat opened has not been reopened yet.
+  var householdConnected: Bool { bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired }
+  func householdConnectionLost(offline: Bool) -> Bool { offline || (!householdConnected && !sessionExpired) }
   /// Why a new assistant cannot be created now, or nil when it can.
   var assistantSetupBlock: String? {
-    if !connected { return "Assistant setup is unavailable while Hermes is disconnected." }
+    if !householdConnected { return "Assistant setup is unavailable while Hermes is disconnected." }
     return supports("botConfiguration") ? nil : reason("botConfiguration")
   }
 }
@@ -188,7 +193,7 @@ struct HomeEmptyDetail: View {
   var body: some View {
     ScrollView {
       Group {
-        if store.connectionLost(offline: reachability.offline) {
+        if store.householdConnectionLost(offline: reachability.offline) {
           HermesConnectionPanel(connection: store.bootstrap?.connection, offline: reachability.offline,
             appUnavailable: store.appUnavailable, busy: checking) {
               checking = true
