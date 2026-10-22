@@ -245,12 +245,14 @@ import XCTest
     XCTAssertTrue(app.staticTexts["On this iPhone"].waitForExistence(timeout: 5))
     if app.buttons["Allow calendar access"].exists {
       addUIInterruptionMonitor(withDescription: "Calendar permission") { alert in
-        if alert.buttons["Don't Allow"].exists { alert.buttons["Don't Allow"].tap(); return true }
+        let deny = alert.buttons.matching(NSPredicate(format: "label IN %@", ["Don't Allow", "Don\u{2019}t Allow"])).firstMatch
+        if deny.exists { deny.tap(); return true }
         return false
       }
       app.buttons["Allow calendar access"].tap()
       let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-      let deny = springboard.buttons["Don't Allow"]
+      // iOS 26 writes the label with a typographic apostrophe.
+      let deny = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Don't Allow", "Don\u{2019}t Allow"])).firstMatch
       if deny.waitForExistence(timeout: 10) { deny.tap() }
       else { app.tap() }
       XCTAssertTrue(app.staticTexts["Permission denied"].waitForExistence(timeout: 10))
