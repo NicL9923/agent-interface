@@ -165,6 +165,19 @@ source, repair, dependency, integration and private authentication checks passed
 It is ready for the administrator's separate installation action; the running
 Hermes version remains d23.
 
+Releases and Hermes installs wait for the gateway to report no active agents.
+`prepare-when-idle.py` prints what the gateway reports on each busy attempt. If it
+counts agents with no listed work for 20 minutes or more, it says so once. On
+October 22, 2026 the gateway counted one agent for 80 minutes. It had no turn, cron,
+kanban or delegation records, no tool processes and no new messages. A restart
+cleared it: `systemctl --user restart hermes-gateway.service`. Restart only when
+nobody is mid-conversation, Discord included, because a restart ends any real turn.
+
+Old releases accumulate under `releases/`. The household host filled to 14 GB free
+with 129 of them, below the update check's 20 GB minimum. `release-app.py activate`
+now keeps the ten newest releases plus the live and previous ones, and removes the
+rest.
+
 See the [Linux installer contract](HermesUpgradeLinux.md) for host configuration
 and recovery requirements. The [validation ledger](ledger/README.md) records
 isolated execution separately from production activation and update checks.

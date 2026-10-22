@@ -160,6 +160,14 @@ script in worker `qualificationFiles`. Their exact bytes must remain unchanged
 between qualification and install. The worker also binds its configuration,
 platform helper, and directly referenced hook files.
 
+The app starts the worker as its own transient systemd user unit when it runs
+under systemd, through `systemd-run --user`. The app's service has a private
+`/tmp`, which a user manager builds from a user namespace. On hosts that restrict
+unprivileged user namespaces through AppArmor, a sandboxed Chrome started inside
+that namespace aborts, so a worker started as the app's child would always fail
+the local-network probe. Started outside the app's namespace and cgroup, the worker
+also keeps running if the app restarts. Without systemd the app spawns it directly.
+
 On a host that requires a specific sandboxed browser for the local-network probe,
 qualify the app release with `--computer-probe-browser /absolute/direct/ELF`.
 The receipt's optional `computerProbeBrowser` metadata carries that selection

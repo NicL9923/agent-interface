@@ -11,18 +11,41 @@ type WorkerSettings = { python: string; workerConfig: string; stateDirectory: st
 // The worker keeps its own log once it runs. Output from a start that fails before then lands in
 // a new private launch log per attempt, so a retry never erases the failure it follows.
 const LAUNCH_LOGS_KEPT = 10;
+/**
+ * The app's user service runs with a private /tmp, which a user manager provides through a user
+ * namespace. Inside it AppArmor refuses Chrome's own sandbox namespace, so a worker started as
+ * the app's child can never pass the browser probe. Under systemd the worker runs as its own
+ * transient user unit instead, outside the app's namespace and cgroup.
+ */
+export function transientRunner(env: NodeJS.ProcessEnv = process.env, runner = "/usr/bin/systemd-run"): string | false {
+  return env.INVOCATION_ID && env.XDG_RUNTIME_DIR && existsSync(runner) ? runner : false;
+}
 export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
-  script = resolve("scripts/hermes-upgrade-worker.py")) {
+  script = resolve("scripts/hermes-upgrade-worker.py"), runner: string | false = transientRunner()) {
   const directory = settings.stateDirectory;
   const logs = readdirSync(directory).filter(name => /^worker-launch-.+\.log$/.test(name))
     .map(name => ({ name, at: lstatSync(join(directory, name)).mtimeMs })).sort((a, b) => b.at - a.at);
   for (const { name } of logs.slice(LAUNCH_LOGS_KEPT - 1)) rmSync(join(directory, name), { force: true });
   // Exclusive creation never follows or reuses an existing path.
-  const log = openSync(join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`), "wx", 0o600);
+  const logPath = join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`);
+  const log = openSync(logPath, "wx", 0o600);
+  const argv = [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
+    "--action", args.action, "--operation-id", args.operationId];
+  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C.UTF-8" };
   try {
-    return spawn(settings.python, [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
-      "--action", args.action, "--operation-id", args.operationId],
-    { detached: true, stdio: ["ignore", log, log], env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "C.UTF-8" } });
+    if (!runner) return spawn(settings.python, argv, { detached: true, stdio: ["ignore", log, log], env });
+    // exec: systemd-run fails if Python itself cannot start. ExitType=cgroup: hooks the worker
+    // left behind keep running to their end instead of being killed when it exits, as they
+    // did as orphans before. Paths reach Python as written, with no `$` expansion.
+    const child = spawn(runner, ["--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no",
+      `--unit=agent-interface-upgrade-${randomUUID()}`, `--working-directory=${process.cwd()}`,
+      "--property=ExitType=cgroup", "--property=UMask=0077",
+      `--property=StandardOutput=append:${logPath}`, `--property=StandardError=append:${logPath}`,
+      ...Object.entries(env).map(([key, value]) => `--setenv=${key}=${value}`), "--", settings.python, ...argv],
+    { stdio: ["ignore", log, log], env: { ...env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "" } });
+    // systemd-run returns once the unit starts; a refusal means the worker never ran.
+    child.on("exit", code => { if (code) child.emit("error", new Error(`systemd-run exited with ${code}`)); });
+    return child;
   } finally {
     closeSync(log);
   }
