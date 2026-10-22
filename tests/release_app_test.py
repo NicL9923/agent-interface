@@ -510,6 +510,24 @@ class HostPrograms(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             worker["native_chromium"](self.host.home)
 
+    def test_prune_keeps_the_live_release_its_rollback_target_and_the_newest(self):
+        import os, time
+        releases = self.host.base / "releases"
+        live = (self.host.base / "current").resolve()
+        now = time.time()
+        names = [f"release-old-{index:02}" for index in range(14)]
+        for index, name in enumerate(names):
+            (releases / name).mkdir(); os.utime(releases / name, (now - 10000 + index, now - 10000 + index))
+        os.utime(live, (now - 20000, now - 20000))
+        operation = self.host.base / "operations" / live.name
+        operation.mkdir(parents=True, exist_ok=True)
+        (operation / "deploy-config.json").write_text(json.dumps({"previous": str(releases / "release-old-00")}))
+        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": 3})
+        self.assertEqual(code, 0, error)
+        left = sorted(path.name for path in releases.iterdir())
+        self.assertEqual(left, sorted({live.name, "release-old-00", "release-old-11", "release-old-12", "release-old-13"}))
+        self.assertEqual(sorted(json.loads(output)["removed"]), names[1:11])
+
     def test_discard_removes_only_an_unactivated_release(self):
         release = self.host.base / "releases/release-new"
         operation = self.host.base / "operations/release-new"

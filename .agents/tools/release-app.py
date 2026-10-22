@@ -286,6 +286,24 @@ base = Path(PAYLOAD["appBase"])
 finish({"current": str((base / "current").resolve()), "workerSha256": sha(base / "shared/hermes-worker.json")})
 """
 
+# Releases kept beyond the live one and the rollback target its deploy configuration names.
+RELEASES_KEPT = 10
+REMOTE_PRUNE = """
+import re
+base = Path(PAYLOAD["appBase"]); releases = base / "releases"
+current = (base / "current").resolve()
+keep = {current}
+# The live release's deploy configuration names its rollback target.
+config = base / "operations" / current.name / "deploy-config.json"
+if config.exists():
+    keep |= {(releases / name).resolve() for name in re.findall(r"releases/(release-[A-Za-z0-9._-]+)", config.read_text())}
+dirs = sorted((p for p in releases.iterdir() if p.is_dir() and not p.is_symlink()), key=lambda p: p.stat().st_mtime, reverse=True)
+keep |= {p.resolve() for p in dirs[:PAYLOAD["keep"]]}
+removed = [p.name for p in dirs if p.resolve() not in keep]
+for name in removed: shutil.rmtree(releases / name)
+finish({"removed": removed, "kept": len(dirs) - len(removed)})
+"""
+
 REMOTE_WRITE_CONFIG = """
 path = Path(PAYLOAD["path"])
 assert not path.exists(), "A deploy configuration already exists for this release."
@@ -592,7 +610,17 @@ def activate(args):
         raise SystemExit(held_for_review())
     manifest.update(status="activated", guardedResult=result)
     save_manifest(manifest)
+    prune_releases(manifest)
     record_release(manifest, docs_pr=not args.no_docs_pr)
+
+
+def prune_releases(manifest):
+    """Remove old release builds so the host keeps room for Hermes update checks; never fails a release."""
+    try:
+        pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT})
+        print(f"Removed {len(pruned['removed'])} old releases; kept {pruned['kept']}.")
+    except (SystemExit, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+        print(f"Warning: old releases were not pruned: {error}", file=sys.stderr)
 
 
 def write_records(root, manifest):
