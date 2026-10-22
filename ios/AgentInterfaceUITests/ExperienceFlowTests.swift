@@ -9,7 +9,8 @@ import XCTest
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     app.launch()
     let compare = app.webViews.buttons["Compare supply"]
-    XCTAssertTrue(compare.waitForExistence(timeout: 15), app.debugDescription)
+    // A web view's first load on CI's simulator can take well over 15 seconds.
+    XCTAssertTrue(compare.waitForExistence(timeout: 40), app.debugDescription)
     compare.tap()
     XCTAssertTrue(app.webViews.staticTexts["40 days"].waitForExistence(timeout: 5))
     capture(app, name: "Native inline UI expanded")

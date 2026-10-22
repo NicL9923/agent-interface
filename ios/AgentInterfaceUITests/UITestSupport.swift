@@ -48,14 +48,11 @@ extension XCUIElement {
   func waitForKeyboardFocus(_ focused: Bool = true, timeout: TimeInterval = 10) -> Bool {
     wait(until: "hasKeyboardFocus == %@", NSNumber(value: focused), timeout: timeout)
   }
-  /// Taps a text input, waits for keyboard focus, then types. Typing before focus arrives fails on a
-  /// slow simulator; a tap that landed while the field was still settling is repeated once, as a
-  /// person would.
-  func typeWhenFocused(_ text: String, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
-    if !waitForKeyboardFocus(true, timeout: 0) {
-      tapWhenReady(timeout: timeout, file: file, line: line)
-      if !waitForKeyboardFocus(true, timeout: 3) { tap() }
-    }
+  /// Taps a text input once, waits for keyboard focus, then types. Typing before focus arrives fails
+  /// on a slow simulator. Never tap twice: while the keyboard slides in, a second tap's position is
+  /// stale and can land on the transcript, whose tap puts the keyboard away.
+  func typeWhenFocused(_ text: String, timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line) {
+    if !waitForKeyboardFocus(true, timeout: 0) { tapWhenReady(timeout: timeout, file: file, line: line) }
     guard waitForKeyboardFocus(true, timeout: timeout) else {
       XCTFail("\(self) never took keyboard focus", file: file, line: line); return
     }
@@ -89,17 +86,23 @@ extension XCUIApplication {
   /// opening, as on a slower simulator, so the choice is repeated only while the menu stays open.
   func selectSettingsTab(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
     let more = buttons["settingsMore"], item = buttons[title]
-    more.tapWhenReady(file: file, line: line)
+    more.tap()
     XCTAssertTrue(item.waitForExistence(timeout: 5), "The More menu lists \(title)", file: file, line: line)
     for _ in 0..<3 {
       // A tap the menu ignored can also close it, so a later try reopens it as a person would.
       if !item.exists { more.tap(); _ = item.waitForExistence(timeout: 5) }
-      guard item.waitUntilHittable(timeout: 5) else { continue }
+      // The item can exist while it still animates in, with no frame yet; asking whether it is
+      // hittable then fails the test outright, so wait for a real frame first.
+      let deadline = Date().addingTimeInterval(5)
+      while Date() < deadline, !(item.exists && item.frame.minX.isFinite && !item.frame.isEmpty) { usleep(100_000) }
+      guard item.exists, item.frame.minX.isFinite, !item.frame.isEmpty, item.isHittable else { continue }
       item.tap()
-      if more.wait(until: "value == %@", title, timeout: 2) { return }
+      let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: more)
+      if XCTWaiter.wait(for: [selected], timeout: 2) == .completed { return }
     }
     XCTAssertEqual(more.value as? String, title, "The More menu selects \(title)", file: file, line: line)
   }
+
   /// The open chat's header: the assistant's avatar and name, which opens its card.
   func chatHeader(_ name: String) -> XCUIElement {
     buttons.matching(identifier: "botProfile").matching(NSPredicate(format: "label == %@", name)).firstMatch
