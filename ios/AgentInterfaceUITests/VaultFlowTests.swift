@@ -17,7 +17,7 @@ import XCTest
   }
   private func field(_ id: String, app: XCUIApplication, value: String, secure: Bool = false) {
     let field = secure ? app.secureTextFields[id] : app.textFields[id]
-    XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(value)
+    XCTAssertTrue(field.waitForExistence(timeout: 5)); field.typeWhenFocused(value)
   }
   private func reveal(_ button: XCUIElement, app: XCUIApplication, container: XCUIElement? = nil) {
     for _ in 0..<5 { if button.isHittable { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
@@ -30,7 +30,7 @@ import XCTest
     XCTAssertTrue(app.staticTexts["Fixture school portal"].exists)
     XCTAssertFalse(app.buttons["Unlock 1Password"].exists)
     capture(app, name: "Native Hermes profile logins")
-    app.buttons["vault.add"].tap()
+    app.buttons["vault.add"].tapWhenReady()
     field("vault.loginLabel", app: app, value: "Fixture library")
     field("vault.loginOrigin", app: app, value: "https://library.example.test")
     field("vault.loginIdentifier", app: app, value: "fixture-reader")
@@ -136,7 +136,7 @@ import XCTest
     XCTAssertFalse(app.secureTextFields["secure.value"].isEnabled); XCTAssertFalse(app.textFields["secure.identifier"].isEnabled)
     XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "fixture-password")).firstMatch.exists)
     app.buttons["Refresh request"].tap()
-    XCTAssertTrue(app.buttons["Refresh request"].exists); XCTAssertFalse(app.buttons["secure.submit"].exists)
+    XCTAssertTrue(app.buttons["Refresh request"].waitForExistence(timeout: 5)); XCTAssertFalse(app.buttons["secure.submit"].exists)
     capture(app, name: "Native uncertain secure request cannot replay")
   }
 }

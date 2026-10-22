@@ -36,7 +36,7 @@ import XCTest
     let scheduled = app.buttons["Scheduled jobs"]
     for _ in 0..<4 { if scheduled.isHittable { break }; app.swipeUp() }
     scheduled.tap()
-    app.buttons["Bunny care"].tap()
+    app.buttons["Bunny care"].tapWhenReady()
     XCTAssertTrue(handoff.waitForExistence(timeout: 5))
     let expanded = XCTAttachment(screenshot: app.screenshot())
     expanded.name = "Scheduled job details expanded"
@@ -47,8 +47,7 @@ import XCTest
     let app = app(fixture: false)
     let address = app.textFields["serverAddress"]
     XCTAssertTrue(address.waitForExistence(timeout: 10))
-    address.tap()
-    address.typeText("http://remote.example")
+    address.typeWhenFocused("http://remote.example")
     app.buttons["connectServer"].tap()
     XCTAssertTrue(
       app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "HTTP is supported only"))
@@ -60,8 +59,7 @@ import XCTest
     let app = app()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
-    composer.tap()
-    composer.typeText("Remember the fence inspection")
+    composer.typeWhenFocused("Remember the fence inspection")
     app.buttons["sendMessage"].tap()
     XCTAssertTrue(app.staticTexts["Remember the fence inspection"].waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
@@ -104,8 +102,8 @@ import XCTest
     let app = app()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
-    app.buttons["Avatar"].tap()
-    app.buttons["Mascot"].tap()
+    app.buttons["Avatar"].tapWhenReady()
+    app.buttons["Mascot"].tapWhenReady()
     func scrollTo(_ button: XCUIElement, up: Bool) {
       for _ in 0..<8 {
         if button.exists && button.isHittable { return }
@@ -117,7 +115,7 @@ import XCTest
       let choice = app.buttons["avatarTile.family.\(family)"]
       scrollTo(choice, up: true)
       choice.tap()
-      XCTAssertTrue(choice.isSelected)
+      XCTAssertTrue(choice.wait(until: "selected == true"), "\(family) is selected")
       scrollTo(app.buttons["previewState.idle"], up: false)
       screenshot(app, "Seasonal native \(family)")
       scrollTo(app.buttons["Save avatar"], up: true)
@@ -125,9 +123,9 @@ import XCTest
       XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 5))
       app.buttons["Close"].tap()
       app.openAssistantSettings("Ranch hand")
-      app.buttons["Avatar"].tap()
+      app.buttons["Avatar"].tapWhenReady()
       scrollTo(app.buttons["avatarTile.family.\(family)"], up: true)
-      XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].isSelected)
+      XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].wait(until: "selected == true"), "\(family) stays selected")
     }
   }
   func testSettingsOverflowSelectsEverySectionAndKeepsAvatarVisible() {
@@ -136,8 +134,8 @@ import XCTest
     app.openAssistantSettings("Ranch hand")
     let more = app.buttons["settingsMore"]
     for title in ["Connections", "Tools", "Skills", "Routines"] {
-      XCTAssertTrue(app.buttons["Details"].isHittable)
-      XCTAssertTrue(app.buttons["Avatar"].isHittable)
+      XCTAssertTrue(app.buttons["Details"].waitUntilHittable())
+      XCTAssertTrue(app.buttons["Avatar"].waitUntilHittable())
       selectSettingsTab(app, title)
       XCTAssertEqual(more.value as? String, title)
       XCTAssertGreaterThanOrEqual(more.frame.minX, 0)
@@ -208,8 +206,7 @@ import XCTest
     let app = app(liveActivity: true)
     XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
-    app.typeKey(".", modifierFlags: .command)
-    XCTAssertTrue(app.buttons["Stop work"].waitForExistence(timeout: 5), "The shortcut asks first")
+    app.shortcut(".", shows: app.buttons["Stop work"])
     // Tapping away dismisses the popover (iPad) or sheet (iPhone) without choosing.
     app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["Stop work"])
@@ -222,9 +219,9 @@ import XCTest
     XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
     XCTAssertFalse(app.buttons["Listen to reply"].exists, "Replies are offered aloud only while idle")
     app.buttons["Reasoning"].tap()
-    XCTAssertTrue(app.staticTexts["Fixture exposed reasoning: current weather needs a fresh forecast."].exists)
-    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tap()
-    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "web_search")).firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["Fixture exposed reasoning: current weather needs a fresh forecast."].waitForExistence(timeout: 5))
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tapWhenReady()
+    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "web_search")).firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["{\"query\":\"Texas ranch weather forecast\"}"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture native live activity and exposed tool details")
   }
@@ -245,14 +242,14 @@ import XCTest
     XCTAssertTrue(app.staticTexts["On this iPhone"].waitForExistence(timeout: 5))
     if app.buttons["Allow calendar access"].exists {
       addUIInterruptionMonitor(withDescription: "Calendar permission") { alert in
-        let deny = alert.buttons.matching(NSPredicate(format: "label IN %@", ["Don't Allow", "Don\u{2019}t Allow"])).firstMatch
+        let deny = alert.buttons.labeled("Don't Allow")
         if deny.exists { deny.tap(); return true }
         return false
       }
       app.buttons["Allow calendar access"].tap()
       let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-      // iOS 26 writes the label with a typographic apostrophe.
-      let deny = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Don't Allow", "Don\u{2019}t Allow"])).firstMatch
+      // iOS 26 writes the label with a typographic apostrophe; `labeled` accepts either.
+      let deny = springboard.buttons.labeled("Don't Allow")
       if deny.waitForExistence(timeout: 10) { deny.tap() }
       else { app.tap() }
       XCTAssertTrue(app.staticTexts["Permission denied"].waitForExistence(timeout: 10))
@@ -276,7 +273,7 @@ import XCTest
     screenshot(app, "Native failed update recovery fixture")
     app.buttons["restartHermesService"].tap()
     XCTAssertTrue(app.staticTexts["Restart the Hermes service and check the connection? This may briefly disconnect everyone."].waitForExistence(timeout: 5))
-    app.buttons["Yes, restart Hermes"].tap()
+    app.buttons["Yes, restart Hermes"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Restoring the connection"].waitForExistence(timeout: 5))
     screenshot(app, "Native service recovery progress fixture")
   }

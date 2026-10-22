@@ -25,31 +25,27 @@ import XCTest
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
   }
-  private func waitForKeyboardFocus(_ element: XCUIElement, _ focused: Bool) {
-    expectation(for: NSPredicate(format: "hasKeyboardFocus == %@", NSNumber(value: focused)), evaluatedWith: element)
-    waitForExpectations(timeout: 5)
-  }
   func testKeyboardHidesFromItsButtonAndFromATapOnTheTranscript() throws {
     let app = launch()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
     XCTAssertFalse(app.buttons["hideKeyboard"].exists, "The control shows only while typing")
-    composer.tap(); waitForKeyboardFocus(composer, true); composer.typeText("Short chat")
+    composer.typeWhenFocused("Short chat")
     try capture(app, "daily-keyboard-control")
-    app.buttons["hideKeyboard"].tap()
-    waitForKeyboardFocus(composer, false)
-    XCTAssertFalse(app.buttons["hideKeyboard"].exists)
+    app.buttons["hideKeyboard"].tapWhenReady()
+    XCTAssertTrue(composer.waitForKeyboardFocus(false))
+    XCTAssertTrue(app.buttons["hideKeyboard"].waitForDisappearance())
     // The fixture chat is too short to drag, so a plain tap on it must be enough.
-    composer.tap(); waitForKeyboardFocus(composer, true)
+    composer.tap(); XCTAssertTrue(composer.waitForKeyboardFocus(true))
     app.scrollViews["conversationTranscript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
-    waitForKeyboardFocus(composer, false)
+    XCTAssertTrue(composer.waitForKeyboardFocus(false))
     XCTAssertEqual(composer.value as? String, "Short chat")
   }
   func testHomePushesKeepDraftAndFindOpensMessageActions() throws {
     let app = launch()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
-    composer.tap(); waitForKeyboardFocus(composer, true); composer.typeText("Keep this draft")
+    composer.typeWhenFocused("Keep this draft")
     home(app)
     app.buttons["openToday"].tap()
     XCTAssertTrue(app.staticTexts["Needs your attention"].waitForExistence(timeout: 5))
@@ -57,7 +53,7 @@ import XCTest
     home(app)
     app.buttons["openDiscovery"].tap()
     XCTAssertTrue(app.textFields["Search conversations"].waitForExistence(timeout: 5))
-    app.textFields["Search conversations"].tap(); app.textFields["Search conversations"].typeText("Retain this query")
+    app.textFields["Search conversations"].typeWhenFocused("Retain this query")
     XCUIDevice.shared.orientation = .landscapeLeft
     XCTAssertTrue(app.textFields["Search conversations"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Search conversations"].value as? String, "Retain this query")
@@ -69,7 +65,7 @@ import XCTest
     app.openBotProfile("Ranch hand")
     app.buttons["profileFind"].tap()
     let find = app.textFields["findConversation"]
-    XCTAssertTrue(find.waitForExistence(timeout: 5)); find.tap(); find.typeText("household assistant")
+    XCTAssertTrue(find.waitForExistence(timeout: 5)); find.typeWhenFocused("household assistant")
     XCTAssertTrue(app.staticTexts["1 of 1"].waitForExistence(timeout: 5))
     try capture(app, "daily-find")
     app.buttons["Close find"].tap()
@@ -78,7 +74,7 @@ import XCTest
     XCTAssertTrue(app.buttons["Share answer"].exists)
     XCTAssertTrue(app.buttons["Save reply"].exists)
     try capture(app, "daily-reply-actions")
-    app.buttons["Save reply"].tap()
+    app.buttons["Save reply"].tapWhenReady()
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
   }
   func testInterruptedVoiceCanBeTranscribedAfterReturning() throws {
@@ -92,15 +88,17 @@ import XCTest
     try capture(app, "daily-voice-kept")
     transcribe.tap()
     XCTAssertTrue(app.staticTexts["Added to your draft. Review it before sending."].waitForExistence(timeout: 5))
-    XCTAssertEqual(app.textViews["messageComposer"].value as? String, "Fixture transcript: check the north gate.")
+    let composer = app.textViews["messageComposer"]
+    composer.wait(until: "value == %@", "Fixture transcript: check the north gate.")
+    XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
   }
   func testSearchOpensTheMatchingReply() throws {
     let app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app); app.buttons["openDiscovery"].tap()
     let query = app.textFields["Search conversations"]
-    XCTAssertTrue(query.waitForExistence(timeout: 5)); query.tap(); query.typeText("brisket")
-    app.buttons["nativeSearchSubmit"].tap()
-    app.buttons["nativeSearchResult-history-1"].tap()
+    XCTAssertTrue(query.waitForExistence(timeout: 5)); query.typeWhenFocused("brisket")
+    app.buttons["nativeSearchSubmit"].tapWhenReady()
+    app.buttons["nativeSearchResult-history-1"].tapWhenReady()
     let reply = app.staticTexts["Fixture saved reply: brisket on Sunday."]
     expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: reply)
     waitForExpectations(timeout: 10)
@@ -110,9 +108,9 @@ import XCTest
     let app = launch(missingTarget: true)
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app); app.buttons["openDiscovery"].tap()
     let query = app.textFields["Search conversations"]
-    XCTAssertTrue(query.waitForExistence(timeout: 5)); query.tap(); query.typeText("brisket")
-    app.buttons["nativeSearchSubmit"].tap()
-    app.buttons["nativeSearchResult-history-1"].tap()
+    XCTAssertTrue(query.waitForExistence(timeout: 5)); query.typeWhenFocused("brisket")
+    app.buttons["nativeSearchSubmit"].tapWhenReady()
+    app.buttons["nativeSearchResult-history-1"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].waitForExistence(timeout: 10), app.debugDescription)
   }
 

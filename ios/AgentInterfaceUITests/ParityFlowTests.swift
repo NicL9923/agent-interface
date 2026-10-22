@@ -56,13 +56,13 @@ import UIKit
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: preview)
     waitForExpectations(timeout: 5)
     // The first pin opens with Cmd+1, and Cmd+F in that chat finds, keyboard ready.
-    app.typeKey("1", modifierFlags: .command)
-    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
-    app.typeKey("f", modifierFlags: .command)
+    app.shortcut("1", shows: app.textViews["messageComposer"])
+    // Cmd+F reaches the chat only once it is on screen; before that, home would take it for Search.
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitUntilHittable())
+    XCTAssertTrue(app.textViews["messageComposer"].waitUntilHittable())
     let find = app.textFields["findConversation"]
-    XCTAssertTrue(find.waitForExistence(timeout: 5))
-    expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: find)
-    waitForExpectations(timeout: 5)
+    app.shortcut("f", shows: find)
+    XCTAssertTrue(find.waitForKeyboardFocus())
   }
   func testHomePinsSettingsAutosaveAndAdvancedComposer() throws {
     let app = launch(home: true)
@@ -86,10 +86,10 @@ import UIKit
     waitForExpectations(timeout: 5)
     let appearance = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Appearance")).firstMatch
     scroll(app, to: appearance); appearance.tap()
-    app.buttons["Dark"].tap()
+    app.buttons["Dark"].tapWhenReady()
     closeSettings(app)
     app.buttons["openSettings"].tap()
-    XCTAssertEqual(app.switches["advancedDetails"].value as? String, "1")
+    XCTAssertTrue(app.switches["advancedDetails"].wait(until: "value == %@", "1"), "Advanced details stays on")
     try capture("settings-dark")
     closeSettings(app)
     try capture("home-dark")
@@ -106,18 +106,18 @@ import UIKit
     XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 10))
     try capture("model-dark")
     let speed = app.buttons["inferenceSpeed"]
-    scroll(app, to: speed); speed.tap(); app.buttons["Fast"].tap()
+    scroll(app, to: speed); speed.tap(); app.buttons["Fast"].tapWhenReady()
     let favorite = app.buttons["Add Fixture fast model to favorites"]
     scroll(app, to: favorite); favorite.tap()
     XCTAssertTrue(app.buttons["Remove Fixture fast model from favorites"].waitForExistence(timeout: 5))
     let search = app.textFields["modelSearch"]
-    search.tap(); search.typeText("Fixture fast")
+    search.typeWhenFocused("Fixture fast")
     let choice = app.buttons["Fixture fast model"].firstMatch
-    XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tap()
+    XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tapWhenReady()
     XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
-    XCTAssertEqual(app.buttons["composerModel"].label, "Model: fixture-fast")
+    XCTAssertTrue(app.buttons["composerModel"].wait(until: "label == %@", "Model: fixture-fast"), app.buttons["composerModel"].label)
     let composer = app.textViews["messageComposer"]
-    composer.tap(); composer.typeText("Check the fence")
+    composer.typeWhenFocused("Check the fence")
     XCTAssertTrue(app.buttons["sendMessage"].isEnabled)
     XCTAssertGreaterThan(composer.frame.width, 240, "Advanced tools must not squeeze the input")
     try capture("composer-typing")
@@ -140,8 +140,8 @@ import UIKit
     new.tap()
     let name = app.alerts.textFields.firstMatch
     XCTAssertTrue(name.waitForExistence(timeout: 5))
-    name.typeText("Around the house")
-    app.alerts.buttons["Add"].tap()
+    name.typeWhenFocused("Around the house")
+    app.alerts.buttons["Add"].tapWhenReady()
     expectation(for: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Around the house", "Around the house"), evaluatedWith: section)
     waitForExpectations(timeout: 5)
     app.buttons["closeBotProfile"].tap()
@@ -156,7 +156,7 @@ import UIKit
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
     let name = app.textFields["Name"]
-    name.tap(); name.typeText(" edited")
+    name.typeWhenFocused(" edited")
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
     app.buttons["Discard changes"].tap()
@@ -170,7 +170,7 @@ import UIKit
     app.buttons["assistantModel"].tap()
     let search = app.textFields["modelSearch"]
     XCTAssertTrue(search.waitForExistence(timeout: 5))
-    search.tap(); search.typeText("Fixture fast")
+    search.typeWhenFocused("Fixture fast")
     XCTAssertTrue(app.buttons["Fixture fast model"].waitForExistence(timeout: 5))
     try capture("assistant-model-catalog")
   }
@@ -201,7 +201,7 @@ import UIKit
     app.launchEnvironment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] = "1"
     app.launch()
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.buttons["openSettings"].tap()
-    app.switches["advancedDetails"].tap()
+    app.switches["advancedDetails"].tapWhenReady()
     let retry = app.buttons["Retry saving settings"]
     XCTAssertTrue(retry.waitForExistence(timeout: 5))
     let dismissError = app.collectionViews.buttons["Dismiss error"].firstMatch
@@ -211,7 +211,7 @@ import UIKit
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: retry); waitForExpectations(timeout: 5)
     closeSettings(app)
     app.buttons["openSettings"].tap()
-    XCTAssertEqual(app.switches["advancedDetails"].value as? String, "1")
+    XCTAssertTrue(app.switches["advancedDetails"].wait(until: "value == %@", "1"), "The retried save kept Advanced details on")
     try capture("settings-save-recovered")
   }
   func testMixedReplyShowsTextOnceAndToolOnlyInsideActivity() {
@@ -227,8 +227,8 @@ import UIKit
     XCTAssertFalse(app.staticTexts["Fixture tool result"].exists)
     XCTAssertTrue(app.buttons["Fixture output.txt"].exists)
     XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "fixture_file_tool")).firstMatch.exists)
-    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tap()
-    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_search")).firstMatch.tap()
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tapWhenReady()
+    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_search")).firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts.matching(identifier: "Fixture single visible reply").count, 1)
   }
@@ -243,7 +243,7 @@ import UIKit
       let tools = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch
       XCTAssertTrue(tools.waitForExistence(timeout: 10)); tools.tap()
       XCTAssertLessThan(tools.frame.minY, app.staticTexts["Fixture final answer follows the tool results."].frame.minY)
-      app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_short")).firstMatch.tap()
+      app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_short")).firstMatch.tapWhenReady()
       let short = app.staticTexts["Short fixture tool result"]
       XCTAssertTrue(short.waitForExistence(timeout: 5))
       let long = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_long")).firstMatch
@@ -362,7 +362,7 @@ import UIKit
     let app = launch(["PUSH"])
     XCTAssertTrue(app.buttons["notNowNotifications"].waitForExistence(timeout: 10))
     app.buttons["notNowNotifications"].tap()
-    XCTAssertFalse(app.staticTexts["Enable notifications on this device?"].exists)
+    XCTAssertTrue(app.staticTexts["Enable notifications on this device?"].waitForDisappearance())
     app.buttons["openSettings"].tap()
     let toggle = app.switches["deviceNotifications"]
     // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.

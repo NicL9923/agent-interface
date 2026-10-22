@@ -14,7 +14,7 @@ import XCTest
   func testSavedReplyOpensHighlightedAndScrolledIntoView() {
     let app=XCUIApplication();app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_RESET"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"]=UUID().uuidString;app.launch()
     if !app.buttons["openDiscovery"].waitForExistence(timeout:3) { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["openDiscovery"].tap()
+    app.buttons["openDiscovery"].tapWhenReady()
     XCTAssertTrue(app.buttons["Saved items"].waitForExistence(timeout:5));app.buttons["Saved items"].tap()
     XCTAssertTrue(app.buttons["savedItem-saved-2"].waitForExistence(timeout:5));app.buttons["savedItem-saved-2"].tap()
     let saved=app.staticTexts["Fixture saved reply: brisket on Sunday."]
@@ -29,10 +29,10 @@ import XCTest
   func testSearchSavedItemsAutomationAndEditableStarter() {
     let app=XCUIApplication();app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_RESET"]="1";app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"]=UUID().uuidString;app.launch()
     if !app.buttons["openDiscovery"].waitForExistence(timeout:3) { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["openDiscovery"].tap()
+    app.buttons["openDiscovery"].tapWhenReady()
     XCTAssertTrue(app.textFields["Search conversations"].waitForExistence(timeout:5),app.debugDescription)
-    app.textFields["Search conversations"].tap();app.textFields["Search conversations"].typeText("dinners")
-    app.buttons["nativeSearchSubmit"].tap()
+    app.textFields["Search conversations"].typeWhenFocused("dinners")
+    app.buttons["nativeSearchSubmit"].tapWhenReady()
     XCTAssertTrue(app.buttons["nativeSearchResult-history-1"].waitForExistence(timeout:5));app.buttons["nativeSearchResult-history-1"].tap()
     // The hit opens at its matching reply, below the fold; saving the conversation is at the top.
     let match=app.staticTexts["Fixture saved reply: brisket on Sunday."]
