@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { integrationDigest, isolatedQualification, qualifiedReceipt } from "../src/server/hermes-qualification.js";
+import qualificationInputs from "../src/shared/qualification-inputs.json" with { type: "json" };
 
 const directories: string[] = [];
 function temporary() { const path = mkdtempSync(join(tmpdir(), "agent-interface-qualification-")); directories.push(path); return path; }
@@ -13,6 +14,11 @@ describe("exact Hermes upgrade qualification", () => {
   it("uses the same integration digest in the worker, add-on and app", () => {
     const python = execFileSync("python3", ["src/hermes/qualification.py", "--digest", process.cwd()], {encoding:"utf8"}).trim();
     expect(integrationDigest()).toBe(python);
+  });
+  it("binds every Hermes adapter module to the receipt", () => {
+    // A receipt covers only listed files, so an unlisted adapter module could change after qualification.
+    const adapter = readdirSync("src/server").filter(name => /^hermes.*\.ts$/.test(name)).map(name => `src/server/${name}`);
+    expect(adapter.filter(path => !qualificationInputs.includes(path))).toEqual([]);
   });
   it("accepts only a private receipt for the exact source, repair and current integration", () => {
     const file = join(temporary(), "qualified.json");
