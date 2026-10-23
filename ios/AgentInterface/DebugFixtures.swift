@@ -8,7 +8,7 @@
     static func configure(_ store: AppStore) async -> Bool {
       let environment = ProcessInfo.processInfo.environment
       if environment["AGENT_INTERFACE_UI_RESET"] == "1" {
-        UserDefaults.standard.removeObject(forKey: "connection.host")
+        UserDefaults.standard.removeObject(forKey: DeviceDefaults.host)
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }

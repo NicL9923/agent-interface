@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../client-api";
+import { request } from "../client-api";
 import type { ModelCatalog, Routine, Skill, Tool } from "../shared/types";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -19,11 +19,11 @@ export function AdvancedRoutineFields({ value, onChange, routines, editing }: {
     if (!open) return;
     const controller = new AbortController();
     setErrors([]); setSkills(undefined); setTools(undefined); setCatalog(undefined);
-    const path = `/bots/${encodeURIComponent(value.botId)}`;
+    const params = { id: value.botId }, signal = controller.signal;
     void Promise.allSettled([
-      api<Skill[]>(`${path}/skills`, { signal: controller.signal }).then(rows => { if (!Array.isArray(rows)) throw new Error("Unreadable skills catalog"); if (!controller.signal.aborted) setSkills(rows); }),
-      api<Tool[]>(`${path}/tools`, { signal: controller.signal }).then(rows => { if (!Array.isArray(rows)) throw new Error("Unreadable toolsets catalog"); if (!controller.signal.aborted) setTools(rows); }),
-      api<ModelCatalog>(`/models?botId=${encodeURIComponent(value.botId)}`, { signal: controller.signal }).then(rows => { if (!Array.isArray(rows.providers)) throw new Error("Unreadable model catalog"); if (!controller.signal.aborted) setCatalog(rows); }),
+      request("GET /bots/:id/skills", { params, signal }).then(rows => { if (!Array.isArray(rows)) throw new Error("Unreadable skills catalog"); if (!controller.signal.aborted) setSkills(rows); }),
+      request("GET /bots/:id/tools", { params, signal }).then(rows => { if (!Array.isArray(rows)) throw new Error("Unreadable toolsets catalog"); if (!controller.signal.aborted) setTools(rows); }),
+      request("GET /models", { query: { botId: value.botId }, signal }).then(rows => { if (!Array.isArray(rows.providers)) throw new Error("Unreadable model catalog"); if (!controller.signal.aborted) setCatalog(rows); }),
     ]).then(results => { if (!controller.signal.aborted) setErrors(results.flatMap((result, index) => result.status === "rejected" ? [`Could not load ${["skills", "toolsets", "models"][index]}. ${result.reason instanceof Error ? result.reason.message : "Try again."}`] : [])); });
     return () => controller.abort();
   }, [open, value.botId, retry]);

@@ -39,7 +39,7 @@ describe("message provenance", () => {
     expect(messageOrigin({ id: "child", role: "tool", text: "", toolName: "delegate_task" })?.kind).toBe("subagent");
   });
   it("does not announce diagnostic activity but announces the useful scheduled answer", () => {
-    const base = { botId: "kimberly", activity: { state: "idle" as const }, approvals: [], files: [] };
+    const base = { botId: "kimberly", activity: { state: "idle" as const }, approvals: [], files: [], draft: null, readPosition: null };
     const diagnostic: Message = { id: "d", role: "assistant", text: "Internal failure details", origin: { kind: "diagnostic", visibility: "activity" } };
     expect(watchReplies({}, { ...base, messages: [diagnostic] }, false).reply).toBeUndefined();
     const answer: Message = { ...diagnostic, id: "s", text: "Your reminder is ready.", origin: { kind: "scheduled", visibility: "conversation" } };

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, write } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
+import { integrationFlowKey } from "../app/storage";
 import { FormMessage } from "./ui/form-message";
 import type { Bot } from "../shared/types";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../shared/integrations";
@@ -41,14 +42,23 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   const [callback, setCallback] = useState("");
   const [custom, setCustom] = useState(false);
   const [mcp, setMcp] = useState({ name: "", url: "", auth: "none", token: "" });
-  const flowKey = `integration-flow:${accountScope ? `${accountScope}:` : ""}${profile}`;
+  const flowKey = integrationFlowKey(accountScope, profile);
   const connections = useResource<IntegrationCatalog>(`/integrations?profile=${encodeURIComponent(profile)}`, { wake: true });
   const { data: catalog, loading, reload: refresh } = connections;
   const action = useAction();
   const { busy } = action;
   // Which control started the work, to label it "Working…".
   const [working, setWorking] = useState("");
-  const error = action.error || connections.error;
+  // A pending sign-in is checked until it finishes. A check that lands after the flow changed is dropped.
+  const pendingFlow = flow?.status === "pending" ? flow.flowId : undefined;
+  const flowCheck = useResource<IntegrationFlow>(pendingFlow ? `/integrations/flows/${encodeURIComponent(pendingFlow)}?profile=${encodeURIComponent(profile)}` : null, {
+    pollMs: 2500,
+    onData: next => {
+      setFlow(next);
+      if (next.status !== "pending") { try { sessionStorage.removeItem(flowKey); } catch {} void refresh(); }
+    },
+  });
+  const error = action.error || connections.error || flowCheck.error;
   // A refresh someone asks for answers "Refresh status before trying again", so it retires that error.
   const refreshStatus = () => { action.setError(""); void refresh(); };
   useEffect(() => {
@@ -56,21 +66,6 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
     try { saved = sessionStorage.getItem(flowKey); } catch { /* Private browsing can disable storage. */ }
     if (saved) setFlow({ flowId: saved, kind: "instructions", status: "pending", message: "Restoring the sign-in status…" });
   }, [flowKey]);
-  useEffect(() => {
-    if (!flow?.flowId || flow.status !== "pending") return;
-    let current = true;
-    const poll = async () => {
-      try {
-        const next = await api<IntegrationFlow>(`/integrations/flows/${encodeURIComponent(flow.flowId!)}?profile=${encodeURIComponent(profile)}`);
-        if (!current) return;
-        setFlow(next);
-        if (next.status !== "pending") { try { sessionStorage.removeItem(flowKey); } catch {} void refresh(); }
-      } catch (e) { if (current) action.setError((e as Error).message); }
-    };
-    void poll();
-    const timer = setInterval(() => void poll(), 2500);
-    return () => { current = false; clearInterval(timer); };
-  }, [flow?.flowId, flow?.status, profile, refresh, flowKey, action.setError]);
   const acceptFlow = (next: IntegrationFlow) => {
     setFlow(next);
     if (next.flowId && next.status === "pending") try { sessionStorage.setItem(flowKey, next.flowId); } catch {}
@@ -97,7 +92,8 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
       const path = `/integrations/flows/${encodeURIComponent(flowId)}`;
       const next = cancel ? await api<IntegrationFlow>(`${path}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" })
         : await write<IntegrationFlow>(`${path}/callback`, { profile, callbackUrl: callback });
-      if (current()) { setFlow(next); setCallback(""); await refresh(); }
+      // A check that started before this answer could otherwise replace it with the older state.
+      if (current()) { flowCheck.invalidate(); setFlow(next); setCallback(""); await refresh(); }
       if (next.status !== "pending") try { sessionStorage.removeItem(flowKey); } catch {}
     });
   };

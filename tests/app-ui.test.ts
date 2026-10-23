@@ -11,13 +11,13 @@ import { FakeEventSource } from "./fake-event-source";
 import { contentHash } from "../src/app/draft-merge";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
-vi.mock("../src/client-api", async (original) => ({
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn(),
   write: vi.fn().mockResolvedValue({}),
   uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
-}));
+}))(original)));
 const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.

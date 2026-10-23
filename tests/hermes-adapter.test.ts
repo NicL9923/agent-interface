@@ -1,4 +1,5 @@
 import { Store } from "../src/server/store.js";
+import { IncompleteCreationError } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
@@ -513,6 +514,13 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
     expect(await runtime.status()).toMatchObject({connected: false, code: 'unauthorized'});
     expect(sockets).toHaveLength(0);
+  });
+  it('names the profile it created when configuration fails and Hermes refuses to remove it',async()=>{
+    rpcErrors.set('profiles.configure',{code:-1,message:'Disk full'});
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {status: 403})));
+    const failure = await runtime.saveBot({name:'Night Ledger',instructions:'',model:'Inherited',shared:false}).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(IncompleteCreationError);
+    expect(failure).toMatchObject({createdBotId: 'night-ledger'});
   });
   it('creates a bot without installing a machine-wide shell alias',async()=>{
     await runtime.saveBot({name:'Shared',instructions:'Local instructions',model:'Inherited',shared:true});

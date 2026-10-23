@@ -8,9 +8,16 @@ import argparse
 import json
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / ".agents/tools"))
+import host_access  # noqa: E402
+
+EVIDENCE = REPO / "docs/evidence/hermes-dashboard-managed-probe.json"
+# Readiness polls for up to about four minutes, and stopping the dashboard can take 15 seconds more.
+TIMEOUT = 600
 REMOTE = r'''
 import json, os, secrets, signal, socket, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
@@ -77,18 +84,30 @@ result["checks"]["only_probe_process_stopped"] = True
 print(json.dumps(result))
 '''
 
-# Ship every add-on module: the add-on loads its siblings by file, so a missing one fails at startup.
-files = {path.name: base64.b64encode(path.read_bytes()).decode() for path in sorted((REPO / "src/hermes").glob("*.py"))}
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--ssh-host", required=True)
-parser.add_argument("--launcher", default="~/.local/bin/hermes")
-parser.add_argument("--hermes-home", default="~/.hermes")
-parser.add_argument("--source", default="~/.hermes/hermes-agent")
-args = parser.parse_args()
-payload = {"files": files, "inlineInstructions": base64.b64encode((REPO / "src/shared/inline-ui-instructions.json").read_bytes()).decode(), "hermesHome": args.hermes_home, "launcher": args.launcher, "source": args.source}
-result = subprocess.run(["ssh", args.ssh_host, "python3 -c " + shlex.quote(REMOTE)], input=json.dumps(payload), text=True, capture_output=True, check=False)
-if result.returncode:
-    raise SystemExit(result.stderr)
-evidence = json.loads(result.stdout)
-(REPO / "docs/evidence/hermes-dashboard-managed-probe.json").write_text(json.dumps(evidence, indent=2) + "\n")
-print(json.dumps(evidence, indent=2))
+def bundle():
+    """Every add-on module, base64-encoded by name. The add-on loads its siblings by file,
+    so a missing one fails at startup."""
+    return {path.name: base64.b64encode(path.read_bytes()).decode() for path in sorted((REPO / "src/hermes").glob("*.py"))}
+
+
+def main(argv=None, evidence=EVIDENCE):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ssh-host", required=True)
+    parser.add_argument("--launcher", default="~/.local/bin/hermes")
+    parser.add_argument("--hermes-home", default="~/.hermes")
+    parser.add_argument("--source", default="~/.hermes/hermes-agent")
+    args = parser.parse_args(argv)
+    payload = {"files": bundle(), "inlineInstructions": base64.b64encode((REPO / "src/shared/inline-ui-instructions.json").read_bytes()).decode(), "hermesHome": args.hermes_home, "launcher": args.launcher, "source": args.source}
+    try:
+        result = host_access.ssh(args.ssh_host, "python3 -c " + shlex.quote(REMOTE), input=json.dumps(payload), timeout=TIMEOUT, check=False, capture=True)
+    except subprocess.TimeoutExpired as error:
+        raise SystemExit(f"The dashboard probe on {args.ssh_host} did not finish within {TIMEOUT} seconds.") from error
+    if result.returncode:
+        raise SystemExit(result.stderr)
+    found = json.loads(result.stdout)
+    evidence.write_text(json.dumps(found, indent=2) + "\n")
+    print(json.dumps(found, indent=2))
+
+
+if __name__ == "__main__":
+    main()

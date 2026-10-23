@@ -7,10 +7,10 @@ import { useSession } from "../src/app/use-session";
 import type { Bootstrap, Preferences } from "../src/shared/types";
 import { mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
   changeStream: () => ({ open() {}, close() {} }),
-}));
+}))(original)));
 let root: Root, container: HTMLDivElement, session: ReturnType<typeof useSession>;
 function Harness() {
   session = useSession({ onIdentityChange() {}, onFirstBootstrap() {}, onError() {}, onBotGone() {} });

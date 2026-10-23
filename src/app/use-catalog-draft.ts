@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, write } from "../client-api";
+import { request } from "../client-api";
 import type { Skill, Tool } from "../shared/types";
 
 export type CatalogKind = "tools" | "skills";
@@ -33,7 +33,7 @@ export function useCatalogDraft(kind: CatalogKind, { botId, active, supported, r
     if (!supported) return;
     const controller = new AbortController();
     setStatus("loading");
-    api<CatalogItem[]>(`/bots/${encodeURIComponent(botId)}/${kind}`, { signal: controller.signal })
+    request(`GET /bots/:id/${kind}`, { params: { id: botId }, signal: controller.signal })
       .then(loaded => {
         if (controller.signal.aborted) return;
         setItems(loaded);
@@ -58,7 +58,7 @@ export function useCatalogDraft(kind: CatalogKind, { botId, active, supported, r
     /** Saves the enabled choices and makes them the new baseline. */
     async save(id: string) {
       const submitted = items;
-      await write(`/bots/${encodeURIComponent(id)}/${kind}`, { ids: submitted.filter(item => item.enabled).map(item => item.id) }, "PUT");
+      await request(`PUT /bots/:id/${kind}`, { params: { id }, body: { ids: submitted.filter(item => item.enabled).map(item => item.id) } });
       setBaseline(enabledKey(submitted));
     },
   };

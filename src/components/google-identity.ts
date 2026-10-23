@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState, type RefObject } from "react";
+
 export type GoogleIdentity = { accounts: { id: {
   initialize: (options: unknown) => void;
   renderButton: (element: HTMLElement, options: unknown) => void;
@@ -41,4 +43,31 @@ export function renderGoogleButton(client: GoogleIdentity, element: HTMLElement,
   });
   element.replaceChildren();
   client.accounts.id.renderButton(element, { theme: "outline", size: "large" });
+}
+
+/**
+ * Renders the Google button into element while clientId is set, and loads again when attempt
+ * changes. onCredential hears only the current button: a load that finishes after clientId
+ * changed or the component unmounted renders nothing and reports nothing.
+ */
+export function useGoogleButton(element: RefObject<HTMLElement | null>, clientId: string | undefined, attempt: number,
+  onCredential: (credential: string) => void) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const latest = useRef(onCredential);
+  latest.current = onCredential;
+  useEffect(() => {
+    if (!clientId) return;
+    let live = true;
+    setLoading(true); setError("");
+    loadGoogleIdentity().then(client => {
+      if (!live || !element.current) return;
+      renderGoogleButton(client, element.current, clientId, credential => { if (live) latest.current(credential); });
+      setLoading(false);
+    }, (cause: Error) => {
+      if (live) { setLoading(false); setError(cause.message); }
+    });
+    return () => { live = false; };
+  }, [clientId, attempt, element]);
+  return { loading, error };
 }

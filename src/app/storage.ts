@@ -1,12 +1,7 @@
-import type { Conversation, FileRef } from "../shared/types";
-export type SavedConversation = Conversation & {
-  draft?: { text: string; attachments: FileRef[] };
-  readPosition?: { scrollTop?: number; messageId?: string };
-  /** Messages before the requested window, present only when one was requested. */
-  earlier?: number;
-  /** Files only those earlier messages carry, listed on demand. */
-  earlierFiles?: number;
-};
+import type { FileRef } from "../shared/types";
+import type { ConversationPage } from "../shared/api";
+/** A conversation page as the server answers it, with this person's draft and read position. */
+export type SavedConversation = ConversationPage;
 export type Draft = {
   text: string;
   attachments: FileRef[];
@@ -51,10 +46,19 @@ export type Pending = {
   /** The draft revision this message was written on, so the server clears a draft whose final edits were never saved. */
   draftBaseRevision?: number;
 };
+// Every key this app keeps in browser storage. The names are persisted: renaming one orphans what a
+// browser already saved, such as a request whose outcome is uncertain and must be retried, not resent.
 export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
+export const goalResumeKey = (user: string, bot: string) => `automation-goal-resume:${user}:${bot}`;
+/** In sessionStorage: a sign-in flow belongs to this tab. */
+export const integrationFlowKey = (user: string, profile: string) => `integration-flow:${user ? `${user}:` : ""}${profile}`;
+export const groupCreateKey = (user: string) => `agent-interface:group-create:${user}`;
+export const groupSendKey = (user: string, room: string) => `agent-interface:group-send:${user}:${room}`;
+export const routineTrialKey = (user: string, routine: string) => `agent-interface:routine-trial:${user}:${routine}`;
+export const notificationPromptKey = "agent-interface:notifications-prompt:v1";
 export function localRead<T>(key: string): T | null {
   try {
     return JSON.parse(localStorage.getItem(key) || "null");

@@ -6,7 +6,7 @@ import { api, ApiError, write } from "../src/client-api";
 import { AutomationPanel, LearningPanel } from "../src/components/AutomationPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 let root: Root, container: HTMLDivElement;
 const bots = [{ id: "ranch", name: "Ranch", model: "fixture", shared: true, activity: "idle" as const }];
 const initial = (): AutomationOverview => ({ botId: "ranch", owner: "Hermes", canManageTriggers: true,
@@ -48,7 +48,7 @@ it("requires conversation review before replacing an uncertain resume with a fre
   const value = initial();
   const previous = crypto.randomUUID();
   value.goals.resume = { requestId: previous, status: "uncertain" };
-  vi.mocked(api).mockResolvedValue(value);
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
   vi.mocked(write).mockResolvedValue({ ...value, goals: { ...value.goals, resume: { requestId: "accepted", status: "accepted" } } });
   await work();
   expect(button("Resume goal").disabled).toBe(true);
@@ -99,7 +99,7 @@ it("requires an explicit whole-goal replacement before discarding native goal de
 it("clears task assignment explicitly and shows when the board is truncated", async () => {
   const value = initial();
   value.tasks = { supported: true, truncated: true, limit: 100, items: [{ id: "task", title: "Gate", body: "Inspect", status: "blocked", priority: 0, assignee: "ranch", owner: "ranch", dependencies: [] }] };
-  vi.mocked(api).mockResolvedValue(value); vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value); vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
   await work();
   expect(container.textContent).toContain("Showing the newest 100 visible tasks");
   await click("Edit task");
@@ -151,4 +151,16 @@ it("reports unsupported native capabilities without editable controls", async ()
   vi.mocked(api).mockResolvedValue(value);
   await work(); expect(container.textContent).toContain("Update and qualify Hermes first.");
   expect(button("New task")).toBeUndefined(); expect(button("Resume goal")).toBeUndefined(); expect(button("New event trigger")).toBeUndefined();
+});
+
+it("retires a failed status refresh once a change and its follow-up status succeed", async () => {
+  await work();
+  vi.mocked(api).mockRejectedValueOnce(new Error("Hermes is restarting."));
+  await click("Refresh status");
+  expect(container.textContent).toContain("Hermes is restarting.");
+  vi.mocked(write).mockResolvedValueOnce(initial());
+  await click("Resume goal");
+  expect(container.textContent).toContain("Saved in Hermes.");
+  expect(container.textContent).not.toContain("Hermes is restarting.");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });

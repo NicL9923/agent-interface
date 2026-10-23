@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AdvancedRoutineFields } from "../src/components/AdvancedRoutineFields";
 import { api } from "../src/client-api";
 import type { Routine } from "../src/shared/types";
-vi.mock("../src/client-api", () => ({ api: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: vi.fn() }))()));
 let container: HTMLDivElement;
 let root: Root;
 let draft: Omit<Routine, "id">;

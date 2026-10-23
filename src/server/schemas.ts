@@ -1,10 +1,21 @@
 import { z } from "zod";
 import { avatarAccessories, avatarEyes, avatarShapes, mascotFamilies } from "../shared/types.js";
-import type { Avatar, BotInput, Preferences } from "../shared/types.js";
+import type { Avatar, BotInput, FileRef, Preferences } from "../shared/types.js";
 
 // Request schemas whose output is a shared type. Only the server validates, so zod stays out of
 // the client bundle; the checks at the end keep each schema and its type in step.
 export const id = z.string().min(1).max(200);
+export const fileRef = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(8192)
+    .regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+  name: z.string().max(255),
+  mime: z.string().max(100),
+  size: z.number().optional(),
+  url: z.string().optional(),
+});
 export const apnsToken = z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/);
 const scale = z.number().min(0.6).max(1.5).optional();
 const face = {
@@ -85,5 +96,6 @@ type Assert<T extends true> = T;
 export type SchemaChecks = [
   Assert<Same<z.infer<typeof avatar>, Avatar>>,
   Assert<Same<z.infer<typeof botInput>, BotInput>>,
+  Assert<Same<z.infer<typeof fileRef>, FileRef>>,
   Assert<Same<z.infer<typeof preferences>, Preferences>>,
 ];

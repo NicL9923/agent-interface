@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
-import { api, ApiError, changeStream, clearResponseCache, setCsrf, write } from "../client-api";
+import { ApiError, changeStream, clearResponseCache, request as apiRequest, setCsrf } from "../client-api";
 import { preferenceQueue } from "./preference-queue";
 type SessionEvents = {
   onIdentityChange(): void;
@@ -42,7 +42,7 @@ export function useSession(events: SessionEvents) {
     const marked = preferences.current?.mark() ?? -1;
     const request = (async () => {
       try {
-        const next = await api<Bootstrap>("/bootstrap?roster=lean");
+        const next = await apiRequest("GET /bootstrap", { query: { roster: "lean" } });
         if (epoch !== identityEpoch.current) return null;
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           nextIdentity();
@@ -97,7 +97,7 @@ export function useSession(events: SessionEvents) {
     if (checkingConnection) return;
     setCheckingConnection(true);
     try {
-      await write("/connection/retry", {});
+      await apiRequest("POST /connection/retry");
       await refresh();
       window.dispatchEvent(new Event("agent-interface:reconnect"));
     } catch {
@@ -153,7 +153,7 @@ export function useSession(events: SessionEvents) {
   const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
   preferences.current ??= preferenceQueue({
     // Model stars have their own endpoint; leaving them out keeps the server's current list.
-    send: ({ modelFavorites: _, ...value }) => write<Preferences>("/preferences", value, "PATCH"),
+    send: ({ modelFavorites: _, ...value }) => apiRequest("PATCH /preferences", { body: value }),
     apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
     failed: error => handlers.current.onError(error.message),
     account: () => identityEpoch.current,

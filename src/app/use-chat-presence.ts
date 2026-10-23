@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { write } from "../client-api";
+import { request } from "../client-api";
 /** The server forgets a client after 45 seconds without a beat. */
 const HEARTBEAT_MS = 15_000;
 /** A focused window nobody has touched for this long no longer counts as reading. */
@@ -11,7 +11,7 @@ const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
 // One report at a time, so leaving one chat can never land after arriving in the next.
 let reports = Promise.resolve();
 function report(botId: string, state: "active" | "left" | "idle") {
-  reports = reports.then(() => write(`/bots/${encodeURIComponent(botId)}/presence`, { client, state }, "PUT")).then(() => {}, () => {});
+  reports = reports.then(() => request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state } })).then(() => {}, () => {});
 }
 
 /** Closes this browser's notifications for a chat now on screen. Routine results open elsewhere. */

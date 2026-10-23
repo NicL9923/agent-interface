@@ -1,3 +1,4 @@
+import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type ApiResponse, type ApiRoute } from "./shared/api";
 import type { ErrorCode } from "./shared/errors";
 import type { Inflight } from "./shared/types";
 let csrf = "";
@@ -113,6 +114,24 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
 }
 export function write<T>(path: string, value: unknown, method = "POST", init?: RequestInit) {
   return api<T>(path, { ...init, method, body: JSON.stringify(value) });
+}
+type Fields<K extends ApiRoute> =
+  & (keyof ApiParams<K> extends never ? { params?: undefined } : { params: ApiParams<K> })
+  & (ApiBody<K> extends undefined ? { body?: undefined } : { body: ApiBody<K> })
+  & (ApiQuery<K> extends undefined ? { query?: undefined } : { query?: ApiQuery<K> });
+export type RequestOptions<K extends ApiRoute> = Fields<K> & { signal?: AbortSignal };
+/**
+ * Calls a route from the shared map, typed by its method and path: `request("GET /bots/:id/draft",
+ * { params: { id } })` answers a SavedDraft or null. It reads and caches like api().
+ */
+export function request<K extends ApiRoute>(route: K, ...[options]: {} extends RequestOptions<K> ? [RequestOptions<K>?] : [RequestOptions<K>]) {
+  const { params, body, query, signal } = (options ?? {}) as { params?: ApiParams<K>; body?: unknown; query?: ApiQuery<K>; signal?: AbortSignal };
+  const { method } = routeParts(route);
+  return api<ApiResponse<K>>(routeUrl(route, params ?? ({} as ApiParams<K>), query), {
+    ...(method === "GET" ? {} : { method }),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal,
+  });
 }
 /**
  * Runs refresh every intervalMs while the page is visible. A hidden page pauses it,

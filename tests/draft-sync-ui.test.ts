@@ -8,7 +8,7 @@ import { contentHash } from '../src/app/draft-merge';
 import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shared/types';
 import { advance, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}));
+vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}))(original)));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 
 // The app server's draft rules, for one person: the phone acts on it directly.

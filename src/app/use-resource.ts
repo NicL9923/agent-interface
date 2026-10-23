@@ -10,7 +10,7 @@ export type ResourceOptions<T> = {
   pollMs?: number;
   /** Refreshes quietly when the window regains focus, the network returns, or the page is shown. */
   wake?: boolean;
-  /** Turns a failure into the text shown. Defaults to the error's message. */
+  /** Turns a failure into the text shown. Defaults to the error's message. It runs only for a current load. */
   errorMessage?: (cause: unknown) => string;
   /** Returns text to show instead of making the request, such as while offline. */
   skip?: () => string | undefined;
@@ -18,6 +18,8 @@ export type ResourceOptions<T> = {
   validate?: (value: T) => void;
   /** Runs for each accepted response, before it is stored. */
   onData?: (value: T) => void;
+  /** Loads the value for path instead of a JSON GET of it. It must stop when signal aborts. */
+  load?: (path: string, signal: AbortSignal) => Promise<T>;
 };
 
 export type Resource<T> = {
@@ -27,7 +29,10 @@ export type Resource<T> = {
   loading: boolean;
   /** Loads again now and resolves when that load settles. It never rejects: failures land in `error`. */
   reload: () => Promise<void>;
-  /** Replaces the data with a fresher copy and drops any load still running, so it cannot overwrite this. */
+  /**
+   * Replaces the data with a fresher copy, as a load would: it clears the load error and drops any
+   * load still running, so that load cannot overwrite this.
+   */
   setData: Dispatch<SetStateAction<T | null>>;
   /** Drops any load still running and ignores its result. */
   invalidate: () => void;
@@ -36,8 +41,8 @@ export type Resource<T> = {
 /**
  * Loads a GET path and keeps its result, error and loading state. Each load aborts the one
  * before it, and nothing from an old path, an unmounted component or a dropped load is stored.
- * A null path has nothing to load and no data. Quiet refreshes (poll, wake) never stack and
- * never raise `loading`.
+ * A null path has nothing to load and no data, and a reload kept from an older path does nothing.
+ * Quiet refreshes (poll, wake) never stack and never raise `loading`.
  */
 export function useResource<T>(path: string | null, options: ResourceOptions<T> = {}): Resource<T> {
   const { deps = [], enabled = true, pollMs, wake } = options;
@@ -49,7 +54,8 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
   latest.current = options;
   const inflight = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(true);
-  const previousPath = useRef(path);
+  // The path whose data this hook holds. A reload kept from a render for another path does nothing.
+  const shownPath = useRef(path);
 
   const invalidate = useCallback(() => {
     inflight.current?.abort();
@@ -57,7 +63,7 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     setLoading(false);
   }, []);
   const load = useCallback(async (quiet: boolean) => {
-    if (path === null || !mounted.current || quiet && inflight.current) return;
+    if (path === null || path !== shownPath.current || !mounted.current || quiet && inflight.current) return;
     const skipped = latest.current.skip?.();
     // A skipped load settles at once, unless a load already running still owns `loading`.
     if (skipped) { setError(skipped); if (!inflight.current) setLoading(false); return; }
@@ -65,7 +71,8 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     const controller = inflight.current = new AbortController();
     if (!quiet) { setLoading(true); setError(""); }
     try {
-      const value = await api<T>(path, { signal: controller.signal });
+      const custom = latest.current.load;
+      const value = await (custom ? custom(path, controller.signal) : api<T>(path, { signal: controller.signal }));
       if (controller.signal.aborted) return;
       latest.current.validate?.(value);
       latest.current.onData?.(value);
@@ -79,14 +86,14 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     }
   }, [path]);
   const reload = useCallback(() => load(false), [load]);
-  const replace: Dispatch<SetStateAction<T | null>> = useCallback(value => { invalidate(); setData(value); }, [invalidate]);
+  const replace: Dispatch<SetStateAction<T | null>> = useCallback(value => { invalidate(); setData(value); setError(""); }, [invalidate]);
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
   useEffect(() => {
-    if (previousPath.current !== path) { previousPath.current = path; setData(null); setError(""); }
+    if (shownPath.current !== path) { shownPath.current = path; setData(null); setError(""); }
     if (!active) { setLoading(false); return; }
     void load(false);
     const quiet = () => void load(true);

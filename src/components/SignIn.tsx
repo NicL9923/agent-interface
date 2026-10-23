@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import { api, write } from "../client-api";
+import { useRef, useState } from "react";
+import { write } from "../client-api";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
 import { Avatar } from "./Avatar";
 import { Button } from "./ui/button";
 import { NativeSelect } from "./ui/native-select";
 import { SetupCommand } from "./ConnectionPanel";
-import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
+import { useGoogleButton } from "./google-identity";
 import "./sign-in.css";
 
 export type AuthConfig = { localDevAuth: boolean; googleClientId?: string };
@@ -23,63 +25,23 @@ export function AvatarTrio() {
 }
 
 export function SignIn({ onSuccess }: { onSuccess: () => void }) {
-  const [config, setConfig] = useState<AuthConfig | null>(null);
-  const [error, setError] = useState("");
-  const [configError, setConfigError] = useState("");
   const [member, setMember] = useState("one");
   const [attempt, setAttempt] = useState(0);
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
   const google = useRef<HTMLDivElement>(null);
   const success = useRef(onSuccess);
   success.current = onSuccess;
-  useEffect(() => {
-    let live = true;
-    let loading = false;
-    const load = async () => {
-      if (loading || document.visibilityState === "hidden") return;
-      loading = true;
-      try {
-        const next = await api<AuthConfig>("/auth/config");
-        if (live) { setConfig(next); setConfigError(""); }
-      } catch (e) {
-        if (live) setConfigError((e as Error).message);
-      } finally { loading = false; }
-    };
-    void load();
-    const timer = setInterval(() => void load(), 8000);
-    window.addEventListener("online", load);
-    document.addEventListener("visibilitychange", load);
-    return () => {
-      live = false;
-      clearInterval(timer);
-      window.removeEventListener("online", load);
-      document.removeEventListener("visibilitychange", load);
-    };
-  }, [attempt]);
-  useEffect(() => {
-    if (!config?.googleClientId) return;
-    const clientId = config.googleClientId;
-    let live = true;
-    setGoogleLoading(true);
-    loadGoogleIdentity().then(client => {
-      if (!live || !google.current) return;
-      renderGoogleButton(client, google.current, clientId, async credential => {
-        if (!live) return;
-        setBusy(true); setError("");
-        try {
-          await write("/auth/google", { credential });
-          if (live) success.current();
-        } catch (e) {
-          if (live) setError((e as Error).message);
-        } finally { if (live) setBusy(false); }
-      });
-      setGoogleLoading(false);
-    }, (e: Error) => {
-      if (live) { setGoogleLoading(false); setError(e.message); }
-    });
-    return () => { live = false; };
-  }, [config?.googleClientId, attempt]);
+  // Checked again while the page is shown, so finishing setup elsewhere shows up here.
+  const auth = useResource<AuthConfig>("/auth/config", { deps: [attempt], pollMs: 8000, wake: true });
+  const { data: config, error: configError } = auth;
+  const signing = useAction();
+  const { busy } = signing;
+  const signIn = (path: string, body: unknown) => signing.run(async ({ current }) => {
+    await write(path, body);
+    if (current()) success.current();
+  });
+  const button = useGoogleButton(google, config?.googleClientId, attempt, credential => void signIn("/auth/google", { credential }));
+  const googleLoading = button.loading;
+  const error = signing.error || button.error;
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
   return <main className={`welcome sign-in${needsSetup ? " needs-setup" : ""}`}>
     <header className="sign-in-brand"><span className="brand-mark" aria-hidden="true">w.</span>WildBots</header>
@@ -107,10 +69,7 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
         {busy && <p className="sign-in-status" role="status">Signing you in…</p>}
         {config?.localDevAuth && <form onSubmit={event => {
           event.preventDefault();
-          if (busy) return;
-          setBusy(true); setError("");
-          void write("/auth/local", { member }).then(() => success.current())
-            .catch(e => setError(e.message)).finally(() => setBusy(false));
+          void signIn("/auth/local", { member });
         }}>
           <label>Sign in as
             <NativeSelect value={member} onChange={event => setMember(event.target.value)}>
@@ -123,7 +82,7 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
         </form>}
         {(error || configError) && <div className="sign-in-error">
           <p role="alert">{error || configError}</p>
-          <Button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</Button>
+          <Button onClick={() => { signing.setError(""); setAttempt(value => value + 1); }}>Try again</Button>
         </div>}
       </div>
     </div>

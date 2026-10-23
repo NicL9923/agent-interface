@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createApnsSender } from "../src/server/apns.js";
+import { ApnsError, createApnsSender } from "../src/server/apns.js";
 import { loadConfig, type Config } from "../src/server/config.js";
 import { ARMED_MS, FINISHED_MS, LiveActivities, type LiveState } from "../src/server/live-activity.js";
 import { Store } from "../src/server/store.js";
@@ -12,7 +12,7 @@ import { defaultPreferences, type ActivityState, type Bot, type Conversation } f
 const apns = (): NonNullable<Config["apns"]> => ({ teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" });
 type Push = { token: string; payload: { aps: { event: string; timestamp: number; "content-state": LiveState; "stale-date"?: number; "dismissal-date"?: number } }; priority: number };
 
-let clock: number, store: Store, pushes: Push[], failure: (Error & { statusCode?: number; reason?: string }) | undefined;
+let clock: number, store: Store, pushes: Push[], failure: Error | undefined;
 let bots: Bot[], conversations: Record<string, Partial<Conversation["activity"]>>, live: LiveActivities;
 let duringSend: (() => void) | undefined;
 const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({ id, name: id[0].toUpperCase() + id.slice(1), shared: true, model: "test", activity, ...extra });
@@ -141,14 +141,14 @@ describe("aggregate Live Activity", () => {
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
     set("kitchen", "working");
     register("one");
-    failure = Object.assign(new Error("APNs outage"), { statusCode: 503 });
+    failure = new ApnsError("APNs outage", 503);
     await expect(tick()).resolves.toBeUndefined();
     expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
     expect(store.liveActivities("sandbox", clock + 15_000)).toHaveLength(1);
     failure = undefined;
     await tick(15_000);
     expect(rows()).toEqual(["kitchen:working"]);
-    failure = Object.assign(new Error("Gone"), { statusCode: 410 });
+    failure = new ApnsError("Gone", 410);
     set("kitchen", "waiting");
     await tick(1000);
     expect(store.liveActivities("sandbox", clock + 3_600_000)).toHaveLength(0);
@@ -168,7 +168,7 @@ describe("aggregate Live Activity", () => {
   it.each([undefined, 410, 413, 400])("keeps a replacement token when old cleanup finishes with %s", async statusCode => {
     const oldToken = "ab".repeat(32), replacement = "cd".repeat(32);
     register("one", [], oldToken);
-    if (statusCode) failure = Object.assign(new Error("Old activity rejected"), { statusCode, reason: "BadDeviceToken" });
+    if (statusCode) failure = new ApnsError("Old activity rejected", statusCode, "BadDeviceToken");
     duringSend = () => register("one", ["kitchen"], replacement);
     await tick();
     expect(store.liveActivities("sandbox", clock)).toMatchObject([{ token: replacement, armed: ["kitchen"], sentAt: 0 }]);
@@ -207,7 +207,7 @@ describe("aggregate Live Activity", () => {
     expect(Buffer.byteLength(JSON.stringify(last().payload))).toBeLessThanOrEqual(4096);
     expect(last().payload.aps["content-state"].activeCount).toBe(4);
     expect(last().payload.aps["content-state"].rows.length).toBeGreaterThan(0);
-    failure = Object.assign(new Error("PayloadTooLarge"), { statusCode: 413 });
+    failure = new ApnsError("PayloadTooLarge", 413);
     set(bots[0].id, "waiting");
     await tick(1000);
     expect(store.liveActivities("sandbox", clock + 3_600_000)).toHaveLength(0);
@@ -247,7 +247,7 @@ it("sends Live Activity pushes with their own topic, push type and priority", as
     expect(seen[0].headers).toMatchObject({ ":path": `/3/device/${target.token}`, "apns-topic": "test.agentinterface.push-type.liveactivity", "apns-push-type": "liveactivity", "apns-priority": "5" });
     expect(JSON.parse(seen[0].body)).toEqual({ aps: { event: "update" } });
     await expect(sender.liveActivity({ ...target, environment: "production" }, {}, 10)).rejects.toThrow("environment");
-    await expect(sender.liveActivity(target, { detail: '🐎'.repeat(2000) }, 5)).rejects.toMatchObject({ statusCode: 413 });
+    await expect(sender.liveActivity(target, { detail: '🐎'.repeat(2000) }, 5)).rejects.toMatchObject({ apnsStatus: 413, reason: "PayloadTooLarge" });
     expect(seen).toHaveLength(1);
   } finally { sender.close(); rmSync(dir, { recursive: true }); }
 });

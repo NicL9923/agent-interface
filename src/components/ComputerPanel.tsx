@@ -7,7 +7,9 @@ import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
 import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
-import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
+import { useGoogleButton } from "./google-identity";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
 import { Icon } from "./Icon";
 import type { AuthConfig } from "./SignIn";
 import "@xterm/xterm/css/xterm.css";
@@ -214,62 +216,24 @@ function Unavailable({ icon, title, detail }: { icon: "computer" | "terminal"; t
 }
 
 function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
-  const [config, setConfig] = useState<AuthConfig | null>(null);
-  const [member, setMember] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const auth = useResource<AuthConfig>("/auth/config", { deps: [attempt], errorMessage: cause => failure(cause, "Can't check sign-in options. Try again.") });
+  const config = auth.data;
+  // Local test accounts confirm as the signed-in member; the server checks it is the same one.
+  const local = useResource<{ user: { id: string } }>(config?.localDevAuth ? "/bootstrap" : null);
+  const member = local.data ? /^local-(one|two)$/.exec(local.data.user.id)?.[1] ?? null : null;
   const button = useRef<HTMLDivElement>(null);
   const confirmed = useRef(onConfirmed);
   confirmed.current = onConfirmed;
-  const live = useRef(true);
-  useEffect(() => {
-    live.current = true;
-    return () => { live.current = false; };
-  }, []);
-
-  const confirm = useCallback(async (body: { credential: string } | { member: string }) => {
-    setBusy(true); setError("");
-    try {
-      await write("/auth/confirm", body);
-      if (live.current) confirmed.current();
-    } catch (cause) {
-      if (live.current) setError(failure(cause, "Couldn't confirm it's you. Check your connection and try again."));
-    } finally { if (live.current) setBusy(false); }
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    api<AuthConfig>("/auth/config", { signal: controller.signal }).then(setConfig, cause => {
-      if (!controller.signal.aborted) setError(failure(cause, "Can't check sign-in options. Try again."));
-    });
-    return () => controller.abort();
-  }, [attempt]);
-
-  // Local test accounts confirm as the signed-in member; the server checks it is the same one.
-  useEffect(() => {
-    if (!config?.localDevAuth) return;
-    const controller = new AbortController();
-    api<{ user: { id: string } }>("/bootstrap", { signal: controller.signal })
-      .then(boot => setMember(/^local-(one|two)$/.exec(boot.user.id)?.[1] ?? null), () => {});
-    return () => controller.abort();
-  }, [config?.localDevAuth]);
-
-  useEffect(() => {
-    const clientId = config?.googleClientId;
-    if (!clientId) return;
-    let current = true;
-    setGoogleLoading(true);
-    loadGoogleIdentity().then(client => {
-      if (!current || !button.current) return;
-      renderGoogleButton(client, button.current, clientId, credential => { if (current) void confirm({ credential }); });
-      setGoogleLoading(false);
-    }, (cause: Error) => {
-      if (current) { setGoogleLoading(false); setError(cause.message); }
-    });
-    return () => { current = false; };
-  }, [config?.googleClientId, attempt, confirm]);
+  const confirming = useAction();
+  const { busy } = confirming;
+  const confirm = (body: { credential: string } | { member: string }) => confirming.run(async ({ current }) => {
+    await write("/auth/confirm", body);
+    if (current()) confirmed.current();
+  }, { onError: cause => failure(cause, "Couldn't confirm it's you. Check your connection and try again.") });
+  const google = useGoogleButton(button, config?.googleClientId, attempt, credential => void confirm({ credential }));
+  const googleLoading = google.loading;
+  const error = auth.error || confirming.error || google.error;
 
   return <div className="computer-unavailable computer-confirm">
     <span className="computer-empty-icon"><Icon name="terminal" size={34} /></span>
@@ -282,7 +246,7 @@ function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
     {member && <Button className="primary" disabled={busy} onClick={() => void confirm({ member })}>Confirm local member {member}</Button>}
     {error && <div className="computer-confirm-error">
       <p role="alert">{error}</p>
-      <Button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</Button>
+      <Button onClick={() => { confirming.setError(""); setAttempt(value => value + 1); }}>Try again</Button>
     </div>}
   </div>;
 }

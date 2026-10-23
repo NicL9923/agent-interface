@@ -24,3 +24,14 @@ export type ErrorCode =
 
 /** Sent when a conversation's interrupted task needs review before another message starts. */
 export const interruptionPendingMessage = "Review the interrupted task before starting another message.";
+
+/**
+ * A runtime created an assistant, then could neither finish setting it up nor remove it.
+ * It still exists as `createdBotId`, so the app keeps a record of who may see it.
+ */
+export class IncompleteCreationError extends Error {
+  constructor(message: string, readonly createdBotId: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "IncompleteCreationError";
+  }
+}

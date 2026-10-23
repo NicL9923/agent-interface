@@ -6,7 +6,7 @@ import { DiscoveryPanel } from '../src/components/DiscoveryPanel';
 import { ApiError, api } from '../src/client-api';
 import type { Bootstrap, Message } from '../src/shared/types';
 import { mountRoot, typeInto } from './ui-harness';
-vi.mock('../src/client-api',async(importOriginal)=>({...await importOriginal<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}));
+vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async(importOriginal)=>({...await importOriginal<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
 let root:Root;let container:HTMLDivElement;
 beforeEach(()=>{({container,root}=mountRoot());});
 it('does not let a late history response replace the selected automation view',async()=>{

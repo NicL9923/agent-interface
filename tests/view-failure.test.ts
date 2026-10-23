@@ -8,7 +8,7 @@ import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }))(original)));
 // SVG geometry is a browser concern, not part of this regression.
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),

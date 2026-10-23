@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, write } from "../client-api";
-import type { Conversation } from "../shared/types";
+import { ApiError, request as apiRequest, write } from "../client-api";
 import type { ExplicitLoginRequest, SecureRequest, SecureRequestAnswer } from "../shared/vault";
 import "./vault.css";
 import { FormMessage } from "./ui/form-message";
@@ -70,7 +69,7 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
   async function refresh() {
     const started = scope; setBusy(true);
     try {
-      const conversation = await api<Conversation>(`/bots/${encodeURIComponent(botId)}/conversation`);
+      const conversation = await apiRequest("GET /bots/:id/conversation", { params: { id: botId } });
       if (!active(started)) return;
       const pending = conversation.attention?.some(item => item.id === requestId && JSON.stringify(item.secure) === JSON.stringify(request));
       if (!pending) { uncertainRequests.delete(started); setSettled(true); setNotice("Hermes is no longer waiting for this request."); setError(""); }

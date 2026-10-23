@@ -1,6 +1,6 @@
 import { reasoningLevels, serviceTiers } from "../shared/types";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, write } from "../client-api";
+import { ApiError, request } from "../client-api";
 import type { Bootstrap, Bot, BotInput, InferenceSettings, ModelChoice } from "../shared/types";
 import { Icon } from "./Icon";
 import { ModelSelector } from "./ModelSelector";
@@ -36,7 +36,7 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
     if (!open) return;
     const controller = new AbortController();
     setSettings(undefined); setSettingsError("");
-    void api<InferenceSettings>(`/bots/${encodeURIComponent(bot.id)}/inference`, { signal: controller.signal })
+    void request("GET /bots/:id/inference", { params: { id: bot.id }, signal: controller.signal })
       .then(value => { if (!controller.signal.aborted) setSettings(value); })
       .catch(error => { if (!controller.signal.aborted) setSettingsError(error.message); });
     return () => controller.abort();
@@ -46,7 +46,7 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
     const target = bot.id;
     setSettingsBusy(true); setSettingsError("");
     try {
-      const value = await write<InferenceSettings>(`/bots/${encodeURIComponent(target)}/inference`, update, "PATCH");
+      const value = await request("PATCH /bots/:id/inference", { params: { id: target }, body: update });
       if (current.current === target) setSettings(value);
     } catch (error) { if (current.current === target) setSettingsError((error as Error).message); }
     finally { if (current.current === target) setSettingsBusy(false); }
@@ -56,7 +56,7 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
     const target = bot.id;
     setBusy(true); setError("");
     try {
-      const detail=await api<Bot>(`/bots/${encodeURIComponent(target)}`);
+      const detail=await request("GET /bots/:id", { params: { id: target } });
       if(current.current!==target)return;
       if(typeof detail.instructions!=="string")throw new Error("Assistant settings could not be loaded. Try again before changing the model.");
       const input: BotInput = {
@@ -64,7 +64,7 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
         model: choice.model, provider: choice.provider || undefined, shared: detail.shared,
         enabledMcpServers: detail.enabledMcpServers || [], confirmModel: confirmed,
       };
-      await write(`/bots/${encodeURIComponent(target)}`, input, "PATCH");
+      await request("PATCH /bots/:id", { params: { id: target }, body: input });
       onSaved();
       if (current.current !== target) return;
       setConfirm(null); setOpen(false);

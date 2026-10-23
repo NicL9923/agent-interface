@@ -9,6 +9,17 @@ export type ApnsSender = (device: NativeDevice, payload: string) => Promise<unkn
 /** Asks a device to remove these delivered notifications, named by tag. */
 export type ApnsClearSender = (device: NativeDevice, tags: string[]) => Promise<unknown>;
 export type ApnsTransport = (origin: string, headers: Record<string, string>, body: string) => Promise<{ statusCode: number; reason?: string }>;
+/**
+ * A push Apple refused, with Apple's status and reason for the workers to judge the token by.
+ * The status is Apple's, not this app's: it is not `statusCode`, so one that reached a route
+ * would answer as an unexplained 502 instead of passing Apple's status and text to the client.
+ */
+export class ApnsError extends Error {
+  constructor(message: string, readonly apnsStatus: number, readonly reason?: string) {
+    super(message);
+    this.name = "ApnsError";
+  }
+}
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const fit = (value: string, limit: number) => {
   let result = "", bytes = 0;
@@ -111,24 +122,24 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
     const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
       "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json",
       ...(typeof tag === "string" && tag ? { "apns-collapse-id": apnsCollapseId(tag) } : {}) }, apnsPayload(payload));
-    if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected notification (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
+    if (result.statusCode !== 200) throw new ApnsError(`APNs rejected notification (${result.statusCode})`, result.statusCode, result.reason);
   };
   // Live Activities take their own topic suffix and push type; the payload is built by LiveActivities.
   const liveActivity: LiveActivitySender = async (target, payload, priority) => {
     if (target.environment !== config.environment) throw new Error("APNs device environment does not match this host");
     const body = JSON.stringify(payload);
-    if (Buffer.byteLength(body) > 4096) throw Object.assign(new Error("Live Activity payload exceeds APNs' 4096-byte limit"), { statusCode: 413 });
+    if (Buffer.byteLength(body) > 4096) throw new ApnsError("Live Activity payload exceeds APNs' 4096-byte limit", 413, "PayloadTooLarge");
     const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${target.token}`, authorization: `bearer ${providerToken()}`,
       "apns-topic": `${config.topic}.push-type.liveactivity`, "apns-push-type": "liveactivity", "apns-priority": String(priority),
       "apns-expiration": String(Math.floor(Date.now() / 1000) + 900), "content-type": "application/json" }, body);
-    if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected Live Activity update (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
+    if (result.statusCode !== 200) throw new ApnsError(`APNs rejected Live Activity update (${result.statusCode})`, result.statusCode, result.reason);
   };
   // Background pushes must use priority 5; iOS budgets them, so the worker sends one per device per pass.
   const clear: ApnsClearSender = async (device, tags) => {
     if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
     const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
       "apns-push-type": "background", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsClearPayload(tags));
-    if (result.statusCode !== 200) throw Object.assign(new Error(`APNs rejected notification clear (${result.statusCode})`), { statusCode: result.statusCode, reason: result.reason });
+    if (result.statusCode !== 200) throw new ApnsError(`APNs rejected notification clear (${result.statusCode})`, result.statusCode, result.reason);
   };
   return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear });
 }

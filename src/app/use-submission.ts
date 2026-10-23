@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { SubmissionReceipt } from "../shared/types";
-import { api, ApiError, write } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import { clearSavedDraft, draftKey, localRead, localRemove, localSave, sentCopy, submissionKey } from "./storage";
 import type { Draft, Pending } from "./storage";
 import { contentHash } from "./draft-merge";
@@ -63,9 +63,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       if (loading || navigator.onLine === false || document.visibilityState === "hidden") return;
       loading = true;
       try {
-        const result = await api<SubmissionReceipt>(
-          `/submissions/${pending.requestId}`,
-        );
+        const result = await apiRequest("GET /submissions/:id", { params: { id: pending.requestId } });
         if (!live || epoch !== identityEpoch.current) return;
         setReceipt(result);
         if (result.status === "accepted") {
@@ -119,10 +117,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     setPending(request);
     setSending(true);
     try {
-      const result = await write<SubmissionReceipt>(
-        `/bots/${encodeURIComponent(botId)}/messages`,
-        request,
-      );
+      const result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body: request });
       if (epoch !== identityEpoch.current) return;
       if (activeBotRef.current === request.botId) setReceipt(result);
       if (result.status === "accepted") {
@@ -157,10 +152,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     const current = () => epoch === identityEpoch.current &&
       activeBotRef.current === requestBot;
     setSending(true);
-    void write<SubmissionReceipt>(
-      `/bots/${encodeURIComponent(pending.botId)}/messages`,
-      { ...pending, reviewedUncertain: true },
-    )
+    void apiRequest("POST /bots/:id/messages", { params: { id: pending.botId }, body: { ...pending, reviewedUncertain: true } })
       .then((result) => { if (current()) setReceipt(result); })
       .catch((e) => { if (current()) setError(e.message); })
       .finally(() => {

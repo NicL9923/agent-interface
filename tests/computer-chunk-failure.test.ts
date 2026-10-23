@@ -9,7 +9,7 @@ import { advance, mountRoot } from "./ui-harness";
 
 // A deploy retired these chunks, as an old tab sees it: loading the module fails with the browser's own wording.
 const gone = vi.hoisted(() => () => { throw new TypeError("Failed to fetch dynamically imported module: https://app.example/assets/rfb-OLD12345.js"); });
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 vi.mock("@novnc/novnc", () => ({ get default() { return gone(); } }));
 vi.mock("@xterm/xterm", () => ({ get Terminal() { return gone(); } }));
 vi.mock("@xterm/addon-fit", () => ({ get FitAddon() { return gone(); } }));

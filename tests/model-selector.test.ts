@@ -7,7 +7,7 @@ import { api, write } from "../src/client-api";
 import type { ModelCatalog } from "../src/shared/types";
 import { mountRoot, typeInto } from "./ui-harness";
 
-vi.mock("../src/client-api", () => ({ api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: vi.fn(), write: vi.fn() }))()));
 const catalog: ModelCatalog = { provider: "custom:house", model: "saved-model", providers: [
   { id: "house", name: "House provider", aliases: ["custom:house"], authenticated: true, models: [
     { id: "saved-model", name: "Saved model", available: true },

@@ -5,7 +5,7 @@ import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import type { RoutineOutput, RoutineResult } from '../shared/collaboration.js';
 import { withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
 import { formatBytes } from '../shared/uploads.js';
-import { interruptionPendingMessage } from '../shared/errors.js';
+import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
@@ -515,8 +515,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             await http(`/api/profiles/${encodeURIComponent(name)}`, {method: 'DELETE'});
             live.delete(name);
           } catch {
-            throw Object.assign(new Error('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot ' + name + '.'),
-              {createdBotId: name, cause: error});
+            throw new IncompleteCreationError('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot ' + name + '.',
+              name, {cause: error});
           }
         }
         throw error;

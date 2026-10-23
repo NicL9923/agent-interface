@@ -9,7 +9,7 @@ import { RoutineResults } from '../src/components/RoutineResults';
 import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
 import { click, mountRoot } from './ui-harness';
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}));
+vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
 let root:Root, container:HTMLDivElement;
 const bootstrap = { user:{id:'one'},bots:[{id:'ranch',name:'Ranch hand'},{id:'planner',name:'Planner'}],preferences:defaultPreferences,connection:{connected:true} } as Bootstrap;
 const room={room_id:'room',name:'Weekend plans',members:[{member_id:'ranch',profile:'ranch',handle:'ranch',display_name:'Ranch hand'},{member_id:'planner',profile:'planner',handle:'planner',display_name:'Planner'}]};
@@ -95,4 +95,62 @@ it('clears a vanished group at once, even when the group list cannot be refreshe
   await act(async()=>vi.advanceTimersByTimeAsync(3000));
   for(const leak of ['The secret ledger total','Weekend plans','@planner'])expect(container.textContent).not.toContain(leak);
   expect(container.textContent).toContain('That group chat is no longer available to you.');
+});
+it('shows a sent group message at once even while a background check is still running',async()=>{
+  const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  const sent={event_id:'sent',seq:1,kind:'message.user',actor:{id:'one'},payload:{text:'Plan Saturday'},created_at:1};
+  let reads=0,delivered=false,held:((value:unknown)=>void)|undefined;
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(path==='/groups')return{supported:true,canSend:true,rooms:[room]};
+    if(path==='/groups/room')return ++reads===2?new Promise(done=>{held=done;}):state;
+    return{events:delivered?[sent]:[],cursor:delivered?1:0,has_more:false};
+  });
+  vi.mocked(write).mockImplementation(async()=>{delivered=true;return{accepted:true};});
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  await act(async()=>vi.advanceTimersByTimeAsync(3000));expect(held).toBeDefined();
+  const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
+  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field,'Plan Saturday');field.dispatchEvent(new Event('input',{bubbles:true}));});
+  await act(async()=>field.form!.requestSubmit());
+  expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({text:'Plan Saturday'}));
+  expect(container.querySelector('.group-message')?.textContent).toContain('Plan Saturday');
+  await act(async()=>held!(state));
+  expect(container.querySelectorAll('.group-message')).toHaveLength(1);
+});
+it('reads a room log from the start again after leaving and returning to it',async()=>{
+  const other={...room,room_id:'other',name:'Fence repair'};
+  const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  const first={event_id:'one',seq:1,kind:'message.user',actor:{id:'one'},payload:{text:'Bring water'},created_at:1};
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(path==='/groups')return{supported:true,canSend:true,rooms:[room,other]};
+    if(path==='/groups/other')return new Promise(()=>{});
+    if(path==='/groups/room')return state;
+    return path.endsWith('since=0')?{events:[first],cursor:1,has_more:false}:{events:[],cursor:1,has_more:false};
+  });
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  expect(container.querySelector('.group-message')?.textContent).toContain('Bring water');
+  await click('Fence repair2 assistants');await click('Weekend plans2 assistants');
+  expect(vi.mocked(api).mock.calls.at(-1)?.[0]).toBe('/groups/room/log?since=0');
+  expect(container.querySelector('.group-message')?.textContent).toContain('Bring water');
+});
+it('keeps the newly selected room when an action from a room that left the list finishes',async()=>{
+  const other={...room,room_id:'other',name:'Fence repair'};
+  const idle={driver_status:{working:false,blocked:false,pending_actions:[]}};
+  let rooms=[room,other],removed=false,finish:((value:unknown)=>void)|undefined;
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(path==='/groups')return{supported:true,canSend:true,rooms};
+    if(path==='/groups/room'){if(removed)throw new ApiError('Not found',404);return{room,driver_status:{...idle.driver_status,working:true}};}
+    if(path==='/groups/other')return{room:other,...idle};
+    return{events:[],cursor:0,has_more:false};
+  });
+  vi.mocked(write).mockImplementation(()=>new Promise(done=>{finish=done;}));
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  await click('Stop discussion');expect(write).toHaveBeenCalledWith('/groups/room/stop',expect.anything());
+  // Another member made the room personal, so the list drops it and selects the next one.
+  rooms=[other];await act(async()=>vi.advanceTimersByTimeAsync(15000));
+  expect(container.querySelector('.group-heading h3')?.textContent).toBe('Fence repair');
+  const reads=vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length;
+  removed=true;await act(async()=>finish!({ok:true}));
+  expect(container.querySelector('.group-heading h3')?.textContent).toBe('Fence repair');
+  expect(container.textContent).not.toContain('That group chat is no longer available to you.');
+  expect(vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length).toBe(reads);
 });

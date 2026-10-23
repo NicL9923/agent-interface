@@ -3,26 +3,11 @@ import { allowedIdentity, type Config } from "./config.js";
 import type { LiveActivityRegistration, Store } from "./store.js";
 import { visible } from "./bot-access.js";
 import { FailureTracker, quietLog, type Log } from "./logging.js";
+import { ApnsError } from "./apns.js";
 
-/** One row of the aggregate Live Activity. docs/native-api.md is the contract the iOS app decodes. */
-export type LivePhase = "starting" | "thinking" | "working" | "waiting" | "blocked" | "done" | "failed" | "interrupted";
-export interface LiveRow {
-  botId: string;
-  name: string;
-  phase: LivePhase;
-  status: string;
-  detail?: string;
-  /** Unix epoch seconds. ActivityKit would decode a Date from the 2001 epoch. */
-  since?: number;
-  color?: string;
-}
-export interface LiveState {
-  title: string;
-  activeCount: number;
-  attentionCount: number;
-  updatedAt: number;
-  rows: LiveRow[];
-}
+import type { LivePhase, LiveRow, LiveState } from "../shared/live-activity.js";
+export type { LivePhase, LiveRow, LiveState } from "../shared/live-activity.js";
+
 export type LiveActivitySender = (target: { token: string; environment: "sandbox" | "production" }, payload: object, priority: 5 | 10) => Promise<void>;
 
 const status: Record<LivePhase, string> = {
@@ -121,8 +106,8 @@ export class LiveActivities {
       await this.send!({ token: registration.token, environment: registration.environment }, payload, priority);
       this.push.success();
     } catch (error) {
-      const result = error as { statusCode?: number; reason?: string };
-      if (result.statusCode === 410 || result.statusCode === 413 || (result.statusCode === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"].includes(result.reason ?? ""))) {
+      const apns = error instanceof ApnsError ? error : undefined;
+      if (apns?.apnsStatus === 410 || apns?.apnsStatus === 413 || (apns?.apnsStatus === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"].includes(apns.reason ?? ""))) {
         this.store.removeLiveActivity(registration.userId, registration.deviceId, registration.token);
         return;
       }
