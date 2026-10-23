@@ -62,7 +62,7 @@ def main():
     hinted = False
     while True:
         attempt += 1
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
         output = result.stdout + result.stderr
         prepared = re.search(r"^Prepared .*$", output, re.M)
         if prepared:

@@ -474,7 +474,7 @@ def manifest_lock(name):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.")
+            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.") from None
         yield
 
 
@@ -491,7 +491,7 @@ def build_locally(commit, work):
         archive = json.loads(subprocess.check_output(
             [sys.executable, ".agents/tools/archive-release.py", str(work / "release.tar.gz")], cwd=checkout, text=True))
         log = subprocess.run("npm ci --no-audit --no-fund && npm run build", shell=True, cwd=checkout,
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         if log.returncode:
             raise SystemExit("The local build failed:\n" + (log.stdout + log.stderr)[-3000:])
         return archive["sha256"], built_web_version(log.stdout)
@@ -502,7 +502,7 @@ def build_locally(commit, work):
 def prepare(args):
     git("fetch", "--quiet", "origin", "main")
     commit = git("rev-parse", "--verify", args.commit + "^{commit}")
-    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"], cwd=ROOT).returncode:
+    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"], cwd=ROOT, check=False).returncode:
         raise SystemExit("Release only commits that are merged to origin/main.")
     name = release_name(commit, datetime.datetime.now(datetime.timezone.utc))
     base = Path(args.app_base)

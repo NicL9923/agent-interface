@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
 def run_remote(program, payload):
     """Execute a host program locally, exactly as the wrapper sends it over SSH."""
-    done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True)
+    done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True, check=False)
     return done.returncode, done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "", done.stderr
 
 

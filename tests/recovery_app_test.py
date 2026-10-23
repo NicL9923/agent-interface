@@ -38,11 +38,11 @@ class ReceiptTests(unittest.TestCase):
             config_module.write_text("export const loadConfig = () => ({hermesUrl:'url',hermesToken:'token',hermesAuthMode:'service',hermesQualificationFile:'/qualified'});")
             runtime_module.write_text("export const createHermesRuntime = o => {if(o.qualificationFile!=='/qualified'||o.token!=='token'||o.authMode!=='service'||o.url!=='url')throw Error('private-secret');return {status:async()=>({connected:true,code:'ready'}),close:async()=>{}};};")
             command = ["node", "--input-type=module", "-e", recover.QUALIFIED_DOCTOR, config_module.as_uri(), runtime_module.as_uri()]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), {"qualifiedRuntimeReady": True})
             runtime_module.write_text("export const createHermesRuntime = () => ({status:async()=>{throw Error('private-secret');},close:async()=>{}});")
-            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
             self.assertEqual(result.returncode, 1)
             self.assertNotIn("private-secret", result.stdout+result.stderr)
             self.assertEqual(result.stderr.strip(), "Qualified Hermes runtime verification failed.")

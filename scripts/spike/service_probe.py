@@ -190,7 +190,7 @@ try:
         payload = {"action": "rpc", "source": source, "home": str(home), "origin": origin,
                    "key": key, "method": action, "operation": owner}
         result = subprocess.run([sys.executable, "-I", "-c", code], input=json.dumps(payload),
-            text=True, capture_output=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=30)
+            text=True, capture_output=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=30, check=False)
         if not success:
             assert result.returncode != 0, "An unauthorized installer maintenance request succeeded"
             return

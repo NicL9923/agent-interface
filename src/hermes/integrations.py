@@ -585,7 +585,6 @@ async def inventory(profile):
         platforms = (await messaging.get_messaging_platforms(profile)).get("platforms", [])
         if isinstance(platforms, dict):
             platforms = list(platforms.values())
-        discord = next((p for p in platforms if p.get("id") == "discord"), {})
         configured = bool(env.get("DISCORD_BOT_TOKEN"))
         rows.append(card("discord", "Discord", "messaging", profile, "configured" if configured else "not_connected", "Native Discord channel is configured. Check verifies its token." if configured else "Connect the Discord bot in the official Hermes Channels page.", actions=dict(connect=False, check=configured, disconnect=False), capabilities=["Native Discord messaging"]))
     except Exception:

@@ -406,15 +406,15 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.wait_gateway(draining=True, after=timestamp(drain["requested_at"]))
             if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"]: raise RuntimeError("Host inputs changed while acquiring maintenance")
             self.save({"baseline": baseline, "phase": "quiescent"})
-        except Exception:
+        except Exception as refusal:
             # 75 is a proven harmless rejection; all cleanup uncertainty fails closed.
             self.clear_drain()
             release = self.rpc("release")
-            if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed")
+            if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed") from refusal
             self.wait_gateway()
-            if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state")
+            if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
             self.save({"baseline": baseline, "phase": "rejected"})
-            raise SystemExit(75)
+            raise SystemExit(75) from None
 
     def control(self, verb):
         # The app unit is deliberately never stopped: it owns the detached worker
@@ -662,7 +662,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         store can lose objects; the staged repository holds the baseline's full history."""
         offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
         check = ["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", "--no-walk", revision]
-        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180).returncode != 0:
+        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180, check=False).returncode != 0:
             for name in ("pack", "info"): (self.objects / name).mkdir(parents=True, exist_ok=True)
             packer = subprocess.Popen(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
@@ -828,7 +828,7 @@ def main():
         # Private worker logs record only the fixed failure class, never source
         # command output which could contain credentials or native session keys.
         detail = describe(error)
-        raise SystemExit("Linux upgrade hook failed: " + detail + ". Maintenance remains closed for installer review")
+        raise SystemExit("Linux upgrade hook failed: " + detail + ". Maintenance remains closed for installer review") from None
 
 
 if __name__ == "__main__": main()

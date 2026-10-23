@@ -227,7 +227,7 @@ class Computer:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise ComputerError("The household computer is busy. Try again after the current action finishes.")
+                        raise ComputerError("The household computer is busy. Try again after the current action finishes.") from None
                     time.sleep(.025)
             try:
                 yield fd
@@ -283,7 +283,7 @@ class Computer:
         env.update(record["environment"])
         try:
             result = subprocess.run([record["python"], "-c", HARNESS_RECOVERY], env=env,
-                input=json.dumps(record).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                input=json.dumps(record).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
             if result.returncode:
                 return False
         except (OSError, subprocess.TimeoutExpired):
@@ -492,7 +492,7 @@ class Computer:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise ComputerError("The household computer is busy. Retry after its current action finishes.")
+                        raise ComputerError("The household computer is busy. Retry after its current action finishes.") from None
                     time.sleep(.025)
             self._check_bot_admission()
             if self._lease().epoch != lease_epoch:

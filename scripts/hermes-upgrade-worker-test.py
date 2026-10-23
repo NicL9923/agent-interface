@@ -838,7 +838,7 @@ print('fixture real candidate patch identity passed')
         tree = self.git('cat-file', '-p', self.new).decode().splitlines()[0].split()[1]
         offline = dict(os.environ, GIT_NO_LAZY_FETCH='1')
         missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(missing.returncode, 0, 'The fixture must lack the candidate tree')
         self.assertEqual(self.git('config', '--get', 'remote.origin.promisor').decode().strip(), 'true')
         self.git('remote', 'set-url', 'origin', worker.OFFICIAL_UPSTREAM)
@@ -855,7 +855,7 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(worker.git(target, 'rev-list', '--count', 'v0.1.0..HEAD'), self.git('rev-list', '--count', 'v0.1.0..' + self.new))
         self.assertFalse((target / '.git/shallow').exists())
         still_missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(still_missing.returncode, 0, 'Staging must not hydrate installed Git objects')
         self.assertFalse((target / '.git/objects/info/alternates').exists())
         self.assertFalse(list((target / '.git/objects/pack').glob('*.promisor')))

@@ -124,8 +124,8 @@ WantedBy=default.target
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     if args.start:
         if not target.is_file(): parser.error("Activate the qualified release before starting its computer supervisor")
-        terminal_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "agent-interface-terminal.service"]).returncode == 0
-        server_exists = subprocess.run(["tmux", "-N", "-S", str(computer / "terminal/tmux.sock"), "show-options", "-s"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        terminal_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "agent-interface-terminal.service"], check=False).returncode == 0
+        server_exists = subprocess.run(["tmux", "-N", "-S", str(computer / "terminal/tmux.sock"), "show-options", "-s"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0
         if server_exists and not terminal_active:
             parser.error("An existing terminal server needs an explicit handover before its supervisor can start; its human shells were preserved")
         subprocess.run(["systemctl", "--user", "enable", "--now", "hermes-computer.service", "agent-interface-terminal.service"], check=True)

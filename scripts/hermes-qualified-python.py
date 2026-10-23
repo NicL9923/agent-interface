@@ -298,7 +298,7 @@ def prepare(source, stage, launcher, installed_source, installed_home):
     log = stage / "pm-build.log"
     with log.open("w") as output:
         log.chmod(0o600)
-        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800)
+        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800, check=False)
     if result.returncode:
         raise RuntimeError("Candidate native PM dependency build failed; inspect its private build log")
     built = json.loads(result.stdout)
@@ -394,4 +394,4 @@ if __name__ == "__main__":
     except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as error:
         # The caller's log needs the stack: "Permission denied: '/'" alone cannot be traced.
         traceback.print_exc()
-        raise SystemExit("Managed qualification failed: " + str(error))
+        raise SystemExit("Managed qualification failed: " + str(error)) from error

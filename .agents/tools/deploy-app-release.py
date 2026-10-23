@@ -182,7 +182,7 @@ except BaseException:
     if release_started:
         journal("activated-needs-review")
         print("The new release reached admission release; services kept running for review. Do not stop them without fresh quiescence." + tripped(sys.exc_info()[1]))
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     if commit_attempted and not committed:
         try:
             # Native commit is idempotent. Recover a lost reply before deciding
@@ -199,7 +199,7 @@ except BaseException:
         except BaseException:
             journal("retirement-needs-review")
             print("Retirement admission could not be proved; original native owners preserved for review." + tripped(sys.exc_info()[1]))
-            raise SystemExit(2)
+            raise SystemExit(2) from None
     # Recover the old deployment before opening native ingress. Keep rotating
     # grants and the live application database; never replay stale credentials.
     journal("rollback")
@@ -245,9 +245,9 @@ except BaseException:
             system("stop", "agent-interface.service", "hermes-dashboard.service", "hermes-gateway.service")
         journal("rollback-needs-review")
         print("Release recovery needs review. Native owners that may have admitted work were preserved; private recovery copies retained." + tripped(sys.exc_info()[1]))
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     print("Release activation failed; previous release restored and original sign-in verified." + tripped(sys.exc_info()[1]))
-    raise SystemExit(1)
+    raise SystemExit(1) from None
 finally:
     if claim: claim.__exit__(None, None, None)
     log.close()

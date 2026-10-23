@@ -65,7 +65,7 @@ def classify(returncode, summary, ci):
 
 def run(path):
     started = time.monotonic()
-    result = subprocess.run([sys.executable, str(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run([sys.executable, str(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
     return result.returncode, time.monotonic() - started, result.stdout, result.stderr
 
 

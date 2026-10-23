@@ -181,7 +181,7 @@ class FenceTests(unittest.TestCase):
             try:
                 deploy_common.fence(False, "drain request names this operation")
             except AssertionError:
-                raise RuntimeError("rollback failed")
+                raise RuntimeError("rollback failed")  # noqa: B904 - implicit chaining is the case under test
         except RuntimeError as error:
             self.assertEqual(deploy_common.tripped(error), " Stopped at fence: drain request names this operation.")
 
@@ -191,7 +191,7 @@ class FenceTests(unittest.TestCase):
             config.write_text("{}")
             config.chmod(0o644)
             done = subprocess.run([sys.executable, "-O", str(TOOLS / "deploy-guarded-app-release.py"), "--config", str(config)],
-                                  capture_output=True, text=True, timeout=30)
+                                  capture_output=True, text=True, timeout=30, check=False)
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("Fence: config file is private and owned by this user", done.stderr)
 

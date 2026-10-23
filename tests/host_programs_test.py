@@ -116,7 +116,7 @@ class HostProgramTests(unittest.TestCase):
         for argv, environment in ((["-O", "-"], {}), (["-"], {"PYTHONOPTIMIZE": "1"})):
             with self.subTest(argv=argv, environment=environment):
                 done = subprocess.run([sys.executable, *argv], input=live, capture_output=True, text=True,
-                                      env={**os.environ, **environment})
+                                      env={**os.environ, **environment}, check=False)
                 self.assertNotEqual(done.returncode, 0)
                 self.assertIn("need their assert guards", done.stderr)
                 self.assertEqual(done.stdout, "")
