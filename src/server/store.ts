@@ -19,6 +19,7 @@ import type { SavedItem } from "../shared/discovery.js";
 import { visible } from "./bot-access.js";
 import type { LiveState } from "./live-activity.js";
 import { httpError } from "./http-error.js";
+import type { ErrorCode } from "../shared/errors.js";
 
 export interface LiveActivityRegistration {
   deviceId: string;
@@ -108,6 +109,14 @@ const additions = `
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;
+/** Why this server rejected a submission itself, recorded so a retry is judged by it rather than by its text. */
+export type RejectionReason = Extract<ErrorCode, "interruption_pending">;
+type StoredReceipt = SubmissionReceipt & { reason?: RejectionReason };
+// Releases before reasons were recorded stored only this exact sentence. It stays frozen even if
+// the message clients see is reworded, and is checked only for rows that carry no reason.
+const legacyInterruptionMessage = "Review the interrupted task before starting another message.";
+const legacyReason = (receipt: SubmissionReceipt): RejectionReason | undefined =>
+  receipt.status === "rejected" && receipt.message === legacyInterruptionMessage ? "interruption_pending" : undefined;
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
 // Clients report an open chat every 15 seconds, so a missed beat or two never counts as leaving.
@@ -674,12 +683,9 @@ export class Store {
     const row = this.db
       .prepare("SELECT payload,receipt FROM submissions WHERE request_id=?")
       .get(id) as { payload: string; receipt: string } | undefined;
-    return row
-      ? {
-          input: JSON.parse(row.payload) as Submission,
-          receipt: JSON.parse(row.receipt) as SubmissionReceipt,
-        }
-      : undefined;
+    if (!row) return undefined;
+    const { reason, ...receipt } = JSON.parse(row.receipt) as StoredReceipt;
+    return { input: JSON.parse(row.payload) as Submission, receipt, reason: reason ?? legacyReason(receipt) };
   }
   submissionForMessage(botId: string, messageId: string) {
     const row = this.db
@@ -697,12 +703,14 @@ export class Store {
       }[]
     ).map((r) => this.submission(r.request_id)!);
   }
-  receipt(receipt: SubmissionReceipt) {
+  /** A reason stays with the stored receipt, never with the one clients receive. */
+  receipt(receipt: SubmissionReceipt, reason?: RejectionReason) {
     this.transaction(() => {
       const previous = this.submission(receipt.requestId);
+      const stored: StoredReceipt = reason ? { ...receipt, reason } : receipt;
       this.db
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
-        .run(JSON.stringify(receipt), receipt.requestId);
+        .run(JSON.stringify(stored), receipt.requestId);
       const row = this.submission(receipt.requestId);
       if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
         this.clearSubmittedDraft(row.input.senderId, row.input.botId, {

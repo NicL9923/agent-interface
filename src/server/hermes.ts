@@ -8,6 +8,7 @@ import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import { withMessageOrigins, wireOrigin, messageOrigin } from "../shared/message-origin.js";
 import { formatBytes } from '../shared/uploads.js';
 import { httpError } from './http-error.js';
+import { interruptionPendingMessage } from '../shared/errors.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
@@ -653,7 +654,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       return receipt(value);
     }catch(error){
-      if(error instanceof TransportError&&error.rpcCode===4094)throw httpError(409,'Review the interrupted task before starting another message.',{code:'interruption_pending'});
+      if(error instanceof TransportError&&error.rpcCode===4094)throw httpError(409,interruptionPendingMessage,{code:'interruption_pending'});
       return {requestId:input.requestId,status:'uncertain',message:error instanceof Error?error.message:'Hermes response lost. Review before retrying.'};
     }
   }

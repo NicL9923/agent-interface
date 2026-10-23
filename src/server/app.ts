@@ -37,6 +37,7 @@ import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
+import { interruptionPendingMessage } from "../shared/errors.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
@@ -634,8 +635,7 @@ export async function createApp(
       senderId: signedIn(req).id,
     };
     const previous = store.submission(input.requestId);
-    const interruptionRejected = previous?.receipt.status === "rejected"
-      && previous.receipt.message === "Review the interrupted task before starting another message.";
+    const interruptionRejected = previous?.reason === "interruption_pending";
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
@@ -644,7 +644,7 @@ export async function createApp(
           "This submission ID was already used for different content",
         );
       if (interruptionRejected && !reviewedInterruption)
-        throw httpError(409, "Review the interrupted task before starting another message.");
+        throw httpError(409, interruptionPendingMessage);
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
       await requireCapability("idempotency");
@@ -660,10 +660,7 @@ export async function createApp(
     const fast = await runtime.canonicalSubmit?.() === true;
     const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
-      throw httpError(
-        409,
-        "Review the interrupted task before starting another message.",
-      );
+      throw httpError(409, interruptionPendingMessage);
     const steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
@@ -683,9 +680,8 @@ export async function createApp(
       return receipt;
     } catch (error) {
       if ((error as { code?: string }).code === "interruption_pending") {
-        store.receipt({ requestId: input.requestId, status: "rejected",
-          message: "Review the interrupted task before starting another message." });
-        throw httpError(409, "Review the interrupted task before starting another message.");
+        store.receipt({ requestId: input.requestId, status: "rejected", message: interruptionPendingMessage }, "interruption_pending");
+        throw httpError(409, interruptionPendingMessage);
       }
       return store.submission(input.requestId)!.receipt;
     }

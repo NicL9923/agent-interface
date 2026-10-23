@@ -21,3 +21,6 @@ export type ErrorCode =
   // The web client sets these for failures that never reached the server.
   | "CONNECTION_UNAVAILABLE"
   | "INVALID_RESPONSE";
+
+/** Sent when a conversation's interrupted task needs review before another message starts. */
+export const interruptionPendingMessage = "Review the interrupted task before starting another message.";

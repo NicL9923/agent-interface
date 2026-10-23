@@ -534,6 +534,36 @@ describe("safe admission, steering, and approvals", () => {
     expect(store.recipients({id:"event",botId:"shared",runId:"run",kind:"completed",title:"Done",occurredAt:""})).toEqual(["local-one"]);
     await app.close();
   });
+  it("recognizes an interruption rejection by its recorded reason, and legacy rows by their sentence", async () => {
+    const fake=runtimeDouble();
+    fake.runtime.canonicalSubmit=async()=>true;
+    fake.runtime.submit=vi.fn(async input=>{
+      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
+      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
+    });
+    const {app,store}=await createApp(config(),fake.runtime,{background:false});
+    const headers=await login(app);
+    const send=(payload:{requestId:string;text:string;reviewedInterruption?:boolean})=>app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
+    const current={requestId:randomUUID(),text:"Continue"};
+    expect((await send(current)).statusCode).toBe(409);
+    expect(store.submission(current.requestId)).toMatchObject({reason:"interruption_pending",receipt:{status:"rejected"}});
+    expect(store.submission(current.requestId)!.receipt).not.toHaveProperty("reason");
+    expect((await send(current)).statusCode).toBe(409);
+    expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
+    // A row stored before reasons were recorded carries only the sentence.
+    const legacy={requestId:randomUUID(),text:"Older"};
+    store.intent({...legacy,attachments:[],botId:"shared",senderId:"local-one"});
+    store.receipt({requestId:legacy.requestId,status:"rejected",message:"Review the interrupted task before starting another message."});
+    expect((await send(legacy)).json().error).toBe("Review the interrupted task before starting another message.");
+    expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
+    expect((await send({...legacy,reviewedInterruption:true})).json().status).toBe("accepted");
+    // Another rejection is returned as recorded, never mistaken for an interruption.
+    const other={requestId:randomUUID(),text:"Image"};
+    store.intent({...other,attachments:[],botId:"shared",senderId:"local-one"});
+    store.receipt({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
+    expect((await send(other)).json()).toEqual({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
+    await app.close();
+  });
   it("forwards a request once, rejects reused IDs with changed content, and persists uncertain intent across app restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-interface-"));
     const path = join(dir, "app.sqlite");
