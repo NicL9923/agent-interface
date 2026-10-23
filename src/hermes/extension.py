@@ -214,29 +214,39 @@ def event_body(value):
     return text[:500] or None
 
 
-def install(path=None):
-    actual_revision, patch_hash = source_state()
-    from tui_gateway import server
-    from tui_gateway.transport import Transport
-    from hermes_constants import get_hermes_home, profile_name_for_home
-    sibling_module("computer").install(server)
-    journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
-    canonical_lock = threading.RLock()
-    submission_lock = threading.RLock()
-    keepers = {}
-    canonical = {}
-    decorated = {}
-    journal.canonical_session = lambda profile: canonical.get(profile)
-    settlement = {}
-    maintenance_lock = threading.RLock()
-    maintenance_file = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE")
-    from hermes_cli.backend_retirement import retirement
-    maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
+# Methods a held maintenance lease still admits: status, history and discovery reads.
+MAINTENANCE_READS = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
+                     "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
+                     "groups.capabilities", "groups.list", "groups.state", "groups.log"}
 
-    def maintenance_state():
-        if not maintenance_file:
+
+class Bridge:
+    """The add-on's hooks into one native gateway, sharing its journal and canonical sessions.
+
+    install() builds one per process, wraps the native seams and registers the
+    agent-interface RPCs. Methods are grouped by concern, in installation order.
+    """
+
+    def __init__(self, server, journal, *, get_hermes_home, profile_name_for_home, maintenance_file=None):
+        self.server, self.journal = server, journal
+        self.get_hermes_home, self.profile_name_for_home = get_hermes_home, profile_name_for_home
+        self.maintenance_file = maintenance_file
+        self.canonical_lock = threading.RLock()
+        self.submission_lock = threading.RLock()
+        self.maintenance_lock = threading.RLock()
+        self.maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
+        self.keepers = {}
+        self.canonical = {}
+        self.decorated = {}
+        self.settlement = {}
+        journal.canonical_session = self.canonical.get
+
+    # Maintenance lease: a held lease fences every native admission except reads.
+
+    def maintenance_state(self):
+        if not self.maintenance_file:
             return None
-        path = Path(maintenance_file)
+        path = Path(self.maintenance_file)
         if not path.is_absolute():
             raise RuntimeError("Maintenance lease requires an absolute private path.")
         if not os.path.lexists(path):
@@ -245,25 +255,26 @@ def install(path=None):
             raise RuntimeError("Maintenance lease is not private.")
         return json.loads(path.read_text())
 
-    def busy_sessions():
+    def busy_sessions(self):
         # Native workers can reserve admission while holding _sessions_lock.
         # Snapshot the dictionary without taking that lock in the reverse order;
         # native reservations cover work queued after this snapshot.
-        sessions = server._sessions.copy()
-        return [{"sessionId": sid, "profile": profile_for(sid), "state": "running"}
+        sessions = self.server._sessions.copy()
+        return [{"sessionId": sid, "profile": self.profile_for(sid), "state": "running"}
                 for sid, session in sessions.items()
                 if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
                 or session.get("pending_steer") or session.get("_auto_continue_scheduled")]
 
-    def maintenance(rid, params):
+    def maintenance(self, rid, params):
+        server = self.server
         secret = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", "")
         supplied = params.get("service_key", "")
         if not secret or not isinstance(supplied, str) or not hmac.compare_digest(supplied, secret):
             return server._err(rid, 403, "Private maintenance authentication required")
-        if not maintenance_file:
+        if not self.maintenance_file:
             return server._err(rid, 409, "Host maintenance lease is not configured")
-        with maintenance_lock:
-            lease = maintenance_state()
+        with self.maintenance_lock:
+            lease = self.maintenance_state()
             action = params.get("action", "status")
             operation = params.get("operation_id")
             if action not in ("status", "acquire", "release"):
@@ -272,53 +283,68 @@ def install(path=None):
                 return server._err(rid, 400, "Invalid maintenance operation")
             if lease and lease.get("operationId") != operation and action != "status":
                 return server._err(rid, 409, "Another maintenance operation owns this lease")
-            busy = busy_sessions()
+            busy = self.busy_sessions()
             if action == "acquire":
                 # This request holds one native reservation. Queued RPCs and
                 # deferred work reserve before execution and must also be idle.
-                if busy or retirement.active_count() > 1:
+                if busy or self.retirement.active_count() > 1:
                     return server._err(rid, 409, "Hermes still has active work; no maintenance lease acquired")
-                path = Path(maintenance_file)
+                path = Path(self.maintenance_file)
                 path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 private_fs.atomic_json(path, {"operationId": operation})
                 lease = {"operationId": operation}
             elif action == "release" and lease:
-                Path(maintenance_file).unlink()
+                Path(self.maintenance_file).unlink()
                 lease = None
             return server._ok(rid, {"active": lease is not None, "operationId": (lease or {}).get("operationId"), "busy": busy})
 
-    original_handle = server.handle_request
-    original_dispatch = server.dispatch
-    original_acquire = retirement.acquire
-    maintenance_reads = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
-                         "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
-                         "groups.capabilities", "groups.list", "groups.state", "groups.log"}
-    def guarded_acquire():
-        with maintenance_lock:
-            if maintenance_state() and not maintenance_read.get():
+    def guarded_acquire(self):
+        with self.maintenance_lock:
+            if self.maintenance_state() and not self.maintenance_read.get():
                 return False
-            return original_acquire()
-    retirement.acquire = guarded_acquire
+            return self.original_acquire()
 
-    def guarded_call(call, request, *args, **kwargs):
+    def guarded_call(self, call, request, *args, **kwargs):
         method = request.get("method", "")
-        read = method in maintenance_reads or method == "agent-interface.computer" and request.get("params", {}).get("action", "status") == "status"
-        token = maintenance_read.set(read)
+        read = method in MAINTENANCE_READS or method == "agent-interface.computer" and request.get("params", {}).get("action", "status") == "status"
+        token = self.maintenance_read.set(read)
         try:
-            with maintenance_lock:
-                if not read and maintenance_state():
-                    return server._err(request.get("id"), 409, "Hermes is being upgraded. Your current work and drafts are preserved.")
+            with self.maintenance_lock:
+                if not read and self.maintenance_state():
+                    return self.server._err(request.get("id"), 409, "Hermes is being upgraded. Your current work and drafts are preserved.")
             # Native admission takes the same gate atomically. Never hold our
             # lock across a native handler's own session/profile locks.
             return call(request, *args, **kwargs)
         finally:
-            maintenance_read.reset(token)
+            self.maintenance_read.reset(token)
 
-    # Native dispatch reserves pool work before queueing. Fencing only the
-    # synchronous handler misses native shell/configuration/image RPCs.
-    server.handle_request = lambda request: guarded_call(original_handle, request)
-    server.dispatch = lambda request, *args, **kwargs: guarded_call(original_dispatch, request, *args, **kwargs)
-    server.register_method("agent-interface.maintenance", maintenance)
+    def install_maintenance(self, retirement):
+        server = self.server
+        self.retirement = retirement
+        original_handle, original_dispatch = server.handle_request, server.dispatch
+        self.original_acquire = retirement.acquire
+        retirement.acquire = self.guarded_acquire
+        # Native dispatch reserves pool work before queueing. Fencing only the
+        # synchronous handler misses native shell/configuration/image RPCs.
+        server.handle_request = lambda request: self.guarded_call(original_handle, request)
+        server.dispatch = lambda request, *args, **kwargs: self.guarded_call(original_dispatch, request, *args, **kwargs)
+        server.register_method("agent-interface.maintenance", self.maintenance)
+
+
+def install(path=None):
+    actual_revision, patch_hash = source_state()
+    from tui_gateway import server
+    from tui_gateway.transport import Transport
+    from hermes_constants import get_hermes_home, profile_name_for_home
+    sibling_module("computer").install(server)
+    journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
+    bridge = Bridge(server, journal, get_hermes_home=get_hermes_home, profile_name_for_home=profile_name_for_home,
+                    maintenance_file=os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"))
+    canonical_lock, submission_lock, maintenance_lock = bridge.canonical_lock, bridge.submission_lock, bridge.maintenance_lock
+    keepers, canonical, decorated, settlement = bridge.keepers, bridge.canonical, bridge.decorated, bridge.settlement
+    maintenance_state = bridge.maintenance_state
+    from hermes_cli.backend_retirement import retirement
+    bridge.install_maintenance(retirement)
 
     # Keep the canonical native projection, adding only details present in its
     # original tool rows. The compact native view otherwise omits most outputs.
@@ -376,6 +402,7 @@ def install(path=None):
         row = journal.db.execute("SELECT profile FROM receipts WHERE session_id=? ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
         return row[0] if row else profile_name_for_home(home or get_hermes_home())
     journal.profile_for_session = profile_for
+    bridge.profile_for = profile_for
     def live_profile_for(sid):
         session = server._sessions.get(sid)
         if session is None:
