@@ -4,12 +4,15 @@ The adapter owns only duplicate-safe manual-trigger receipts. Memory, timezones,
 job claims, agent execution and canonical delivery stay in Hermes.
 """
 import asyncio
+import contextlib
+import copy
 import datetime
 import hashlib
 import json
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 
 
@@ -40,15 +43,178 @@ def memory_document(store, profile, target):
     return result["document"]
 
 
-def profile_memory(profile):
+class MemoryRefresh:
+    """App-requested refreshes for canonical Bot Chats, never native tool writes.
+
+    An intent is durable before the native CAS writes its replacement. A crash
+    before its completion receipt conservatively refreshes at the next boundary.
+    Neither status reads nor native memory drift create another refresh request.
+    """
+    def __init__(self, journal, server, sessions_for):
+        self.journal, self.server, self.sessions_for = journal, server, sessions_for
+        self.supported = all(callable(getattr(server, method, None)) for method in ("_invoke_agent", "_persist_live_session_system_prompt"))
+        with journal.lock, journal.db:
+            journal.db.executescript("""
+                CREATE TABLE IF NOT EXISTS memory_refresh_edits(id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile TEXT NOT NULL, revision TEXT NOT NULL UNIQUE, state TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS memory_refresh_edit_profile ON memory_refresh_edits(profile,id);
+                CREATE TABLE IF NOT EXISTS memory_refresh_sessions(profile TEXT NOT NULL, session_id TEXT NOT NULL,
+                    revision TEXT, error TEXT, prompt_digest TEXT, PRIMARY KEY(profile,session_id));
+            """)
+            if "prompt_digest" not in {row[1] for row in journal.db.execute("PRAGMA table_info(memory_refresh_sessions)")}:
+                journal.db.execute("ALTER TABLE memory_refresh_sessions ADD COLUMN prompt_digest TEXT")
+
+    @contextlib.contextmanager
+    def snapshot(self, store):
+        # Lock both native documents in one fixed order while reloading/building.
+        # Checked reads reject native load_from_disk's fail-open empty fallback.
+        with contextlib.ExitStack() as locks:
+            for target in ("memory", "user"):
+                locks.enter_context(store._file_lock(store._path_for(target)))
+            def read():
+                values = []
+                for target in ("memory", "user"):
+                    raw, ok = store._read_raw_checked(store._path_for(target))
+                    if not ok:
+                        raise RuntimeError("Memory could not be read safely")
+                    values.append((target, store.target_enabled(target), raw))
+                return digest(values)
+            yield read(), read
+
+    def mutate(self, profile, store, target, update):
+        """Stage only a validated app edit, inside the native memory CAS lock.
+
+        There is no atomic transaction spanning native files and this journal.
+        A prepared intent survives a process crash on either side of the write;
+        an explicit refusal removes only its own intent. An exceptional write
+        has an unknown outcome, so its intent remains recoverable.
+        """
+        revision = None
+        def prepare(entries, limit):
+            nonlocal revision
+            replacement = update(entries, limit)
+            revision = uuid.uuid4().hex
+            with self.journal.lock, self.journal.db:
+                self.journal.db.execute("INSERT INTO memory_refresh_edits(profile,revision,state) VALUES(?,?,'prepared')", (profile, revision))
+            return replacement
+        result = store._mutate(target, prepare)
+        if not result.get("success"):
+            self.cancel(revision)
+        elif revision is not None:
+            with self.journal.lock, self.journal.db:
+                self.journal.db.execute("UPDATE memory_refresh_edits SET state='saved' WHERE revision=?", (revision,))
+        return result
+
+    def cancel(self, revision):
+        if revision is not None:
+            with self.journal.lock, self.journal.db:
+                self.journal.db.execute("DELETE FROM memory_refresh_edits WHERE revision=?", (revision,))
+
+    def latest(self, profile):
+        with self.journal.lock:
+            row = self.journal.db.execute("SELECT revision FROM memory_refresh_edits WHERE profile=? ORDER BY id DESC LIMIT 1", (profile,)).fetchone()
+        return row[0] if row else None
+
+    def acknowledgement(self, profile, sid):
+        with self.journal.lock:
+            return self.journal.db.execute("SELECT revision,error,prompt_digest FROM memory_refresh_sessions WHERE profile=? AND session_id=?", (profile, sid)).fetchone()
+
+    def status(self, profile):
+        revision = self.latest(profile)
+        sessions = list(self.sessions_for(profile))
+        applied = [self.acknowledgement(profile, session.get("session_key")) for session in sessions]
+        waiting = [session for session, ack in zip(sessions, applied) if not ack or ack[0] != revision]
+        failed = any(ack and ack[1] for ack in applied)
+        busy = revision is not None and any(session.get("running") for session in waiting)
+        state = "applied" if revision is None else "pending" if not self.supported or failed or busy else "next_turn" if waiting or not sessions else "applied"
+        message = {
+            "pending": "Saved in Hermes. Refresh pending. The active turn keeps its current memory; Hermes will retry at the next safe turn boundary." if busy else "Saved in Hermes. Refresh pending because the native prompt could not be refreshed. Reload after the next turn to check again.",
+            "next_turn": "Saved in Hermes. Applies to the next turn. Existing chat history is preserved.",
+            "applied": "Saved in Hermes. Applied to the current chat memory. Existing chat history is preserved." if revision else "Saved in Hermes. No app memory refresh is pending.",
+        }[state]
+        return dict(revision=revision or "", state=state, busy=busy, message=message)
+
+    def before_turn(self, profile, session, agent):
+        """Run at native invocation, only for the app's canonical Bot Chat.
+
+        Acknowledged restored agents retain native prompt restore and caching.
+        User, queued steering and goal followups share this boundary; approvals,
+        native task roots, tool state and history are never replaced.
+        """
+        if not any(candidate is session for candidate in self.sessions_for(profile)):
+            return
+        revision = self.latest(profile)
+        if revision is None:
+            return
+        sid = session.get("session_key")
+        old_agent = old_store = None
+        try:
+            db = getattr(agent, "_session_db", None)
+            if not sid or session.get("agent") is not agent or not callable(getattr(db, "get_session", None)):
+                raise RuntimeError("Native memory prompt cannot be verified")
+            ack = self.acknowledgement(profile, sid)
+            if ack and ack[0] == revision:
+                row = db.get_session(getattr(agent, "session_id", None) or sid)
+                prompt = (row or {}).get("system_prompt")
+                if isinstance(prompt, str) and prompt and digest(prompt) == ack[2]:
+                    # A restore may have a stale in-memory cache. Let Hermes restore
+                    # the verified persisted bytes rather than rebuilding the prefix.
+                    cached = getattr(agent, "_cached_system_prompt", None)
+                    if cached is not None and cached != prompt:
+                        agent._cached_system_prompt = None
+                        agent._cached_system_prompt_static = None
+                    if ack[1]:
+                        self.clear_error(profile, sid)
+                    return
+                # Native model switches can rewrite the persisted prompt. Its
+                # old digest no longer acknowledges this prompt; rebuild and
+                # verify below, then replace the receipt for the same app edit.
+            store = getattr(agent, "_memory_store", None)
+            persist = getattr(self.server, "_persist_live_session_system_prompt", None)
+            if store is None or not all(callable(fn) for fn in (
+                    getattr(agent, "_invalidate_system_prompt", None), getattr(agent, "_build_system_prompt", None),
+                    persist, getattr(db, "update_system_prompt", None))):
+                raise RuntimeError("Native memory refresh methods are unavailable")
+            with self.snapshot(store) as (snapshot, reread):
+                # The pending app revision is independent of disk content. Load
+                # the latest native files, including tool writes since the edit.
+                old_store = copy.deepcopy(vars(store))
+                old_agent = {key: value for key, value in vars(agent).items() if key.startswith(("_cached_system_prompt", "_plugin_system_prompt_sections", "_static_rebuild_failed"))}
+                agent._invalidate_system_prompt()
+                persist(session)
+                prompt = getattr(agent, "_cached_system_prompt", None)
+                row = db.get_session(getattr(agent, "session_id", None) or sid)
+                if not isinstance(prompt, str) or not prompt or not row or row.get("system_prompt") != prompt or reread() != snapshot:
+                    raise RuntimeError("Native memory prompt persistence was not verified")
+                with self.journal.lock, self.journal.db:
+                    self.journal.db.execute("INSERT INTO memory_refresh_sessions(profile,session_id,revision,error,prompt_digest) VALUES(?,?,?,NULL,?) ON CONFLICT(profile,session_id) DO UPDATE SET revision=excluded.revision,error=NULL,prompt_digest=excluded.prompt_digest", (profile, sid, revision, digest(prompt)))
+        except Exception:
+            if old_agent is not None:
+                for key in list(vars(agent)):
+                    if key.startswith(("_cached_system_prompt", "_plugin_system_prompt_sections", "_static_rebuild_failed")):
+                        delattr(agent, key)
+                vars(agent).update(old_agent)
+                vars(store).clear()
+                vars(store).update(old_store)
+            with self.journal.lock, self.journal.db:
+                self.journal.db.execute("INSERT INTO memory_refresh_sessions(profile,session_id,revision,error) VALUES(?,?,NULL,?) ON CONFLICT(profile,session_id) DO UPDATE SET error=excluded.error", (profile, sid or "", "Native memory refresh pending"))
+            __import__("logging").getLogger(__name__).warning("Native memory refresh pending for profile %s", profile, exc_info=True)
+
+    def clear_error(self, profile, sid):
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE memory_refresh_sessions SET error=NULL WHERE profile=? AND session_id=? AND error IS NOT NULL", (profile, sid))
+
+
+def profile_memory(profile, refresh=None):
     from tools.memory_tool import load_on_disk_store
     store = load_on_disk_store()
     return dict(botId=profile, profile=profile, scope="profile", owner="Hermes",
         documents=[memory_document(store, profile, target) for target in ("memory", "user")],
-        notice="These memories belong to this shared Hermes profile. Edits are saved in Hermes. Existing conversations keep their memory snapshot until Hermes starts a new session.")
+        **(dict(refresh=refresh.status(profile)) if refresh else {}),
+        notice="These memories belong to this shared Hermes profile. Saved edits refresh at the next safe turn boundary without changing chat history.")
 
 
-def mutate_memory(data):
+def mutate_memory(data, refresh=None):
     from tools.memory_tool import load_on_disk_store
     from tools.memory_tool_store import ENTRY_DELIMITER, _scan_memory_content
     profile, target = data["profile"], data.get("target")
@@ -94,10 +260,10 @@ def mutate_memory(data):
         return replacement, "Memory updated."
     # CAS occurs inside Hermes's own file lock, after its disk reread. Native
     # tools and household edits therefore cannot silently overwrite each other.
-    result = store._mutate(target, update)
+    result = refresh.mutate(profile, store, target, update) if refresh else store._mutate(target, update)
     if not result.get("success"):
         raise ExperienceError("Hermes refused this memory edit because its on-disk content needs review in the native dashboard.", 409)
-    return profile_memory(profile)
+    return profile_memory(profile, refresh)
 
 
 def preview_schedule(profile, schedule):
@@ -605,7 +771,7 @@ def install(web, journal, projector):
             if operation in ("search", "history", "usage"):
                 result = await config_scoped_to_thread(profile, lambda: discovery(data, journal, projector))
             elif operation == "memory":
-                result = await config_scoped_to_thread(profile, lambda: profile_memory(profile))
+                result = await config_scoped_to_thread(profile, lambda: profile_memory(profile, getattr(journal, "memory_refresh", None)))
             elif operation == "preview":
                 result = await config_scoped_to_thread(profile, lambda: preview_schedule(profile, data.get("schedule")))
             elif operation in ("routine_results", "routine_output"):
@@ -614,7 +780,7 @@ def install(web, journal, projector):
                 with retirement.work() as admitted:
                     if not admitted:
                         raise ExperienceError("Hermes is being upgraded. Memory edits are paused.", 409)
-                    result = await config_scoped_to_thread(profile, lambda: mutate_memory(data))
+                    result = await config_scoped_to_thread(profile, lambda: mutate_memory(data, getattr(journal, "memory_refresh", None)))
             elif operation in ("run", "run_receipt"):
                 if not all(isinstance(data.get(key), str) and 1 <= len(data[key]) <= 200 for key in ("routineId", "requestId", "senderId")):
                     raise ExperienceError("Routine ID, request ID and person are required.")

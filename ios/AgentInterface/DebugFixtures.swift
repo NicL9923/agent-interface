@@ -31,6 +31,12 @@
       }
       // Seeded under the lock its requests take, so no request reads it half written.
       FixtureProtocol.lock.withLock {
+        if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
+          FixtureProtocol.automation = AutomationDebugFixture()
+          FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
+            "prompt": "Inspect the pasture.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": [],
+            "provider": "openrouter", "model": "fixture-fast", "contextFrom": ["self"]]]
+        }
         if environment["AGENT_INTERFACE_UI_COORDINATION"] == "1" {
           FixtureProtocol.messages = [
             ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
@@ -80,6 +86,7 @@
   }
   private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
+    nonisolated(unsafe) static var automation = AutomationDebugFixture()
     // The fixture server's state. Unchecked because `lock` guards every access: requests read and
     // write it only inside `startLoading`, and `configure` seeds it under the same lock.
     nonisolated(unsafe) static var messages: [[String: Any]] = [
@@ -195,7 +202,9 @@
         respond(raw: Self.silence(seconds: 10), type: "audio/wav")
         return
       }
-      if path.hasSuffix("/voice/transcribe") {
+      if let fixture = Self.automation.response(path: path, method: method, body: body, url: request.url!) {
+        status = fixture.status; object = fixture.object
+      } else if path.hasSuffix("/voice/transcribe") {
         object = ["text": "Fixture transcript: check the north gate."]
       } else if path.hasSuffix("/voice/speak") {
         object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
@@ -366,7 +375,7 @@
       } else if path.hasSuffix("/memory") || path.hasSuffix("/memory/memory") {
         if method == "PATCH" { Self.memoryEntries = (body["entries"] as? [[String: Any]] ?? []).enumerated().map { index, entry in var entry = entry; if entry["id"] == nil { entry["id"] = "m-new-\(index)" }; return entry } }
         if method == "DELETE" { Self.memoryEntries.removeAll { $0["id"] as? String == body["entryId"] as? String } }
-        object = ["botId": "ranch", "profile": "default", "scope": "profile", "owner": "Hermes", "documents": [["target": "memory", "label": "Memory", "revision": "fixture-revision", "enabled": true, "entries": Self.memoryEntries, "charLimit": 2200, "charCount": 42]], "notice": "Explicit simulator fixture. New sessions see edits."]
+        object = ["botId": "ranch", "profile": "default", "scope": "profile", "owner": "Hermes", "documents": [["target": "memory", "label": "Memory", "revision": "fixture-revision", "enabled": true, "entries": Self.memoryEntries, "charLimit": 2200, "charCount": 42]], "notice": "Explicit simulator fixture. Saved edits refresh at the next safe turn boundary without changing chat history."]
       } else if path.contains("/cards/") && path.hasSuffix("/state") {
         if method == "PUT" { Self.cardState = body }
         object = Self.cardState

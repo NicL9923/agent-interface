@@ -1,3 +1,4 @@
+import { installAutomationRoutes } from './automation.js';
 import { avatarShapes, mascotFamilies, reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
@@ -242,12 +243,14 @@ export async function createApp(
     const input = z.object({ action: z.enum(["retry", "cancel", "restart_service"]), operationId: z.string().uuid(), requestId: z.string().uuid() }).strict().parse(req.body);
     return upgrades.control(signedIn(req), input);
   });
+  const canManageIntegrations = (req: FastifyRequest) => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
   await installIntegrationsRoutes(app, runtime, {
     origin: config.origin,
-    canManage: req => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase())),
+    canManage: canManageIntegrations,
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
   await installExperienceRoutes(app, runtime, store, roster);
+  await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);
   await installCollaborationRoutes(app, runtime, store, roster);
   await installVaultRoutes(app, runtime);
@@ -921,12 +924,44 @@ export async function createApp(
       .object({
         botId: id,
         name: z.string().min(1).max(100),
-        prompt: z.string().min(1).max(50000),
+        prompt: z.string().max(50000),
         schedule: z.string().min(1).max(500),
         enabled: z.boolean(),
         recipientIds: z.array(id).max(20),
+        skills: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
+        model: z.string().trim().max(500).nullable().optional(),
+        provider: z.string().trim().max(200).nullable().optional(),
+        enabledToolsets: z.array(z.string().trim().min(1).max(200)).max(100).nullable().optional(),
+        script: z.string().trim().max(2000).nullable().optional(),
+        noAgent: z.boolean().optional(),
+        contextFrom: z.array(z.string().trim().min(1).max(200)).max(100).nullable().optional(),
       })
       .parse(req.body);
+    const all = routineId || input.contextFrom?.some(ref => ref !== 'self') ? await runtime.routines() : [];
+    const previous = routineId ? all.find(row => row.id === routineId) : undefined;
+    if (routineId && (!previous || previous.botId !== input.botId)) throw failure(404, "Routine not found");
+    // Compare against native state before forwarding updates. This also preserves
+    // uneditable settings and avoids revalidating an untouched, missing script/source.
+    for (const key of ['skills','model','provider','enabledToolsets','script','noAgent','contextFrom'] as const) {
+      if (previous && input[key] !== undefined && JSON.stringify(input[key]) === JSON.stringify(previous[key])) delete input[key];
+    }
+    const effective = { ...previous, ...input };
+    if (effective.noAgent && !effective.script?.trim()) throw failure(400, "Script-only routines require a script from this assistant's scripts directory.");
+    if (!effective.prompt.trim() && !effective.script?.trim() && !effective.skills?.length)
+      throw failure(400, "Add instructions, a skill, or a profile script for this routine to run.");
+    // 41dfcf2c dashboard _cron_string_list converts [] to None. Do not turn a
+    // deliberate zero-tool restriction into unrestricted access silently.
+    if (Array.isArray(input.enabledToolsets) && input.enabledToolsets.length === 0)
+      throw failure(400, "Select at least one toolset or use profile tools. This Hermes dashboard cannot save an empty toolset allowlist.");
+    if (input.contextFrom?.some(ref => ref !== 'self' && !all.some(row => row.id === ref && row.botId === input.botId)))
+      throw failure(400, "Context sources must be existing routines for this assistant.");
+    if ((input.model !== undefined || input.provider !== undefined) && (effective.model || effective.provider)) {
+      if (!runtime.modelOptions) throw failure(409, "Model choices are unavailable. Keep the existing model or try again after reconnecting.");
+      const catalog = await runtime.modelOptions(input.botId);
+      const provider = catalog.providers.find(row => row.id === effective.provider || row.aliases?.includes(effective.provider ?? ''));
+      if (!provider || !provider.authenticated || effective.model && !provider.models.some(row => row.id === effective.model && row.available))
+        throw failure(400, "Choose a model from an existing connected provider, or use the assistant's model.");
+    }
     if (
       input.recipientIds.some((id) => {
         const user = store.getUser(id);
@@ -943,7 +978,7 @@ export async function createApp(
       throw Object.assign(failure(400, "Only you can receive your personal assistant's routine results."), { code: "private_recipients" });
     const routine = await runtime.saveRoutine(input, routineId);
     store.routineRecipients(routine.id, input.recipientIds);
-    return { ...routine, recipientIds: input.recipientIds };
+    return { ...effective, ...routine, recipientIds: input.recipientIds };
   };
   app.post("/api/routines", async (req) => saveRoutine(req));
   app.put("/api/routines/:id", async (req) => saveRoutine(req, params(req).id));

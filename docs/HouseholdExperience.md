@@ -79,9 +79,11 @@ disabled-memory settings still apply.
 
 The profile label describes the real scope. WildBots shows a personal
 assistant's memory only to its owner, but anyone with Hermes dashboard access can
-still read and change it. Existing Hermes conversations retain their original
-memory snapshot until Hermes starts a new session. Saving a memory edit does not
-rewrite a conversation's current context.
+still read and change it. App edits refresh the canonical Bot Chat's memory at
+its next safe turn boundary. A running turn keeps its current snapshot. The panel
+distinguishes pending, next-turn and applied status. Refresh preserves the native
+session, history, approvals and task identity. Native memory-tool writes keep
+Hermes's usual snapshot behavior, and other native conversations are unaffected.
 
 ## Interactive replies
 
@@ -181,10 +183,61 @@ receipt follows the native execution ledger, including detached native workers.
 An uncertain outcome requires review. The app does not silently start another
 run, and it blocks routine edits while a trial's outcome remains unconfirmed.
 
+## Work and learning
+
+Assistant settings > Work provides native goals, tasks and event triggers on web
+and iOS. Each section reports whether the installed Hermes supports it. Refresh
+status after an uncertain response; the clients never replay a mutation on their
+own.
+
+A standing goal saves paused with a continuation-turn budget. Resume starts a
+real task through the app's durable admission journal. Pause and Clear remain
+available during execution. An interrupted task requires explicit review before
+another admission. Resume requests retain their identity while their outcome is
+uncertain. After reviewing the conversation, the person can explicitly start a
+new attempt with a fresh request ID. Replacing a goal requires confirmation
+because it resets progress and removes native subgoals, completion contracts and
+verification gates.
+
+The task board lists this assistant's work on Hermes's current board. New tasks
+start blocked. Choose a visible assistant, edit instructions and priority, add
+same-owner dependencies, then Start. Hermes owns dispatch and worker claims.
+Request review hands an unclaimed ready task to a chosen reviewer. An active
+native reviewer owns requests for changes; WildBots does not take over its claim.
+Tasks assigned to a hidden personal assistant and private dependency edges remain
+hidden. The overview shows the newest 100 visible owner tasks and reports when
+older tasks were omitted. Choosing Unassigned clears the native assignment.
+
+Event triggers target an existing routine in the same profile. New triggers start
+disabled and return a signing secret once. Copy it to the event sender before
+leaving; the clients never persist it. An integration administrator can create,
+edit, enable or delete triggers. Hermes's webhook channel must be enabled by the
+installer, and the target routine must be enabled. Hermes owns event verification,
+filtering, admission and delivery. A lost creation response cannot reveal the
+secret again; inspect the disabled trigger and replace it if needed.
+
+Learning shows installed skill documents and pending changes. Read the actual
+diff before approving or rejecting it. The decision names that diff's revision,
+so a changed skill requires another review. Oversized diffs cannot be approved
+here. An uncertain skill decision requires native inspection before another
+attempt. Integration administrators control whether Hermes requires approval for
+skill writes; ordinary assistant editors can review pending changes.
+
+Routine Advanced options select skills, a provider/model pin, toolsets, an
+existing profile script, script-only execution, and previous results from this
+assistant's other routines. Script-only execution skips its model call, but
+delivery to Bot Chat starts a separate model turn. Context sources supply their
+latest saved outputs and do not impose execution order. Cycles and cross-profile
+dependencies are refused. Omitted native settings stay saved during edits. Scripts must exist
+inside the profile's scripts directory. Hermes's dashboard cannot save a new empty
+toolset selection safely, so WildBots rejects that change and preserves existing
+zero-tool settings.
+
 ## Integration and release
 
-The add-on adds one finite, service-authenticated experience endpoint. It calls
-Hermes's native memory stores and scheduler under their existing profile context.
+The add-on provides finite, service-authenticated experience and automation
+endpoints. They call Hermes's native stores and scheduler under their existing
+profile context.
 Voice uses the existing native transcription and speech endpoints. The service
 bridge excludes the native voice configuration endpoint, which can contain secrets.
 

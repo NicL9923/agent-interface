@@ -7,14 +7,13 @@ function MemoryEditor({ document, botId, busy, onChange }: { document: MemoryDoc
   const [entries, setEntries] = useState(document.entries.map(entry => ({ ...entry })));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
   const [forget, setForget] = useState<string | null>(null);
   const changed = JSON.stringify(entries) !== JSON.stringify(document.entries);
   const path = `/bots/${encodeURIComponent(botId)}/memory/${document.target}`;
   async function mutate(action: () => Promise<ProfileMemory>) {
-    setSaving(true); setError(""); setNotice("");
-    try { onChange(await action()); setNotice("Saved in Hermes."); }
+    setSaving(true); setError("");
+    try { onChange(await action()); }
     catch (e) { setError((e as Error).message); if (e instanceof ApiError && e.status === 409) setConflict(true); }
     finally { setSaving(false); }
   }
@@ -39,7 +38,6 @@ function MemoryEditor({ document, botId, busy, onChange }: { document: MemoryDoc
           entries: entries.map(entry => ({ ...(entry.id ? { id: entry.id } : {}), text: entry.text })) }, "PATCH"))}>{saving ? "Saving..." : "Save memories"}</button>
       {changed && <button type="button" disabled={saving} onClick={() => { setEntries(document.entries.map(entry => ({ ...entry }))); setError(""); }}>Discard edits</button>}</div>
     {error && <p className="form-error" role="alert">{error}{conflict && " Your edits are kept. Copy them before reloading the newer profile memory."}</p>}
-    {notice && <p role="status">{notice}</p>}
   </section>;
 }
 export function MemoryPanel({ botId }: { botId: string }) {
@@ -58,8 +56,10 @@ export function MemoryPanel({ botId }: { botId: string }) {
     {loading && <p role="status">Loading profile memory...</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
     {memory && <><p className="capability-note"><strong>Profile: {memory.profile}.</strong> {memory.notice}</p>
+      {memory.refresh && <p role="status">{memory.refresh.message}</p>}
       {memory.documents.map(document => <MemoryEditor key={`${document.target}:${document.revision}`} document={document} botId={botId} busy={loading}
         onChange={result => setMemory(previous => previous ? { ...previous,
+          refresh: result.refresh, notice: result.notice,
           documents: previous.documents.map(saved => saved.target === document.target
             ? result.documents.find(updated => updated.target === saved.target) || saved : saved) } : result)} />)}</>}
     <button type="button" disabled={loading} onClick={() => setRetry(retry + 1)}>{error ? "Try loading again" : "Reload profile memory"}</button>

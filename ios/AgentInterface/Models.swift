@@ -801,14 +801,49 @@ struct Routine: Codable, Identifiable {
   var schedule: String
   var enabled: Bool
   var recipientIds: [String]?
+  var skills: [String]?
+  var model: String?
+  var provider: String?
+  var enabledToolsets: [String]?
+  var script: String?
+  var noAgent: Bool?
+  var contextFrom: [String]?
   var nextRunAt: String?
   var lastRunAt: String?
   var lastStatus: String?
   var lastError: String?
   var lastDeliveryError: String?
+  enum CodingKeys: String, CodingKey {
+    case id, botId, name, prompt, schedule, enabled, recipientIds, skills, model, provider
+    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError
+  }
+  // Explicit null releases an override; synthesized encodeIfPresent would omit it
+  // and native PUT would retain the old value. Unknown native fields stay server-side.
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(botId, forKey: .botId)
+    try c.encode(name, forKey: .name)
+    try c.encode(prompt, forKey: .prompt)
+    try c.encode(schedule, forKey: .schedule)
+    try c.encode(enabled, forKey: .enabled)
+    try c.encodeIfPresent(recipientIds, forKey: .recipientIds)
+    try c.encodeIfPresent(skills, forKey: .skills)
+    try c.encode(model, forKey: .model)
+    try c.encode(provider, forKey: .provider)
+    try c.encode(enabledToolsets, forKey: .enabledToolsets)
+    try c.encode(script, forKey: .script)
+    try c.encodeIfPresent(noAgent, forKey: .noAgent)
+    try c.encode(contextFrom, forKey: .contextFrom)
+    try c.encodeIfPresent(nextRunAt, forKey: .nextRunAt)
+    try c.encodeIfPresent(lastRunAt, forKey: .lastRunAt)
+    try c.encodeIfPresent(lastStatus, forKey: .lastStatus)
+    try c.encodeIfPresent(lastError, forKey: .lastError)
+    try c.encodeIfPresent(lastDeliveryError, forKey: .lastDeliveryError)
+  }
   static func empty(botId: String) -> Routine {
     Routine(
-      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [])
+      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], contextFrom: ["self"])
   }
 }
 struct Receipt: Codable, Equatable {

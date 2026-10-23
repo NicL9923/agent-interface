@@ -822,6 +822,28 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertNil(object["modelFavorites"])
     }
 
+    func testAdvancedRoutineOverridesRoundTripAndClearExplicitly() throws {
+        let source = Data(#"{"id":"abc123","botId":"bot","name":"Morning","prompt":"","schedule":"1h","enabled":false,"skills":["weather"],"model":"saved","provider":"configured","script":"reports/morning.py","noAgent":true,"enabledToolsets":[],"contextFrom":["self","def456"]}"#.utf8)
+        var routine = try JSONDecoder().decode(Routine.self, from: source)
+        let roundTrip = try JSONDecoder().decode(Routine.self, from: JSONEncoder().encode(routine))
+        XCTAssertEqual(roundTrip.skills, ["weather"])
+        XCTAssertEqual(roundTrip.model, "saved")
+        XCTAssertEqual(roundTrip.provider, "configured")
+        XCTAssertEqual(roundTrip.script, "reports/morning.py")
+        XCTAssertEqual(roundTrip.noAgent, true)
+        XCTAssertEqual(roundTrip.enabledToolsets, [])
+        XCTAssertEqual(roundTrip.contextFrom, ["self", "def456"])
+        routine.model = nil
+        routine.provider = nil
+        routine.script = nil
+        routine.enabledToolsets = nil
+        routine.contextFrom = []
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(routine)) as? [String: Any])
+        for key in ["model", "provider", "script", "enabledToolsets"] { XCTAssertTrue(json[key] is NSNull, key) }
+        XCTAssertEqual(json["contextFrom"] as? [String], [])
+        XCTAssertEqual(Routine.empty(botId: "bot").contextFrom, ["self"])
+    }
+
     func testBackendJSONContractsIncludeNullableCSRFAndISOExpiry() throws {
         let server = NativeMockServer()
         let bootstrap = try JSONDecoder().decode(Bootstrap.self, from: server.bootstrapData())

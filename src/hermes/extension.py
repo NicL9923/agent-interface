@@ -124,6 +124,24 @@ class Journal:
         row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor FROM receipts WHERE request_id=?", (request_id,)).fetchone()
         return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3]}
 
+    def submission_state(self, profile, sid, session):
+        """The shared recovery gates for app input and goal continuation.
+
+        Callers doing a goal mutation also hold this session's history_lock.
+        """
+        with self.lock:
+            stored = session.get("session_key")
+            running = bool(session.get("running"))
+            current = self.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
+            interrupted = self.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
+            terminal = self.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
+            if not terminal:
+                latest = self.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, stored)).fetchone()
+                terminal = self.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
+            inflight = session.get("inflight_turn") or {}
+            interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
+            return dict(stored=stored, running=running, current=current, interrupted=interrupted)
+
     def admission_response(self, request_id):
         row = self.db.execute("SELECT admission_response FROM receipts WHERE request_id=?", (request_id,)).fetchone()
         if row is None:
@@ -375,6 +393,8 @@ def install(path=None):
         home = session.get("profile_home") or session.get("hermes_home")
         return profile_name_for_home(home or get_hermes_home()) or "default"
     journal.live_profile_for_session = live_profile_for
+    journal.memory_refresh = sibling_module("experience").MemoryRefresh(journal, server,
+        lambda profile: (session for sid, session in server._sessions.copy().items() if sid == canonical.get(profile)))
 
     def artifacts(result, session):
         # Only actual native tool results can register outputs. Never scan user text.
@@ -429,6 +449,9 @@ def install(path=None):
     if hasattr(server, "_invoke_agent"):
         original_invoke = server._invoke_agent
         def invoke(sid, session, turn, *args, **kwargs):
+            profile = live_profile_for(sid)
+            if canonical.get(profile) == sid:
+                journal.memory_refresh.before_turn(profile, session, turn.agent)
             text = kwargs.get("text", args[7] if len(args) > 7 else None)
             display_kind = kwargs.get("display_kind", args[4] if len(args) > 4 else None)
             author = kwargs.get("turn_author", args[6] if len(args) > 6 else None)
@@ -841,16 +864,10 @@ def install(path=None):
             with journal.lock:
                 if sid is None or canonical.get(profile) != sid:
                     return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
-                stored = server._sessions[sid].get("session_key")
-                running = bool(server._sessions[sid].get("running"))
-                current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-                interrupted = journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
-                terminal = journal.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
-                if not terminal:
-                    latest = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, stored)).fetchone()
-                    terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
-                inflight = server._sessions[sid].get("inflight_turn") or {}
-                interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
+                state = journal.submission_state(profile, sid, server._sessions[sid])
+                stored, running, current, interrupted = (state[key] for key in ("stored", "running", "current", "interrupted"))
+                if params.get("require_idle") is True and running:
+                    return server._err(rid, 4091, "This assistant started another turn before goal continuation admission")
                 if interrupted and params.get("reviewed_interruption") is not True:
                     return server._err(rid, 4094, "Review the interrupted task before starting another turn")
                 def admitted(message=None):
@@ -1024,6 +1041,10 @@ def install(path=None):
                                                  open_canonical, delivery_admission, classify=classify_agent_error,
                                                  native_records=bridge)
     journal.bot_delivery.start()
+    automation_spec = importlib.util.spec_from_file_location("agent_interface_automation", Path(__file__).resolve().with_name("automation.py"))
+    automation = importlib.util.module_from_spec(automation_spec)
+    automation_spec.loader.exec_module(automation)
+    automation.install_runtime(server, native, open_bot, canonical_lock, submission_lock, maintenance_lock, maintenance_state, journal, submit)
     return journal
 
 
@@ -1038,6 +1059,9 @@ if __name__ == "__main__":
     experience_spec = importlib.util.spec_from_file_location("agent_interface_experience", Path(__file__).resolve().with_name("experience.py"))
     experience = importlib.util.module_from_spec(experience_spec); experience_spec.loader.exec_module(experience)
     experience.install(web, journal, server._history_to_messages)
+    automation_spec = importlib.util.spec_from_file_location("agent_interface_automation", Path(__file__).resolve().with_name("automation.py"))
+    automation = importlib.util.module_from_spec(automation_spec); automation_spec.loader.exec_module(automation)
+    automation.install(web, journal)
     vault_spec = importlib.util.spec_from_file_location("agent_interface_vault", Path(__file__).resolve().with_name("vault.py"))
     vault = importlib.util.module_from_spec(vault_spec); vault_spec.loader.exec_module(vault)
     vault.install(web, journal)

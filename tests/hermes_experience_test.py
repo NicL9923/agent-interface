@@ -14,11 +14,296 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('experience_test', ROOT / 'src/hermes/experience.py')
 experience = importlib.util.module_from_spec(spec); spec.loader.exec_module(experience)
+
+
+class MemoryRefreshTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / 'refresh.db'
+        self.disk = {'memory': ['Old note'], 'user': ['About me']}
+        self.locks = {target: threading.RLock() for target in self.disk}
+        self.persisted = {'system_prompt': 'Old note|About me'}
+        self.server = types.SimpleNamespace(_invoke_agent=lambda: None)
+        self.session = dict(session_key='canonical', running=False, history=[{'role': 'user', 'content': 'earlier', '_row_id': 7}],
+                            task_id='root', pending_approval=object(), goal=object())
+        owner = self
+        class Store:
+            def __init__(self): self.load_from_disk()
+            def load_from_disk(self): self.loaded = copy.deepcopy(owner.disk)
+            def _path_for(self, target): return target
+            def _file_lock(self, path): return owner.locks[path]
+            def _read_raw_checked(self, path): return '\n§\n'.join(owner.disk[path]), True
+            def target_enabled(self, target): return True
+            def _mutate(self, target, fn, **kwargs):
+                with owner.locks[target]:
+                    result = fn(list(owner.disk[target]), 5000)
+                    if isinstance(result, dict): return result
+                    owner.disk[target] = result[0]
+                    return {'success': True}
+        self.Store = Store
+        def persist(session):
+            agent = session['agent']
+            agent._cached_system_prompt = agent._build_system_prompt(None)
+            self.persisted['system_prompt'] = agent._cached_system_prompt
+        self.server._persist_live_session_system_prompt = persist
+        self.modules = {
+            'tools.memory_tool': types.SimpleNamespace(load_on_disk_store=Store),
+            'tools.memory_tool_store': types.SimpleNamespace(ENTRY_DELIMITER='\n§\n', _scan_memory_content=lambda text: False),
+        }
+        self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
+        self.open_journal()
+        self.make_agent()
+
+    def open_journal(self):
+        self.journal = types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(self.path, check_same_thread=False))
+        self.refresh = experience.MemoryRefresh(self.journal, self.server, lambda profile: [self.session] if profile == 'default' else [])
+
+    def make_agent(self):
+        store = self.Store()
+        agent = types.SimpleNamespace(_memory_store=store, _cached_system_prompt=self.persisted['system_prompt'],
+            _cached_system_prompt_static='old static', session_id='canonical',
+            _session_db=types.SimpleNamespace(get_session=lambda sid: dict(self.persisted), update_system_prompt=lambda *args: None))
+        def invalidate():
+            agent._cached_system_prompt = None; agent._cached_system_prompt_static = None
+            store.load_from_disk()
+        def build(_):
+            agent._cached_system_prompt_static = 'new static'
+            return '|'.join(text for entries in store.loaded.values() for text in entries)
+        agent._invalidate_system_prompt = invalidate; agent._build_system_prompt = build
+        self.session['agent'] = self.agent = agent
+
+    def tearDown(self):
+        self.patch.stop(); self.journal.db.close(); self.directory.cleanup()
+
+    def save(self, text):
+        document = experience.profile_memory('default')['documents'][0]
+        return experience.mutate_memory(dict(operation='save_memory', profile='default', target='memory',
+            revision=document['revision'], entries=[dict(text=text)]), self.refresh)
+
+    def test_edit_during_run_waits_then_rebuilds_and_persists_without_changing_session(self):
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.session['running'] = True
+        before = dict(self.session)
+        result = self.save('New note')
+        self.assertEqual(result['refresh']['state'], 'pending')
+        self.assertTrue(result['refresh']['busy'])
+        self.assertEqual(self.agent._memory_store.loaded['memory'], ['Old note'])
+        self.assertEqual(self.persisted['system_prompt'], 'Old note|About me')
+        self.session['running'] = False
+        self.assertEqual(self.refresh.status('default')['state'], 'next_turn')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'New note|About me')
+        self.assertEqual(self.agent._cached_system_prompt_static, 'new static')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.assertEqual(self.session, {**before, 'running': False})
+        # A subsequent native restore with nonempty canonical history sees the
+        # persisted rebuild, rather than resurrecting the old memory snapshot.
+        self.assertIn('New note', self.agent._session_db.get_session('canonical')['system_prompt'])
+
+    def test_restart_recovers_unapplied_revision_and_saved_prompt(self):
+        revision = self.save('Saved before restart')['refresh']['revision']
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.assertEqual(self.refresh.status('default')['revision'], revision)
+        self.assertEqual(self.refresh.status('default')['state'], 'next_turn')
+        self.assertEqual(self.agent._cached_system_prompt, 'Old note|About me')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertIn('Saved before restart', self.persisted['system_prompt'])
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_native_persist_swallows_failure_or_missing_methods_never_acknowledge(self):
+        self.save('Pending note')
+        for persist in (lambda session: None, None):
+            self.server._persist_live_session_system_prompt = persist
+            with self.assertLogs(experience.__name__, level='WARNING'):
+                self.refresh.before_turn('default', self.session, self.agent)
+            self.assertEqual(self.refresh.status('default')['state'], 'pending')
+            self.assertEqual(self.agent._cached_system_prompt, 'Old note|About me')
+            self.assertEqual(self.agent._memory_store.loaded['memory'], ['Old note'])
+            self.assertIsNone(getattr(self.agent, '_app_memory_revision', None))
+
+    def test_disk_change_during_build_is_pending_and_next_boundary_retries_latest(self):
+        self.save('First edit')
+        persist = self.server._persist_live_session_system_prompt
+        def racing(session):
+            persist(session)
+            # An uncooperative external writer can ignore Hermes's locks.
+            self.disk['memory'] = ['External edit']
+        self.server._persist_live_session_system_prompt = racing
+        with self.assertLogs(experience.__name__, level='WARNING'):
+            self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('default')['state'], 'pending')
+        self.server._persist_live_session_system_prompt = persist
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'External edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_cas_failure_does_not_write_refresh_receipt_and_other_profile_is_separate(self):
+        with self.assertRaises(experience.ExperienceError):
+            experience.mutate_memory(dict(operation='save_memory', profile='default', target='memory', revision='stale', entries=[]), self.refresh)
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_edits').fetchone()[0], 0)
+        self.save('Profile note')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('other')['state'], 'applied')
+        self.assertEqual(self.refresh.status('other')['revision'], '')
+        self.assertEqual(self.journal.db.execute('SELECT profile FROM memory_refresh_sessions').fetchall(), [('default',)])
+
+    def test_native_writer_is_serialized_with_app_reload_then_keeps_frozen_prompt(self):
+        self.save('First edit')
+        entered, attempted, written = threading.Event(), threading.Event(), threading.Event()
+        persist = self.server._persist_live_session_system_prompt
+        def writer():
+            entered.wait(2); attempted.set()
+            with self.locks['memory']:
+                self.disk['memory'] = ['Later native edit']
+                written.set()
+        worker = threading.Thread(target=writer); worker.start()
+        def building(session):
+            entered.set()
+            self.assertTrue(attempted.wait(2))
+            self.assertFalse(written.is_set(), 'Native write crossed the prompt reload lock')
+            persist(session)
+        self.server._persist_live_session_system_prompt = building
+        self.refresh.before_turn('default', self.session, self.agent)
+        worker.join(2); self.assertFalse(worker.is_alive())
+        self.assertEqual(self.persisted['system_prompt'], 'First edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.server._persist_live_session_system_prompt = persist
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.assertEqual(self.persisted['system_prompt'], 'First edit|About me')
+
+    def test_status_and_native_tool_writes_never_create_app_refresh_requests(self):
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.disk['memory'].append('A native tool wrote this')
+        self.refresh.status('default')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_edits').fetchone()[0], 0)
+        self.assertEqual(self.persisted['system_prompt'], 'Old note|About me')
+
+    def test_busy_app_edit_followed_by_native_tool_write_loads_latest_disk_once(self):
+        self.session['running'] = True
+        revision = self.save('An app edit')['refresh']['revision']
+        self.disk['memory'].append('Subsequent native tool edit')
+        self.assertEqual(self.refresh.status('default')['revision'], revision)
+        self.session['running'] = False
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'An app edit|Subsequent native tool edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_other_native_session_is_untouched_even_with_pending_app_edit(self):
+        self.save('App edit for Bot Chat')
+        native = {**self.session, 'session_key': 'unrelated-native-session'}
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.refresh.before_turn('default', native, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_sessions').fetchone()[0], 0)
+        self.assertEqual(self.persisted['system_prompt'], 'Old note|About me')
+
+    def test_restored_acknowledged_agent_uses_persisted_prompt_without_rebuilding(self):
+        revision = self.save('Persisted app edit')['refresh']['revision']
+        self.refresh.before_turn('default', self.session, self.agent)
+        prompt = self.persisted['system_prompt']
+        self.disk['memory'].append('Native write after acknowledgement')
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.agent._cached_system_prompt = None
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.agent._build_system_prompt = Mock(wraps=self.agent._build_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.agent._build_system_prompt.assert_not_called()
+        self.assertEqual(self.persisted['system_prompt'], prompt)
+        self.assertEqual(self.refresh.status('default')['revision'], revision)
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_acknowledged_stale_cache_defers_to_verified_native_restore(self):
+        self.save('Persisted app edit')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._cached_system_prompt = 'Old note|About me'
+        self.agent._build_system_prompt = Mock(wraps=self.agent._build_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertIsNone(self.agent._cached_system_prompt)
+        self.assertIsNone(self.agent._cached_system_prompt_static)
+        self.agent._build_system_prompt.assert_not_called()
+
+    def test_native_model_prompt_rewrite_rebuilds_and_acknowledges_once(self):
+        revision = self.save('Persisted app edit')['refresh']['revision']
+        self.refresh.before_turn('default', self.session, self.agent)
+        original_ack = self.refresh.acknowledgement('default', 'canonical')
+        native_build = self.agent._build_system_prompt
+        self.agent.model = 'switched-model'
+        self.agent._build_system_prompt = Mock(side_effect=lambda message: self.agent.model + '|' + native_build(message))
+        # The native model-switch path persists its new runtime identity before
+        # the next invocation, replacing the digest in the existing receipt.
+        self.server._persist_live_session_system_prompt(self.session)
+        rewritten = self.persisted['system_prompt']
+        self.assertNotEqual(experience.digest(rewritten), original_ack[2])
+        self.agent._build_system_prompt.reset_mock()
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        session_before = dict(self.session)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_called_once_with()
+        self.agent._build_system_prompt.assert_called_once_with(None)
+        self.assertEqual(self.refresh.acknowledgement('default', 'canonical'), (revision, None, experience.digest(rewritten)))
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.assertEqual(self.session, session_before)
+        self.assertEqual(self.agent.model, 'switched-model')
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_edits').fetchone()[0], 1)
+        # A later native tool write still keeps the newly acknowledged prefix.
+        self.disk['memory'].append('Native-only edit after model switch')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._build_system_prompt.assert_called_once_with(None)
+        self.assertEqual(self.persisted['system_prompt'], rewritten)
+
+    def test_missing_acknowledged_prompt_remains_pending_until_persistence_recovers(self):
+        self.save('Persisted app edit')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.persisted['system_prompt'] = None
+        persist = self.server._persist_live_session_system_prompt
+        self.server._persist_live_session_system_prompt = lambda session: None
+        with self.assertLogs(experience.__name__, level='WARNING'):
+            self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('default')['state'], 'pending')
+        self.server._persist_live_session_system_prompt = persist
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'Persisted app edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_crash_after_native_cas_before_saved_marker_keeps_recoverable_intent(self):
+        native_mutate = self.Store._mutate
+        def crash_after_write(store, *args, **kwargs):
+            native_mutate(store, *args, **kwargs)
+            raise SystemExit('Simulated process crash after native CAS')
+        with patch.object(self.Store, '_mutate', crash_after_write):
+            # Read the revision before installing the crashing native seam.
+            revision = experience.digest('default', 'memory', ['Old note'])
+            with self.assertRaises(SystemExit):
+                experience.mutate_memory(dict(operation='save_memory', profile='default', target='memory', revision=revision, entries=[dict(text='Crash durable app edit')]), self.refresh)
+        self.assertEqual(self.journal.db.execute('SELECT state FROM memory_refresh_edits').fetchall(), [('prepared',)])
+        self.disk['memory'].append('Later native write')
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'Crash durable app edit|Later native write|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_native_compression_tip_gets_its_own_durable_acknowledgement(self):
+        self.save('Current memory')
+        self.refresh.before_turn('default', self.session, self.agent)
+        # Hermes may compress/rotate its own tip after a turn. Memory refresh
+        # follows that native identity without creating a new conversation.
+        self.session['session_key'] = self.agent.session_id = 'native-compressed-tip'
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.assertEqual(self.session['task_id'], 'root')
+        self.assertEqual(self.session['history'][0]['_row_id'], 7)
 
 
 class TrialTests(unittest.TestCase):

@@ -1,0 +1,8 @@
+{
+  "request": "GET /api/bots/household/automation/skills/content?name=ranch%2Ffences",
+  "response": {
+    "name": "ranch/fences",
+    "content": "# Fence inspection\n\nCheck the north gate.",
+    "truncated": false
+  }
+}

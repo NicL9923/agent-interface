@@ -12,7 +12,7 @@ import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
-from extension_probe import Client
+from extension_probe import Client, settled
 from guard import verify_target
 
 
@@ -25,6 +25,84 @@ def call(operation, profile="spike", **fields):
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, json.load(error)
+
+
+async def memory_refresh_proof(client):
+    """Provider wire proof, using the actual native agent and canonical history.
+
+    The slow provider request creates an edit-during-run window. The memory
+    sentinels never enter submitted user text, so only a real prompt refresh can
+    make them appear in the next native provider request.
+    """
+    log = Path(os.environ['HERMES_SPIKE_PROVIDER_LOG'])
+    _, initial = call('memory')
+    original = next(doc for doc in initial['documents'] if doc['target'] == 'memory')['entries']
+    prefix = 'Memory refresh fixture ' + uuid.uuid4().hex
+    first, second = prefix + ' initial note', prefix + ' corrected note'
+
+    def save(entries):
+        status, memory = call('memory')
+        assert status == 200, memory
+        document = next(doc for doc in memory['documents'] if doc['target'] == 'memory')
+        status, result = call('save_memory', target='memory', revision=document['revision'], entries=entries)
+        assert status == 200, result
+        assert result.get('refresh', {}).get('state') in ('next_turn', 'pending', 'applied'), result
+        return result
+
+    def wire(text):
+        return [row['messages'] for line in log.read_text().splitlines(keepends=True) if line.endswith('\n') and (row := json.loads(line)).get('messages')
+                and any(message.get('role') == 'user' and text in str(message.get('content', '')) for message in row['messages'])]
+
+    def system(messages):
+        return '\n'.join(str(message.get('content', '')) for message in messages if message.get('role') in ('system', 'developer'))
+
+    snapshot = await settled(client)
+    sid, canonical = snapshot['session_id'], snapshot['canonical_stored_session_id']
+    prior_rows = [(row.get('row_id'), row.get('text')) for row in snapshot['messages']]
+    async def send(text):
+        return await client.call('agent-interface.submit', profile='spike', session_id=sid,
+            request_id=str(uuid.uuid4()), sender_id='memory-fixture', text=text, steer=False, attachments=[])
+
+    try:
+        save([dict(text=first)])
+        baseline = 'Public synthetic memory baseline ' + uuid.uuid4().hex
+        await send(baseline)
+        snapshot = await settled(client)
+        baseline_wire = wire(baseline)
+        assert baseline_wire and first in system(baseline_wire[-1]), baseline_wire
+        slow = 'PROBE_SLOW Public synthetic memory active turn ' + uuid.uuid4().hex
+        running = await send(slow)
+        for _ in range(100):
+            requests = wire(slow)
+            if requests:
+                break
+            await asyncio.sleep(.05)
+        else:
+            raise AssertionError('No native slow provider request')
+        edited = save([dict(text=second)])
+        assert edited['refresh']['state'] == 'pending' and edited['refresh']['busy'], edited
+        active = await client.call('agent-interface.open', profile='spike')
+        assert active['app_run_id'] == running['runId'], active
+        assert active['canonical_stored_session_id'] == canonical
+        snapshot = await settled(client)
+        active_wire = wire(slow)
+        assert active_wire and all(first in system(messages) and second not in system(messages) for messages in active_wire), active_wire
+        followup = 'Public synthetic memory followup ' + uuid.uuid4().hex
+        await send(followup)
+        snapshot = await settled(client)
+        followup_wire = wire(followup)
+        assert followup_wire and second in system(followup_wire[-1]) and first not in system(followup_wire[-1]), followup_wire
+        assert any(message.get('content') == baseline for message in followup_wire[-1] if message.get('role') == 'user')
+        assert snapshot['canonical_stored_session_id'] == canonical and snapshot['session_id'] == sid
+        current_rows = [(row.get('row_id'), row.get('text')) for row in snapshot['messages']]
+        assert all(row in current_rows for row in prior_rows), 'Memory edit changed canonical history'
+        assert not any(prefix in str(row.get('text', '')) for row in snapshot['messages']), 'Memory was injected into chat history'
+        status, applied = call('memory')
+        assert status == 200 and applied['refresh']['state'] == 'applied', applied
+        return dict(native_memory_next_provider_request=True, native_memory_edit_during_run=True,
+                    native_memory_canonical_history_preserved=True, native_memory_not_injected_into_user_text=True)
+    finally:
+        save([dict(text=entry['text']) for entry in original])
 
 
 async def main():
@@ -65,6 +143,7 @@ async def main():
         current = next(row for row in latest["documents"] if row["target"] == "memory")
         assert call("save_memory", target="memory", revision=current["revision"], entries=original)[0] == 200
         checks.update(native_memory_cas_lock=True, native_memory_limits=True, native_profile_memory_separation=True, native_memory_forget=True)
+        checks.update(await memory_refresh_proof(c))
         status, preview = call("preview", schedule="0 7 * * *")
         assert status == 200 and len(preview["nextRuns"]) == 3 and preview["timezone"], preview
         epochs = [__import__('datetime').datetime.fromisoformat(value).timestamp() for value in preview["nextRuns"]]

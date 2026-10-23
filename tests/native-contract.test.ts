@@ -15,6 +15,7 @@ import type { Bot, Capabilities, Conversation, FileRef, Message, ModelCatalog, P
 import type { UpgradeStatus } from "../src/shared/upgrades.js";
 import type { ProfileVault } from "../src/shared/vault.js";
 import type { VoiceTranscript } from "../src/shared/voice.js";
+import type { AutomationOverview as ProfileAutomationOverview, AutomationTask, EventSubscription, SkillContent, SkillDiff } from "../src/shared/automation.js";
 
 // The iOS app decodes these responses. Every optional field the app reads is populated, so a
 // renamed or retyped field changes a committed fixture and the Swift decoding test sees it.
@@ -88,6 +89,20 @@ const memory = { botId: "household", profile: "household", scope: "profile", own
 const preview = { botId: "household", schedule: "0 7 * * *", timezone: "America/Chicago", nextRuns: ["2026-10-02T12:00:00.000Z", "2026-10-03T12:00:00.000Z"], kind: "cron" } satisfies RoutinePreview;
 const runReceipt = { requestId: ids.run, routineId: "routine-morning", botId: "household", status: "completed", message: "The trial finished.", startedAt: at("11:30"), finishedAt: at("11:31"),
   executionId: "execution-1", ownerStatus: "succeeded" } satisfies RoutineRunReceipt;
+const automationTask = { id: "task-fence", title: "Check the north gate", body: "Inspect the latch before opening the pasture.", status: "blocked", priority: 5,
+  assignee: "garden", owner: "household", dependencies: ["task-supplies"], blockedReason: "Waiting for supplies." } satisfies AutomationTask;
+const eventSubscription = { id: "gate-event", description: "Gate alert", events: ["gate.open", "gate.closed"], routineId: "routine-morning", enabled: false,
+  url: "https://hermes.example.test/webhook/gate-event", secretSet: true, revision: "b".repeat(64) } satisfies EventSubscription;
+const profileAutomation = { botId: "household", owner: "Hermes", goals: { supported: true,
+  goal: { title: "Maintain the pasture", status: "paused", turnsUsed: 4, maxTurns: 20, pausedReason: "Waiting for your approval." },
+  resume: { requestId: ids.run, status: "accepted", runId: "run-goal" } },
+  tasks: { supported: true, items: [automationTask] }, triggers: { supported: true, items: [eventSubscription], platformEnabled: false },
+  skills: { supported: true, installed: [{ name: "ranch/fences", description: "Fence inspection" }],
+    pending: [{ id: "deadbeef", summary: "Add gate check", origin: "agent", revision: "c".repeat(64) }], approvalRequired: true },
+} satisfies ProfileAutomationOverview;
+const skillContent = { name: "ranch/fences", content: "# Fence inspection\n\nCheck the north gate.", truncated: false } satisfies SkillContent;
+// The detail revision hashes the displayed diff, so it deliberately differs from the list revision.
+const skillDiff = { id: "deadbeef", diff: "--- SKILL.md\n+++ SKILL.md\n+Check the north gate.\n", revision: "d".repeat(64), truncated: false } satisfies SkillDiff;
 const hits = [{ botId: "household", botName: "Household", sessionId: "session-household", title: "Dinner planning", snippet: "Five easy dinners", updatedAt: at("11:05") }] satisfies SearchHit[];
 const history = { botId: "household", sessionId: "session-household", offset: 0, hasMore: true,
   // Hermes reports the app sender; the server turns it into a household sender.
@@ -175,6 +190,18 @@ const runtime = {
       case "memory": case "save_memory": case "delete_memory": return memory;
       case "preview": return preview;
       case "run": case "run_receipt": return { ...runReceipt, requestId: input.requestId };
+    }
+  },
+  automationRequest: async input => {
+    switch (input.operation) {
+      case "overview": case "goal_set": case "goal_pause": case "goal_clear": return structuredClone(profileAutomation);
+      case "goal_resume": return { ...structuredClone(profileAutomation), goals: { ...structuredClone(profileAutomation.goals), resume: { requestId: input.requestId, status: "accepted", runId: "run-goal" } } };
+      case "task_create": case "task_get": case "task_update": case "task_action": case "task_dependency": return structuredClone(automationTask);
+      case "trigger_create": return { subscription: structuredClone(eventSubscription), secret: "one-time-contract-fixture" };
+      case "trigger_update": case "trigger_toggle": return { subscription: structuredClone(eventSubscription) };
+      case "skill_content": return skillContent;
+      case "skill_diff": return skillDiff;
+      default: return { ok: true };
     }
   },
   groupRequest: async input => {
@@ -306,6 +333,15 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("today-seen", "PUT", "/api/today/seen", { seenAt: today.generatedAt, frontier: today.frontier });
     await record("memory", "GET", "/api/bots/household/memory");
     await record("memory-save", "PATCH", "/api/bots/household/memory/memory", { revision: "a".repeat(64), entries: [{ id: "b".repeat(64), text: "The household prefers vegetarian dinners." }] });
+
+    await record("bot-automation", "GET", "/api/bots/household/automation");
+    await record("bot-goal-resume", "POST", "/api/bots/household/automation/goal/resume", { requestId: ids.run });
+    await record("bot-task", "POST", "/api/bots/household/automation/tasks", { requestId: ids.submission, title: automationTask.title,
+      body: automationTask.body, priority: automationTask.priority, assignee: "garden", dependencies: automationTask.dependencies });
+    await record("bot-trigger-create", "POST", "/api/bots/household/automation/triggers", { id: eventSubscription.id,
+      description: eventSubscription.description, events: eventSubscription.events, routineId: eventSubscription.routineId });
+    await record("bot-skill-diff", "GET", "/api/bots/household/automation/skills/pending/deadbeef");
+    await record("bot-skill-content", "GET", "/api/bots/household/automation/skills/content?name=ranch%2Ffences");
 
     await record("search", "GET", "/api/search?q=dinner");
     await record("history", "GET", "/api/bots/household/history/session-household?offset=0");

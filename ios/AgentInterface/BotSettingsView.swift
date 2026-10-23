@@ -50,7 +50,7 @@ struct BotSettingsView: View {
   @State private var catalogLoading: Set<String> = []
   @State private var loadId = UUID()
   @State private var progress = SaveProgress()
-  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Logins"]
+  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Work", "Learning", "Memory", "Logins"]
   // Split out of body so the type checker stays fast on slower CI machines.
   private var tabBar: some View {
     HStack(spacing: 8) {
@@ -88,6 +88,10 @@ struct BotSettingsView: View {
       if let bot { VaultView(botId: bot.id) }
     } else if tab == "Memory" {
       if let bot { MemoryDrawer(botId: bot.id) }
+    } else if tab == "Work" {
+      if let bot { HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)") }
+    } else if tab == "Learning" {
+      if let bot { HermesLearningView(botId: bot.id).id("learning|\(store.scope ?? "")|\(bot.id)") }
     } else { Form {
       switch tab {
       case "Details": details
@@ -819,6 +823,7 @@ struct RoutineEditor: View {
         Section {
           RoutineSchedulePreview(botId: routine.botId, schedule: routine.schedule, onReady: { previewedSchedule = $0 })
         }
+        Section { RoutineAdvancedFields(routine: $routine) }
         Section {
           ForEach(recipients) { user in
             Toggle(
@@ -849,7 +854,8 @@ struct RoutineEditor: View {
             Button(busy ? "Saving…" : routine.id.isEmpty ? "Add routine" : "Save routine") { save() }.disabled(
               busy || !store.connected
                 || routine.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !hasPayload
+                || routine.noAgent == true && (routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.prompt.count > 50000 || routine.enabled && !schedulePreviewValid)
           }
@@ -875,6 +881,11 @@ struct RoutineEditor: View {
     let household = store.bootstrap?.household ?? []
     return store.bootstrap?.bots.first { $0.id == routine.botId }?.routineRecipients(household) ?? household
   }
+  private var hasPayload: Bool {
+    !routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !(routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !(routine.skills ?? []).isEmpty
+  }
   private func save() {
     busy = true
     error = nil
@@ -891,6 +902,139 @@ struct RoutineEditor: View {
         dismiss()
       } catch { self.error = error.localizedDescription }
     }
+  }
+}
+
+/// Per-routine overrides. Collapsed by default; catalogs never seed a model pin.
+private struct RoutineAdvancedFields: View {
+  @Binding var routine: Routine
+  @Environment(AppStore.self) private var store
+  @State private var expanded = false
+  @State private var skills: [CapabilityItem] = []
+  @State private var tools: [CapabilityItem] = []
+  @State private var sources: [Routine] = []
+  @State private var providers: [ModelProviderInfo] = []
+  @State private var loading = false
+  @State private var loaded = false
+  @State private var errors: [String] = []
+  private var selectedProvider: ModelProviderInfo? { providers.first { $0.matches(routine.provider) } }
+  var body: some View {
+    DisclosureGroup("Advanced", isExpanded: $expanded) {
+      Text("Overrides apply only to this routine. Saved settings stay in place unless you change them.")
+        .font(.caption).foregroundStyle(.secondary)
+      if loading { ProgressView("Loading advanced choices") }
+      ForEach(errors, id: \.self) { message in
+        Text(message).foregroundStyle(Palette.danger).accessibilityAddTraits(.updatesFrequently)
+      }
+      if !errors.isEmpty { Button("Retry advanced choices") { Task { await load() } } }
+      Toggle("Run the script without a model", isOn: Binding(
+        get: { routine.noAgent == true }, set: { routine.noAgent = $0 }))
+        .accessibilityIdentifier("routine.runScriptWithoutModel")
+      TextField("Profile script, e.g. reports/morning.py", text: Binding(
+        get: { routine.script ?? "" }, set: { routine.script = $0.isEmpty ? nil : $0 }))
+        .textInputAutocapitalization(.never).autocorrectionDisabled()
+      Text("Use an existing file in this assistant's Hermes scripts directory. With a model, its output becomes context. This option skips the model for script execution. Delivery to WildBots Bot Chat starts a separate model turn. Shell commands are not supported.")
+        .font(.caption).foregroundStyle(.secondary)
+      if routine.noAgent == true && (routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Text("Script-only routines require a profile script.").foregroundStyle(Palette.danger)
+      }
+      agentFields.disabled(routine.noAgent == true)
+    }
+    .task(id: expanded) { if expanded && !loaded { await load() } }
+  }
+  @ViewBuilder private var agentFields: some View {
+    if routine.noAgent == true {
+      Text("Model settings are kept and are used when this option is turned off.").font(.caption).foregroundStyle(.secondary)
+    }
+    Picker("Provider", selection: Binding(
+      get: { routine.provider ?? "" },
+      set: { routine.provider = $0.isEmpty ? nil : $0; routine.model = nil })) {
+      Text("Use assistant provider").tag("")
+      if let provider = routine.provider, selectedProvider == nil || selectedProvider?.id != provider {
+        Text("\(provider) (saved)").tag(provider)
+      }
+      ForEach(providers) { provider in
+        Text(provider.name + (provider.authenticated == false ? " (disconnected)" : ""))
+          .tag(provider.id).disabled(provider.authenticated == false)
+      }
+    }
+    Picker("Model", selection: Binding(
+      get: { routine.model ?? "" }, set: { routine.model = $0.isEmpty ? nil : $0 })) {
+      Text("Use assistant model").tag("")
+      if let model = routine.model, selectedProvider?.models.contains(where: { $0.id == model }) != true {
+        Text("\(model) (saved)").tag(model)
+      }
+      ForEach(selectedProvider?.models ?? []) { model in
+        Text(model.name + (model.available ? "" : " (unavailable)"))
+          .tag(model.id).disabled(!model.available)
+      }
+    }.disabled(selectedProvider == nil)
+    Button("Use assistant model and provider") { routine.model = nil; routine.provider = nil }
+    if loaded && providers.isEmpty { Text("No providers reported. Existing pins are preserved.").font(.caption) }
+    Text("Skills to load").font(.headline)
+    if loaded && skills.isEmpty { Text("No skills reported for this assistant.").font(.caption) }
+    ForEach(choiceIDs(skills, selected: routine.skills ?? []), id: \.self) { id in
+      Toggle(choiceName(skills, id: id), isOn: Binding(
+        get: { routine.skills?.contains(id) == true },
+        set: { routine.skills = toggled(routine.skills ?? [], id: id, selected: $0) }))
+    }
+    Text("Toolsets").font(.headline)
+    Toggle("Use profile tools", isOn: Binding(
+      get: { routine.enabledToolsets == nil },
+      set: { routine.enabledToolsets = $0 ? nil : tools.filter(\.enabled).map(\.id) }))
+    if let selected = routine.enabledToolsets {
+      if loaded && tools.isEmpty { Text("No toolsets reported for this assistant.").font(.caption) }
+      ForEach(choiceIDs(tools, selected: selected), id: \.self) { id in
+        Toggle(choiceName(tools, id: id), isOn: Binding(
+          get: { routine.enabledToolsets?.contains(id) == true },
+          set: { routine.enabledToolsets = toggled(routine.enabledToolsets ?? [], id: id, selected: $0) }))
+      }
+      if selected.isEmpty {
+        Text("No tools allowed. Existing zero-tool settings are preserved, but Hermes cannot save a new empty selection here. Select a toolset or use profile tools.")
+          .font(.caption)
+      }
+    }
+    Text("Context from previous runs").font(.headline)
+    Toggle("Include this routine's previous result", isOn: contextBinding("self"))
+    Text("Include the latest result from other routines for this assistant. This does not change when they run.")
+      .font(.caption).foregroundStyle(.secondary)
+    if loaded && sources.isEmpty { Text("No other routines for this assistant.").font(.caption) }
+    ForEach(sources) { source in Toggle(source.name, isOn: contextBinding(source.id)) }
+    ForEach((routine.contextFrom ?? []).filter { ref in ref != "self" && !sources.contains { $0.id == ref } }, id: \.self) { ref in
+      Toggle("\(ref) (saved, unavailable)", isOn: contextBinding(ref))
+    }
+  }
+  private func contextBinding(_ id: String) -> Binding<Bool> {
+    Binding(get: { routine.contextFrom?.contains(id) == true },
+      set: { routine.contextFrom = toggled(routine.contextFrom ?? [], id: id, selected: $0) })
+  }
+  private func toggled(_ values: [String], id: String, selected: Bool) -> [String] {
+    selected ? (values.contains(id) ? values : values + [id]) : values.filter { $0 != id }
+  }
+  private func choiceIDs(_ choices: [CapabilityItem], selected: [String]) -> [String] {
+    choices.map(\.id) + selected.filter { id in !choices.contains { $0.id == id } }
+  }
+  private func choiceName(_ choices: [CapabilityItem], id: String) -> String {
+    choices.first { $0.id == id }?.name ?? "\(id) (saved, unavailable)"
+  }
+  @MainActor private func load() async {
+    guard let api = store.api, !loading else { return }
+    loading = true
+    errors = []
+    defer { loading = false; loaded = true }
+    let path = "/bots/\(APIClient.component(routine.botId))"
+    do { skills = try await api.get("\(path)/skills") }
+    catch { errors.append("Could not load skills. \(error.localizedDescription)") }
+    do { tools = try await api.get("\(path)/tools") }
+    catch { errors.append("Could not load toolsets. \(error.localizedDescription)") }
+    do {
+      let catalog: ModelCatalog = try await api.get("/models?botId=\(APIClient.component(routine.botId))")
+      providers = catalog.providers
+    } catch { errors.append("Could not load models. \(error.localizedDescription)") }
+    do {
+      let all: [Routine] = try await api.get("/routines")
+      sources = all.filter { $0.botId == routine.botId && $0.id != routine.id }
+    } catch { errors.append("Could not load context sources. \(error.localizedDescription)") }
   }
 }
 

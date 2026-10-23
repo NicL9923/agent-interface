@@ -254,11 +254,16 @@ struct MemoryDraft: Identifiable, Equatable {
 }
 struct ProfileMemory: Decodable {
   var botId: String; var profile: String; var scope: String; var owner: String; var documents: [MemoryDocument]; var notice: String
+  var refresh: MemoryRefreshStatus?
   mutating func acceptSavedDocument(_ target: String, from refreshed: ProfileMemory) {
     guard let index = documents.firstIndex(where: { $0.target == target }), let updated = refreshed.documents.first(where: { $0.target == target }) else { return }
     // Unsaved documents retain their original revision so concurrent edits still conflict.
     documents[index] = updated
+    refresh = refreshed.refresh; notice = refreshed.notice
   }
+}
+struct MemoryRefreshStatus: Decodable {
+  var revision: String; var state: String; var busy: Bool; var message: String
 }
 struct MemorySaveEntry: Encodable { var id: String?; var text: String }
 struct MemorySave: Encodable {
@@ -287,6 +292,7 @@ struct MemoryDrawer: View {
         Text("What Hermes remembers").font(.headline)
         Text("Inspect and correct the facts saved in the assistant's Hermes profile.").font(.footnote).foregroundStyle(.secondary)
         if let value { (Text("Profile: \(value.profile). ").bold() + Text(value.notice)).font(.footnote) }
+        if let refresh = value?.refresh { Text(refresh.message).font(.footnote).accessibilityIdentifier("memoryRefreshStatus") }
       }
       if busy && value == nil { Section { ProgressView("Loading profile memory…") } }
       if let error { Section { ErrorBanner(message: error) } }
@@ -356,7 +362,7 @@ struct MemoryDrawer: View {
       do {
         let result = try await operation(api)
         guard store.scope == scope, store.api === api, let updated = result.documents.first(where: { $0.target == target }) else { return }
-        value?.acceptSavedDocument(target, from: result); drafts[target] = updated.drafts(); notices[target] = "Saved in Hermes."
+        value?.acceptSavedDocument(target, from: result); drafts[target] = updated.drafts(); notices[target] = result.refresh == nil ? "Saved in Hermes." : nil
       } catch {
         guard store.scope == scope else { return }
         failures[target] = error.localizedDescription
