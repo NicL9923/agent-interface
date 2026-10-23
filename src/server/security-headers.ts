@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { isApiRequest, routePattern } from "./route-path.js";
+import { httpError } from "./http-error.js";
 
 /** The policy for app pages and static files. The preview fixture serves the same one. */
 export function contentSecurityPolicy(origin: string) {
@@ -63,7 +64,7 @@ export function installSecurityHeaders(app: FastifyInstance, origin: string) {
   });
   app.addContentTypeParser(["application/csp-report", "application/reports+json"], { parseAs: "string" }, (_req, body, done) => {
     try { done(null, JSON.parse(body as string)); }
-    catch { done(Object.assign(new Error("Invalid violation report"), { statusCode: 400 }), undefined); }
+    catch { done(httpError(400, "Invalid violation report"), undefined); }
   });
   const seen = new Set<string>();
   let windowStart = 0, reports = 0;

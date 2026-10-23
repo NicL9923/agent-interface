@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
 import type { UpgradeControlAction, UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "../shared/upgrades.js";
 import type { Config } from "./config.js";
+import { httpError } from "./http-error.js";
 
 type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
 // The worker keeps its own log once it runs. Output from a start that fails before then lands in
@@ -63,7 +64,6 @@ const stateSchema = z.object({
 type WorkerState = z.infer<typeof stateSchema>;
 interface InstallReceipt { candidateRevision: string; operationId: string; status: "pending" | "complete"; result?: WorkerState }
 const active = new Set(["checking", "qualifying", "installing", "verifying", "recovering"]);
-const issue = (message: string, statusCode = 409) => Object.assign(new Error(message), { statusCode });
 const writePrivate = (file: string, value: unknown) => {
   const temporary = `${file}.${randomUUID()}.tmp`;
   const descriptor = openSync(temporary, "wx", 0o600);
@@ -241,8 +241,8 @@ export class HermesUpgrades {
     return result;
   }
   private authorized(user: User) {
-    if (!this.config.hermesUpgrade) throw issue("Hermes upgrades are not enabled on this installation");
-    if (!this.administrator(user)) throw issue("Only the installation's designated administrator can manage Hermes upgrades", 403);
+    if (!this.config.hermesUpgrade) throw httpError(409, "Hermes upgrades are not enabled on this installation");
+    if (!this.administrator(user)) throw httpError(403, "Only the installation's designated administrator can manage Hermes upgrades");
   }
   control(user: User, input: UpgradeControlRequest) { return this.exclusive(async () => {
     this.authorized(user);
@@ -250,7 +250,7 @@ export class HermesUpgrades {
     const receiptFile = join(this.controlsDirectory!, `request-${input.requestId}.json`);
     if (existsSync(receiptFile)) {
       const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
-      if (receipt.action !== input.action || receipt.operationId !== input.operationId) throw issue("This recovery request ID already belongs to another action");
+      if (receipt.action !== input.action || receipt.operationId !== input.operationId) throw httpError(409, "This recovery request ID already belongs to another action");
       const intent = this.controlIntent(input.operationId);
       const lostLaunch = !intent || intent.requestId === input.requestId && intent.status === "pending" && (!intent.startedAt || Date.now() - Date.parse(intent.startedAt) >= 15000);
       if (receipt.status === "pending" && lostLaunch && this.read().operationId === input.operationId && !await this.workerHeld()) {
@@ -260,9 +260,9 @@ export class HermesUpgrades {
       return this.status(user);
     }
     const status = await this.status(user);
-    if (status.operationId !== input.operationId) throw issue("This update changed. Refresh before choosing a recovery action");
+    if (status.operationId !== input.operationId) throw httpError(409, "This update changed. Refresh before choosing a recovery action");
     const allowed = input.action === "cancel" ? status.canCancel : input.action === "retry" ? status.canRetry : status.canRestartService;
-    if (!allowed) throw issue("This recovery action is unavailable while another operation runs or the update requires installer review");
+    if (!allowed) throw httpError(409, "This recovery action is unavailable while another operation runs or the update requires installer review");
     const intent = { ...input, status: "pending", startedAt: new Date().toISOString() };
     writePrivate(receiptFile, intent);
     writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), intent);
@@ -272,7 +272,7 @@ export class HermesUpgrades {
   }); }
   check(user: User) { return this.exclusive(async () => {
     this.authorized(user);
-    if (!(await this.status(user)).canCheck) throw issue("An upgrade is already running or requires installer review");
+    if (!(await this.status(user)).canCheck) throw httpError(409, "An upgrade is already running or requires installer review");
     const operationId = randomUUID();
     this.save({ phase: "checking", checks: [], operationId, message: "Looking for a Hermes update." });
     this.launch({ action: "check", operationId });
@@ -284,7 +284,7 @@ export class HermesUpgrades {
     const requestFile = join(this.requestsDirectory!, `${input.requestId}.json`);
     if (existsSync(requestFile)) {
       const receipt = JSON.parse(readFileSync(requestFile, "utf8")) as InstallReceipt;
-      if (receipt.candidateRevision !== input.candidateRevision) throw issue("This upgrade request ID was already used for a different revision");
+      if (receipt.candidateRevision !== input.candidateRevision) throw httpError(409, "This upgrade request ID was already used for a different revision");
       const current = await this.status(user);
       if (current.operationId === receipt.operationId || !receipt.result) return current;
       const result = receipt.result;
@@ -294,7 +294,7 @@ export class HermesUpgrades {
     }
     const status = await this.status(user);
     if (!status.canInstall || status.candidate?.revision !== input.candidateRevision)
-      throw issue(status.busyBots.length ? "Wait for active Hermes work to finish before upgrading" : "Check and qualify this exact Hermes update before installing it");
+      throw httpError(409, status.busyBots.length ? "Wait for active Hermes work to finish before upgrading" : "Check and qualify this exact Hermes update before installing it");
     const operationId = randomUUID();
     // The pending receipt is also the durable maintenance gate. Persist it before launching.
     const predecessor = this.read();

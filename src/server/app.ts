@@ -35,7 +35,8 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
-import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
+import { loggerOptions } from "./logging.js";
+import { errorHandler, httpError } from "./http-error.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
@@ -113,9 +114,6 @@ const fileRef = z.object({
   url: z.string().optional(),
 });
 const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
-function failure(statusCode: number, message: string) {
-  return Object.assign(new Error(message), { statusCode });
-}
 export async function createApp(
   config: Config,
   runtime: Runtime,
@@ -162,48 +160,11 @@ export async function createApp(
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
   });
-  const serverErrors = new RepeatFilter();
-  app.setErrorHandler((error, req, reply) => {
-    if (error instanceof z.ZodError)
-      return reply.code(400).send({
-        error: "Invalid request",
-        details: error.issues.map((x) => ({
-          path: x.path,
-          message: x.message,
-        })),
-      });
-    const err = error as Error & {
-      statusCode?: number;
-      code?: string;
-      confirmRequired?: boolean;
-      // A 5xx whose fixed message tells the person what to do next.
-      expose?: boolean;
-    };
-    const status = err.statusCode ?? 502;
-    if (status >= 500) {
-      const route = `${req.method} ${req.routeOptions.url ?? "unmatched"}`;
-      const repeats = serverErrors.hit(`${route} ${status} ${err.message}`);
-      if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");
-      else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
-    }
-    // A stream can fail after a route set file headers; the error is always JSON.
-    reply.removeHeader("Content-Disposition");
-    reply.removeHeader("Content-Length");
-    reply.type("application/json; charset=utf-8");
-    reply.code(status).send({
-      error:
-        err.statusCode && (err.statusCode < 500 || err.expose)
-          ? err.message
-          : "The Hermes operation could not be completed",
-      detail: config.production ? undefined : err.message,
-      code: err.code,
-      confirmRequired: err.confirmRequired,
-    });
-  });
+  app.setErrorHandler(errorHandler({ production: config.production }));
   const requireCapability = async (key: CapabilityKey) => {
     const cap = (await runtime.capabilities())[key];
     if (!cap?.supported)
-      throw failure(409, cap?.reason ?? `${key} is unavailable`);
+      throw httpError(409, cap?.reason ?? `${key} is unavailable`);
   };
   const params = (req: { params: unknown }) =>
     req.params as { id: string; approvalId?: string };
@@ -329,19 +290,19 @@ export async function createApp(
     return { modelFavorites };
   });
   app.get("/api/bots/:id/inference", async req => {
-    if (!runtime.inferenceSettings) throw failure(409, "Hermes inference controls are unavailable.");
+    if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
     return runtime.inferenceSettings(params(req).id);
   });
   app.patch("/api/bots/:id/inference", async req => {
     await requireCapability("botConfiguration");
-    if (!runtime.inferenceSettings) throw failure(409, "Hermes inference controls are unavailable.");
+    if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
     const update = z.object({ reasoning: z.enum(reasoningLevels).optional(), speed: z.enum(serviceTiers).optional() })
       .strict().refine(value => Object.keys(value).length > 0).parse(req.body);
     return runtime.inferenceSettings(params(req).id, update);
   });
   app.get("/api/models", async (req) => {
     const { botId } = z.object({ botId: id.optional() }).parse(req.query);
-    if (!runtime.modelOptions) throw failure(409, "The connected Hermes installation does not expose model options.");
+    if (!runtime.modelOptions) throw httpError(409, "The connected Hermes installation does not expose model options.");
     return runtime.modelOptions(botId);
   });
   app.get("/api/bots", async (req) => {
@@ -356,7 +317,7 @@ export async function createApp(
     // public and a recreated ID never inherits an old record. An existing assistant's is never touched.
     const id = botIdFor(input.name);
     if (id && await roster.has(id))
-      throw failure(409, "An assistant with this name already exists. Choose another name.");
+      throw httpError(409, "An assistant with this name already exists. Choose another name.");
     const prior = id ? store.presentation(id) : {};
     const version = id ? store.swapPresentation(id, prior, next) : false;
     let bot;
@@ -367,7 +328,7 @@ export async function createApp(
       if (typeof created === "string") {
         if (created !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(created, next); }
         roster.forget();
-        throw Object.assign(failure(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`), { expose: true, code: "created_incomplete" });
+        throw httpError(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`, { expose: true, code: "created_incomplete" });
       }
       if (version !== false) store.restorePresentation(id, version, prior);
       throw error;
@@ -381,7 +342,7 @@ export async function createApp(
     const botId = params(req).id;
     const value = runtime.botDetail ? await runtime.botDetail(botId)
       : (await runtime.listBots()).find(bot => bot.id === botId);
-    if (!value) throw failure(404, "Bot not found");
+    if (!value) throw httpError(404, "Bot not found");
     return decorateBot(rememberBot(value), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
@@ -392,14 +353,14 @@ export async function createApp(
     const id = params(req).id, userId = signedIn(req).id;
     const previous = store.presentation(id);
     // Another member may have made it theirs since this request was let in.
-    if (!visible(previous, userId)) throw Object.assign(failure(404, notFound.error), { code: notFound.code });
+    if (!visible(previous, userId)) throw httpError(404, notFound.error, { code: notFound.code });
     if (!input.shared && !(previous.shared === false && previous.ownerId) && !confirmPrivate)
-      throw Object.assign(failure(409, "Confirm making this assistant personal. It will disappear for the rest of the household."), { code: "private_confirmation_required" });
+      throw httpError(409, "Confirm making this assistant personal. It will disappear for the rest of the household.", { code: "private_confirmation_required" });
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
     const version = store.swapPresentation(id, previous, next);
     if (version === false)
-      throw Object.assign(failure(409, "Someone changed who can see this assistant while you were saving. Review it and try again."), { code: "sharing_changed" });
+      throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
     let bot;
     // A failed save puts sharing back only if no later save has changed it since.
     try { bot = await runtime.saveBot(input as BotInput, id); }
@@ -419,7 +380,7 @@ export async function createApp(
   app.put("/api/bots/:id/avatar", async (req) => {
     const value = avatar.parse(req.body) as Avatar;
     const bot = (await runtime.listBots()).find((b) => b.id === params(req).id);
-    if (!bot) throw failure(404, "Bot not found");
+    if (!bot) throw httpError(404, "Bot not found");
     if (
       (await runtime.capabilities()).avatarMetadata?.supported &&
       runtime.setAvatar
@@ -678,12 +639,12 @@ export async function createApp(
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
-        throw failure(
+        throw httpError(
           409,
           "This submission ID was already used for different content",
         );
       if (interruptionRejected && !reviewedInterruption)
-        throw failure(409, "Review the interrupted task before starting another message.");
+        throw httpError(409, "Review the interrupted task before starting another message.");
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
       await requireCapability("idempotency");
@@ -699,7 +660,7 @@ export async function createApp(
     const fast = await runtime.canonicalSubmit?.() === true;
     const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
-      throw failure(
+      throw httpError(
         409,
         "Review the interrupted task before starting another message.",
       );
@@ -724,7 +685,7 @@ export async function createApp(
       if ((error as { code?: string }).code === "interruption_pending") {
         store.receipt({ requestId: input.requestId, status: "rejected",
           message: "Review the interrupted task before starting another message." });
-        throw failure(409, "Review the interrupted task before starting another message.");
+        throw httpError(409, "Review the interrupted task before starting another message.");
       }
       return store.submission(input.requestId)!.receipt;
     }
@@ -776,7 +737,7 @@ export async function createApp(
       (x) => x.id === p.approvalId,
     );
     if (!attention || attention.kind !== "clarify")
-      throw failure(
+      throw httpError(
         409,
         "This request must be handled in the official Hermes interface or is no longer pending",
       );
@@ -798,7 +759,7 @@ export async function createApp(
     const p = params(req);
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
     if (account !== undefined && account !== accountMarker(signedIn(req).id))
-      throw failure(409, "This approval was sent to a different account");
+      throw httpError(409, "This approval was sent to a different account");
     const conversation = await runtime.conversation(p.id, { history: false });
     const approval = conversation.approvals.find((a) => a.id === p.approvalId);
     if (
@@ -807,7 +768,7 @@ export async function createApp(
       store.approval(p.approvalId!) ||
       (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
     )
-      throw failure(409, "This approval is no longer pending");
+      throw httpError(409, "This approval is no longer pending");
     await runtime.approve(p.id, p.approvalId!, decision, signedIn(req).id);
     store.attributeApproval(p.approvalId!, p.id, signedIn(req).id, decision);
     if (conversation.activity.runId)
@@ -844,11 +805,11 @@ export async function createApp(
   app.post("/api/bots/:id/uploads", async (req) => {
     await requireCapability("uploads");
     const file = await req.file();
-    if (!file) throw failure(400, "No file provided");
+    if (!file) throw httpError(400, "No file provided");
     if (!(UPLOAD_MIME_TYPES as readonly string[]).includes(file.mimetype))
-      throw failure(415, `Use ${UPLOAD_KINDS}.`);
+      throw httpError(415, `Use ${UPLOAD_KINDS}.`);
     const data = await file.toBuffer();
-    if (file.file.truncated) throw failure(413, `${file.filename || "This file"} is larger than ${formatBytes(MAX_UPLOAD_BYTES)}.`);
+    if (file.file.truncated) throw httpError(413, `${file.filename || "This file"} is larger than ${formatBytes(MAX_UPLOAD_BYTES)}.`);
     return runtime.upload(params(req).id, {
       name: file.filename,
       mime: file.mimetype,
@@ -933,14 +894,14 @@ export async function createApp(
         return !user || !allowedIdentity(config, user);
       })
     )
-      throw failure(
+      throw httpError(
         400,
         "Routine recipients must be signed-in household members",
       );
     // Nobody else would ever receive a private assistant's results, so do not pretend they will.
     const owner = store.presentation(input.botId);
     if (owner.shared === false && owner.ownerId && input.recipientIds.some(id => id !== owner.ownerId))
-      throw Object.assign(failure(400, "Only you can receive your personal assistant's routine results."), { code: "private_recipients" });
+      throw httpError(400, "Only you can receive your personal assistant's routine results.", { code: "private_recipients" });
     const routine = await runtime.saveRoutine(input, routineId);
     store.routineRecipients(routine.id, input.recipientIds);
     return { ...routine, recipientIds: input.recipientIds };
@@ -960,7 +921,7 @@ export async function createApp(
   });
   app.post("/api/push/subscriptions", async (req) => {
     if (!config.vapidPublicKey)
-      throw failure(409, "Web Push is not configured");
+      throw httpError(409, "Web Push is not configured");
     const input = z
       .object({
         endpoint: z
@@ -978,7 +939,7 @@ export async function createApp(
   });
   app.post("/api/push/test", async (req) => {
     if (!config.vapidPublicKey)
-      throw failure(409, "Web Push is not configured");
+      throw httpError(409, "Web Push is not configured");
     const botId = z.object({ botId: id }).parse(req.body).botId;
     const eventId = crypto.randomUUID();
     store.queueNotification(eventId, signedIn(req).id, {
@@ -1001,8 +962,8 @@ export async function createApp(
     return { ok: true };
   });
   const requireNativePush = (req: FastifyRequest) => {
-    if (!req.nativeSessionHash) throw failure(403, "Native device registration requires native sign-in");
-    if (!config.apns) throw failure(409, "Apple push notifications are not configured on this host");
+    if (!req.nativeSessionHash) throw httpError(403, "Native device registration requires native sign-in");
+    if (!config.apns) throw httpError(409, "Apple push notifications are not configured on this host");
     return config.apns;
   };
   app.get("/api/native/push/config", async () => ({ available: !!config.apns, environment: config.apns?.environment }));
@@ -1013,14 +974,14 @@ export async function createApp(
     return { ok: true };
   });
   app.delete("/api/native/push/device", async req => {
-    if (!req.nativeSessionHash) throw failure(403, "Native device registration requires native sign-in");
+    if (!req.nativeSessionHash) throw httpError(403, "Native device registration requires native sign-in");
     const body = z.object({ deviceId: z.string().uuid() }).strict().parse(req.body);
     store.removeNativeDevice(signedIn(req).id, body.deviceId);
     return { ok: true };
   });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   app.get("/api/native/live-activity", async req => {
-    if (!req.nativeSessionHash) throw failure(403, "Live Activities require native sign-in");
+    if (!req.nativeSessionHash) throw httpError(403, "Live Activities require native sign-in");
     const { deviceId } = z.object({ deviceId: z.string().uuid().optional() }).strict().parse(req.query);
     const userId = signedIn(req).id;
     const context = deviceId ? store.liveActivityContext(userId, req.nativeSessionHash, deviceId) : undefined;
@@ -1037,7 +998,7 @@ export async function createApp(
     return { ok: true };
   });
   app.delete("/api/native/live-activity", async req => {
-    if (!req.nativeSessionHash) throw failure(403, "Live Activities require native sign-in");
+    if (!req.nativeSessionHash) throw httpError(403, "Live Activities require native sign-in");
     const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
     store.removeLiveActivity(signedIn(req).id, body.deviceId, body.token.toLowerCase());
     return { ok: true };
@@ -1045,7 +1006,7 @@ export async function createApp(
   app.post("/api/native/push/test", async req => {
     requireNativePush(req);
     const { botId } = z.object({ botId: id }).strict().parse(req.body);
-    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw failure(404, "Bot not found");
+    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw httpError(404, "Bot not found");
     const eventId = crypto.randomUUID();
     store.queueNotification(eventId, signedIn(req).id, { title: "WildBots test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId });
     return { ok: true, detail: "Queued for this person. Confirm delivery on the signed-in physical device." };

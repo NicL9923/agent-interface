@@ -7,6 +7,7 @@ import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import { withMessageOrigins, wireOrigin, messageOrigin } from "../shared/message-origin.js";
 import { formatBytes } from '../shared/uploads.js';
+import { httpError } from './http-error.js';
 
 // The only Hermes wire boundary. Dynamic records are upstream's versioned JSON-RPC payloads.
 type Wire = Record<string, any>;
@@ -519,19 +520,19 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     // it on as a 401 or 403, which clients read as the end of the person's own sign-in.
     if (response.status === 401 || response.status === 403) {
       await response.body?.cancel();
-      throw Object.assign(new Error("Hermes rejected this server's credential. You are still signed in. Ask whoever runs the server to update its Hermes token, then reconnect."), {statusCode: 502, code: 'hermes_unauthorized', expose: true});
+      throw httpError(502, "Hermes rejected this server's credential. You are still signed in. Ask whoever runs the server to update its Hermes token, then reconnect.", {code: 'hermes_unauthorized', expose: true});
     }
     if (!response.ok && path.startsWith('/api/audio/') && response.status === 400) {
       await response.body?.cancel();
-      throw Object.assign(new Error('Voice is unavailable. Check the speech provider in the native Hermes dashboard.'), { statusCode: 409 });
+      throw httpError(409, 'Voice is unavailable. Check the speech provider in the native Hermes dashboard.');
     }
     if (!response.ok && path === '/api/agent-interface/credentials') {
       await response.body?.cancel();
-      throw Object.assign(new Error('Hermes could not confirm this credential operation. Refresh its status before trying again.'), { statusCode: response.status });
+      throw httpError(response.status, 'Hermes could not confirm this credential operation. Refresh its status before trying again.');
     }
     if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience'].includes(path)) {
       const detail = await response.json().catch(() => ({})) as {error?:unknown};
-      throw Object.assign(new Error(typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.'), {statusCode:response.status});
+      throw httpError(response.status, typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.');
     }
     if (!response.ok) throw new TransportError('unreachable', `Hermes HTTP ${response.status}: request failed.`);
     return response;
@@ -550,7 +551,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
     } finally { reader.releaseLock(); }
     const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Wire;
-    if (value.ok !== true) throw Object.assign(new Error('Hermes voice is unavailable. Check the speech provider in the native dashboard.'), { statusCode: 409 });
+    if (value.ok !== true) throw httpError(409, 'Hermes voice is unavailable. Check the speech provider in the native dashboard.');
     return value;
   }
   async function runtimeStatus(): Promise<RuntimeStatus> {
@@ -652,7 +653,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       }
       return receipt(value);
     }catch(error){
-      if(error instanceof TransportError&&error.rpcCode===4094)throw Object.assign(new Error('Review the interrupted task before starting another message.'),{statusCode:409,code:'interruption_pending'});
+      if(error instanceof TransportError&&error.rpcCode===4094)throw httpError(409,'Review the interrupted task before starting another message.',{code:'interruption_pending'});
       return {requestId:input.requestId,status:'uncertain',message:error instanceof Error?error.message:'Hermes response lost. Review before retrying.'};
     }
   }
@@ -803,7 +804,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if (input.operation === 'state') return rpc('groups.state', { room_id });
       if (input.operation === 'log') return rpc('groups.log', { room_id, since_seq: input.since, limit: 200 });
       const catalog = await rpc('groups.capabilities', {});
-      if (catalog.protocol_version !== 2 || catalog.driver !== true) throw Object.assign(new Error('The Hermes group coordinator is unavailable. Refresh before trying again.'), { statusCode: 409 });
+      if (catalog.protocol_version !== 2 || catalog.driver !== true) throw httpError(409, 'The Hermes group coordinator is unavailable. Refresh before trying again.');
       if (input.operation === 'create') return rpc('groups.create', { room_id, name: input.name, members: input.members });
       if (input.operation === 'send') return rpc('groups.send', { room_id, event_id: input.requestId, payload: { text: input.text, thread_id: input.threadId } });
       if (input.operation === 'stop') return rpc('groups.stop', { room_id, cancel_id: input.requestId });
@@ -896,7 +897,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       const config:Wire={name,soul:input.instructions,description:input.description??'',ui_meta:{'hermes-bots':{...previous?.ui_meta?.['hermes-bots'],title:input.name},agent_interface:{...previous?.ui_meta?.agent_interface,name:input.name,shared:input.shared}},ui_meta_expected_revisions:{'hermes-bots':previous?.ui_meta_revisions?.['hermes-bots']??0,agent_interface:previous?.ui_meta_revisions?.agent_interface??0}};
       if(input.model && input.model!=='Inherited'){config.model=input.model;config.provider=input.provider??(await rpc('profiles.describe',{name})).model.provider;if(input.confirmModel)config.confirm_expensive_model=true;}if(input.enabledMcpServers)config.enabled_mcp_servers=input.enabledMcpServers;
       if(input.enabledSkills){const all=await rpc('profiles.describe',{name});config.disabled_skills=all.skills.filter((x:Wire)=>!input.enabledSkills!.includes(x.name)).map((x:Wire)=>x.name);}
-      const result=await rpc('profiles.configure',config);if(result.confirm_required)throw Object.assign(new Error(typeof result.confirm_message === 'string' ? result.confirm_message.slice(0, 2000) : 'Hermes requires confirmation for this model.'),{statusCode:409,code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
+      const result=await rpc('profiles.configure',config);if(result.confirm_required)throw httpError(409,typeof result.confirm_message === 'string' ? result.confirm_message.slice(0, 2000) : 'Hermes requires confirmation for this model.',{code:'MODEL_CONFIRMATION_REQUIRED',confirmRequired:true});if(!result.ok)throw new Error('Hermes applied only some profile changes: '+Object.entries(result.applied??{}).filter(([_,value])=>value===false).map(([key])=>key).join(', '));if(input.enabledTools)await this.setTools(name,input.enabledTools);
       const roster=await rpc('profiles.list',{include_sessions:true});edited(name);return bot(roster.profiles.find((x:Wire)=>x.name===name),await describe(name,true));}catch(error){edited(name);if(created){try{await http(`/api/profiles/${encodeURIComponent(name)}`,{method:'DELETE'});live.delete(name);}catch{throw Object.assign(new Error('Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot '+name+'.'),{createdBotId:name,cause:error});}}throw error;}},
     async deleteBot(id){try{await http(`/api/profiles/${encodeURIComponent(id)}`,{method:'DELETE'});live.delete(id);}finally{edited(id);}},
     async stop(botId){const state=await open(botId);try{await rpc('session.interrupt',{session_id:state.session_id,profile:botId});}finally{touched(botId);}},
@@ -949,7 +950,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     fileBotId(id){try{return fileValue(id).botId;}catch{return undefined;}},
     async download(id,maxBytes){
       const file=fileValue(id);const response=await http(`/api/files/download?path=${encodeURIComponent(file.path)}`);
-      const tooLarge=()=>Object.assign(new Error(`${file.name} is larger than ${formatBytes(maxBytes)}, the most this app opens. Ask the assistant for a smaller file.`),{statusCode:502,code:'file_too_large',expose:true});
+      const tooLarge=()=>httpError(502,`${file.name} is larger than ${formatBytes(maxBytes)}, the most this app opens. Ask the assistant for a smaller file.`,{code:'file_too_large',expose:true});
       // fetch decodes a compressed body, so the declared length counts encoded bytes.
       // Trust it only for an unencoded body; the cap always counts what is sent on.
       const encoding=response.headers.get('content-encoding');
@@ -1018,7 +1019,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
         // This add-on's 409 responses are deliberate, user-facing ComputerError
         // messages. Preserve busy/control/recovery explanations at this boundary.
         if (error instanceof TransportError && error.rpcCode === 409)
-          throw Object.assign(new Error(error.rpcMessage || error.message), {statusCode: 409});
+          throw httpError(409, error.rpcMessage || error.message);
         throw error;
       }
     },

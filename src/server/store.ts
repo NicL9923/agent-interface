@@ -18,6 +18,7 @@ import { defaultPreferences } from "../shared/types.js";
 import type { SavedItem } from "../shared/discovery.js";
 import { visible } from "./bot-access.js";
 import type { LiveState } from "./live-activity.js";
+import { httpError } from "./http-error.js";
 
 export interface LiveActivityRegistration {
   deviceId: string;
@@ -240,7 +241,7 @@ export class Store {
   nativeFlow(hash: string, state: string, challenge: string, nonce: string, expires: number) {
     this.pruneNativeAuth();
     const count = this.db.prepare("SELECT count(*) AS count FROM native_flows").get() as { count: number };
-    if (count.count >= 1000) throw Object.assign(new Error("Too many sign-in attempts. Try again shortly."), { statusCode: 429 });
+    if (count.count >= 1000) throw httpError(429, "Too many sign-in attempts. Try again shortly.");
     this.db.prepare("INSERT INTO native_flows VALUES(?,?,?,?,?)").run(hash, state, challenge, nonce, expires);
   }
   getNativeFlow(hash: string) {
@@ -270,7 +271,7 @@ export class Store {
     const conflicts = this.db.prepare("SELECT user_id FROM native_devices WHERE device_id=? OR (token=? AND environment=?)")
       .all(deviceId, token, environment) as { user_id: string }[];
     if (conflicts.some(row => row.user_id !== userId))
-      throw Object.assign(new Error("This notification device belongs to another household member. Sign out there first."), { statusCode: 409 });
+      throw httpError(409, "This notification device belongs to another household member. Sign out there first.");
     // Token rotation can retain an older installation ID. Keep exactly one current registration.
     this.transaction(() => {
       this.db.prepare("DELETE FROM native_devices WHERE user_id=? AND token=? AND environment=? AND device_id<>?").run(userId, token, environment, deviceId);
@@ -291,7 +292,7 @@ export class Store {
     const conflicts = this.db.prepare("SELECT user_id FROM live_activities WHERE device_id=? OR (token=? AND environment=?)")
       .all(deviceId, token, environment) as { user_id: string }[];
     if (conflicts.some(row => row.user_id !== userId))
-      throw Object.assign(new Error("This device's Live Activity belongs to another household member. Sign out there first."), { statusCode: 409 });
+      throw httpError(409, "This device's Live Activity belongs to another household member. Sign out there first.");
     // A new token replaces the device's previous activity and replays the current state.
     this.transaction(() => {
       const previous = this.liveActivityContext(userId, sessionHash, deviceId);
@@ -647,12 +648,7 @@ export class Store {
       const previous = this.submission(input.requestId);
       if (previous) {
         if (JSON.stringify(previous.input) !== JSON.stringify(input))
-          throw Object.assign(
-            new Error(
-              "This submission ID was already used for different content",
-            ),
-            { statusCode: 409 },
-          );
+          throw httpError(409, "This submission ID was already used for different content");
         return { created: false, ...previous };
       }
       const receipt: SubmissionReceipt = {
@@ -881,12 +877,7 @@ export class Store {
       .prepare("SELECT user_id FROM subscriptions WHERE endpoint=?")
       .get(subscription.endpoint) as { user_id: string } | undefined;
     if (existing && existing.user_id !== userId)
-      throw Object.assign(
-        new Error(
-          "This browser push subscription belongs to another household member. Remove it from that session before subscribing.",
-        ),
-        { statusCode: 409 },
-      );
+      throw httpError(409, "This browser push subscription belongs to another household member. Remove it from that session before subscribing.");
     this.db
       .prepare(
         "INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET value=excluded.value",

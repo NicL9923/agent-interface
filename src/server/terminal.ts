@@ -5,6 +5,7 @@ import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./config.js";
+import { httpError } from "./http-error.js";
 
 const host = fileURLToPath(new URL("./terminal-host.py", import.meta.url));
 export class SystemTerminal {
@@ -42,7 +43,7 @@ export class SystemTerminal {
     return result.stdout.split("\n").filter(name => /^member-[a-f0-9]{32}$/.test(name));
   }
   private arguments(sessionId: string) {
-    if (!this.available || !this.config) throw Object.assign(new Error(this.reason), {statusCode: 409});
+    if (!this.available || !this.config) throw httpError(409, this.reason ?? "");
     return [host, "--socket", join(this.config.stateDirectory, "tmux.sock"),
       "--session", sessionId, "--cwd", this.config.cwd];
   }

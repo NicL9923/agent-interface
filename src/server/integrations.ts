@@ -2,16 +2,16 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Runtime } from "../shared/types.js";
 import type { IntegrationRequest } from "../shared/integrations.js";
+import { httpError } from "./http-error.js";
 const profile = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
 const fields = z.record(z.string().max(100), z.string().max(20000));
 const body = z.object({ profile, fields: fields.optional() }).strict();
-const failure = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 export async function installIntegrationsRoutes(app: FastifyInstance, runtime: Runtime, options: { origin: string; canManage: (req: FastifyRequest) => boolean }) {
   const request = async (input: IntegrationRequest) => {
-    if (!runtime.integrationRequest) throw failure(409, "The installed Hermes add-on needs integration support. Ask the installer to update and qualify it.");
+    if (!runtime.integrationRequest) throw httpError(409, "The installed Hermes add-on needs integration support. Ask the installer to update and qualify it.");
     return runtime.integrationRequest(input);
   };
-  const manage = (req: FastifyRequest) => { if (!options.canManage(req)) throw failure(403, "Only a household integration administrator can change shared Hermes connections."); };
+  const manage = (req: FastifyRequest) => { if (!options.canManage(req)) throw httpError(403, "Only a household integration administrator can change shared Hermes connections."); };
   app.get("/api/integrations", async req => ({ ...await request({ operation: "list", profile: z.object({ profile }).parse(req.query).profile }), canManage: options.canManage(req) }));
   for (const operation of ["check", "connect", "disconnect"] as const) {
     app.post(`/api/integrations/:id/${operation}`, async req => {

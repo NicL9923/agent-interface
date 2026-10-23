@@ -10,19 +10,19 @@ import { isConversationReply } from '../shared/message-origin.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
+import { httpError } from './http-error.js';
 const id = z.string().min(1).max(200);
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
-const failure = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 export async function assertRoutineEditable(runtime: Runtime, store: Store, routineId: string) {
   if (!runtime.experienceRequest) return;
   for (const trial of store.routineTrials(routineId)) {
     try {
       const response = await runtime.experienceRequest({ operation: 'run_receipt', profile: trial.botId, routineId, requestId: trial.requestId, senderId: trial.userId });
       if ('status' in response) store.recordRoutineTrialStatus(trial.requestId, response.status === 'uncertain' && response.ownerStatus === 'unknown' ? 'settled' : response.status);
-      if ('status' in response && response.status === 'accepted') throw failure(409, 'This routine has a trial running. Wait for its result before changing or deleting it.');
-      if ('status' in response && response.status === 'uncertain' && 'executionId' in response && (!('ownerStatus' in response) || response.ownerStatus !== 'unknown')) throw failure(409, 'The native trial owner is still unconfirmed. Check the trial result before changing this routine.');
+      if ('status' in response && response.status === 'accepted') throw httpError(409, 'This routine has a trial running. Wait for its result before changing or deleting it.');
+      if ('status' in response && response.status === 'uncertain' && 'executionId' in response && (!('ownerStatus' in response) || response.ownerStatus !== 'unknown')) throw httpError(409, 'The native trial owner is still unconfirmed. Check the trial result before changing this routine.');
     } catch (error) {
       if ((error as { statusCode?: number }).statusCode === 404) continue;
       throw error;
@@ -31,11 +31,11 @@ export async function assertRoutineEditable(runtime: Runtime, store: Store, rout
 }
 export async function installExperienceRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const bot = async (botId: string) => {
-    if (!(await runtime.listBots()).some(row => row.id === botId)) throw Object.assign(failure(404, notFound.error), { code: notFound.code });
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   };
   const request = async (input: ExperienceRequest) => {
     await bot(input.profile);
-    if (!runtime.experienceRequest) throw failure(409, 'The installed Hermes add-on needs memory and routine preview support. Update and qualify the integration.');
+    if (!runtime.experienceRequest) throw httpError(409, 'The installed Hermes add-on needs memory and routine preview support. Update and qualify the integration.');
     return runtime.experienceRequest(input);
   };
   app.get('/api/today', async (req, reply) => {
@@ -44,7 +44,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const query = z.object({ since: iso.optional() }).strict().parse(req.query);
     // Before a first catch-up the recap covers a day, starting on a whole minute so polls within it can revalidate.
     const since = new Date(query.since ?? store.todaySeen(userId) ?? Math.floor((now.getTime() - 86400000) / 60_000) * 60_000).toISOString();
-    if (Date.parse(since) > now.getTime() + 60_000) throw failure(400, 'The recap start cannot be in the future');
+    if (Date.parse(since) > now.getTime() + 60_000) throw httpError(400, 'The recap start cannot be in the future');
     // Capture the ingestion page before any awaited native read. A completion
     // discovered during those reads belongs to the next page, even when its
     // native occurredAt precedes the person's last visit.
@@ -91,8 +91,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   });
   app.put('/api/today/seen', async req => {
     const { seenAt, frontier } = z.object({ seenAt: iso, frontier: z.string().regex(/^\d{1,16}$/) }).strict().parse(req.body);
-    if (Date.parse(seenAt) > Date.now() + 60_000) throw failure(400, 'Read time cannot be in the future');
-    if (!Number.isSafeInteger(Number(frontier)) || Number(frontier) > store.latestEventFrontier()) throw failure(400, 'The recap frontier is not a known ingestion position');
+    if (Date.parse(seenAt) > Date.now() + 60_000) throw httpError(400, 'Read time cannot be in the future');
+    if (!Number.isSafeInteger(Number(frontier)) || Number(frontier) > store.latestEventFrontier()) throw httpError(400, 'The recap frontier is not a known ingestion position');
     store.markTodaySeen(signedIn(req).id, new Date(seenAt).toISOString(), Number(frontier));
     return { ok: true };
   });
@@ -114,7 +114,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   });
   const routine = async (routineId: string) => {
     const row = (await runtime.routines()).find(routine => routine.id === routineId);
-    if (!row) throw failure(404, 'Routine not found');
+    if (!row) throw httpError(404, 'Routine not found');
     return row;
   };
   app.post('/api/routines/:id/run', async req => {
@@ -122,7 +122,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const { requestId } = z.object({ requestId: z.string().uuid() }).strict().parse(req.body);
     const userId = signedIn(req).id;
     const previous = store.routineTrial(requestId);
-    if (previous && (previous.userId !== userId || previous.routineId !== params.id)) throw failure(409, 'This trial request ID belongs to a different routine or person');
+    if (previous && (previous.userId !== userId || previous.routineId !== params.id)) throw httpError(409, 'This trial request ID belongs to a different routine or person');
     const row = previous ? { botId: previous.botId, id: previous.routineId } : await routine(params.id);
     store.rememberRoutineTrial(requestId, userId, row.id, row.botId);
     const receipt = await request({ operation: 'run', profile: row.botId, routineId: row.id, requestId, senderId: userId });
@@ -133,7 +133,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const params = z.object({ id, requestId: z.string().uuid() }).parse(req.params);
     const userId = signedIn(req).id;
     const row = store.routineTrial(params.requestId);
-    if (!row || row.userId !== userId || row.routineId !== params.id) throw failure(404, 'Trial receipt not found');
+    if (!row || row.userId !== userId || row.routineId !== params.id) throw httpError(404, 'Trial receipt not found');
     const receipt = await request({ operation: 'run_receipt', profile: row.botId, routineId: row.routineId, requestId: params.requestId, senderId: userId });
     if ('status' in receipt) store.recordRoutineTrialStatus(params.requestId, receipt.status === 'uncertain' && receipt.ownerStatus === 'unknown' ? 'settled' : receipt.status);
     return receipt;
@@ -144,11 +144,11 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const redact = await redactAgents(store, roster, signedIn(req).id);
     const message = (await runtime.conversation(params.id)).messages.map(redact.message).find(message => message.id === params.messageId && isConversationReply(message));
     const card = message && replyCardsFromText(message.text).find(card => card.id === params.cardId);
-    if (!card) throw failure(404, 'This interactive reply is no longer in the Hermes conversation');
+    if (!card) throw httpError(404, 'This interactive reply is no longer in the Hermes conversation');
     const userId = signedIn(req).id;
     if (method === 'PUT') {
       const state = z.object({ checkedIds: z.array(id).max(60), notes: z.record(id, z.string().max(2000)) }).strict().parse(req.body);
-      if (!validReplyCardState(card, state)) throw failure(400, 'The saved choices do not belong to this reply');
+      if (!validReplyCardState(card, state)) throw httpError(400, 'The saved choices do not belong to this reply');
       store.saveCardState(userId, params.id, params.messageId, params.cardId, state);
       return state;
     }
