@@ -251,7 +251,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   /// What the app keeps in UserDefaults per scope, optionally per assistant.
   enum StorageKind: String {
-    case draft, draftAdditions, pending, recovered, selected, notifications, notificationPrompt
+    case draft, draftAdditions, pending, recovered, selected, notifications, notificationPrompt, goalResume
   }
   func key(_ kind: StorageKind, _ bot: String? = nil) -> String? {
     scope.map { "native.\($0).\(kind.rawValue)\(bot.map { ".\($0)" } ?? "")" }

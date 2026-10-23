@@ -226,7 +226,7 @@ struct HermesWorkView: View {
       }
     }.householdListBackground().accessibilityIdentifier("automation.work")
       .task {
-        control.restoreResumeIntent(key: store.key("goalResume", botId))
+        control.restoreResumeIntent(key: store.key(.goalResume, botId))
         control.appear(foreground: scenePhase == .active)
         await control.refresh(store.api)
       }
