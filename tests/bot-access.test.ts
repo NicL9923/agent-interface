@@ -10,6 +10,7 @@ import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import { HermesUpgrades } from "../src/server/upgrades.js";
 import { defaultPreferences, type Runtime } from "../src/shared/types.js";
+import { IncompleteCreationError } from "../src/shared/errors.js";
 import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): unknown }[] = [], directories: string[] = [];
@@ -512,7 +513,7 @@ describe("private assistant redaction across tools, restarts and failed creation
 
   it("keeps a profile Hermes created but could not remove private to its creator", async () => {
     const s = await setup();
-    s.runtime.saveBot = async () => { throw Object.assign(new Error("Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot night-ledger."), { createdBotId: "night-ledger" }); };
+    s.runtime.saveBot = async () => { throw new IncompleteCreationError("Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot night-ledger.", "night-ledger"); };
     const failed = await s.app.inject({ method: "POST", url: "/api/bots", headers: s.owner, payload: { name: "Night Ledger", instructions: "", model: "test", shared: false } });
     expect([failed.statusCode, failed.json().code]).toEqual([502, "created_incomplete"]);
     expect(failed.json().error).toContain("Night Ledger");

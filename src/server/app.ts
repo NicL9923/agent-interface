@@ -38,7 +38,7 @@ import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
 import { openEventStream } from "./event-stream.js";
 import { apnsToken, avatar, botSaveRequest, id, modelFavoriteList, preferences } from "./schemas.js";
-import { interruptionPendingMessage } from "../shared/errors.js";
+import { IncompleteCreationError, interruptionPendingMessage } from "../shared/errors.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
@@ -269,8 +269,8 @@ export async function createApp(
     try { bot = await runtime.saveBot(input); }
     catch (error) {
       // Hermes may have created the profile and then failed to remove it; it stays the creator's.
-      const created = (error as { createdBotId?: unknown }).createdBotId;
-      if (typeof created === "string") {
+      if (error instanceof IncompleteCreationError) {
+        const created = error.createdBotId;
         if (created !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(created, next); }
         roster.forget();
         throw httpError(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`, { expose: true, code: "created_incomplete" });

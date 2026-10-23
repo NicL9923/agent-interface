@@ -6,11 +6,13 @@ import { afterEach, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { accountMarker, apnsCollapseId, createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
+import { accountMarker, ApnsError, apnsCollapseId, createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime } from "./helpers/server.js";
+import Fastify from "fastify";
+import { errorHandler } from "../src/server/http-error.js";
 
 const origin = "http://127.0.0.1:3000";
 const runtime = fakeRuntime({ status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} });
@@ -232,6 +234,28 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
   } finally { sender.close(); rmSync(dir, { recursive: true }); }
 });
 
+it("reports Apple's refusal with its status and reason, which a route never forwards", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "apns-test-"));
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const sender = createApnsSender(config, async () => ({ statusCode: 400, reason: "BadDeviceToken" }))!;
+  const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
+  const app = Fastify();
+  try {
+    const refusal = await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" })).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ApnsError);
+    expect(refusal).toMatchObject({ apnsStatus: 400, reason: "BadDeviceToken" });
+    await expect(sender.clear(device, ["event"])).rejects.toMatchObject({ apnsStatus: 400, reason: "BadDeviceToken" });
+    // Apple's 400 is not this app's: a route that let it escape answers as an unexplained failure.
+    app.setErrorHandler(errorHandler({ production: true }));
+    app.get("/escaped", async () => { throw refusal; });
+    const response = await app.inject({ url: "/escaped" });
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({ error: "The Hermes operation could not be completed" });
+  } finally { await app.close(); sender.close(); rmSync(dir, { recursive: true }); }
+});
+
 it("shares durable participant/routine notifications across web/APNs without retry duplicates and removes invalid devices", async () => {
   const store = new Store(":memory:");
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
@@ -249,7 +273,7 @@ it("shares durable participant/routine notifications across web/APNs without ret
   const worker = new BackgroundWorker(store, runtime, config, async device => { web.push(device.endpoint); }, async device => {
     native.push(device.deviceId);
     if (device.deviceId === "one" && native.filter(value => value === "one").length === 1) throw new Error("Temporary outage");
-    if (device.deviceId === "two") throw Object.assign(new Error("Invalid device"), { statusCode: 410 });
+    if (device.deviceId === "two") throw new ApnsError("Invalid device", 410);
   });
   try {
     await worker.tick(); expect(web).toHaveLength(1); expect(native).toEqual(["one", "two"]);

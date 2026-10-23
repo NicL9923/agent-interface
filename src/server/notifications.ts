@@ -3,7 +3,7 @@ import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
-import { accountMarker, createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
+import { accountMarker, ApnsError, createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 export type PushSender = (
@@ -194,12 +194,12 @@ export class BackgroundWorker {
             for (const row of item.items) this.store.markDelivered(row.id, endpoint);
             this.push.success();
           } catch (error) {
-            const result = error as { statusCode?: number; reason?: string; message?: string };
-            if (result.statusCode === 410 || (result.statusCode === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(result.reason ?? ""))) {
+            const apns = error instanceof ApnsError ? error : undefined;
+            if (apns?.apnsStatus === 410 || (apns?.apnsStatus === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(apns.reason ?? ""))) {
               this.store.removeNativeDevice(item.user_id, device.deviceId);
               for (const row of item.items) this.store.markDelivered(row.id, endpoint);
             } else {
-              failed = `APNs ${result.statusCode ?? "error"}: ${result.reason ?? result.message ?? String(error)}`;
+              failed = `APNs ${apns?.apnsStatus ?? "error"}: ${apns?.reason ?? (error instanceof Error ? error.message : String(error))}`;
               this.push.failure(failed);
             }
           }
