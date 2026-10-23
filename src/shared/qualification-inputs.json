@@ -4,6 +4,7 @@
   "scripts/hermes-upgrade-linux.py",
   "scripts/hermes-upgrade-worker.py",
   "scripts/spike/advanced_routine_probe.py",
+  "scripts/spike/app-probe-scope.mjs",
   "scripts/spike/app-probe.mjs",
   "scripts/spike/automation_probe.py",
   "scripts/spike/computer_acceptance.py",
