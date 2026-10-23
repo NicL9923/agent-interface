@@ -56,7 +56,8 @@ class QualificationBrowser(unittest.TestCase):
             (release / 'src/shared').mkdir()
             (release / 'scripts/spike').mkdir(parents=True)
             (release / 'node_modules').mkdir()
-            shutil.copy2(ROOT / 'src/hermes/qualification.py', release / 'src/hermes/qualification.py')
+            for name in ('qualification.py', 'private_fs.py'):
+                shutil.copy2(ROOT / 'src/hermes' / name, release / 'src/hermes' / name)
             shutil.copy2(ROOT / 'scripts/hermes-upgrade-worker.py', release / 'scripts/hermes-upgrade-worker.py')
             (release / 'src/shared/qualification-inputs.json').write_text('["src/hermes/qualification.py"]')
             seen = base / 'browser-seen.json'

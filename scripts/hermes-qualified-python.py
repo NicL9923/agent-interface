@@ -66,6 +66,7 @@ def tree_digest(root, listing=None):
 
 
 def private_directory(path):
+    # Not private_fs.owner_private: prepare freezes this file alone into the candidate stage.
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
         raise RuntimeError("Candidate stage must be a private directory owned by this user")

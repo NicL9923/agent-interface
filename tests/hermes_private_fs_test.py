@@ -99,18 +99,24 @@ class OwnerPrivateTests(unittest.TestCase):
             private_fs.owner_private(self.root / "missing")
 
 
-def sibling_loaders():
-    for path in sorted((ROOT / "src/hermes").glob("*.py")):
-        for node in ast.parse(path.read_text()).body:
-            if isinstance(node, ast.FunctionDef) and node.name == "sibling_module":
-                yield path.name, ast.dump(node)
+def loaders(name, *patterns):
+    for pattern in patterns:
+        for path in sorted(ROOT.glob(pattern)):
+            for node in ast.parse(path.read_text()).body:
+                if isinstance(node, ast.FunctionDef) and node.name == name:
+                    yield str(path.relative_to(ROOT)), ast.dump(node)
 
 
 class SiblingLoaderTests(unittest.TestCase):
-    def test_every_add_on_copy_of_the_loader_is_identical(self):
-        loaders = dict(sibling_loaders())
-        self.assertGreaterEqual(set(loaders), {"extension.py", "gateway_guard.py", "dashboard.py", "computer_host.py", "computer.py", "integrations.py"})
-        self.assertEqual(len(set(loaders.values())), 1, sorted(loaders))
+    def test_every_copy_of_each_loader_is_identical(self):
+        siblings = dict(loaders("sibling_module", "src/hermes/*.py"))
+        self.assertGreaterEqual(set(siblings), {"src/hermes/" + name for name in (
+            "extension.py", "gateway_guard.py", "dashboard.py", "computer_host.py", "computer.py", "integrations.py")})
+        releases = dict(loaders("hermes_module", "scripts/*.py", ".agents/tools/*.py"))
+        self.assertGreaterEqual(set(releases), {"scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py",
+                                         ".agents/tools/setup-shared-computer.py"})
+        for found in (siblings, releases):
+            self.assertEqual(len(set(found.values())), 1, sorted(found))
 
     def add_on_copy(self):
         directory = tempfile.TemporaryDirectory()

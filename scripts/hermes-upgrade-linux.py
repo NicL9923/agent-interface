@@ -33,23 +33,43 @@ MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
 GIT_ABBREV = ("-c", "core.abbrev=10")
 
 
+# The add-on's private file helpers ship beside this script in every release.
+HERMES_SOURCE = Path(__file__).resolve().parents[1] / "src/hermes"
+
+
+def hermes_module(name):
+    """Load this release's src/hermes/NAME.py once per process, under its canonical name.
+
+    The add-on's sibling_module uses the same name, so the two never make two instances.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, HERMES_SOURCE / (name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
+private_fs = hermes_module("private_fs")
+
+
 def private(path, directory=False):
     path = Path(path)
-    info = path.lstat()
-    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077 or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
+    if not private_fs.owner_private(path, "dir" if directory else "file"):
         raise RuntimeError("Expected installer-owned private configuration or operation record")
     return path
 
 
 def atomic(path, value):
-    path = Path(path)
-    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
-        json.dump(value, output); output.write("\n"); output.flush(); os.fsync(output.fileno())
-    os.replace(temporary, path)
-    directory = os.open(path.parent, os.O_RDONLY)
-    try: os.fsync(directory)
-    finally: os.close(directory)
+    private_fs.atomic_write(path, json.dumps(value) + "\n")
 
 
 def digest(path):
@@ -632,10 +652,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
             path = Path(filename)
             if path.is_symlink(): raise RuntimeError("Protected configuration became a symlink")
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".restore")
-            with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, saved["mode"]), "wb") as output:
-                output.write(content); output.flush(); os.fsync(output.fileno())
-            os.replace(temporary, path)
+            private_fs.atomic_write(path, content, mode=saved["mode"])
         if self.source_state() != tuple(record["baseline"]["source"]): raise RuntimeError("Rollback source or repair does not match the cold snapshot")
         self.save(dict(record, phase="restored"))
         self.control("start")

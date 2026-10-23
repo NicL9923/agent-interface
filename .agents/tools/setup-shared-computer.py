@@ -7,11 +7,40 @@ Desktop packages and a sandboxed /usr/bin/google-chrome must already be installe
 """
 import argparse
 import datetime
+import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+
+# Run on the host from a release, whose add-on ships the private file helpers.
+HERMES_SOURCE = Path(__file__).resolve().parents[2] / "src/hermes"
+
+
+def hermes_module(name):
+    """Load this release's src/hermes/NAME.py once per process, under its canonical name.
+
+    The add-on's sibling_module uses the same name, so the two never make two instances.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, HERMES_SOURCE / (name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
+private_fs = hermes_module("private_fs")
 
 
 def main():
@@ -31,8 +60,7 @@ def main():
     computer = shared / "computer"
     for path in (computer, computer / "terminal", computer / "workspace"):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
-        info = path.lstat()
-        if path.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        if not private_fs.owner_private(path, "dir"):
             parser.error("Computer state must be private and owned by the service account")
     units = Path.home() / ".config/systemd/user"
     backup = base / "operations" / ("computer-setup-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
@@ -40,10 +68,7 @@ def main():
     def write(path, contents):
         if path.exists(): shutil.copy2(path, backup / (path.parent.name + "-" + path.name))
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(path.name + ".computer-new")
-        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "w") as handle: handle.write(contents)
-        temporary.replace(path)
+        private_fs.atomic_write(path, contents)
     env_file = shared / "computer.env"
     write(env_file, f"HERMES_AGENT_INTERFACE_COMPUTER_HOME={computer}\nHERMES_AGENT_INTERFACE_COMPUTER_CDP_URL=http://127.0.0.1:9223\nAGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome\n")
     for name in ("hermes-dashboard", "hermes-gateway"):

@@ -19,7 +19,6 @@ import re
 import resource
 import select
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -30,24 +29,43 @@ OFFICIAL_UPSTREAM = "https://github.com/NousResearch/hermes-agent.git"
 MAX_REPAIR_SNAPSHOT_PACK_BYTES = 512 * 1024 * 1024
 
 
+# The add-on's private file helpers ship beside this script in every release.
+HERMES_SOURCE = Path(__file__).resolve().parents[1] / "src/hermes"
+
+
+def hermes_module(name):
+    """Load this release's src/hermes/NAME.py once per process, under its canonical name.
+
+    The add-on's sibling_module uses the same name, so the two never make two instances.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, HERMES_SOURCE / (name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
+private_fs = hermes_module("private_fs")
+
+
 def private_file(path):
     path = Path(path)
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+    if not private_fs.owner_private(path):
         raise RuntimeError("Installer configuration must be a private file owned by the worker user")
     return path
 
 
 def atomic(path, value):
-    path = Path(path)
-    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as output:
-        json.dump(value, output); output.write("\n"); output.flush(); os.fsync(output.fileno())
-    os.replace(temporary, path)
-    directory = os.open(path.parent, os.O_RDONLY)
-    try: os.fsync(directory)
-    finally: os.close(directory)
+    private_fs.atomic_write(path, json.dumps(value) + "\n")
 
 
 def native_chromium(home):
@@ -429,8 +447,7 @@ class Worker:
         self.config = json.loads(private_file(config).read_text())
         self.config_file = Path(config)
         self.directory = Path(state_dir)
-        info = self.directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        if not private_fs.owner_private(self.directory, "dir"):
             raise RuntimeError("Upgrade state directory must be private and owned by the worker")
         self.state_file = self.directory / "status.json"
         self.state = json.loads(private_file(self.state_file).read_text())
@@ -511,8 +528,7 @@ class Worker:
         pending install or an open maintenance window still needs is never removed."""
         root = Path(self.config["stageRoot"])
         if not root.exists(): return
-        info = root.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077: return
+        if not private_fs.owner_private(root, "dir"): return
         completed, recoverable, attempts = [], [], []
         needed = self.state.get("phase") == "ready" or self.state.get("maintenance")
         protected = self.state.get("qualification", {}).get("stage") if needed else None
@@ -520,8 +536,7 @@ class Worker:
             try:
                 identifier = stage.name.removeprefix("qualification-")
                 uuid.UUID(identifier)
-                info = stage.lstat()
-                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077: continue
+                if not private_fs.owner_private(stage, "dir"): continue
                 install = os.path.lexists(stage / "backup") or (stage / ".agent-interface-upgrade-install").exists()
                 if install and (stage / "backup").is_symlink(): continue
                 marker = private_file(stage / ".agent-interface-upgrade-stage")
@@ -1055,8 +1070,7 @@ class Worker:
                 def rollback():
                     if previous_receipt is None: deployed_receipt.unlink(missing_ok=True)
                     else:
-                        temporary = deployed_receipt.with_suffix(".restore.tmp")
-                        temporary.write_bytes(previous_receipt); temporary.chmod(0o600); temporary.replace(deployed_receipt)
+                        private_fs.atomic_write(deployed_receipt, previous_receipt)
                     self.hook("rollback")
                     if self.snapshot(self.source)[:2] != old or self.dashboard_link() != qualification.get("dashboardLink"): raise RuntimeError("Rollback did not restore the exact source and repair")
                     self.environment["HERMES_UPGRADE_ROLLBACK"] = "1"
