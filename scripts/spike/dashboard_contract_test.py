@@ -57,7 +57,9 @@ class DashboardContract(unittest.TestCase):
             def sibling_spec(name, path):
                 self.assertEqual(Path(path).parent, ROOT)
                 module = extension if name.endswith("extension") else experience if name.endswith("experience") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else computer if name.endswith("computer") else service
-                return importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))))
+                spec = importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))), origin=str(path))
+                spec.has_location = True  # Like a real file spec, so the loader can confirm which file it loaded.
+                return spec
             with patch.object(sys, "argv", argv), patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private", "HERMES_SERVE_HEADLESS": ""}), patch.dict(sys.modules, {"hermes_cli": package, "hermes_cli.main": cli, "hermes_cli.web_server": web, "hermes_cli.web_server_files": files, "hermes_cli.web_routers": routers, "hermes_cli.web_routers.actions": actions, "tui_gateway": gateway, "tui_gateway.server": server}), patch.object(dashboard.importlib.util, "spec_from_file_location", sibling_spec):
                 if failure in ("extension", "experience", "integrations", "vault"):
                     with self.assertRaises(RuntimeError): dashboard.main()

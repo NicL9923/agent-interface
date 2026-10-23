@@ -19,6 +19,7 @@ import mimetypes
 import subprocess
 import importlib.util
 import hmac
+import sys
 from pathlib import Path
 
 REVISION = "b9cb268deffc97946ec11645aa622a7353dd0591"
@@ -27,10 +28,27 @@ QUALIFIED_OAUTH_PATCH = "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306b
 
 
 def sibling_module(name):
-    spec = importlib.util.spec_from_file_location("agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    """Load src/hermes/NAME.py once per process, under its one canonical module name.
+
+    A second load under another name would be a separate instance with its own state.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
     return module
+
+
+private_fs = sibling_module("private_fs")
 
 
 def qualification_module():
@@ -201,10 +219,7 @@ def install(path=None):
     from tui_gateway import server
     from tui_gateway.transport import Transport
     from hermes_constants import get_hermes_home, profile_name_for_home
-    computer_spec = importlib.util.spec_from_file_location("agent_interface_computer", Path(__file__).resolve().with_name("computer.py"))
-    computer = importlib.util.module_from_spec(computer_spec)
-    computer_spec.loader.exec_module(computer)
-    computer.install(server)
+    sibling_module("computer").install(server)
     journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
     canonical_lock = threading.RLock()
     submission_lock = threading.RLock()
@@ -224,10 +239,9 @@ def install(path=None):
         path = Path(maintenance_file)
         if not path.is_absolute():
             raise RuntimeError("Maintenance lease requires an absolute private path.")
-        if not path.exists():
+        if not os.path.lexists(path):
             return None
-        info = path.lstat()
-        if path.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        if not private_fs.owner_private(path):
             raise RuntimeError("Maintenance lease is not private.")
         return json.loads(path.read_text())
 
@@ -266,13 +280,7 @@ def install(path=None):
                     return server._err(rid, 409, "Hermes still has active work; no maintenance lease acquired")
                 path = Path(maintenance_file)
                 path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                temporary = path.with_name(path.name + "." + uuid.uuid4().hex)
-                fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                with os.fdopen(fd, "w") as handle:
-                    json.dump({"operationId": operation}, handle)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                temporary.replace(path)
+                private_fs.atomic_json(path, {"operationId": operation})
                 lease = {"operationId": operation}
             elif action == "release" and lease:
                 Path(maintenance_file).unlink()
@@ -1035,16 +1043,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=19119)
     args = parser.parse_args()
     journal = install()
-    experience_spec = importlib.util.spec_from_file_location("agent_interface_experience", Path(__file__).resolve().with_name("experience.py"))
-    experience = importlib.util.module_from_spec(experience_spec); experience_spec.loader.exec_module(experience)
-    experience.install(web, journal, server._history_to_messages)
-    vault_spec = importlib.util.spec_from_file_location("agent_interface_vault", Path(__file__).resolve().with_name("vault.py"))
-    vault = importlib.util.module_from_spec(vault_spec); vault_spec.loader.exec_module(vault)
-    vault.install(web, journal)
-    integration_spec = importlib.util.spec_from_file_location("agent_interface_integrations", Path(__file__).resolve().with_name("integrations.py"))
-    integrations = importlib.util.module_from_spec(integration_spec); integration_spec.loader.exec_module(integrations)
-    integrations.install(web)
-    service_spec = importlib.util.spec_from_file_location("agent_interface_service_auth", Path(__file__).resolve().with_name("service_auth.py"))
-    service = importlib.util.module_from_spec(service_spec); service_spec.loader.exec_module(service)
-    service.install_service_auth(web, os.environ["HERMES_AGENT_INTERFACE_TOKEN"])
+    sibling_module("experience").install(web, journal, server._history_to_messages)
+    sibling_module("vault").install(web, journal)
+    sibling_module("integrations").install(web)
+    sibling_module("service_auth").install_service_auth(web, os.environ["HERMES_AGENT_INTERFACE_TOKEN"])
     web.start_server(host="127.0.0.1", port=args.port, open_browser=False, headless=True, isolated=True)
