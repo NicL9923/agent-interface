@@ -4,7 +4,9 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from support import load_source
+from support import ROOT, load_source
+
+sys.path.insert(0, str(ROOT / ".agents/tools"))
 
 idle = load_source('.agents/tools/prepare-when-idle.py', 'prepare_when_idle')
 

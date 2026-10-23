@@ -4,7 +4,8 @@ import argparse
 import base64
 import json
 from pathlib import Path
-import subprocess
+
+import host_access
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--host", default="home-hermes-vps")
@@ -42,5 +43,6 @@ print("Disposable probe stage:",stage,flush=True)
 result=subprocess.run([payload["python"],str(stage/payload["probe"])],env=env,cwd=stage)
 raise SystemExit(result.returncode)
 ''' % json.dumps(payload)
-result = subprocess.run(["ssh", args.host, "python3", "-"], input=remote, text=True)
+# The probe drives a native browser in a fresh disposable home; allow it an hour.
+result = host_access.ssh(args.host, ["python3", "-"], input=remote, timeout=3600, check=False)
 raise SystemExit(result.returncode)

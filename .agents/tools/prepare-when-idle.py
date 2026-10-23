@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+import host_access
+
 TOOL = Path(__file__).with_name("release-app.py")
 # Either native admission owner can report work. Retry only their no-change preflight refusals.
 BUSY = re.compile(r'Fence: (?:maintenance gate inactive with no busy work|gateway reports no active agents or work)|gate\["busy"\]')
@@ -27,7 +29,7 @@ def gateway_report(host, hermes_home):
     script = ("import json,os;d=json.load(open(os.path.join(os.path.expanduser(%r),'gateway_state.json')));"
               "print(json.dumps({'agents':d.get('active_agents'),'work':d.get('active_work') or []}))" % hermes_home)
     try:
-        result = subprocess.run(["ssh", host, "python3 -c " + shlex.quote(script)], capture_output=True, text=True, timeout=30)
+        result = host_access.ssh(host, "python3 -c " + shlex.quote(script), timeout=30, check=False, capture=True)
         return json.loads(result.stdout) if result.returncode == 0 else None
     except (subprocess.SubprocessError, ValueError):
         return None
