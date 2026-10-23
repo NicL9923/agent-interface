@@ -92,6 +92,27 @@ it('reads a settled assistant\'s history again only after its roster preview cha
   await today(); await today();
   expect(histories()).toBe(5);
 });
+it('never reuses a recap redacted under privacy that changed while it was read', async () => {
+  const s = await setup();
+  const lastMessage = { text: 'Done', at: new Date(Date.now() - 60000).toISOString() };
+  // One assistant is already private, so the redactor waits for roster names after deciding
+  // what to hide. Another becomes private during that wait.
+  s.store.savePresentation('secret', { shared: false, ownerId: 'someone-else' });
+  let lists = 0;
+  s.runtime.listBots = vi.fn(async () => {
+    if (++lists === 2) s.store.savePresentation('ledger', { shared: false, ownerId: 'someone-else' });
+    return [{ id: 'ranch', name: 'Ranch', model: 'test', shared: true, activity: 'idle' as const, lastMessage }];
+  });
+  const read = s.conversation.getMockImplementation()!;
+  s.conversation.mockImplementation(async (id: string) => ({ ...await read(id), activity: { state: 'done' } }) as never);
+  const histories = () => s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined).length;
+  await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(lists).toBeGreaterThanOrEqual(2);
+  await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(histories()).toBe(2);
+  await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(histories()).toBe(2);
+});
 it('revalidates an unchanged Today as 304 although each read has a new check time', async () => {
   const s = await setup(true);
   const createdAt = new Date(Date.now() - 60_000).toISOString();

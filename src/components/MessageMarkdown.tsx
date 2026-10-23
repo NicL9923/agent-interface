@@ -132,10 +132,12 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
 });
 
 const fence = /^ {0,3}(`{3,}|~{3,})/;
+const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
 /**
  * Splits a reply that is still arriving into blocks that are finished and the one still growing,
  * so each update parses only the last. Splits fall on blank lines outside code fences that are
- * followed by a line at the margin, which always starts a new block. Returns null when a rule
+ * followed by a line at the margin, which starts a new block, unless that line is a list item,
+ * which may continue a loose list above it. Returns null when a rule
  * spans the whole reply: reply cards and inline pages are judged together, reference links and
  * footnotes resolve anywhere, and HTML comments or raw blocks may contain blank lines.
  */
@@ -152,7 +154,7 @@ export function streamingBlocks(text: string): string[] | null {
       continue;
     }
     const next = lines[index + 1];
-    if (open || lines[index].trim() || index === start || !next?.trim() || /^\s/.test(next)) continue;
+    if (open || lines[index].trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
     blocks.push(lines.slice(start, index).join("\n"));
     start = index + 1;
   }

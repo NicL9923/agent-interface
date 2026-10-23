@@ -63,7 +63,11 @@ export class AccountRepository {
       const session = this.db.prepare("SELECT s.expires,t.signed_in_at AS signedInAt FROM native_sessions s LEFT JOIN native_session_starts t ON t.hash=s.hash WHERE s.hash=?")
         .get(hash) as { expires: number; signedInAt: number | null } | undefined;
       if (!session || session.expires <= now) return undefined;
-      const expires = Math.max(session.expires, Math.min(now + lifetime, (session.signedInAt ?? session.expires - lifetime) + limit));
+      // A session from before renewal began one lifetime before its first expiry. Recording that
+      // start keeps later renewals from inferring a newer one from the expiry they extended.
+      const signedInAt = session.signedInAt ?? session.expires - lifetime;
+      if (session.signedInAt === null) this.db.prepare("INSERT INTO native_session_starts VALUES(?,?)").run(hash, signedInAt);
+      const expires = Math.max(session.expires, Math.min(now + lifetime, signedInAt + limit));
       if (expires !== session.expires) this.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(expires, hash);
       return expires;
     });

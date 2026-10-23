@@ -184,7 +184,12 @@ describe("streaming Markdown", () => {
   });
 
   it("renders a growing reply the same as the saved reply", async () => {
-    const text = "## Supper\n\nBeans, **cornbread** and greens.\n\n> Soak the beans tonight.\n\n```txt\nsoak\n\nsimmer\n```\n\n| Day | Meal |\n| --- | --- |\n| Sat | Chili |";
-    expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+    for (const text of [
+      "## Supper\n\nBeans, **cornbread** and greens.\n\n> Soak the beans tonight.\n\n```txt\nsoak\n\nsimmer\n```\n\n| Day | Meal |\n| --- | --- |\n| Sat | Chili |",
+      // Loose lists continue across blank lines, so their numbering and spacing hold.
+      "Steps:\n\n1. Soak\n\n1. Rinse\n\n1. Simmer\n\nEnjoy.",
+      "- Beans\n\n- Cornbread\n\n* Greens",
+      "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
+    ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
 });

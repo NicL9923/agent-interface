@@ -221,6 +221,14 @@ it("renews a native session in place, keeping its push registrations, until 90 d
   store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(start, hash(token));
   store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
   expect(Date.parse((await renew()).json().expiresAt)).toBe(start + 90 * day);
+  // A session from the previous release has no recorded start. Its start is inferred once and
+  // kept, so renewing it every six days still ends 90 days after it began.
+  const legacy = "legacy-session", began = Date.now();
+  store.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(legacy, "local-one", began + 7 * day);
+  let last: number | undefined;
+  for (let at = began + 6 * day; at < began + 120 * day; at += 6 * day)
+    last = store.renewNativeSession(legacy, 7 * day, 90 * day, at) ?? last;
+  expect(last).toBe(began + 90 * day);
   // A browser-origin request never renews a native token, and a gone session cannot be renewed.
   expect((await renew({ origin })).statusCode).toBe(403);
   store.deleteNativeSession(hash(token));

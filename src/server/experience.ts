@@ -69,13 +69,16 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     // native occurredAt precedes the person's last visit.
     const upperFrontier = store.latestEventFrontier();
     const bots = await visibleBots(runtime, store, userId);
+    // The redactor reads which assistants are private in this same tick, so this version names
+    // exactly the privacy it applies. A recap is reused, or saved, only under that version.
+    const privacyVersion = store.privacyVersion;
     const redact = await redactAgents(store, roster, userId);
     const page = store.eventPage(userId, query.since ? 0 : store.todayFrontier(userId), upperFrontier, bots.map(bot => bot.id), query.since || !store.todaySeen(userId) ? since : undefined);
     const eventFiles = new Map<string, typeof page.events[number]['files']>();
-    // Redaction depends on which assistants are private and every name they have had.
+    // Redaction also matches every name a hidden assistant has had.
     const hidden = store.privateBots().filter(row => row.ownerId !== userId).map(row => row.botId).sort();
     const names = hidden.length ? await roster.names() : undefined;
-    const privacy = JSON.stringify(hidden.map(botId => [botId, [...names?.get(botId) ?? []].sort()]));
+    const privacy = JSON.stringify([privacyVersion, hidden.map(botId => [botId, [...names?.get(botId) ?? []].sort()])]);
     const items: TodayItem[] = [];
     for (let index = 0; index < bots.length; index += 4) {
       const batch = await Promise.all(bots.slice(index, index + 4).map(async bot => {
@@ -94,7 +97,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
           else {
             read = await runtime.conversation(bot.id);
             recap = summarize(read.messages.map(redact.message), events, new Set(unreadRuns), since);
-            if (settled(read.activity)) recaps.set(cacheKey, { key, at: Date.now(), recap });
+            if (settled(read.activity) && store.privacyVersion === privacyVersion) recaps.set(cacheKey, { key, at: Date.now(), recap });
             else recaps.delete(cacheKey);
           }
           for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
