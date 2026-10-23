@@ -213,20 +213,22 @@ struct TodayView: View {
   }
   /// A background poll leaves the controls alone and keeps an earlier error until a read succeeds, like the web.
   private func load(manual: Bool = false) async {
-    guard let api = store.api, let scope = store.scope else { return }
-    let id = UUID(); loadId = id; if manual { busy = true }
-    defer { if manual { busy = false } }
-    do {
-      let response: (value: TodayOverview?, etag: String?) = try await api.changed("/today", since: value == nil ? nil : applied)
-      guard !Task.isCancelled, loadId == id, store.scope == scope, store.api === api else { return }
-      if let overview = response.value { value = overview; applied = response.etag }
-      checkedAt = Date(); if error != nil { error = nil }
-    } catch is CancellationError {} catch { if loadId == id, store.scope == scope { self.error = error.localizedDescription } }
+    guard store.scope != nil else { return }
+    let id = UUID(); loadId = id
+    let since = value == nil ? nil : applied
+    let response: (value: TodayOverview?, etag: String?)? = await store.run(busy: manual ? $busy : nil, error: $error, current: { loadId == id }) {
+      try await $0.api.changed("/today", since: since)
+    }
+    guard let response else { return }
+    if let overview = response.value { value = overview; applied = response.etag }
+    checkedAt = Date(); if error != nil { error = nil }
   }
   private func markCaughtUp(_ snapshot: TodayOverview) {
-    guard let api = store.api else { return }; let scope = store.scope
     busy = true
-    Task { do { try await api.markTodaySeen(snapshot); guard store.scope == scope, store.api === api else { return }; busy = false; await load() } catch { busy = false; if store.scope == scope { self.error = error.localizedDescription } } }
+    Task {
+      let marked: Void? = await store.run(busy: $busy, error: $error) { try await $0.api.markTodaySeen(snapshot) }
+      if marked != nil { await load() }
+    }
   }
 }
 
@@ -332,14 +334,11 @@ struct MemoryDrawer: View {
   }
   private func path(_ document: MemoryDocument) -> String { "/bots/\(APIClient.component(botId))/memory/\(APIClient.component(document.target))" }
   private func load() async {
-    guard let api = store.api else { return }; let scope = store.scope
-    busy = true; error = nil; defer { busy = false }
-    do {
-      let result: ProfileMemory = try await api.get("/bots/\(APIClient.component(botId))/memory")
-      guard store.scope == scope, store.api === api else { return }
-      value = result; conflicts = []; failures = [:]; notices = [:]
-      drafts = Dictionary(uniqueKeysWithValues: result.documents.map { ($0.target, $0.drafts()) })
-    } catch { if store.scope == scope { self.error = error.localizedDescription } }
+    error = nil
+    let result: ProfileMemory? = await store.run(busy: $busy, error: $error) { try await $0.api.get("/bots/\(APIClient.component(botId))/memory") }
+    guard let result else { return }
+    value = result; conflicts = []; failures = [:]; notices = [:]
+    drafts = Dictionary(uniqueKeysWithValues: result.documents.map { ($0.target, $0.drafts()) })
   }
   private func save(_ document: MemoryDocument) {
     mutate(document) { api in try await api.write(path(document), MemorySave(revision: document.revision, drafts: drafts[document.target] ?? []), method: "PATCH") }
@@ -349,18 +348,17 @@ struct MemoryDrawer: View {
     mutate(document) { api in try await api.write(path(document), MemoryForget(revision: document.revision, entryId: request.entryId), method: "DELETE") }
   }
   private func mutate(_ document: MemoryDocument, _ operation: @escaping (APIClient) async throws -> ProfileMemory) {
-    guard let api = store.api else { return }; let scope = store.scope; let target = document.target
+    let target = document.target
     busy = true; failures[target] = nil; notices[target] = nil
     Task {
-      defer { busy = false }
-      do {
-        let result = try await operation(api)
-        guard store.scope == scope, store.api === api, let updated = result.documents.first(where: { $0.target == target }) else { return }
+      switch await store.attempt(busy: $busy, { try await operation($0.api) }) {
+      case .success(let result)?:
+        guard let updated = result.documents.first(where: { $0.target == target }) else { return }
         value?.acceptSavedDocument(target, from: result); drafts[target] = updated.drafts(); notices[target] = "Saved in Hermes."
-      } catch {
-        guard store.scope == scope else { return }
-        failures[target] = error.localizedDescription
-        if (error as? APIError)?.status == 409 { conflicts.insert(target) }
+      case .failure(let failure)?:
+        failures[target] = failure.localizedDescription
+        if (failure as? APIError)?.status == 409 { conflicts.insert(target) }
+      case nil: break
       }
     }
   }
@@ -419,15 +417,13 @@ struct RoutineSchedulePreview: View {
     if let error, requested == schedule { ErrorBanner(message: error) }
   }
   private func load() {
-    guard let api = store.api else { return }; let scope = store.scope; let asked = schedule
+    let asked = schedule
     busy = true; error = nil; preview = nil; requested = asked
     Task {
-      defer { busy = false }
-      do {
-        let value: SchedulePreview = try await api.write("/routines/preview", ["botId": botId, "schedule": asked])
-        guard store.scope == scope, store.api === api, requested == asked else { return }
-        preview = value; onReady?(asked)
-      } catch { if store.scope == scope { self.error = error.localizedDescription } }
+      let value: SchedulePreview? = await store.run(busy: $busy, error: $error, current: { requested == asked }) {
+        try await $0.api.write("/routines/preview", ["botId": botId, "schedule": asked])
+      }
+      if let value { preview = value; onReady?(asked) }
     }
   }
 }
@@ -469,27 +465,40 @@ struct RoutineEnhancements: View {
   }
   private func saveReceipt(_ value: RoutineRunReceipt, key: String) { receipt = value; if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: key) } }
   private func startRun() {
-    guard let api = store.api else { return }; let scope = store.scope; let key = receiptKey
+    guard store.api != nil else { return }
+    let key = receiptKey
     let requestId = retrySameRun ? (receipt?.requestId ?? UUID().uuidString) : UUID().uuidString
     retrySameRun = false
     let pending = RoutineRunReceipt(requestId: requestId, routineId: routine.id, botId: routine.botId, status: "uncertain", message: "Checking admission. This run will not be automatically retried.", startedAt: ISO8601DateFormatter().string(from: Date()))
     saveReceipt(pending, key: key); busy = true; error = nil
-    Task { defer { busy = false }; do { let value: RoutineRunReceipt = try await api.write("/routines/\(APIClient.component(routine.id))/run", ["requestId": requestId]); guard store.scope == scope, store.api === api else { return }; saveReceipt(value, key: key) } catch { if store.scope == scope {
-      if let failure = error as? APIError, (400..<500).contains(failure.status) {
-        self.error = failure.localizedDescription
-        var rejected = pending; rejected.status = "failed"; rejected.message = failure.message; saveReceipt(rejected, key: key)
-      } else { self.error = error.localizedDescription + " Check this run's status before starting another." }
-    } } }
+    Task {
+      switch await store.attempt(busy: $busy, { (context) -> RoutineRunReceipt in
+        try await context.api.write("/routines/\(APIClient.component(routine.id))/run", ["requestId": requestId])
+      }) {
+      case .success(let value)?: saveReceipt(value, key: key)
+      case .failure(let failure)?:
+        if let failure = failure as? APIError, (400..<500).contains(failure.status) {
+          error = failure.localizedDescription
+          var rejected = pending; rejected.status = "failed"; rejected.message = failure.message; saveReceipt(rejected, key: key)
+        } else { error = failure.localizedDescription + " Check this run's status before starting another." }
+      case nil: break
+      }
+    }
   }
   private func checkRun(_ id: String) {
     busy = true; error = nil
     Task { defer { busy = false }; await fetchRun(id) }
   }
   private func fetchRun(_ id: String) async {
-    guard let api = store.api else { return }; let scope = store.scope; let key = receiptKey
-    do { let value: RoutineRunReceipt = try await api.get("/routines/\(APIClient.component(routine.id))/runs/\(APIClient.component(id))"); guard store.scope == scope, store.api === api else { return }; saveReceipt(value, key: key); retrySameRun = false } catch { if store.scope == scope {
-      self.error = error.localizedDescription
-      if (error as? APIError)?.status == 404 { retrySameRun = true }
-    } }
+    let key = receiptKey
+    switch await store.attempt({ (context) -> RoutineRunReceipt in
+      try await context.api.get("/routines/\(APIClient.component(routine.id))/runs/\(APIClient.component(id))")
+    }) {
+    case .success(let value)?: saveReceipt(value, key: key); retrySameRun = false
+    case .failure(let failure)?:
+      error = failure.localizedDescription
+      if (failure as? APIError)?.status == 404 { retrySameRun = true }
+    case nil: break
+    }
   }
 }
