@@ -105,65 +105,83 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(ServerDate.parse("not a date"))
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
-    for shape in AvatarGeometry.keys {
-      let points = AvatarGeometry.points(shape)
-      XCTAssertEqual(points.values.count, 144, shape)
-      XCTAssertTrue(points.values.allSatisfy(\.isFinite), shape)
+    for body in AvatarGeometry.keys {
+      let points = AvatarGeometry.points(body)
+      XCTAssertEqual(points.values.count, 144, "\(body)")
+      XCTAssertTrue(points.values.allSatisfy(\.isFinite), "\(body)")
       XCTAssertGreaterThan(points.magnitudeSquared, 0)
-      if shape != "blob" { XCTAssertNotEqual(AvatarGeometry.svg(shape), AvatarGeometry.svg("blob"), shape) }
+      if body != .shape(.blob), case .shape = body {
+        XCTAssertNotEqual(AvatarGeometry.svg(body), AvatarGeometry.svg(.shape(.blob)), "\(body)")
+      }
     }
-    for shape in AvatarConfig.shapes + ["mascot"] { XCTAssertNotNil(AvatarGeometry.faces[shape], shape) }
+    for shape in AvatarConfig.shapes { XCTAssertNotNil(AvatarGeometry.faces[shape], shape.rawValue) }
   }
   func testCharactersWithoutTheirOwnHeadShareTheMascotHeadAndAnchor() {
     for family in AvatarConfig.characterFamilies {
       let own = CharacterAvatarArt.heads[family]
-      XCTAssertEqual(AvatarGeometry.svg(AvatarGeometry.characterKey(family)), own ?? AvatarGeometry.mascotHead, family)
-      let avatar = AvatarConfig(mode: "mascot", shape: nil, family: family)
+      XCTAssertEqual(AvatarGeometry.svg(.character(family)), own ?? AvatarGeometry.mascotHead, family.rawValue)
+      let avatar = AvatarConfig(mode: .mascot, shape: nil, family: family)
       let anchor = AvatarGeometry.anchor(for: avatar)
-      let expected = AvatarGeometry.characterFaces[family] ?? AvatarGeometry.faces["mascot"]!
-      XCTAssertEqual([anchor.cy, anchor.scale, anchor.top, anchor.hat], [expected.cy, expected.scale, expected.top, expected.hat], family)
+      let expected = AvatarGeometry.characterFaces[family] ?? AvatarGeometry.mascotFace
+      XCTAssertEqual([anchor.cy, anchor.scale, anchor.top, anchor.hat], [expected.cy, expected.scale, expected.top, expected.hat], family.rawValue)
     }
     XCTAssertEqual(
       Set(AvatarConfig.characterFamilies.filter { CharacterAvatarArt.heads[$0] == nil }),
-      ["panda", "raccoon", "owl", "dinosaur", "eagle", "bat"])
+      [.panda, .raccoon, .owl, .dinosaur, .eagle, .bat])
   }
   func testCharacterGhostKeepsItsOwnSilhouetteNextToTheGeometricGhost() {
-    let character = AvatarConfig(mode: "mascot", shape: nil, family: "ghost")
-    let shape = AvatarConfig(shape: "ghost")
-    XCTAssertEqual(character.geometry, shape.geometry)
-    XCTAssertNotEqual(character.silhouette, shape.silhouette)
-    XCTAssertNotEqual(AvatarGeometry.svg(character.silhouette), AvatarGeometry.svg(shape.silhouette))
+    let character = AvatarConfig(mode: .mascot, shape: nil, family: .ghost)
+    let shape = AvatarConfig(shape: .ghost)
+    XCTAssertNotEqual(character.body, shape.body)
+    XCTAssertNotEqual(AvatarGeometry.svg(character.body), AvatarGeometry.svg(shape.body))
     XCTAssertEqual(AvatarGeometry.anchor(for: shape).cy, 45)
     XCTAssertEqual(AvatarGeometry.anchor(for: character).cy, 47)
   }
   func testCharacterInkHeadColorAndCheeksFollowTheirMarkings() {
-    XCTAssertEqual(CharacterAvatarArt.headColor("panda", "#292929"), "#FBF7EF")
-    XCTAssertEqual(CharacterAvatarArt.headColor("owl", "#97683D"), "#97683D")
+    XCTAssertEqual(CharacterAvatarArt.headColor(.panda, "#292929"), "#FBF7EF")
+    XCTAssertEqual(CharacterAvatarArt.headColor(.owl, "#97683D"), "#97683D")
     // Dark eyes would vanish on the raccoon mask, and light ones on the owl's cream disc.
-    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor("raccoon", "#8C8F99"), mascot: true), "#fff3db")
-    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor("owl", "#292929"), mascot: true), "#2b201b")
-    XCTAssertEqual(CharacterAvatarArt.cheekless, ["pumpkin", "owl"])
+    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor(.raccoon, "#8C8F99"), mascot: true), "#fff3db")
+    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor(.owl, "#292929"), mascot: true), "#2b201b")
+    XCTAssertEqual(CharacterAvatarArt.cheekless, [.pumpkin, .owl])
     XCTAssertNotNil(AvatarMotion.bodyEdge("#F2EEF8"))
     XCTAssertNil(AvatarMotion.bodyEdge("#FF9800"))
   }
   func testSeasonalAvatarsDecodeAndKeepCustomizationWhenSelected() throws {
     for (family, color) in AvatarConfig.seasonalColors {
-      let data = Data("{\"mode\":\"mascot\",\"family\":\"\(family)\",\"color\":\"#111111\",\"eyes\":\"spark\",\"accessory\":\"glasses\",\"eyeSpacing\":1.3}".utf8)
+      let data = Data("{\"mode\":\"mascot\",\"family\":\"\(family.rawValue)\",\"color\":\"#111111\",\"eyes\":\"spark\",\"accessory\":\"glasses\",\"eyeSpacing\":1.3}".utf8)
       let saved = try JSONDecoder().decode(AvatarConfig.self, from: data)
-      XCTAssertEqual(saved.geometry, family)
+      XCTAssertEqual(saved.body, .character(family))
       XCTAssertEqual(try JSONDecoder().decode(AvatarConfig.self, from: JSONEncoder().encode(saved)), saved)
       let selected = saved.selectingFamily(family)
       XCTAssertEqual(selected.color, color)
-      XCTAssertEqual(selected.eyes, "spark")
-      XCTAssertEqual(selected.accessory, "glasses")
+      XCTAssertEqual(selected.eyes, .spark)
+      XCTAssertEqual(selected.accessory, .glasses)
       XCTAssertEqual(selected.eyeSpacing, 1.3)
       XCTAssertTrue(AvatarConfig.families.contains { $0.id == family })
       XCTAssertEqual(
-        AvatarGeometry.svg(AvatarGeometry.characterKey(family)) != AvatarGeometry.mascotHead,
-        CharacterAvatarArt.heads[family] != nil, family)
+        AvatarGeometry.svg(.character(family)) != AvatarGeometry.mascotHead,
+        CharacterAvatarArt.heads[family] != nil, family.rawValue)
     }
-    let original = AvatarConfig(mode: "mascot", color: "#111111")
-    XCTAssertEqual(original.selectingFamily("fox").color, "#111111")
+    let original = AvatarConfig(mode: .mascot, color: "#111111")
+    XCTAssertEqual(original.selectingFamily(.fox).color, "#111111")
+  }
+  func testAnAvatarValueThisAppDoesNotKnowSurvivesASaveUnchanged() throws {
+    let json = ##"{"mode":"hologram","shape":"tesseract","family":"yeti","color":"#111111","eyes":"laser","accessory":"monocle"}"##
+    let saved = try JSONDecoder().decode(AvatarConfig.self, from: Data(json.utf8))
+    XCTAssertEqual(saved.mode.rawValue, "hologram")
+    XCTAssertEqual(saved.shape?.rawValue, "tesseract")
+    let object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
+    XCTAssertEqual(object["mode"] as? String, "hologram")
+    XCTAssertEqual(object["shape"] as? String, "tesseract")
+    XCTAssertEqual(object["family"] as? String, "yeti")
+    XCTAssertEqual(object["eyes"] as? String, "laser")
+    XCTAssertEqual(object["accessory"] as? String, "monocle")
+    // It still draws, as the shared mascot, instead of failing.
+    XCTAssertEqual(saved.body, .mascot)
+    XCTAssertEqual(AvatarConfig(shape: AvatarShape(rawValue: "tesseract")).body, .shape(AvatarShape(rawValue: "tesseract")))
+    XCTAssertEqual(AvatarGeometry.svg(AvatarShape(rawValue: "tesseract")), AvatarGeometry.svg(.blob))
   }
   @MainActor func testPushRoutesOnlyRelativeConversationURL() {
     let origin = URL(string: "https://household.example")!

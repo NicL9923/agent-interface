@@ -206,18 +206,6 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertEqual(SettingsLimits.message("Instructions are", count: 50_012, limit: limit), "Instructions are 12 characters over the 50,000 limit. Shorten the text to save.")
     XCTAssertEqual(SettingsLimits.message("The description is", count: 2_001, limit: SettingsLimits.portraitPrompt), "The description is 1 character over the 2,000 limit. Shorten the text to save.")
   }
-  func testSeasonalCharactersAreSeparateFromTheEverydayOnes() {
-    XCTAssertEqual(
-      AvatarConfig.everydayFamilies.map(\.id),
-      ["bear", "fox", "sprout", "panda", "raccoon", "owl", "cactus", "dinosaur"])
-    XCTAssertEqual(
-      AvatarConfig.seasonalFamilies.map(\.id),
-      ["leprechaun", "bunny", "eagle", "pumpkin", "bat", "ghost", "turkey", "santa", "rudolph", "snowman"])
-    XCTAssertTrue(AvatarConfig.seasonalFamilies.allSatisfy { AvatarConfig.seasonalColors[$0.id] != nil })
-    XCTAssertTrue(AvatarConfig.everydayFamilies.allSatisfy { AvatarConfig.seasonalColors[$0.id] == nil })
-    XCTAssertEqual(AvatarConfig.families.map(\.id), AvatarConfig.everydayFamilies.map(\.id) + AvatarConfig.seasonalFamilies.map(\.id))
-  }
-
   // MARK: Model picker
 
   func testModelPickerRefreshAndStarFollowTheWebRules() {

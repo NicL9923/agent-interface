@@ -41,7 +41,7 @@ struct RoutineResultsView: View {
       if !selected.isEmpty && output == nil && error == nil { Section { ProgressView("Loading output…") } }
       if let output {
         Section("Output") {
-          Button("Save output") { Task { do { let _:SavedItem = try await store.api!.write("/saved",SavedPointer(botId:botId,kind:"routine",routineId:routineId,resultId:selected,title:String((rows.first { $0.id==selected }?.title ?? "Routine output").prefix(120))));error="Saved to your saved items." } catch { self.error=error.localizedDescription } } }
+          Button("Save output") { Task { await saveOutput() } }
           if output.previewOnly { Text("Hermes exposes a preview for this script run. Full output is available in the native cron output files.").font(.footnote).foregroundStyle(.secondary) }
           if output.messages.isEmpty { Text("No assistant output was saved for this run.") }
           ForEach(output.messages) { message in
@@ -55,24 +55,26 @@ struct RoutineResultsView: View {
       .task(id: "\(store.scope ?? ""):\(botId):\(routineId):\(revision)") { await load() }
       .task(id: "\(store.scope ?? ""):\(selected):\(revision)") { await loadOutput() }
   }
+  private func saveOutput() async {
+    let pointer = SavedPointer(botId: botId, kind: "routine", routineId: routineId, resultId: selected, title: String((rows.first { $0.id == selected }?.title ?? "Routine output").prefix(120)))
+    let saved: SavedItem? = await store.run(error: $error) { try await $0.api.write("/saved", pointer) }
+    if saved != nil { error = "Saved to your saved items." }
+  }
   private func load() async {
-    guard let api = store.api else { return }; let scope = store.scope
-    busy = true; error = nil; defer { busy = false }
-    do {
-      let result: [RoutineResultRow] = try await api.get(path)
-      guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
-      rows = result
-      if !rows.contains(where: { $0.id == selected }) { selected = rows.first?.id ?? "" }
-    } catch { if !Task.isCancelled, store.scope == scope { self.error = error.localizedDescription } }
+    error = nil
+    let result: [RoutineResultRow]? = await store.run(busy: $busy, error: $error) { try await $0.api.get(path) }
+    guard let result else { return }
+    rows = result
+    if !rows.contains(where: { $0.id == selected }) { selected = rows.first?.id ?? "" }
   }
   private func loadOutput() async {
     output = nil
-    guard !selected.isEmpty, let api = store.api else { return }; let scope = store.scope, id = selected
-    do {
-      let result: RoutineOutput = try await api.get("\(path)/\(APIClient.component(id))")
-      guard !Task.isCancelled, selected == id, store.scope == scope, store.api === api else { return }
-      output = result; error = nil
-    } catch { if !Task.isCancelled, selected == id, store.scope == scope { self.error = error.localizedDescription } }
+    guard !selected.isEmpty else { return }
+    let id = selected
+    let result: RoutineOutput? = await store.run(error: $error, current: { selected == id }) {
+      try await $0.api.get("\(path)/\(APIClient.component(id))")
+    }
+    if let result { output = result; error = nil }
   }
 }
 
@@ -198,14 +200,12 @@ struct GroupChatsView: View {
     }
   }
   private func retryCreate(_ request: GroupCreate) async {
-    guard let api = store.api else { return }; let scope = store.scope
-    retryingCreate = true; defer { retryingCreate = false }
-    do {
-      let room = try await GroupCreation.submit(request, api: api, scope: scope)
-      guard store.scope == scope, store.api === api else { return }
-      pendingCreate = nil; error = nil; created = room
-      await open(room)
-    } catch { if store.scope == scope { self.error = GroupCreation.failure(error) } }
+    let room = await store.run(busy: $retryingCreate, error: $error, failure: GroupCreation.failure) {
+      try await GroupCreation.submit(request, api: $0.api, scope: $0.scope)
+    }
+    guard let room else { return }
+    pendingCreate = nil; error = nil; created = room
+    await open(room)
   }
   private func sheetDismissed() {
     pendingCreate = GroupCreation.pending(scope: store.scope)
@@ -216,10 +216,9 @@ struct GroupChatsView: View {
   /// Refreshes the list, then opens the room, as the web selects the room it just created.
   private func open(_ room: GroupRoom) async { await load(); opened = room }
   private func load() async {
-    guard let api = store.api else { return }; let scope = store.scope
     let id = UUID(); loadId = id
-    do { let value: GroupCatalog = try await api.get("/groups"); guard !Task.isCancelled, loadId == id, store.scope == scope, store.api === api else { return }; catalog = value; error = nil }
-    catch { if !Task.isCancelled, loadId == id, store.scope == scope { self.error = error.localizedDescription } }
+    let value: GroupCatalog? = await store.run(error: $error, current: { loadId == id }) { try await $0.api.get("/groups") }
+    if let value { catalog = value; error = nil }
   }
 }
 struct GroupCreateView: View {
@@ -254,15 +253,14 @@ struct GroupCreateView: View {
       .task { pending = GroupCreation.pending(scope: store.scope) }
   }
   private func create() async {
-    guard let api = store.api else { return }; let scope = store.scope
     let input = pending ?? GroupCreate(requestId: UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), botIds: botIds)
-    busy = true; defer { busy = false }; error = nil
+    error = nil
     pending = input
-    do {
-      let room = try await GroupCreation.submit(input, api: api, scope: scope)
-      guard store.scope == scope, store.api === api else { return }
-      pending = nil; onCreated(room); dismiss()
-    } catch { if store.scope == scope { self.error = GroupCreation.failure(error) } }
+    let room = await store.run(busy: $busy, error: $error, failure: GroupCreation.failure) {
+      try await GroupCreation.submit(input, api: $0.api, scope: $0.scope)
+    }
+    guard let room else { return }
+    pending = nil; onCreated(room); dismiss()
   }
 }
 struct GroupConversationView: View {
@@ -376,52 +374,69 @@ struct GroupConversationView: View {
     let member = room.members.first { $0.member_id == event.actor?.id || $0.member_id == event.payload.member_id }
     return member?.display_name ?? member?.profile ?? event.actor?.id ?? event.payload.member_id ?? "Assistant"
   }
+  private enum Fetched {
+    case unchanged
+    case gone
+    case combined(GroupState, GroupPage, etag: String?)
+    /// `downgraded` when this server cannot send the room state with the log.
+    case separate(GroupState, GroupPage, downgraded: Bool)
+  }
   /// One request a poll: the log brings the room state along, so the server reads it from Hermes once.
   private func load() async {
-    guard let api = store.api else { return }; let scope = store.scope
-    do {
-      if combined {
-        do {
-          let response: (value: GroupPage?, etag: String?) = try await api.changed("\(path)/log?since=\(cursor)&state=1", since: applied)
-          guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
-          // The page applied last time, unchanged: nothing to decode or redraw.
-          guard let page = response.value else { if error != nil { error = nil }; return }
-          if let value = page.state { apply(value, page); applied = response.etag; return }
-          combined = false
-        } catch let failure as APIError where failure.status == 400 { combined = false }
-      }
-      let value: GroupState = try await api.get(path)
-      let page: GroupPage = try await api.get("\(path)/log?since=\(cursor)")
-      guard !Task.isCancelled, store.scope == scope, store.api === api else { return }
+    let since = cursor, tag = applied, wantsCombined = combined
+    let fetched: Fetched? = await store.run(error: $error) { context in
+      var downgraded = false
+      do {
+        if wantsCombined {
+          do {
+            let response: (value: GroupPage?, etag: String?) = try await context.api.changed("\(path)/log?since=\(since)&state=1", since: tag)
+            // The page applied last time, unchanged: nothing to decode or redraw.
+            guard let page = response.value else { return .unchanged }
+            if let value = page.state { return .combined(value, page, etag: response.etag) }
+            downgraded = true
+          } catch let failure as APIError where failure.status == 400 { downgraded = true }
+        }
+        let value: GroupState = try await context.api.get(path)
+        let page: GroupPage = try await context.api.get("\(path)/log?since=\(since)")
+        return .separate(value, page, downgraded: downgraded)
+      } catch let failure as APIError where failure.status == 404 { return .gone }
+    }
+    switch fetched {
+    case nil: return
+    case .unchanged?: if error != nil { error = nil }
+    case .gone?: missing = true; state = nil; events = []; error = nil
+    case .combined(let value, let page, let etag)?: apply(value, page); applied = etag
+    case .separate(let value, let page, let downgraded)?:
+      if downgraded { combined = false }
       apply(value, page)
-    } catch {
-      guard !Task.isCancelled, store.scope == scope else { return }
-      if (error as? APIError)?.status == 404 { missing = true; state = nil; events = []; self.error = nil }
-      else { self.error = error.localizedDescription }
     }
   }
   private func apply(_ value: GroupState, _ page: GroupPage) {
     state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor; more = page.has_more
   }
   private func send() async {
-    guard let api = store.api else { return }; let scope = store.scope
     let input = pending ?? GroupSend(requestId: UUID().uuidString.lowercased(), threadId: threadId.isEmpty ? UUID().uuidString.lowercased() : threadId, text: draft.trimmingCharacters(in: .whitespacesAndNewlines))
-    busy = true; error = nil; defer { busy = false }
-    do {
+    error = nil
+    let receipt: GroupAccepted? = await store.run(busy: $busy, error: $error, failure: { $0.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." }) {
       UserDefaults.standard.set(try JSONEncoder().encode(input), forKey: key); pending = input
-      let receipt: GroupAccepted = try await api.write(path + "/messages", input)
-      guard store.scope == scope, store.api === api else { return }
+      let receipt: GroupAccepted = try await $0.api.write(path + "/messages", input)
       guard receipt.accepted else { throw NSError(domain: "Group chat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Hermes did not confirm this message."]) }
-      UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; await load()
-    } catch { if store.scope == scope { self.error = error.localizedDescription + " The message may have arrived. Retry the same saved message to check, without sending a duplicate." } }
+      return receipt
+    }
+    guard receipt != nil else { return }
+    UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; await load()
   }
   private func stop() async {
-    guard let api = store.api else { return }; busy = true; defer { busy = false }
-    do { let _: [String: Int] = try await api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]); await load() } catch { self.error = error.localizedDescription }
+    let stopped: [String: Int]? = await store.run(busy: $busy, error: $error) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }
+    if stopped != nil { await load() }
   }
   private func decide(_ action: GroupAction, _ choice: String) async {
-    guard let api = store.api, let member = action.member_id, let generation = action.execution_generation, let request = action.request_id ?? action.approval?.request_id else { return }
-    busy = true; defer { busy = false }
-    do { let _: GroupApproved = try await api.write(path + "/approve", GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)); store.buzz(.decided); await load() } catch { store.buzz(.failed); self.error = error.localizedDescription }
+    guard let member = action.member_id, let generation = action.execution_generation, let request = action.request_id ?? action.approval?.request_id else { return }
+    let decision = GroupDecision(taskId: action.task_id, memberId: member, generation: generation, choice: choice, requestId: request)
+    switch await store.attempt(busy: $busy, { (context) -> GroupApproved in try await context.api.write(path + "/approve", decision) }) {
+    case .success?: store.buzz(.decided); await load()
+    case .failure(let failure)?: store.buzz(.failed); error = failure.localizedDescription
+    case nil: break
+    }
   }
 }

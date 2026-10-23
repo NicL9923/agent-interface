@@ -108,31 +108,28 @@ struct ModelCatalogSections: View {
     }
   }
   private func load() async {
-    guard let api = store.api else { return }
-    let scope = store.scope
+    guard store.api != nil else { return }
     loading = true; error = nil
-    do {
-      let catalog: ModelCatalog = try await api.get("/models" + (botId.map { "?botId=\(APIClient.component($0))" } ?? ""))
-      guard scope == store.scope, !Task.isCancelled else { return }
+    // A stale answer leaves `loading` on for the load that replaced it.
+    switch await store.attempt({ (context) -> ModelCatalog in
+      try await context.api.get("/models" + (botId.map { "?botId=\(APIClient.component($0))" } ?? ""))
+    }) {
+    case .success(let catalog)?:
       providers = catalog.providers
       if let selected = providers.first(where: { $0.matches(selection.provider) }) { expanded.insert(selected.id) }
       loading = false
-    } catch {
-      guard scope == store.scope, !Task.isCancelled else { return }
-      self.error = error.localizedDescription; loading = false
+    case .failure(let failure)?: error = failure.localizedDescription; loading = false
+    case nil: break
     }
   }
   private func toggleFavorite(_ choice: ModelChoice) async {
-    guard let api = store.api, !savingFavorite else { return }
-    let scope = store.scope
+    guard !savingFavorite else { return }
     let next = favorites.contains(choice) ? favorites.filter { $0 != choice } : favorites + [choice]
-    savingFavorite = true; favoriteError = nil
-    defer { savingFavorite = false }
-    do {
-      let saved: ModelFavorites = try await api.write("/preferences/models", ModelFavorites(modelFavorites: next), method: "PUT")
-      guard scope == store.scope else { return }
-      store.bootstrap?.preferences.modelFavorites = saved.modelFavorites
-    } catch { if scope == store.scope { favoriteError = error.localizedDescription } }
+    favoriteError = nil
+    let saved: ModelFavorites? = await store.run(busy: $savingFavorite, error: $favoriteError) {
+      try await $0.api.write("/preferences/models", ModelFavorites(modelFavorites: next), method: "PUT")
+    }
+    if let saved { store.bootstrap?.preferences.modelFavorites = saved.modelFavorites }
   }
 }
 
@@ -191,7 +188,7 @@ struct ComposerModelSheet: View {
   @State private var error: String?
   @State private var confirmation: ModelChoice?
   private var bot: Bot? { store.bootstrap?.bots.first { $0.id == botId } }
-  private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports("botConfiguration") }
+  private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports(.botConfiguration) }
   var body: some View {
     NavigationStack {
       Form {
@@ -229,44 +226,37 @@ struct ComposerModelSheet: View {
     }
   }
   private func loadSettings() async {
-    guard let api = store.api else { return }
-    let scope = store.scope
     settingsError = nil
-    do {
-      let value: InferenceSettings = try await api.get("/bots/\(APIClient.component(botId))/inference")
-      if scope == store.scope, !Task.isCancelled { settings = value }
-    } catch { if scope == store.scope, !Task.isCancelled { settingsError = error.localizedDescription } }
+    let value: InferenceSettings? = await store.run(error: $settingsError) { try await $0.api.get("/bots/\(APIClient.component(botId))/inference") }
+    if let value { settings = value }
   }
   private func changeSettings(_ update: [String: String]) {
-    guard let api = store.api, !busy, !blocked else { return }
-    let scope = store.scope
+    guard !busy, !blocked else { return }
     busy = true; settingsError = nil
     Task {
-      defer { busy = false }
-      do {
-        let value: InferenceSettings = try await api.write("/bots/\(APIClient.component(botId))/inference", update, method: "PATCH")
-        if scope == store.scope { settings = value }
-      } catch { if scope == store.scope { settingsError = error.localizedDescription } }
+      let value: InferenceSettings? = await store.run(busy: $busy, error: $settingsError) {
+        try await $0.api.write("/bots/\(APIClient.component(botId))/inference", update, method: "PATCH")
+      }
+      if let value { settings = value }
     }
   }
   private func save(_ choice: ModelChoice, confirmed: Bool = false) {
-    guard let api = store.api, let bot, !busy, !blocked else { return }
-    let scope = store.scope
+    guard let bot, !busy, !blocked else { return }
     busy = true; error = nil
     Task {
-      defer { busy = false }
-      do {
-        let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
-        guard scope == store.scope else { return }
+      switch await store.attempt(busy: $busy, { (context) -> Void in
+        let detail: Bot = try await context.api.get("/bots/\(APIClient.component(bot.id))")
         var input = BotInput(bot: detail)
         input.model = choice.model; input.provider = choice.provider; input.confirmModel = confirmed
-        let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", input, method: "PATCH")
-        guard scope == store.scope else { return }
+        let _: Bot = try await context.api.write("/bots/\(APIClient.component(bot.id))", input, method: "PATCH")
         await store.refreshBootstrap()
-        if scope == store.scope { dismiss() }
-      } catch let failure as APIError where failure.confirmRequired {
-        if scope == store.scope { confirmation = choice; error = failure.localizedDescription }
-      } catch { if scope == store.scope { self.error = error.localizedDescription } }
+      }) {
+      case .success?: dismiss()
+      case .failure(let failure)?:
+        if (failure as? APIError)?.confirmRequired == true { confirmation = choice }
+        error = failure.localizedDescription
+      case nil: break
+      }
     }
   }
 }

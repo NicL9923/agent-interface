@@ -239,18 +239,22 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       && draft.text.utf16.count <= Self.maxMessageLength
       && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !draft.attachments.isEmpty)
-      && supports(active ? "steering" : "chat")
+      && supports(active ? .steering : .chat)
       && (activity != .interrupted || interruptionReviewed)
   }
   /// The server's limit, counted in UTF-16 code units as JavaScript counts string length.
   nonisolated static let maxMessageLength = 50_000
-  func supports(_ key: String) -> Bool { bootstrap?.capabilities[key]?.supported == true }
-  func reason(_ key: String) -> String {
-    bootstrap?.capabilities[key]?.reason
+  func supports(_ key: CapabilityKey) -> Bool { bootstrap?[capability: key]?.supported == true }
+  func reason(_ key: CapabilityKey) -> String {
+    bootstrap?[capability: key]?.reason
       ?? "This capability is unavailable from the connected Hermes installation."
   }
-  func key(_ kind: String, _ bot: String? = nil) -> String? {
-    scope.map { "native.\($0).\(kind)\(bot.map { ".\($0)" } ?? "")" }
+  /// What the app keeps in UserDefaults per scope, optionally per assistant.
+  enum StorageKind: String {
+    case draft, draftAdditions, pending, recovered, selected, notifications, notificationPrompt
+  }
+  func key(_ kind: StorageKind, _ bot: String? = nil) -> String? {
+    scope.map { "native.\($0).\(kind.rawValue)\(bot.map { ".\($0)" } ?? "")" }
   }
   func read<T: Decodable>(_ key: String?) -> T? {
     guard let key, let data = UserDefaults.standard.data(forKey: key) else { return nil }
@@ -292,7 +296,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           if let id = snapshot.selected, bootstrap?.bots.contains(where: { $0.id == id }) == true {
             selectedBotId = id
             conversation = conversationCache[id]
-            let cachedDraft: Draft? = read(key("draft", id))
+            let cachedDraft: Draft? = read(key(.draft, id))
             draft = cachedDraft ?? Draft()
             draftReady = cachedDraft != nil
           }
@@ -648,7 +652,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       if let open = selectedBotId, value.connection.connected, !value.bots.contains(where: { $0.id == open }) {
         await leave(open)
       } else if !stayHome, selectedBotId == nil || !value.bots.contains(where: { $0.id == selectedBotId }) {
-        let last: String? = read(key("selected"))
+        let last: String? = read(key(.selected))
         let next =
           value.bots.first { $0.id == last }?.id ?? value.bots.first {
             $0.id == value.preferences.defaultBotId
@@ -694,12 +698,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     draftReady = false
     interruptionReviewed = false
     receipt = pending?.botId == id ? receipt : nil
-    save(id, key("selected"))
+    save(id, key(.selected))
     guard let id, let api, bootstrap != nil else {
       draft = Draft()
       return
     }
-    let cached: Draft? = read(key("draft", id))
+    let cached: Draft? = read(key(.draft, id))
     draft = cached ?? Draft()
     if cached?.dirty == true { draftReady = true }
     // Like the web, a chat opens at its latest page; the window grows from there.
@@ -924,7 +928,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     draftTask?.cancel()
     var started = false
     // The latest edit always goes, unless a save of exactly that edit is already in flight.
-    if draftReady, draft.dirty == true, let botId = selectedBotId, let localKey = key("draft", botId),
+    if draftReady, draft.dirty == true, let botId = selectedBotId, let localKey = key(.draft, botId),
       draftSavesInFlight[localKey]?.contains(draft.seq ?? 0) != true
     {
       started = startDraftSave(botId: botId, force: true)
@@ -951,16 +955,16 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// server forgets its own, so a new edit never reuses one an older save in flight carries.
   @ObservationIgnored private var draftSeqs: [String: Int] = [:]
   private func nextDraftSeq(_ botId: String?) -> Int {
-    let localKey = botId.flatMap { key("draft", $0) } ?? ""
+    let localKey = botId.flatMap { key(.draft, $0) } ?? ""
     let next = max(draftSeqs[localKey] ?? 0, draft.seq ?? 0) + 1
     draftSeqs[localKey] = next
     return next
   }
-  private func settled(_ botId: String) -> Bool { key("draft", botId).map { draftSavesInFlight[$0] == nil } ?? true }
+  private func settled(_ botId: String) -> Bool { key(.draft, botId).map { draftSavesInFlight[$0] == nil } ?? true }
   /// Saves a draft on its base revision, then merges the response into the open copy and the
   /// cached copy as they are now. Kept edits after a conflict save again on the new base.
   private func saveDraft(_ snapshot: Draft, botId: String, retries: Int = 3) async throws {
-    guard let api, let localKey = key("draft", botId) else { return }
+    guard let api, let localKey = key(.draft, botId) else { return }
     let currentGeneration = generation
     let seq = snapshot.seq ?? 0
     draftSavesInFlight[localKey, default: []].append(seq)
@@ -1017,13 +1021,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       if draftReady { next = draft }
     }
     // The server now has this text, or a send made it obsolete.
-    if !conflict || next?.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
+    if !conflict || next?.dirty != true { save(Optional<Bool>.none, key(.recovered, botId)) }
     ensureDraftSaved(botId, retries: retries - 1)
   }
   /// The one rule after every response or merge: a copy left unsaved, with no save in flight or
   /// waiting, saves again.
   private func ensureDraftSaved(_ botId: String, retries: Int = 3) {
-    guard settled(botId), let localKey = key("draft", botId) else { return }
+    guard settled(botId), let localKey = key(.draft, botId) else { return }
     // A failing save retries on its backoff, however often the conversation polls.
     if let retryAt = draftRetryAt[localKey], now() < retryAt { return }
     if selectedBotId == botId && draftReady {
@@ -1037,7 +1041,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private func persistDraft() {
     draftPersistTask?.cancel()
     draftPersistTask = nil
-    if draftReady, let botId = selectedBotId { save(draft, key("draft", botId)) }
+    if draftReady, let botId = selectedBotId { save(draft, key(.draft, botId)) }
   }
   /// Typing writes the local copy after a short pause instead of encoding it on every keystroke.
   private func persistDraftSoon() {
@@ -1067,7 +1071,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     }
     pendings[id] = submission
     submissionChecks[submission.requestId] = nil
-    save(submission, key("pending", id))
+    save(submission, key(.pending, id))
     // Until the server shows the send, a save of the sent text from this copy is not new work.
     // A retry sends the same request again; the copy it came from is already marked, and a copy
     // edited since is not it.
@@ -1136,18 +1140,18 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   private func clearPending(_ botId: String) {
     pendings[botId] = nil
-    save(Optional<PendingSubmission>.none, key("pending", botId))
+    save(Optional<PendingSubmission>.none, key(.pending, botId))
   }
   /// Reads each assistant's unconfirmed send. One saved by an older version, which held a single
   /// send for every assistant, moves to its own assistant.
   private func loadPendings(_ bots: [Bot]) {
-    if let legacy: PendingSubmission = read(key("pending")) {
-      let current: PendingSubmission? = read(key("pending", legacy.botId))
-      if current == nil { save(legacy, key("pending", legacy.botId)) }
-      save(Optional<PendingSubmission>.none, key("pending"))
+    if let legacy: PendingSubmission = read(key(.pending)) {
+      let current: PendingSubmission? = read(key(.pending, legacy.botId))
+      if current == nil { save(legacy, key(.pending, legacy.botId)) }
+      save(Optional<PendingSubmission>.none, key(.pending))
     }
     for bot in bots where pendings[bot.id] == nil {
-      if let stored: PendingSubmission = read(key("pending", bot.id)) { pendings[bot.id] = stored }
+      if let stored: PendingSubmission = read(key(.pending, bot.id)) { pendings[bot.id] = stored }
     }
   }
   private func handleReceipt(_ value: Receipt, botId: String) async {
@@ -1165,7 +1169,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
         draft = draft.sent(original)
         persistDraft()
       } else {
-        let draftKey = key("draft", original.botId)
+        let draftKey = key(.draft, original.botId)
         if let cached: Draft = read(draftKey) { save(cached.sent(original), draftKey) }
       }
     }
@@ -1181,7 +1185,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if open && draftReady {
       let target = Self.draft(restoring: submission, into: draft)
       if target != draft { updateDraft(target) }
-    } else if let localKey = key("draft", submission.botId), let cached: Draft = read(localKey) {
+    } else if let localKey = key(.draft, submission.botId), let cached: Draft = read(localKey) {
       var target = Self.draft(restoring: submission, into: cached)
       guard target != cached else { return }
       target.dirty = true
@@ -1248,7 +1252,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let hash = sent ? Draft.contentHash(submission.text, submission.attachments) : nil
     let base = sent ? submission.draftBaseRevision ?? 0 : nil
     // The copy's edit sequence identifies it as the sent copy until someone types in it again.
-    if let localKey = key("draft", submission.botId), var cached: Draft = read(localKey) {
+    if let localKey = key(.draft, submission.botId), var cached: Draft = read(localKey) {
       cached.sentHash = hash
       cached.sentBase = base
       if sent { cached.sentSeq = cached.seq ?? 0 }
@@ -1267,7 +1271,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// Without an assistant, it is the open assistant's send.
   func discardUnconfirmedSubmission(botId: String? = nil) {
     guard let id = botId ?? selectedBotId, let old = pendings[id], !sending,
-      let localKey = key("draft", old.botId)
+      let localKey = key(.draft, old.botId)
     else { return }
     let open = selectedBotId == old.botId
     // While the open assistant's draft is still loading, the in-memory draft is not its draft.
@@ -1278,7 +1282,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     target.sentHash = nil
     // Durable first: a dirty local draft wins over any draft read still in flight.
     save(target, localKey)
-    save(true, key("recovered", old.botId))
+    save(true, key(.recovered, old.botId))
     clearPending(id)
     receipts[id] = nil
     if open {
@@ -1308,13 +1312,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// survive the merge, such as a draft recovered by Discard, then save on their base revision,
   /// so the server refuses them if it moved on.
   private func loadDraft(_ remote: SavedDraft?, botId: String) {
-    let merged = Draft.merge(draftReady ? draft : read(key("draft", botId)) ?? draft, with: remote, settled: settled(botId))
+    let merged = Draft.merge(draftReady ? draft : read(key(.draft, botId)) ?? draft, with: remote, settled: settled(botId))
     let changed = merged.draft != draft
     if changed { draft = merged.draft }
     if !draftReady { draftReady = true }
     clearDraftLoadFailure()
     if changed { persistDraft() }
-    if draft.dirty != true { save(Optional<Bool>.none, key("recovered", botId)) }
+    if draft.dirty != true { save(Optional<Bool>.none, key(.recovered, botId)) }
     ensureDraftSaved(botId)
   }
   /// Puts a pending message back in front of whatever the person has typed since, unless the
@@ -1474,8 +1478,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// Why files cannot be attached to this assistant's draft right now, in the web's words.
   static let attachWhileSending = "Wait a moment for your message to send."
   func attachUnavailable(_ botId: String) -> String? {
-    if !supports("uploads") {
-      let reason = bootstrap?.capabilities["uploads"]?.reason ?? ""
+    if !supports(.uploads) {
+      let reason = bootstrap?[capability: .uploads]?.reason ?? ""
       return reason.isEmpty ? "Hermes can't receive files right now." : reason
     }
     if !draftReady || selectedBotId != botId { return "Your draft is still loading." }
@@ -1493,7 +1497,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       var next = draft; next.attachments.append(file); updateDraft(next)
       uploaded()
     } else {
-      let localKey = key("draft", botId)
+      let localKey = key(.draft, botId)
       var target: Draft = read(localKey) ?? Draft()
       target.attachments.append(file); target.dirty = true; target.seq = (target.seq ?? 0) + 1
       save(target, localKey)
@@ -1504,11 +1508,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     }
   }
   func attachAppleSnapshot(_ data: Data, botId: String) async throws {
-    guard let api, connected, supports("uploads"), !uploads.uploading, !sending, pendings[botId] == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
+    guard let api, connected, supports(.uploads), !uploads.uploading, !sending, pendings[botId] == nil, bootstrap?.bots.contains(where: { $0.id == botId }) == true else {
       throw APIError(message: "Reconnect to this assistant before sharing a snapshot.", status: 409)
     }
     let currentGeneration = generation
-    let localKey = key("draft", botId)
+    let localKey = key(.draft, botId)
     var target: Draft
     if selectedBotId == botId {
       guard draftReady else { throw APIError(message: "Wait for this assistant's draft to finish loading.", status: 409) }

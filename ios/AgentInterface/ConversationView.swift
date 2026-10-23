@@ -275,7 +275,7 @@ struct ConversationView: View {
           store.editComposer { $0.text = RoleDiscussion.draft(appendingTo: $0.text, description: bot.description) }
           composerFocused = true
         }.buttonStyle(.bordered).disabled(!store.draftReady)
-        if !store.supports("chat") { Text(store.reason("chat")).font(.footnote).foregroundStyle(.secondary) }
+        if !store.supports(.chat) { Text(store.reason(.chat)).font(.footnote).foregroundStyle(.secondary) }
       }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 36).id("welcome")
     }
   }

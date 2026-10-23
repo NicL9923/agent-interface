@@ -162,51 +162,22 @@ import XCTest
   }
 
   @MainActor func testGroupCreationKeepsItsRequestUntilHermesAnswersAndSendsAssistantsInPickOrder() async throws {
-    GroupStub.reset()
+    let server = FakeServer()
     let scope = "home-parity-\(UUID().uuidString)"
     defer { GroupCreation.clear(scope: scope) }
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [GroupStub.self]; config.urlCache = nil
-    let api = APIClient(baseURL: URL(string: "https://groups.example.test")!, session: URLSession(configuration: config))
-    api.token = "synthetic"
+    let api = server.api(token: "synthetic")
     let request = GroupCreate(requestId: "request-1", name: "Gate planning", botIds: ["zed", "alpha", "mid"])
-    GroupStub.status = 503
+    server.reply = .init(status: 503, body: #"{"error":"Synthetic outage"}"#)
     do { _ = try await GroupCreation.submit(request, api: api, scope: scope); XCTFail("The outage must surface") } catch {
       XCTAssertTrue(GroupCreation.failure(error).hasSuffix("Retry the saved request to check this room's creation."))
     }
     XCTAssertEqual(GroupCreation.pending(scope: scope)?.requestId, "request-1", "A request that may have arrived is kept for the retry")
-    GroupStub.status = 200
+    server.reply = .init(body: #"{"room":{"room_id":"room-1","name":"Gate planning","members":[]}}"#)
     let room = try await GroupCreation.submit(GroupCreation.pending(scope: scope)!, api: api, scope: scope)
     XCTAssertEqual(room.name, "Gate planning")
     XCTAssertNil(GroupCreation.pending(scope: scope), "Hermes answered, so the saved request is done")
-    let bodies = GroupStub.bodies.compactMap { try? JSONDecoder().decode(GroupCreate.self, from: $0) }
+    let bodies = server.bodies.compactMap { try? JSONDecoder().decode(GroupCreate.self, from: $0) }
     XCTAssertEqual(bodies.map(\.requestId), ["request-1", "request-1"], "The retry reuses the request ID so Hermes cannot make a second room")
     XCTAssertEqual(bodies.last?.botIds, ["zed", "alpha", "mid"])
   }
-}
-
-private final class GroupStub: URLProtocol, @unchecked Sendable {
-  nonisolated(unsafe) static var status = 200
-  nonisolated(unsafe) static var bodies: [Data] = []
-  static func reset() { status = 200; bodies = [] }
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-  override func startLoading() {
-    var body = request.httpBody
-    if body == nil, let stream = request.httpBodyStream {
-      stream.open(); defer { stream.close() }
-      var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
-      while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
-      body = data
-    }
-    Self.bodies.append(body ?? Data())
-    let payload = Self.status == 200
-      ? #"{"room":{"room_id":"room-1","name":"Gate planning","members":[]}}"#
-      : #"{"error":"Synthetic outage"}"#
-    let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
-    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data(payload.utf8))
-    client?.urlProtocolDidFinishLoading(self)
-  }
-  override func stopLoading() {}
 }

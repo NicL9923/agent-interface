@@ -20,7 +20,7 @@ struct BotSettingsView: View {
   @State private var form = BotInput()
   @State private var savedForm = BotInput()
   @State private var savedAvatar = AvatarConfig()
-  @State private var savedCapabilities: [String: Set<String>] = [:]
+  @State private var savedCapabilities: [CatalogKind: Set<String>] = [:]
   @State private var discardConfirm = false
   @State private var initialized = false
   @State private var detailLoaded = false
@@ -46,8 +46,8 @@ struct BotSettingsView: View {
   @State private var mcpText = ""
   @State private var templates: [RoutineTemplate] = []
   @State private var deletingRoutine: Routine?
-  @State private var catalogReady: Set<String> = []
-  @State private var catalogLoading: Set<String> = []
+  @State private var catalogReady: Set<CatalogKind> = []
+  @State private var catalogLoading: Set<CatalogKind> = []
   @State private var loadId = UUID()
   @State private var progress = SaveProgress()
   let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Logins"]
@@ -92,8 +92,8 @@ struct BotSettingsView: View {
       switch tab {
       case "Details": details
       case "Avatar": avatarEditor
-      case "Tools": capabilities("tools")
-      case "Skills": capabilities("skills")
+      case "Tools": capabilities(.tools)
+      case "Skills": capabilities(.skills)
       default: routineList
       }
     }.householdListBackground().disabled(busy || (bot != nil && !detailLoaded)) }
@@ -108,7 +108,7 @@ struct BotSettingsView: View {
     if let error { ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal) }
     Form {
       creationHeader
-      Section { unavailable("botConfiguration") }
+      Section { unavailable(.botConfiguration) }
       if creationStep == .look {
         avatarPreview
         nameSection
@@ -181,7 +181,7 @@ struct BotSettingsView: View {
         mcpText = form.enabledMcpServers.joined(separator: ", ")
         avatar = bot?.avatar ?? AvatarConfig()
         savedAvatar = avatar
-        if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
+        if avatar.mode != .portrait { lastDrawn = avatar } else { lastPortrait = avatar }
       }
       .task(id: tab) { await loadTab() }
       .interactiveDismissDisabled(dirty || busy)
@@ -189,7 +189,7 @@ struct BotSettingsView: View {
         Button("Discard changes", role: .destructive) { closeSheet() }
       }
       .onChange(of: avatar) { _, value in
-        if value.mode != "portrait" {
+        if value.mode != .portrait {
           lastDrawn = value
         } else if !(value.src ?? "").isEmpty {
           lastPortrait = value
@@ -258,7 +258,7 @@ struct BotSettingsView: View {
   }
   @ViewBuilder private var details: some View {
     Section {
-      unavailable("botConfiguration")
+      unavailable(.botConfiguration)
     }
     nameSection
     roleSections
@@ -275,7 +275,7 @@ struct BotSettingsView: View {
       Text("Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.")
     }
     Section {
-      ModelSelectionRow(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy || !store.supports("botConfiguration")) {
+      ModelSelectionRow(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy || !store.supports(.botConfiguration)) {
         form.model = $0.model
         form.provider = $0.provider
       }
@@ -300,7 +300,7 @@ struct BotSettingsView: View {
   }
   private var nameReady: Bool { !form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
   private var canSave: Bool {
-    store.supports("botConfiguration") && store.connected && nameReady
+    store.supports(.botConfiguration) && store.connected && nameReady
       && !form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && form.instructions.count <= SettingsLimits.instructions
   }
@@ -309,7 +309,7 @@ struct BotSettingsView: View {
       Button(progress.label("details", idle: bot == nil ? "Create assistant" : "Save changes")) { saveBot() }.disabled(!canSave)
       if bot != nil {
         Button("Delete assistant", role: .destructive) { deleteConfirm = true }.disabled(
-          !store.supports("botConfiguration") || !store.connected)
+          !store.supports(.botConfiguration) || !store.connected)
       }
     }
   }
@@ -354,41 +354,41 @@ struct BotSettingsView: View {
     Group {
       Section {
         Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
-          Text("Geometric").tag("geometric")
-          Text("Mascot").tag("mascot")
-          if bot != nil { Text("Portrait").tag("portrait") }
+          Text("Geometric").tag(AvatarMode.geometric)
+          Text("Mascot").tag(AvatarMode.mascot)
+          if bot != nil { Text("Portrait").tag(AvatarMode.portrait) }
         }.pickerStyle(.segmented).accessibilityIdentifier("avatarStyle")
       } header: { Text("Style") } footer: {
         // A portrait is stored with the assistant, so it can only be added once it exists.
         if bot == nil { Text("Want a portrait? Upload or generate one in Avatar settings after you create the assistant.") }
       }
-      if avatar.mode == "portrait" {
+      if avatar.mode == .portrait {
         Section("Portrait") {
           Text("Portraits stay still. Activity appears in a separate state indicator.")
             .font(.caption).foregroundStyle(.secondary)
           Button("Upload portrait") { portraitImport = true }.disabled(
-            bot == nil || !store.supports("uploads") || !store.connected)
-          unavailable("uploads")
+            bot == nil || !store.supports(.uploads) || !store.connected)
+          unavailable(.uploads)
           TextField("Describe a portrait", text: $portraitPrompt, axis: .vertical).lineLimit(2...5)
           if let limit = SettingsLimits.message("The description is", count: portraitPrompt.count, limit: SettingsLimits.portraitPrompt) {
             Text(limit).font(.caption).foregroundStyle(portraitPrompt.count > SettingsLimits.portraitPrompt ? Color.red : Color.secondary)
               .accessibilityIdentifier("portraitPromptLimit")
           }
           Button("Generate portrait") { generatePortrait() }.disabled(
-            bot == nil || !store.supports("portraitGeneration") || !store.connected
+            bot == nil || !store.supports(.portraitGeneration) || !store.connected
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || portraitPrompt.count > SettingsLimits.portraitPrompt)
-          unavailable("portraitGeneration")
+          unavailable(.portraitGeneration)
           Text("Use a PNG, JPEG, or WebP image up to 2 MB.").font(.caption).foregroundStyle(
             .secondary)
         }
       } else {
-        if avatar.mode == "geometric" {
+        if avatar.mode == .geometric {
           Section("Shape") {
             AvatarTiles(
-              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.capitalized) },
-              selected: avatar.shape ?? "blob",
-              preview: { var a = avatar; a.shape = $0; a.accessory = "none"; return a },
+              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.rawValue.capitalized) },
+              selected: avatar.shape ?? .blob,
+              preview: { var a = avatar; a.shape = $0; a.accessory = .plain; return a },
               select: { avatar.shape = $0 })
           }
         } else {
@@ -398,16 +398,16 @@ struct BotSettingsView: View {
         Section("Color") { colorSwatches }
         Section("Eyes") {
           AvatarTiles(
-            group: "eyes", options: ["oval", "round", "visor", "spark"].map { ($0, $0.capitalized) },
-            selected: avatar.eyes ?? "oval",
-            preview: { var a = avatar; a.eyes = $0; a.accessory = "none"; return a },
+            group: "eyes", options: AvatarEyes.all.map { ($0, $0.rawValue.capitalized) },
+            selected: avatar.eyes ?? .oval,
+            preview: { var a = avatar; a.eyes = $0; a.accessory = .plain; return a },
             select: { avatar.eyes = $0 })
         }
         Section("Accessory") {
           AvatarTiles(
             group: "accessory",
-            options: [("none", "None"), ("hat", "Cowboy hat"), ("glasses", "Glasses")],
-            selected: avatar.accessory ?? "none",
+            options: [(.plain, "None"), (.hat, "Cowboy hat"), (.glasses, "Glasses")],
+            selected: avatar.accessory ?? .plain,
             preview: { var a = avatar; a.accessory = $0; return a },
             select: { avatar.accessory = $0 })
         }
@@ -427,7 +427,7 @@ struct BotSettingsView: View {
       if bot != nil {
         Section {
           Button(progress.label("avatar", idle: "Save avatar")) { saveAvatar() }.disabled(
-            !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
+            !store.connected || avatar.mode == .portrait && (avatar.src ?? "").isEmpty)
         }
       }
     }
@@ -441,11 +441,11 @@ struct BotSettingsView: View {
         .disabled(busy || !store.connected).accessibilityIdentifier("retryAvatar")
     }
   }
-  private func characterTiles(_ families: [(id: String, label: String)]) -> some View {
+  private func characterTiles(_ families: [(id: AvatarFamily, label: String)]) -> some View {
     AvatarTiles(
       group: "family", options: families.map { ($0.id, $0.label) },
-      selected: avatar.family ?? "sprout",
-      preview: { var a = avatar.selectingFamily($0); a.accessory = "none"; return a },
+      selected: avatar.family ?? .sprout,
+      preview: { var a = avatar.selectingFamily($0); a.accessory = .plain; return a },
       select: { avatar = avatar.selectingFamily($0) })
   }
   private var colorSwatches: some View {
@@ -481,16 +481,16 @@ struct BotSettingsView: View {
   /// Switching styles keeps the drawn character's color, eyes, accessory, and eye tuning,
   /// returning from Portrait restores the last drawn character, and returning to Portrait
   /// restores the last portrait.
-  private func switchAvatarMode(_ mode: String) {
+  private func switchAvatarMode(_ mode: AvatarMode) {
     guard mode != avatar.mode else { return }
-    if mode == "portrait" {
+    if mode == .portrait {
       // Restore the last uploaded, generated, or saved portrait from this session.
       if let lastPortrait {
         avatar = lastPortrait
         return
       }
       var next = avatar
-      next.mode = "portrait"
+      next.mode = .portrait
       next.src = nil
       next.origin = "uploaded"
       avatar = next
@@ -498,27 +498,27 @@ struct BotSettingsView: View {
     }
     var next = lastDrawn
     next.mode = mode
-    if mode == "geometric" { next.shape = lastDrawn.shape ?? "blob" }
-    if mode == "mascot" { next.family = lastDrawn.family ?? "bear" }
+    if mode == .geometric { next.shape = lastDrawn.shape ?? .blob }
+    if mode == .mascot { next.family = lastDrawn.family ?? .bear }
     avatar = next
   }
-  @ViewBuilder private func capabilities(_ kind: String) -> some View {
+  @ViewBuilder private func capabilities(_ kind: CatalogKind) -> some View {
     Section {
-      unavailable(kind)
+      unavailable(kind.capability)
       if bot != nil {
-        let items = kind == "tools" ? tools : skills
+        let items = kind == .tools ? tools : skills
         ForEach(items) { item in
           Toggle(
             isOn: Binding(
               get: {
-                (kind == "tools" ? tools : skills).first { $0.id == item.id }?.enabled == true
+                (kind == .tools ? tools : skills).first { $0.id == item.id }?.enabled == true
                   || item.required == true
               },
               set: { selected in
-                if kind == "tools", let i = tools.firstIndex(where: { $0.id == item.id }) {
+                if kind == .tools, let i = tools.firstIndex(where: { $0.id == item.id }) {
                   tools[i].enabled = selected
                 }
-                if kind == "skills", let i = skills.firstIndex(where: { $0.id == item.id }) {
+                if kind == .skills, let i = skills.firstIndex(where: { $0.id == item.id }) {
                   skills[i].enabled = selected
                 }
               })
@@ -530,34 +530,34 @@ struct BotSettingsView: View {
                 Text("Required by Hermes").font(.caption).foregroundStyle(.secondary)
               }
             }
-          }.disabled(item.required == true || !store.supports(kind) || !catalogReady.contains(kind))
+          }.disabled(item.required == true || !store.supports(kind.capability) || !catalogReady.contains(kind))
         }
         if catalogLoading.contains(kind) {
-          ProgressView("Loading \(kind)…")
-        } else if !catalogReady.contains(kind) && store.supports(kind) {
-          Button("Retry loading \(kind)") { Task { await loadTab() } }
+          ProgressView("Loading \(kind.rawValue)…")
+        } else if !catalogReady.contains(kind) && store.supports(kind.capability) {
+          Button("Retry loading \(kind.rawValue)") { Task { await loadTab() } }
         }
         if items.isEmpty && catalogReady.contains(kind) {
-          Text("No \(kind) were reported by Hermes.").foregroundStyle(.secondary)
+          Text("No \(kind.rawValue) were reported by Hermes.").foregroundStyle(.secondary)
         }
-        Button(progress.label(kind, idle: "Save \(kind)")) {
-          action(progressKey: kind) {
+        Button(progress.label(kind.rawValue, idle: "Save \(kind.rawValue)")) {
+          action(progressKey: kind.rawValue) {
             guard let bot, catalogReady.contains(kind) else { return }
-            let ids = (kind == "tools" ? tools : skills).filter {
+            let ids = (kind == .tools ? tools : skills).filter {
               $0.enabled || $0.required == true
             }.map(\.id)
             try await store.perform(
-              "/bots/\(APIClient.component(bot.id))/\(kind)", ["ids": ids], method: "PUT")
+              "/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT")
             savedCapabilities[kind] = Set(ids)
             notice = "Saved"
           }
-        }.disabled(!store.supports(kind) || !store.connected || !catalogReady.contains(kind))
+        }.disabled(!store.supports(kind.capability) || !store.connected || !catalogReady.contains(kind))
       }
     }
   }
   @ViewBuilder private var routineList: some View {
     Section {
-      unavailable("routines")
+      unavailable(.routines)
       Text("Routines keep working when you are away. Choose notification recipients explicitly.")
         .font(.footnote).foregroundStyle(.secondary)
     }
@@ -572,7 +572,7 @@ struct BotSettingsView: View {
                 Text(template.name).font(.headline).foregroundStyle(.primary)
                 Text(template.description).font(.caption).foregroundStyle(.secondary)
               }
-            }.disabled(!store.supports("routines") || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
+            }.disabled(!store.supports(.routines) || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
           }
         }
       }
@@ -581,7 +581,7 @@ struct BotSettingsView: View {
           Text(routine.schedule).font(.subheadline)
           Text(routine.enabled ? "Active" : "Paused").font(.caption).foregroundStyle(.secondary)
           Text(routine.prompt).font(.footnote).lineLimit(6)
-          RoutineEnhancements(routine: routine, disabled: !store.supports("routines"))
+          RoutineEnhancements(routine: routine, disabled: !store.supports(.routines))
           Button(routine.enabled ? "Pause" : "Resume") {
             action {
               guard let api = store.api else { return }
@@ -598,14 +598,14 @@ struct BotSettingsView: View {
       }
       Section {
         Button("Add routine") { addingRoutine = true }.disabled(
-          !store.supports("routines") || !store.connected)
+          !store.supports(.routines) || !store.connected)
       }
-      if routines.isEmpty && store.supports("routines") {
+      if routines.isEmpty && store.supports(.routines) {
         Section { Text("No routines for \(bot.name).") }
       }
     }
   }
-  @ViewBuilder private func unavailable(_ key: String) -> some View {
+  @ViewBuilder private func unavailable(_ key: CapabilityKey) -> some View {
     if !store.supports(key) { Text(store.reason(key)).font(.footnote).foregroundStyle(.secondary) }
   }
   private func slider(_ title: String, _ key: WritableKeyPath<AvatarConfig, Double?>) -> some View {
@@ -700,7 +700,7 @@ struct BotSettingsView: View {
   }
   private func putAvatar(_ id: String, _ api: APIClient) async throws {
     var value = avatar
-    if value.mode == "mascot" { value.family = value.family ?? "sprout" }
+    if value.mode == .mascot { value.family = value.family ?? .sprout }
     let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", value, method: "PUT")
   }
   private func saveAvatar() {
@@ -751,22 +751,22 @@ struct BotSettingsView: View {
   private func closeSheet() { if let close { close() } else { dismiss() } }
   private var dirty: Bool {
     guard initialized else { return false }
-    return form != savedForm || avatar != savedAvatar || ["tools", "skills"].contains { kind in
+    return form != savedForm || avatar != savedAvatar || CatalogKind.allCases.contains { kind in
       guard let saved = savedCapabilities[kind] else { return false }
-      return Set((kind == "tools" ? tools : skills).filter { $0.enabled || $0.required == true }.map(\.id)) != saved
+      return Set((kind == .tools ? tools : skills).filter { $0.enabled || $0.required == true }.map(\.id)) != saved
     }
   }
   private func loadTab() async {
     guard let bot, let api = store.api else { return }
-    let kind = tab.lowercased()
+    let kind = CatalogKind(rawValue: tab.lowercased())
     let currentId = UUID()
     loadId = currentId
-    if ["tools", "skills"].contains(kind), catalogReady.contains(kind) { return }
-    if ["tools", "skills"].contains(kind) {
+    if let kind, catalogReady.contains(kind) { return }
+    if let kind {
       catalogReady.remove(kind)
       catalogLoading.insert(kind)
     }
-    defer { if loadId == currentId { catalogLoading.remove(kind) } }
+    defer { if let kind, loadId == currentId { catalogLoading.remove(kind) } }
     do {
       if !detailLoaded {
         let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
@@ -776,15 +776,15 @@ struct BotSettingsView: View {
         mcpText = form.enabledMcpServers.joined(separator: ", ")
         detailLoaded = true
       }
-      if ["tools", "skills"].contains(kind), store.supports(kind) {
+      if let kind, store.supports(kind.capability) {
         let values: [CapabilityItem] = try await api.get(
-          "/bots/\(APIClient.component(bot.id))/\(kind)")
+          "/bots/\(APIClient.component(bot.id))/\(kind.rawValue)")
         guard !Task.isCancelled, loadId == currentId else { return }
-        if kind == "tools" { tools = values } else { skills = values }
+        if kind == .tools { tools = values } else { skills = values }
         savedCapabilities[kind] = Set(values.filter { $0.enabled || $0.required == true }.map(\.id))
         catalogReady.insert(kind)
       }
-      if tab == "Routines", store.supports("routines") {
+      if tab == "Routines", store.supports(.routines) {
         let all: [Routine] = try await api.get("/routines")
         routines = all.filter { $0.botId == bot.id }
         templates = try await api.get("/routines/templates")
@@ -938,17 +938,17 @@ private struct AvatarStage: View {
 }
 
 /// A grid of mini static avatars, one per choice, like the web editor's tile pickers.
-private struct AvatarTiles: View {
+private struct AvatarTiles<Value: OpenVocabulary>: View {
   var group: String
-  var options: [(String, String)]
-  var selected: String
-  var preview: (String) -> AvatarConfig
-  var select: (String) -> Void
+  var options: [(Value, String)]
+  var selected: Value
+  var preview: (Value) -> AvatarConfig
+  var select: (Value) -> Void
   @Environment(\.colorScheme) private var scheme
   @ScaledMetric(relativeTo: .caption) private var tileWidth: CGFloat = 64
   var body: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: tileWidth), spacing: 8)], spacing: 10) {
-      ForEach(options, id: \.0) { value, label in
+      ForEach(options, id: \.0.rawValue) { value, label in
         let on = value == selected
         Button {
           select(value)
@@ -969,7 +969,7 @@ private struct AvatarTiles: View {
           }.contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityElement(children: .ignore).accessibilityLabel(label)
           .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-          .accessibilityIdentifier("avatarTile.\(group).\(value)")
+          .accessibilityIdentifier("avatarTile.\(group).\(value.rawValue)")
       }
     }.padding(.vertical, 4)
   }

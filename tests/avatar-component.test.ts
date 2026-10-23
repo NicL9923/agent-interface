@@ -2,21 +2,10 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
-import { resolve } from "node:path";
-import { Avatar, faces, motionOwner, silhouette } from "../src/components/Avatar";
-import { avatarShapes, everydayFamilies, mascotFamilies, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
-import {
-  characterAnchors,
-  characterHatAnchors,
-  characterHeads,
-  cheekless,
-  isCharacter,
-  isSeasonal,
-  seasonalAvatar,
-  seasonalChoices,
-} from "../src/components/character-avatars";
+import { Avatar, motionOwner, silhouette } from "../src/components/Avatar";
+import { avatarShapes, mascotFamilies, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
+import { characterHeads, isCharacter, isSeasonal, seasonalAvatar } from "../src/components/character-avatars";
 
 /** Every character drawn by the character module, in its everyday or seasonal colors. */
 const characters = mascotFamilies.filter(isCharacter).map((family) => ({
@@ -193,60 +182,16 @@ it("keeps two bots that share a name apart in the motion conductor", () => {
 });
 
 describe("avatar silhouettes", () => {
-  // jsdom rewrites import.meta.url, so read from the project root.
-  const native = (file: string) => readFileSync(resolve("ios/AgentInterface", file), "utf8");
-  const swift = native("AvatarView.swift");
-
-  it("lists the same shapes natively", () => {
-    const list = native("Models.swift").match(/static let shapes = \[([^\]]*)\]/)![1];
-    expect([...list.matchAll(/"(\w+)"/g)].map((m) => m[1])).toEqual([...avatarShapes]);
-  });
-
-  it.each(avatarShapes)("draws %s as one closed outline with a matching native face", (shape) => {
+  // The native copies of these outlines, faces and characters are checked in tests/avatar-art-parity.test.ts.
+  it.each(avatarShapes)("draws %s as one closed outline", (shape) => {
     const d = silhouette(shape);
     if (shape !== "blob") expect(d).not.toBe(silhouette("blob"));
-    const nativePath = shape === "blob"
-      ? swift.match(/default: "([^"]+)"/)![1]
-      : swift.match(new RegExp(`case "${shape}":\\s*"([^"]+)"`))![1];
     // Morphing samples one continuous outline; native parses only absolute M L H V Q C Z.
-    expect(nativePath).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
-    if (shape !== "circle") expect(nativePath).toBe(d);
-    // Characters keep their own table, so the ghost character and the ghost shape can differ.
-    const anchor = swift.slice(swift.indexOf("static let faces:")).match(new RegExp(`"${shape}": Anchor\\(cy: ([\\d.]+), scale: ([\\d.]+), top: ([\\d.]+), hat: ([\\d.]+)\\)`))!;
-    expect(anchor.slice(1).map(Number)).toEqual(Object.values(faces[shape]));
+    if (shape !== "circle") expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
   });
 });
 
 describe("mascot characters", () => {
-  const native = (file: string) => readFileSync(resolve("ios/AgentInterface", file), "utf8");
-  const swiftList = (source: string, name: string) =>
-    [...source.match(new RegExp(`static let ${name}[^=]*= \\[([^\\]]*)\\]`))![1].matchAll(/\("(\w+)", "([^"]+)"\)/g)]
-      .map((m) => [m[1], m[2]]);
-
-  it("lists the same everyday and seasonal characters natively, with the same labels and colors", () => {
-    const models = native("Models.swift");
-    expect(swiftList(models, "everydayFamilies")).toEqual(everydayFamilies.map((family) => [family, family[0].toUpperCase() + family.slice(1)]));
-    expect(swiftList(models, "seasonalFamilies")).toEqual(seasonalChoices.map(({ family, label }) => [family, label]));
-    const colors = models.match(/static let seasonalColors = \[([^\]]*)\]/)![1];
-    expect(Object.fromEntries([...colors.matchAll(/"(\w+)": "(#[0-9A-F]{6})"/gi)].map((m) => [m[1], m[2]])))
-      .toEqual(Object.fromEntries(seasonalChoices.map(({ family, color }) => [family, color])));
-  });
-
-  it("draws the same heads, faces, hat positions and cheeks natively", () => {
-    const art = native("CharacterAvatarArt.swift");
-    const view = native("AvatarView.swift");
-    const heads = art.match(/static let heads: \[String: String\] = \[([^\]]*)\]/)![1];
-    expect(Object.fromEntries([...heads.matchAll(/"(\w+)": "([^"]+)"/g)].map((m) => [m[1], m[2]]))).toEqual(characterHeads);
-    const faces = view.match(/static let characterFaces: \[String: Anchor\] = \[([^\]]*)\]/)![1];
-    expect(Object.fromEntries([...faces.matchAll(/"(\w+)": Anchor\(cy: ([\d.]+), scale: ([\d.]+), top: ([\d.]+), hat: ([\d.]+)\)/g)]
-      .map((m) => [m[1], { cy: Number(m[2]), scale: Number(m[3]), top: Number(m[4]), hat: Number(m[5]) }]))).toEqual(characterAnchors);
-    const hats = art.match(/static let hatAnchors[^=]*= \[([^\]]*)\]/)![1];
-    expect(Object.fromEntries([...hats.matchAll(/"(\w+)": \(top: (-?[\d.]+), hat: ([\d.]+)\)/g)].map((m) => [m[1], { top: Number(m[2]), hat: Number(m[3]) }])))
-      .toEqual(characterHatAnchors);
-    const cheeks = art.match(/static let cheekless: Set<String> = \[([^\]]*)\]/)![1];
-    expect([...cheeks.matchAll(/"(\w+)"/g)].map((m) => m[1]).sort()).toEqual([...cheekless].sort());
-  });
-
   it.each(Object.entries(characterHeads))("outlines %s as one closed native-parseable path", (_family, d) => {
     expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
   });

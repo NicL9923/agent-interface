@@ -30,7 +30,7 @@ struct LiveActivityRegistration: Encodable {
     unregisteredBotIds.reduce(state) { state, botId in
       let bot = store?.bootstrap?.bots.first { $0.id == botId }
       return state.seeded(
-        botId: botId, name: bot?.name ?? botId, color: bot?.avatar?.mode == "portrait" ? nil : bot?.avatar?.color,
+        botId: botId, name: bot?.name ?? botId, color: bot?.avatar?.mode == .portrait ? nil : bot?.avatar?.color,
         at: unregisteredSends[botId] ?? Date())
     }
   }

@@ -10,7 +10,7 @@ extension WidgetSnapshot {
         id: bot.id, name: bot.name, activity: bot.activity.rawValue,
         lastMessage: bot.lastMessage.map { String($0.text.prefix(200)) },
         lastMessageAt: bot.lastMessage?.at.flatMap(ServerDate.parse),
-        color: bot.avatar?.mode == "portrait" ? nil : bot.avatar?.color, pinned: favorites.contains(bot.id))
+        color: bot.avatar?.mode == .portrait ? nil : bot.avatar?.color, pinned: favorites.contains(bot.id))
     })
   }
 }

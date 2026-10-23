@@ -35,19 +35,20 @@ private typealias Check = @MainActor (Data) throws -> Void
     },
     "bootstrap": check(Bootstrap.self) {
       XCTAssertEqual($0.bots.map(\.activity), [.working, .waiting, .done])
-      XCTAssertEqual($0.bots.map(\.avatar?.mode), ["geometric", "mascot", "portrait"])
-      XCTAssertEqual($0.bots[0].avatar?.geometry, "pebble")
-      XCTAssertEqual($0.bots[1].avatar?.family, "fox"); XCTAssertEqual($0.bots[2].avatar?.origin, "generated")
+      XCTAssertEqual($0.bots.map(\.avatar?.mode), [.geometric, .mascot, .portrait])
+      XCTAssertEqual($0.bots[0].avatar?.body, .shape(.pebble))
+      XCTAssertEqual($0.bots[1].avatar?.family, .fox); XCTAssertEqual($0.bots[2].avatar?.origin, "generated")
       XCTAssertEqual($0.bots[0].avatar?.eyeSpacing, 1.2); XCTAssertEqual($0.bots[1].ownerId, "local-one")
       XCTAssertEqual($0.household.count, 2); XCTAssertNotNil($0.user.picture); XCTAssertNil($0.csrfToken)
       XCTAssertEqual($0.preferences.notifications?.batchMinutes, 15); XCTAssertEqual($0.preferences.sections.first?.botIds, ["household", "garden"])
-      XCTAssertEqual($0.capabilities["imageGeneration"]?.supported, false); XCTAssertNotNil($0.capabilities["imageGeneration"]?.reason)
+      XCTAssertEqual($0[capability: .imageGeneration]?.supported, false); XCTAssertNotNil($0[capability: .imageGeneration]?.reason)
+      XCTAssertEqual(Set($0.capabilities.keys), Set(CapabilityKey.allCases.map(\.rawValue)), "CapabilityKey must list exactly the names the server reports")
       XCTAssertEqual($0.connection.code, "ready"); XCTAssertNotNil($0.connection.lastConnectedAt)
       XCTAssertEqual($0.preferences.pinnedAssistants($0.bots).map(\.id), $0.preferences.favorites)
       XCTAssertEqual($0.nativeApp, NativeAppInfo(latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT"))
       XCTAssertEqual(AppUpdate.evaluate($0.nativeApp, installedBuild: 11), .available(URL(string: "https://testflight.apple.com/join/CONTRACT")!))
     },
-    "bot-avatar": check(AvatarConfig.self) { XCTAssertEqual($0.shape, "pebble"); XCTAssertEqual($0.accessory, "glasses") },
+    "bot-avatar": check(AvatarConfig.self) { XCTAssertEqual($0.shape, .pebble); XCTAssertEqual($0.accessory, .glasses) },
     "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
     "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
     "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },

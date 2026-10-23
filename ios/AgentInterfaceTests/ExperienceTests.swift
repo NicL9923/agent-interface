@@ -1,18 +1,11 @@
 import XCTest
 @testable import AgentInterface
 
-private final class ExperienceProtocol: URLProtocol, @unchecked Sendable {
-  nonisolated(unsafe) static var observed: URLRequest?
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-  override func startLoading() {
-    Self.observed = request
-    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data((request.url?.path == "/api/today/seen" ? #"{"ok":true}"# : #"{"text":"Check the pasture gate","provider":"fixture"}"#).utf8))
-    client?.urlProtocolDidFinishLoading(self)
+/// What the Hermes app server answers the voice and Today acknowledgement calls with.
+private func experienceServer() -> FakeServer {
+  FakeServer { request in
+    .init(body: request.url?.path == "/api/today/seen" ? #"{"ok":true}"# : #"{"text":"Check the pasture gate","provider":"fixture"}"#)
   }
-  override func stopLoading() {}
 }
 final class ExperienceTests: XCTestCase {
   func testTodayHeadlinesRemoveMarkdownAndKeepApprovalSecretsInChat() {
@@ -74,21 +67,14 @@ final class ExperienceTests: XCTestCase {
     XCTAssertNotNil(parts[1].cards?.first?.start.flatMap(ServerDate.parse))
   }
   @MainActor func testNativeVoiceSendsBoundedAuthenticatedAudioToSelectedBot() async throws {
-    let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ExperienceProtocol.self]
-    let api = APIClient(baseURL: URL(string: "https://experience.example.test")!, session: URLSession(configuration: config))
-    api.token = "fixture-token"
+    let server = experienceServer(), api = server.api(token: "fixture-token")
     let result = try await api.transcribe(botId: "ranch/bot", audio: Data([1, 2, 3]))
     XCTAssertEqual(result.text, "Check the pasture gate")
-    let request = try XCTUnwrap(ExperienceProtocol.observed)
-    XCTAssertEqual(request.url?.absoluteString, "https://experience.example.test/api/bots/ranch%2Fbot/voice/transcribe")
+    let request = try XCTUnwrap(server.lastRequest)
+    XCTAssertEqual(request.url?.absoluteString, server.origin.absoluteString + "/api/bots/ranch%2Fbot/voice/transcribe")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-token")
     XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
-    var data = request.httpBody ?? Data()
-    if let stream = request.httpBodyStream {
-      stream.open(); defer { stream.close() }
-      var buffer = [UInt8](repeating: 0, count: 4096)
-      while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
-    }
+    let data = try XCTUnwrap(server.lastBody)
     XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("name=\"audio\"; filename=\"voice.m4a\""))
     XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("Content-Type: audio/mp4"))
     do { _ = try await api.transcribe(botId: "ranch", audio: Data(repeating: 0, count: 8 * 1024 * 1024 + 1)); XCTFail("Oversized audio must be refused before network upload") } catch { XCTAssertEqual((error as? APIError)?.status, 400) }
@@ -120,19 +106,12 @@ final class ExperienceTests: XCTestCase {
     let snapshot = try JSONDecoder().decode(TodayOverview.self, from: Data(#"{"generatedAt":"2026-10-01T13:30:00Z","since":"2026-10-01T12:00:00Z","items":[],"events":[{"id":"late","botId":"ranch","kind":"completed","title":"Late imported completion","occurredAt":"2026-09-28T12:00:00Z"}],"unavailableBots":[],"frontier":"42","hasMore":true}"#.utf8))
     XCTAssertTrue(snapshot.hasMore)
     XCTAssertEqual(snapshot.events.first?.occurredAt, "2026-09-28T12:00:00Z")
-    let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ExperienceProtocol.self]
-    let api = APIClient(baseURL: URL(string: "https://experience.example.test")!, session: URLSession(configuration: config)); api.token = "fixture-token"
+    let server = experienceServer(), api = server.api(token: "fixture-token")
     try await api.markTodaySeen(snapshot)
-    let request = try XCTUnwrap(ExperienceProtocol.observed)
+    let request = try XCTUnwrap(server.lastRequest)
     XCTAssertEqual(request.url?.path, "/api/today/seen"); XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-token")
-    var data = request.httpBody ?? Data()
-    if let stream = request.httpBodyStream {
-      stream.open(); defer { stream.close() }
-      var buffer = [UInt8](repeating: 0, count: 4096)
-      while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
-    }
-    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: String])
+    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(server.lastBody)) as? [String: String])
     XCTAssertEqual(body, ["seenAt": snapshot.generatedAt, "frontier": "42"])
   }
 

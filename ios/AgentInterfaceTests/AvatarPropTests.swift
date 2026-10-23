@@ -123,8 +123,8 @@ final class AvatarPropTests: XCTestCase {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let avatars: [(String, AvatarConfig)] = [
       ("blob", AvatarConfig()),
-      ("fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
-      ("triangle", AvatarConfig(shape: "triangle", color: "#292929", eyes: "visor")),
+      ("fox", AvatarConfig(mode: .mascot, shape: nil, family: .fox, color: "#FF6700")),
+      ("triangle", AvatarConfig(shape: .triangle, color: "#292929", eyes: .visor)),
     ]
     let size = 160.0
     let base = Date()
@@ -144,7 +144,7 @@ final class AvatarPropTests: XCTestCase {
                     frame: AvatarMotion.frame(
                       .entering(.working, at: base), at: base.addingTimeInterval(t), still: t == 0,
                       prop: prop, propSince: .distantPast),
-                    still: t == 0, body: AvatarGeometry.path(avatar.geometry),
+                    still: t == 0, body: AvatarGeometry.path(avatar.body),
                     bodyColor: Color(hex: avatar.color ?? "#1084FE")
                   ).draw(ctx)
                 }.frame(width: size * 1.4, height: size * 1.4)
