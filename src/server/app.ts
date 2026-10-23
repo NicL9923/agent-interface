@@ -35,6 +35,7 @@ import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
+import { openEventStream } from "./event-stream.js";
 import { apnsToken, avatar, botSaveRequest, id, modelFavoriteList, preferences } from "./schemas.js";
 import { interruptionPendingMessage } from "../shared/errors.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
@@ -441,78 +442,51 @@ export async function createApp(
   app.get("/api/events", { exposeHeadRoute: false }, async (req, reply) => {
     const initial = await runtimeSnapshot();
     let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
-    reply.hijack();
-    const response = reply.raw;
-    response.writeHead(200, {
-      ...reply.getHeaders() as Record<string, string>,
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Content-Encoding": "identity",
-      "X-Accel-Buffering": "no",
-      "Connection": "close",
+    const stream = openEventStream(reply, streams, {
+      allowed: () => stillSignedIn(store, config, req),
+      teardown: () => {
+        rosterListeners.delete(changed);
+        if (!rosterListeners.size) {
+          unwatchRoster?.();
+          unwatchRoster = undefined;
+          clearTimeout(rosterPending);
+          rosterPending = undefined;
+        }
+      },
     });
-    let ended = false;
-    const send = (text: string) => {
-      if (!stillSignedIn(store, config, req)) end();
-      else if (!ended) response.write(text);
-    };
     const changed = (bots: Bot[], nativeAvatar: boolean) => {
-      if (!stillSignedIn(store, config, req)) { end(); return; }
+      if (!stillSignedIn(store, config, req)) { stream.end(); return; }
       const next = rosterProjection(bots, signedIn(req).id, nativeAvatar);
       if (next === projection) return;
       projection = next;
-      send("event: roster\ndata: roster\n\n");
+      stream.send("event: roster\ndata: roster\n\n");
     };
     rosterListeners.add(changed);
     unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
-    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
-    function end() {
-      if (ended) return;
-      ended = true;
-      rosterListeners.delete(changed);
-      if (!rosterListeners.size) {
-        unwatchRoster?.();
-        unwatchRoster = undefined;
-        clearTimeout(rosterPending);
-        rosterPending = undefined;
-      }
-      clearInterval(heartbeat);
-      streams.delete(end);
-      response.end();
-    }
-    streams.add(end);
-    response.on("close", end);
-    // Clients refetch on open; an initial notice would duplicate that read.
-    response.write("retry: 3000\n\n");
   });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     const botId = id.parse(params(req).id);
     const optedIn = (req.query as { inflight?: string }).inflight === "1";
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
     let hidden = JSON.stringify(store.privateBots());
-    reply.hijack();
-    const response = reply.raw;
-    // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
-    response.writeHead(200, {
-      ...reply.getHeaders() as Record<string, string | number | string[]>,
-      "Content-Type": "text/event-stream; charset=utf-8",
-      // Caddy's encode handler would hold notices in its compressor; it skips an encoded body.
-      "Content-Encoding": "identity",
-      "X-Accel-Buffering": "no",
-      // An ended stream's connection is never reused, so shutdown need not wait for it.
-      "Connection": "close",
-    });
-    let last = 0, ended = false, pending: ReturnType<typeof setTimeout> | undefined;
-    const send = (text: string) => {
+    let last = 0, pending: ReturnType<typeof setTimeout> | undefined;
+    let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
+    const stream = openEventStream(reply, streams, {
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-      if (!stillSignedIn(store, config, req) || !visibleTo(store, botId, req.user?.id)) end();
-      else if (!ended) response.write(text);
-    };
+      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+      teardown: () => {
+        unwatch?.();
+        listeners.delete(changed);
+        if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+        clearTimeout(pending);
+        clearTimeout(livePending);
+      },
+    });
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
-      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); send("data: change\n\n"); },
+      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream.send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
-    let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
     const notice = (kind?: "inflight") => {
       if (!optedIn || kind !== "inflight") {
         clearTimeout(livePending); livePending = undefined;
@@ -529,30 +503,13 @@ export async function createApp(
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+          stream.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
     watchers.set(botId, listeners.add(changed));
     const unwatch = runtime.watch?.(botId, notice);
-    // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
-    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
-    function end() {
-      if (ended) return;
-      ended = true;
-      unwatch?.();
-      listeners.delete(changed);
-      if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
-      clearTimeout(pending);
-      clearTimeout(livePending);
-      clearInterval(heartbeat);
-      streams.delete(end);
-      response.end();
-    }
-    streams.add(end);
-    response.on("close", end);
-    response.write("retry: 3000\n\n");
   });
   const submit = async (req: FastifyRequest, explicitSteering = false) => {
     const body = z
