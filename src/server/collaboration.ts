@@ -7,7 +7,7 @@ import type { GroupCatalog, GroupPage, GroupRequest, GroupRoom, GroupState } fro
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
-const id = z.string().min(1).max(200);
+import { id } from './schemas.js';
 const uuid = z.string().uuid();
 
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {

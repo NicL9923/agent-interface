@@ -7,7 +7,7 @@ import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, Us
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
-const id = z.string().min(1).max(200);
+import { id } from './schemas.js';
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {

@@ -1,4 +1,4 @@
-import { avatarShapes, mascotFamilies, reasoningLevels, serviceTiers } from "../shared/types.js";
+import { reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -10,9 +10,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { botIdFor } from "../shared/types.js";
 import type {
-  Avatar,
   Bot,
-  BotInput,
   Bootstrap,
   CapabilityKey,
   Preferences,
@@ -37,6 +35,7 @@ import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
+import { apnsToken, avatar, botSaveRequest, id, modelFavoriteList, preferences } from "./schemas.js";
 import { interruptionPendingMessage } from "../shared/errors.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
@@ -46,63 +45,6 @@ import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
 import { isApiRequest, routePattern } from "./route-path.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
-const id = z.string().min(1).max(200);
-const avatar = z.discriminatedUnion("mode", [
-  z.object({
-    mode: z.literal("geometric"),
-    shape: z.enum(avatarShapes),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i),
-    eyes: z.enum(["round", "oval", "visor", "spark"]),
-    accessory: z.enum(["none", "hat", "glasses"]),
-    eyeWidth: z.number().min(0.6).max(1.5).optional(),
-    eyeHeight: z.number().min(0.6).max(1.5).optional(),
-    eyeSpacing: z.number().min(0.6).max(1.5).optional(),
-  }),
-  z.object({
-    mode: z.literal("mascot"),
-    family: z.enum(mascotFamilies),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i),
-    eyes: z.enum(["round", "oval", "visor", "spark"]),
-    accessory: z.enum(["none", "hat", "glasses"]),
-    eyeWidth: z.number().min(0.6).max(1.5).optional(),
-    eyeHeight: z.number().min(0.6).max(1.5).optional(),
-    eyeSpacing: z.number().min(0.6).max(1.5).optional(),
-  }),
-  z.object({
-    mode: z.literal("portrait"),
-    src: z.string().regex(/^\/api\/files\//),
-    origin: z.enum(["uploaded", "generated"]),
-  }),
-]);
-const botInput = z.object({
-  confirmModel: z.boolean().optional(),
-  name: z.string().min(1).max(100),
-  description: z.string().max(1000).optional(),
-  instructions: z.string().max(50000),
-  model: z.string().min(1).max(200),
-  provider: z.string().min(1).max(200).optional(),
-  enabledMcpServers: z.array(id).max(100).optional(),
-  shared: z.boolean(),
-  // Making an assistant personal hides it from everyone else, so the person confirms that.
-  confirmPrivate: z.boolean().optional(),
-  enabledTools: z.array(id).optional(),
-  enabledSkills: z.array(id).optional(),
-});
-const preferenceInput = z.object({
-  presentation: z.enum(["simple", "advanced"]),
-  theme: z.enum(["system", "light", "dark"]),
-  favorites: z.array(id).max(100),
-  modelFavorites: z.array(z.object({ provider: id, model: id })).max(100).optional(),
-  defaultBotId: id.optional(),
-  sections: z
-    .array(
-      z.object({ id, name: z.string().max(100), botIds: z.array(id).max(100) }),
-    )
-    .max(30),
-  followBots: z.array(id).max(100),
-  startPage: z.enum(["today", "assistant"]).optional(),
-  notifications: z.object({ timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat("en", {timeZone:value}); return true; } catch { return false; } }), quietStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), quietEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), batchMinutes: z.number().int().min(0).max(60) }).refine(value => !!value.quietStart === !!value.quietEnd && (!value.quietStart || value.quietStart !== value.quietEnd), "Choose different quiet start and end times.").optional(),
-});
 const fileRef = z.object({
   id: z
     .string()
@@ -274,7 +216,7 @@ export async function createApp(
     dated(await (runtime.reconnect ? runtime.reconnect() : runtime.status())),
   );
   app.patch("/api/preferences", async (req) => {
-    const value = preferenceInput.parse(req.body) as Preferences;
+    const value = preferences.parse(req.body);
     const previous = store.preferences(signedIn(req).id);
     value.modelFavorites ??= previous.modelFavorites;
     value.startPage ??= previous.startPage;
@@ -283,9 +225,7 @@ export async function createApp(
     return value;
   });
   app.put("/api/preferences/models", async (req) => {
-    const { modelFavorites } = z.object({
-      modelFavorites: z.array(z.object({ provider: id, model: id })).max(100),
-    }).strict().parse(req.body);
+    const { modelFavorites } = z.object({ modelFavorites: modelFavoriteList }).strict().parse(req.body);
     const userId = signedIn(req).id;
     store.savePreferences(userId, { ...store.preferences(userId), modelFavorites });
     return { modelFavorites };
@@ -312,7 +252,7 @@ export async function createApp(
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
-    const { confirmPrivate: _, ...input } = botInput.parse(req.body);
+    const { confirmPrivate: _, ...input } = botSaveRequest.parse(req.body);
     const next = { shared: input.shared, ownerId: input.shared ? undefined : signedIn(req).id };
     // Its sharing is recorded before Hermes creates it, so a personal one is never briefly
     // public and a recreated ID never inherits an old record. An existing assistant's is never touched.
@@ -322,7 +262,7 @@ export async function createApp(
     const prior = id ? store.presentation(id) : {};
     const version = id ? store.swapPresentation(id, prior, next) : false;
     let bot;
-    try { bot = await runtime.saveBot(input as BotInput); }
+    try { bot = await runtime.saveBot(input); }
     catch (error) {
       // Hermes may have created the profile and then failed to remove it; it stays the creator's.
       const created = (error as { createdBotId?: unknown }).createdBotId;
@@ -348,7 +288,7 @@ export async function createApp(
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
-    const { confirmPrivate, ...input } = botInput.parse(req.body);
+    const { confirmPrivate, ...input } = botSaveRequest.parse(req.body);
     // Only its owner reaches a private assistant, so a personal one always belongs to the
     // person saving it. Claiming one everyone could see hides it from them, so it needs a yes.
     const id = params(req).id, userId = signedIn(req).id;
@@ -364,7 +304,7 @@ export async function createApp(
       throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
     let bot;
     // A failed save puts sharing back only if no later save has changed it since.
-    try { bot = await runtime.saveBot(input as BotInput, id); }
+    try { bot = await runtime.saveBot(input, id); }
     catch (error) { store.restorePresentation(id, version, previous); throw error; }
     roster.forget();
     return decorateBot(rememberBot(bot), (await runtime.capabilities()).avatarMetadata.supported);
@@ -379,7 +319,7 @@ export async function createApp(
     return { ok: true };
   });
   app.put("/api/bots/:id/avatar", async (req) => {
-    const value = avatar.parse(req.body) as Avatar;
+    const value = avatar.parse(req.body);
     const bot = (await runtime.listBots()).find((b) => b.id === params(req).id);
     if (!bot) throw httpError(404, "Bot not found");
     if (
@@ -965,7 +905,7 @@ export async function createApp(
   app.get("/api/native/push/config", async () => ({ available: !!config.apns, environment: config.apns?.environment }));
   app.put("/api/native/push/device", async req => {
     const apns = requireNativePush(req);
-    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
+    const body = z.object({ deviceId: z.string().uuid(), token: apnsToken }).strict().parse(req.body);
     store.registerNativeDevice(signedIn(req).id, req.nativeSessionHash!, body.deviceId, body.token.toLowerCase(), apns.environment);
     return { ok: true };
   });
@@ -985,7 +925,7 @@ export async function createApp(
   });
   app.put("/api/native/live-activity", async req => {
     const apns = requireNativePush(req);
-    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/), botIds: z.array(id).max(10).default([]) })
+    const body = z.object({ deviceId: z.string().uuid(), token: apnsToken, botIds: z.array(id).max(10).default([]) })
       .strict().parse(req.body);
     const userId = signedIn(req).id, armedAt = Date.now();
     const armed = [...new Set(body.botIds)].filter(botId => visibleTo(store, botId, userId));
@@ -995,7 +935,7 @@ export async function createApp(
   });
   app.delete("/api/native/live-activity", async req => {
     if (!req.nativeSessionHash) throw httpError(403, "Live Activities require native sign-in");
-    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
+    const body = z.object({ deviceId: z.string().uuid(), token: apnsToken }).strict().parse(req.body);
     store.removeLiveActivity(signedIn(req).id, body.deviceId, body.token.toLowerCase());
     return { ok: true };
   });

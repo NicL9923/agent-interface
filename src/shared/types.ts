@@ -55,8 +55,10 @@ export const seasonalFamilies = [
 export const mascotFamilies = [...everydayFamilies, ...seasonalFamilies] as const;
 export type MascotFamily = (typeof mascotFamilies)[number];
 export type SeasonalFamily = (typeof seasonalFamilies)[number];
-export type Eyes = "round" | "oval" | "visor" | "spark";
-export type Accessory = "none" | "hat" | "glasses";
+export const avatarEyes = ["round", "oval", "visor", "spark"] as const;
+export type Eyes = (typeof avatarEyes)[number];
+export const avatarAccessories = ["none", "hat", "glasses"] as const;
+export type Accessory = (typeof avatarAccessories)[number];
 export type Avatar =
   | {
       mode: "geometric";

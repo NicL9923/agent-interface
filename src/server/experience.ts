@@ -11,7 +11,7 @@ import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
 import { httpError } from './http-error.js';
-const id = z.string().min(1).max(200);
+import { id } from './schemas.js';
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
