@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement, StrictMode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ComputerPanel } from "../src/components/ComputerPanel";
 import { api, ApiError, write } from "../src/client-api";
 import type { ComputerStatus } from "../src/shared/computer";
+import { button, click, mountRoot, typeInto } from "./ui-harness";
 
 const mocks = vi.hoisted(() => ({
   desktops: [] as Array<EventTarget & { viewOnly: boolean; disconnect: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn> }>,
@@ -51,7 +52,6 @@ const onClose = vi.fn();
 beforeEach(() => {
   vi.useFakeTimers(); vi.clearAllMocks();
   mocks.desktops.splice(0); mocks.terminals.splice(0); Socket.instances = []; ticket = 0;
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("WebSocket", Socket);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
@@ -66,17 +66,11 @@ beforeEach(() => {
     if (path === "/computer/control") status = { ...status, control: (body as { action: string }).action === "take" ? { kind: "human", mine: true, name: "Nicolas" } : { kind: "idle" } };
     return status as never;
   });
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount()); container.remove();
-  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  ({ container, root } = mountRoot());
 });
 async function render(open = true, key = "same-user") {
   await act(async () => { root.render(createElement(ComputerPanel, { open, onClose, key })); });
 }
-function button(text: string) { return Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(item => item.textContent === text)!; }
-async function click(text: string) { await act(async () => button(text).click()); }
 async function connectedDesktop() {
   await render();
   await act(async () => mocks.desktops.at(-1)!.dispatchEvent(new Event("connect")));
@@ -95,10 +89,7 @@ describe("shared computer", () => {
     expect(button("Type text").disabled).toBe(true);
     await click("Take over"); await click("Type text");
     const field = container.querySelector<HTMLTextAreaElement>("#desktop-text-input")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "a🌵");
-      field.dispatchEvent(new Event("input", {bubbles: true}));
-    });
+    await typeInto(field, "a🌵");
     await act(async () => container.querySelector("#desktop-text")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
     expect(desktop.sendKey.mock.calls.map(call => call[0])).toEqual([97, 0x0101f335]);
     await click("Enter"); await click("Tab"); await click("Backspace");
@@ -209,10 +200,7 @@ describe("system terminal", () => {
     const client = await connectedTerminal();
     await click("Paste text");
     const input = container.querySelector<HTMLTextAreaElement>("#terminal-paste-text")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "echo test");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(input, "echo test");
     await click("Send text");
     expect(mocks.terminals.at(-1)!.paste).toHaveBeenCalledWith("echo test");
     expect(client.sent).toContainEqual({ type: "input", data: "echo test" });

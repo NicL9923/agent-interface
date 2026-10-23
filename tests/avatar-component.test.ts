@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { resolve } from "node:path";
 import { Avatar, faces, motionOwner, silhouette } from "../src/components/Avatar";
 import { avatarShapes, everydayFamilies, mascotFamilies, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
@@ -47,7 +48,6 @@ const advance = async (seconds: number) => {
 const svg = () => container.querySelector("svg")!.innerHTML;
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   now = 0;
   frames = new Map();
   reduceMotion = false;
@@ -57,11 +57,7 @@ beforeEach(() => {
     return nextFrame;
   });
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => frames.delete(handle));
-  vi.stubGlobal("matchMedia", () => ({
-    matches: reduceMotion,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  }));
+  stubMatchMedia(() => reduceMotion);
   vi.stubGlobal("IntersectionObserver", class {
     constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
       reportVisibility = (visible) => callback([{ isIntersecting: visible }]);
@@ -74,15 +70,7 @@ beforeEach(() => {
     getTotalLength: () => 100,
     getPointAtLength: (length: number) => ({ x: length, y: 0 }),
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(() => {
-  act(() => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 describe("avatar animation loop", () => {
@@ -118,7 +106,6 @@ describe("avatar animation loop", () => {
       act(() => root.unmount());
       await act(async () => { vi.advanceTimersByTime(100); });
       expect(frames.size).toBe(0);
-      root = createRoot(container);
       await render("working");
       await advance(0.5);
       expect(frames.size).toBe(1);
@@ -154,7 +141,6 @@ describe("avatar animation loop", () => {
     expect(frames.size).toBeGreaterThan(0);
     act(() => root.unmount());
     expect(frames.size).toBe(0);
-    root = createRoot(container);
   });
 
   it.each<ActivityState>(["disconnected", "interrupted"])("holds a %s avatar completely still", async (state) => {

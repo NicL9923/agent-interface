@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import type { ActivityState, Avatar as AvatarConfig } from "../shared/types";
+import type { ActivityState, Avatar as AvatarConfig, AvatarShape } from "../shared/types";
 import {
   animatesAt,
   approach,
@@ -82,14 +82,17 @@ export const defaultAvatar: Extract<AvatarConfig, { mode: "geometric" }> = {
   accessory: "none",
 };
 
+const blobHead = "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z";
 const mascotHead =
   "M50 14 C77 14 95 32 95 56 C95 81 76 95 50 95 C24 95 5 81 5 56 C5 32 23 14 50 14Z";
 /**
  * One closed outline per shape in a 0-100 box. AvatarView.swift repeats these strings and
  * reads only absolute M L H V Q C Z; the circle's arc is its one cubic rewrite.
  */
-export function silhouette(shape: string) {
+export function silhouette(shape: AvatarShape | "mascot"): string {
   switch (shape) {
+    case "blob":
+      return blobHead;
     case "mascot":
       return mascotHead;
     case "drop":
@@ -131,14 +134,16 @@ export function silhouette(shape: string) {
     case "circle":
       return "M50 3 A47 47 0 1 1 49.99 3Z";
     default:
-      return "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z";
+      // A shape missing above is a compile error; one from newer data still draws as a blob.
+      shape satisfies never;
+      return blobHead;
   }
 }
 /**
  * Where each silhouette's face sits. Eyes follow the visual center of mass, so
  * a triangle or drop looks out from its wide base instead of its point.
  */
-export const faces: Record<string, { cy: number; scale: number; top: number; hat: number }> = {
+export const faces: Record<AvatarShape | "mascot", { cy: number; scale: number; top: number; hat: number }> = {
   blob: { cy: 50, scale: 1, top: 3, hat: 1 },
   pebble: { cy: 50, scale: 1, top: 2, hat: 1 },
   squircle: { cy: 50, scale: 1, top: 5, hat: 1 },

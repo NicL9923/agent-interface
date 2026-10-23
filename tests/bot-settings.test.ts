@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement, StrictMode } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BotSettings } from "../src/BotSettings";
 import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
+import { click, mountRoot, typeInto } from "./ui-harness";
 
 // SVG geometry is a browser concern; these tests cover the form around the avatar.
 vi.mock("../src/components/Avatar", async (original) => ({
@@ -42,7 +42,6 @@ const onSaved = vi.fn();
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(api).mockReset().mockResolvedValue({ providers: [], provider: "", model: "" });
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // Like a browser, closing queues a close event that arrives after the current work.
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true, value: vi.fn(function (this: HTMLDialogElement) { this.open = true; }),
@@ -54,9 +53,7 @@ beforeEach(async () => {
       queueMicrotask(() => this.dispatchEvent(new Event("close")));
     }),
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
   vi.mocked(api).mockClear();
 });
@@ -95,20 +92,6 @@ describe.each(["tools", "skills"])("%s configuration", (tab) => {
   });
 });
 
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
-  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
-  vi.unstubAllGlobals();
-});
-
-async function click(label: string) {
-  const button = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === label);
-  expect(button).toBeDefined();
-  await act(async () => button!.click());
-}
 
 describe("assistant deletion", () => {
   it("opens and cancels confirmation without submitting the settings form", async () => {
@@ -153,7 +136,6 @@ describe("making an assistant personal", () => {
   it("asks when the server reports the assistant is still visible to others", async () => {
     // The roster said it was already this person's, but another member shared it meanwhile.
     await act(async () => root.unmount());
-    root = createRoot(container);
     await act(async () => root.render(createElement(BotSettings, { bot: { ...bot, id: "mine", shared: false, ownerId: "one" }, bootstrap, onClose, onSaved })));
     vi.mocked(write).mockRejectedValueOnce(new ApiError("Confirm making this assistant personal.", 409, "private_confirmation_required"));
     await submit();
@@ -188,10 +170,7 @@ describe("closing with unsaved edits", () => {
     await act(async () => dialog().dispatchEvent(event));
     return event;
   };
-  const edit = async (value = "Rewritten from scratch") => act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(instructions(), value);
-    instructions().dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const edit = (value = "Rewritten from scratch") => typeInto(instructions(), value);
 
   it("closes on Escape without asking when nothing changed", async () => {
     const event = await escape();
@@ -273,7 +252,6 @@ describe("closing with unsaved edits", () => {
     const opener = document.createElement("button");
     document.body.append(opener);
     opener.focus();
-    root = createRoot(container);
     await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
     await edit();
     instructions().focus();
@@ -329,7 +307,6 @@ describe("closing with unsaved edits", () => {
 
   it("survives Strict Mode closing and reopening the dialog while it mounts", async () => {
     await act(async () => root.unmount());
-    root = createRoot(container);
     await act(async () => root.render(createElement(StrictMode, null, createElement(BotSettings, { bot, bootstrap, onClose, onSaved }))));
     await act(async () => { await Promise.resolve(); });
     expect(dialog().open).toBe(true);
@@ -343,7 +320,6 @@ describe("closing with unsaved edits", () => {
     document.body.append(rail);
     await act(async () => root.unmount());
     (document.activeElement as HTMLElement).blur();
-    root = createRoot(container);
     await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
     await act(async () => root.unmount());
     expect(document.activeElement).toBe(rail.querySelector("button"));
@@ -359,7 +335,6 @@ describe("closing with unsaved edits", () => {
     document.body.append(rail, header);
     await act(async () => root.unmount());
     (document.activeElement as HTMLElement).blur();
-    root = createRoot(container);
     await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
     await act(async () => root.unmount());
     expect(document.activeElement).toBe(header.querySelector("button"));
@@ -376,7 +351,6 @@ describe("closing with unsaved edits", () => {
     document.body.append(rail, main);
     await act(async () => root.unmount());
     (document.activeElement as HTMLElement).blur();
-    root = createRoot(container);
     await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
     await act(async () => root.unmount());
     expect(document.activeElement).toBe(rail.querySelector("button"));
@@ -391,7 +365,7 @@ describe("closing with unsaved edits", () => {
     await click("skills");
     vi.mocked(api).mockClear();
     await click("tools");
-    expect(api).not.toHaveBeenCalledWith("/bots/shared/tools");
+    expect(vi.mocked(api).mock.calls.map(([path]) => path)).not.toContain("/bots/shared/tools");
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
     await escape();
     expect(container.textContent).toContain("Discard your unsaved changes?");
@@ -403,7 +377,6 @@ describe("closing with unsaved edits", () => {
     document.body.append(opener);
     await act(async () => root.unmount());
     opener.focus();
-    root = createRoot(container);
     await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved })));
     expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalled();
     (document.activeElement as HTMLElement | null)?.blur();
@@ -419,7 +392,6 @@ describe("compact settings navigation", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => media));
     await act(async () => {
       root.unmount();
-      root = createRoot(container);
       root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved }));
     });
     return media;
@@ -497,7 +469,6 @@ it("offers only the owner as a recipient of a private assistant's routines", asy
   const household = [{ id: "one", name: "One", email: "one@example.test" }, { id: "two", name: "Two", email: "two@example.test" }];
   const recipients = async (assistant: Bot) => {
     await act(async () => root.unmount());
-    root = createRoot(container);
     vi.mocked(api).mockImplementation(async (path: string) => (path === "/routines" ? [] : { providers: [], provider: "", model: "" }) as never);
     await act(async () => root.render(createElement(BotSettings, { bot: assistant, bootstrap: { ...bootstrap, household, bots: [assistant] }, onClose, onSaved })));
     await click("routines");
@@ -520,7 +491,6 @@ it("loads roster detail before showing a writable settings form", async () => {
 describe("lean roster settings", () => {
   it("keeps one dialog, retries detail, and PATCHes only loaded configuration without reloading on roster refresh", async () => {
     await act(async () => root.unmount());
-    root = createRoot(container);
     const { instructions, ...lean } = bot;
     let finish!: (value: Bot) => void;
     vi.mocked(api).mockRejectedValueOnce(new Error("Detail unavailable"));
@@ -555,13 +525,10 @@ describe("lean roster settings", () => {
 
 describe("creating an assistant", () => {
   const created: Bot = { id: "ranch-hand", name: "Ranch hand", shared: true, model: "test", activity: "idle", instructions: "" };
+  // Unlike the shared button helper, a missing button is a valid answer here.
   const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent === text);
   const title = () => container.querySelector("#assistant-settings-title")?.textContent;
-  const type = (value: string) => act(async () => {
-    const input = container.querySelector<HTMLInputElement>("#create-name")!;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const type = (value: string) => typeInto(container.querySelector<HTMLInputElement>("#create-name")!, value);
   const choose = (label: string) => act(async () => Array.from(container.querySelectorAll("label"))
     .find(item => item.textContent?.trim() === label)!.querySelector("input")!.click());
   beforeEach(async () => {

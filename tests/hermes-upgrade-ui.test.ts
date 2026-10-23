@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HermesUpgradePanel } from "../src/components/HermesUpgradePanel";
 import { api, ApiError, write } from "../src/client-api";
 import type { UpgradeStatus } from "../src/shared/upgrades";
+import { button, mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
@@ -17,21 +18,12 @@ const onClose = vi.fn();
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   status = { available: true, phase: "idle", current: { revision: "original", version: "1.0" },
     message: "Check for an update.", checks: [], canCheck: true, canInstall: false, canRetry: false, canCancel: false, canRestartService: false, busyBots: [] };
   vi.mocked(api).mockImplementation(async () => status as never);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 async function render(open = true) {
   await act(async () => root.render(createElement(HermesUpgradePanel, { open, onClose, bots: [
@@ -150,7 +142,6 @@ describe("Hermes updates", () => {
     status = { ...status, phase: "failed", operationId: "failed-operation", canCheck: false, canRestartService: true, canRetry: true };
     vi.mocked(write).mockRejectedValue(new ApiError("Lost connection", 503));
     await render();
-    const button = (text: string) => Array.from(container.querySelectorAll("button")).find(b => b.textContent === text)!;
     await act(async () => button("Restart Hermes").click());
     expect(write).not.toHaveBeenCalled();
     expect(container.textContent).toContain("briefly disconnect everyone");
@@ -170,7 +161,6 @@ describe("Hermes updates", () => {
     vi.mocked(write).mockResolvedValue({ ...status, phase: "recovering", canCancel: false });
     await render(false);
     await render();
-    const button = (text: string) => Array.from(container.querySelectorAll("button")).find(b => b.textContent === text)!;
     await act(async () => button("Cancel update").click());
     expect(write).not.toHaveBeenCalled();
     await act(async () => button("Yes, cancel update").click());

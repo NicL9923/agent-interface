@@ -1,20 +1,19 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { Root } from 'react-dom/client';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { api, ApiError, write } from '../src/client-api';
 import { agentEnvelope } from '../src/shared/collaboration';
 import { GroupChats } from '../src/components/GroupChats';
 import { RoutineResults } from '../src/components/RoutineResults';
 import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
+import { click, mountRoot } from './ui-harness';
 vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}));
 let root:Root, container:HTMLDivElement;
 const bootstrap = { user:{id:'one'},bots:[{id:'ranch',name:'Ranch hand'},{id:'planner',name:'Planner'}],preferences:defaultPreferences,connection:{connected:true} } as Bootstrap;
 const room={room_id:'room',name:'Weekend plans',members:[{member_id:'ranch',profile:'ranch',handle:'ranch',display_name:'Ranch hand'},{member_id:'planner',profile:'planner',handle:'planner',display_name:'Planner'}]};
-beforeEach(()=>{ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.mocked(api).mockReset();vi.mocked(write).mockReset();localStorage.clear();vi.useFakeTimers();container=document.createElement('div');document.body.append(container);root=createRoot(container);HTMLDialogElement.prototype.showModal=vi.fn();HTMLDialogElement.prototype.close=vi.fn(); });
-afterEach(async()=>{await act(async()=>root.unmount());container.remove();vi.useRealTimers();vi.unstubAllGlobals();});
-async function click(name:string){const button=Array.from(container.querySelectorAll('button')).find(button=>button.textContent===name);expect(button).toBeTruthy();await act(async()=>button!.click());}
+beforeEach(()=>{vi.mocked(api).mockReset();vi.mocked(write).mockReset();vi.useFakeTimers();({container,root}=mountRoot());HTMLDialogElement.prototype.showModal=vi.fn();HTMLDialogElement.prototype.close=vi.fn(); });
 it('renders bot envelopes, multiline and legacy deliveries while preserving attributed human text', async()=>{
   for(const text of ['Message from 🤖 Planner (@planner): Bring water\nand a picnic',"[Message from agent 'planner'] Bring water"]){ expect(agentEnvelope({role:'user',text})?.text).toContain('Bring water'); }
   expect(agentEnvelope({role:'user',text:'I got a Message from 🤖 Planner: yesterday'})).toBeNull();
@@ -25,7 +24,20 @@ it('renders bot envelopes, multiline and legacy deliveries while preserving attr
 it('reads a notification-selected routine history and displays the saved output',async()=>{
   vi.mocked(api).mockImplementation(async(path)=>path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
   await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
-  expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one');expect(container.textContent).toContain('north gate battery');
+  expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one',expect.anything());expect(container.textContent).toContain('north gate battery');
+});
+it('reports a saved routine output as a notice, not an error',async()=>{
+  vi.mocked(api).mockImplementation(async(path)=>path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
+  vi.mocked(write).mockResolvedValueOnce({});
+  await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
+  await click('Save output');
+  expect(write).toHaveBeenCalledWith('/saved',expect.objectContaining({kind:'routine',botId:'ranch',routineId:'morning',resultId:'run-one'}));
+  expect(container.querySelector('[role="status"].form-notice')?.textContent).toBe('Saved to your saved items.');
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  vi.mocked(write).mockRejectedValueOnce(new Error('Could not save.'));
+  await click('Save output');
+  expect(container.querySelector('[role="alert"].form-error')?.textContent).toBe('Could not save.');
+  expect(container.textContent).not.toContain('Saved to your saved items.');
 });
 it('restores an uncertain group send and retries the exact same saved request after refresh',async()=>{
   const pending={requestId:crypto.randomUUID(),threadId:crypto.randomUUID(),text:'Plan Saturday'};

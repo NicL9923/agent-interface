@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatFull, formatListDate, formatWhen } from "../src/time";
 import type { WhenOptions } from "../src/time";
 import { When } from "../src/components/When";
+import { advance, mountRoot } from "./ui-harness";
 
 // Local-time constructors keep calendar-day boundaries independent of the machine's zone.
 const at = (month: number, day: number, hour: number, minute = 0, year = 2026) => new Date(year, month - 1, day, hour, minute);
@@ -83,13 +83,9 @@ describe("timestamp labels", () => {
 });
 
 describe("When", () => {
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
-
   it("renders a machine-readable time and refreshes every mounted label from one minute timer", async () => {
     vi.useFakeTimers({ now: at(10, 3, 18, 50).getTime() + 30_000 });
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const container = document.createElement("div");
-    const root = createRoot(container);
+    const { container, root } = mountRoot();
     const value = at(10, 3, 18, 50).toISOString();
     await act(async () => root.render([createElement(When, { key: "a", value }), createElement(When, { key: "b", value: at(10, 3, 18, 40).getTime(), inline: true })]));
     const [first, second] = container.querySelectorAll("time");
@@ -97,7 +93,7 @@ describe("When", () => {
     expect(first.title).toContain("2026");
     expect([first.textContent, second.textContent]).toEqual(["Just now", "10 min ago"]);
     expect(vi.getTimerCount()).toBe(1);
-    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    await advance(30_000);
     expect([first.textContent, second.textContent]).toEqual(["1 min ago", "11 min ago"]);
     await act(async () => root.unmount());
     expect(vi.getTimerCount()).toBe(0);

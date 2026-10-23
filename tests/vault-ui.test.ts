@@ -1,32 +1,24 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { ReactElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
 import { SecureRequestCard } from "../src/components/SecureRequestCard";
 import { VaultPanel } from "../src/components/VaultPanel";
 import type { ProfileVault, SecureRequest } from "../src/shared/vault";
+import { click, mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.mocked(api).mockReset(); vi.mocked(write).mockReset(); localStorage.clear();
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); localStorage.clear(); });
 async function render(element: ReactElement) { await act(async () => root.render(element)); }
-async function click(text: string) {
-  const button = Array.from(container.querySelectorAll("button")).find(item => item.textContent?.trim() === text);
-  expect(button).toBeDefined(); await act(async () => button!.click());
-}
 async function type(label: string, value: string) {
   const field = Array.from(container.querySelectorAll("label")).find(item => item.textContent?.trim() === label)?.querySelector("input");
-  expect(field).toBeDefined(); await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
-    field!.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  expect(field).toBeDefined(); await typeInto(field!, value);
 }
 async function submit() { await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
 const request: SecureRequest = { method: "vault.save_login", epoch: "epoch", sessionId: "session", origin: "https://example.invalid", site: "example.invalid" };

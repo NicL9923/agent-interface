@@ -1,27 +1,18 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageMarkdown } from "../src/components/MessageMarkdown";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 let container: HTMLDivElement;
 let root: Root;
 const writeText = vi.fn<(value: string) => Promise<void>>();
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   writeText.mockReset().mockResolvedValue(undefined);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 async function render(text: string, inlineUi = false) {
@@ -36,7 +27,7 @@ async function copy() {
 
 describe("assistant Markdown", () => {
   it("renders only closed explicit UI fences when the caller enables assistant UI", async () => {
-    vi.stubGlobal("matchMedia", () => ({ addEventListener() {}, removeEventListener() {} }));
+    stubMatchMedia();
     const payload = JSON.stringify({ version: 1, title: "Supply planner", html: "<button>Compare</button>" });
     const fence = "```wildbots-html\n" + payload + "\n```";
     await render(fence);

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactsButton } from "../src/components/Artifacts";
 import type { Bot, Conversation, FileRef } from "../src/shared/types";
+import { mountRoot, typeInto } from "./ui-harness";
 
 const bot: Bot = { id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" };
 const file = (id: string, name: string, mime = "text/plain", url?: string): FileRef =>
@@ -14,17 +15,13 @@ let conversation: Conversation;
 let fetchFile: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fetchFile = vi.fn().mockImplementation(async () => new Response("Plain preview", { headers: { "Content-Type": "text/plain" } }));
   vi.stubGlobal("fetch", fetchFile);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   conversation = { botId: "ranch", messages: [], files: [], approvals: [], activity: { state: "idle" } };
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 async function render(value: Conversation | null = conversation, unavailable = false) {
   await act(async () => root.render(createElement(ArtifactsButton, { bot, conversation: value, unavailable })));
 }
@@ -32,12 +29,6 @@ async function open() { await act(async () => container.querySelector<HTMLButton
 async function select(name: string) {
   const item = [...container.querySelectorAll<HTMLButtonElement>(".artifact-item")].find(item => item.querySelector("strong")?.textContent === name)!;
   await act(async () => item.click());
-}
-async function enter(input: HTMLInputElement, value: string) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
 }
 
 describe("conversation artifacts", () => {
@@ -106,7 +97,7 @@ describe("conversation artifacts", () => {
     await act(async () => { type.value = "image"; type.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(container.querySelectorAll(".artifact-item")).toHaveLength(1);
     expect(container.querySelector(".artifact-detail img")?.getAttribute("src")).toBe("/api/files/image");
-    await enter(container.querySelector<HTMLInputElement>('input[type="search"]')!, "no-such-file");
+    await typeInto(container.querySelector<HTMLInputElement>('input[type="search"]')!, "no-such-file");
     expect(container.textContent).toContain("No matching files");
     await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Clear filters")!.click());
     expect(container.querySelectorAll(".artifact-item")).toHaveLength(3);

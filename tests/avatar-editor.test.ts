@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AvatarEditor } from "../src/components/AvatarEditor";
+import { mountRoot } from "./ui-harness";
 import type { Avatar } from "../src/shared/types";
 import { seasonalChoices } from "../src/components/character-avatars";
 import { everydayFamilies } from "../src/shared/types";
@@ -29,16 +30,9 @@ const choose = async (label: string) => {
 };
 
 beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   current = { mode: "geometric", shape: "hex", color: "#FF309B", eyes: "visor", accessory: "hat", eyeWidth: 1.2 };
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   await render();
-});
-afterEach(() => {
-  act(() => root.unmount());
-  container.remove();
 });
 
 describe("avatar editor", () => {

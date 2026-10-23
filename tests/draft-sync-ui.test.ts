@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Root } from 'react-dom/client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { api, ApiError, write } from '../src/client-api';
 import { contentHash } from '../src/app/draft-merge';
 import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shared/types';
+import { advance, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 
 vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
@@ -29,9 +30,8 @@ const key=(bot:string)=>`agent-interface:draft:one:${bot}`;
 const cached=(bot:string)=>JSON.parse(localStorage.getItem(key(bot))!);
 const draftPuts=(bot:string)=>vi.mocked(write).mock.calls.filter(([path,,method])=>path===`/bots/${bot}/draft`&&method==='PUT');
 beforeEach(()=>{
-  vi.useFakeTimers();vi.clearAllMocks();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
-  vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
-  localStorage.clear();history.replaceState(null,'','/');drafts.clear();
+  vi.useFakeTimers();vi.clearAllMocks();stubMatchMedia();
+  history.replaceState(null,'','/');drafts.clear();
   boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:{...structuredClone(defaultPreferences),startPage:'assistant'},
     bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'},{id:'other',name:'Other',shared:true,model:'test',activity:'idle'}],
     capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
@@ -55,16 +55,11 @@ beforeEach(()=>{
     if(bot){phone.send(bot,body.text,body.draftBaseRevision);return {requestId:body.requestId,status:'accepted'} as T;}
     return {} as T;
   });
-  container=document.createElement('div');document.body.append(container);root=createRoot(container);
+  ({container,root}=mountRoot());
 });
-afterEach(async()=>{await act(async()=>root.unmount());container.remove();localStorage.clear();vi.useRealTimers();vi.unstubAllGlobals();});
 async function renderApp(){await act(async()=>root.render(createElement(App)));await advance(0);}
-async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync(ms));}
 const textarea=()=>container.querySelector('textarea')!;
-async function type(text:string){
-  const setValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!;
-  await act(async()=>{setValue.call(textarea(),text);textarea().dispatchEvent(new Event('input',{bubbles:true}));});
-}
+const type=(text:string)=>typeInto(textarea(),text);
 const open=(name:string)=>act(async()=>[...container.querySelectorAll<HTMLButtonElement>('.bot-item')].find(button=>button.textContent?.includes(name))!.click());
 
 // Holds the next matching request. `apply` decides whether the server acts on it before or after the hold.
@@ -259,7 +254,7 @@ describe('draft sync across devices',()=>{
     expect(vi.mocked(write).mock.calls.find(([path])=>path==='/bots/shared/messages')![1]).toMatchObject({text:'Pick up feed',draftBaseRevision:1});
     expect(draftPuts('shared')).toEqual([]);
     expect(draft('shared')).toMatchObject({text:'',reason:'sent',revision:2});
-    await act(async()=>root.unmount());root=createRoot(container);await renderApp();await advance(400);
+    await act(async()=>root.unmount());await renderApp();await advance(400);
     expect(textarea().value).toBe('');
   });
 
