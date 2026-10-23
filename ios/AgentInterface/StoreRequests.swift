@@ -4,10 +4,10 @@ import SwiftUI
 struct RequestContext {
   let api: APIClient
   let scope: String?
-  let isCurrent: () -> Bool
+  let isCurrent: @MainActor () -> Bool
 
   /// Call between the steps of multi-step work, so a request gone stale stops before its next write.
-  func checkCurrent() throws { if !isCurrent() { throw StaleRequest() } }
+  @MainActor func checkCurrent() throws { if !isCurrent() { throw StaleRequest() } }
 }
 
 /// Thrown by `RequestContext.checkCurrent`; `AppStore.attempt` reports it as stale, never as a failure.
@@ -27,7 +27,7 @@ extension AppStore {
   /// returns, so a caller may set it earlier to close the gap before a `Task` starts.
   func attempt<T>(
     busy: Binding<Bool>? = nil, current: () -> Bool = { true },
-    _ work: (RequestContext) async throws -> T
+    _ work: @MainActor (RequestContext) async throws -> T
   ) async -> Result<T, Error>? {
     busy?.wrappedValue = true
     defer { busy?.wrappedValue = false }
@@ -55,7 +55,7 @@ extension AppStore {
     busy: Binding<Bool>? = nil, error message: Binding<String?>,
     failure: (Error) -> String = { $0.localizedDescription },
     current: () -> Bool = { true },
-    _ work: (RequestContext) async throws -> T
+    _ work: @MainActor (RequestContext) async throws -> T
   ) async -> T? {
     switch await attempt(busy: busy, current: current, work) {
     case .success(let value)?: return value
