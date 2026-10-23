@@ -4,7 +4,14 @@ import SwiftUI
 struct RequestContext {
   let api: APIClient
   let scope: String?
+  let isCurrent: () -> Bool
+
+  /// Call between the steps of multi-step work, so a request gone stale stops before its next write.
+  func checkCurrent() throws { if !isCurrent() { throw StaleRequest() } }
 }
+
+/// Thrown by `RequestContext.checkCurrent`; `AppStore.attempt` reports it as stale, never as a failure.
+struct StaleRequest: Error {}
 
 extension AppStore {
   /// Runs a request for a view and keeps a stale one from touching it.
@@ -15,6 +22,7 @@ extension AppStore {
   /// such as comparing a load ID or the selected row. A stale outcome, success or failure, comes
   /// back as nil, so the answer to an old question never overwrites the new one. A failure is
   /// current when the scope and task still match, even if the client was replaced.
+  /// Multi-step work calls `context.checkCurrent()` between steps to stop once it is stale.
   /// Also nil, without running, when no client is connected. `busy` is on from the call until it
   /// returns, so a caller may set it earlier to close the gap before a `Task` starts.
   func attempt<T>(
@@ -24,13 +32,16 @@ extension AppStore {
     busy?.wrappedValue = true
     defer { busy?.wrappedValue = false }
     guard let api else { return nil }
-    let context = RequestContext(api: api, scope: scope)
+    let started = scope
+    let context = RequestContext(api: api, scope: started) { [weak self] in
+      !Task.isCancelled && self?.scope == started && self?.api === api
+    }
     do {
       let value = try await work(context)
       guard !Task.isCancelled, scope == context.scope, self.api === api, current() else { return nil }
       return .success(value)
     } catch {
-      guard !Task.isCancelled, scope == context.scope, current() else { return nil }
+      guard !(error is StaleRequest), !Task.isCancelled, scope == context.scope, current() else { return nil }
       return .failure(error)
     }
   }

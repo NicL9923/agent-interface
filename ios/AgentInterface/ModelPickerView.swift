@@ -246,9 +246,11 @@ struct ComposerModelSheet: View {
     Task {
       switch await store.attempt(busy: $busy, { (context) -> Void in
         let detail: Bot = try await context.api.get("/bots/\(APIClient.component(bot.id))")
+        try context.checkCurrent()
         var input = BotInput(bot: detail)
         input.model = choice.model; input.provider = choice.provider; input.confirmModel = confirmed
         let _: Bot = try await context.api.write("/bots/\(APIClient.component(bot.id))", input, method: "PATCH")
+        try context.checkCurrent()
         await store.refreshBootstrap()
       }) {
       case .success?: dismiss()
