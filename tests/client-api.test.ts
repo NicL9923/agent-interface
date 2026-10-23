@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, clearResponseCache, setCsrf, uploadFile } from '../src/client-api.js';
+import { api, clearResponseCache, request, setCsrf, uploadFile } from '../src/client-api.js';
 
 beforeEach(()=>{vi.useFakeTimers();setCsrf('current-session-csrf');clearResponseCache();});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();setCsrf('');});
@@ -164,5 +164,30 @@ describe('attachment uploads',()=>{
     const pending=uploadFile('/bots/b/uploads',photo(),{signal:controller.signal});
     controller.abort();
     await expect(pending).rejects.toMatchObject({name:'AbortError'});
+  });
+});
+
+describe('typed route requests',()=>{
+  const ok=(body:unknown)=>({ok:true,status:200,headers:new Headers(),text:async()=>JSON.stringify(body)});
+  it('fills and encodes path parameters, drops unset query values, and sends JSON writes with the CSRF token',async()=>{
+    const fetch=vi.fn().mockResolvedValue(ok({ok:true}));
+    vi.stubGlobal('fetch',fetch);
+    await request('GET /bots/:id/conversation',{params:{id:'a b/c'},query:{turns:20,start:undefined}});
+    expect(fetch.mock.calls[0][0]).toBe('/api/bots/a%20b%2Fc/conversation?turns=20');
+    expect(fetch.mock.calls[0][1].method).toBeUndefined();
+    await request('POST /bots/:id/approvals/:approvalId',{params:{id:'bot',approvalId:'ap/1'},body:{decision:'approved'}});
+    const [path,init]=fetch.mock.calls[1];
+    expect(path).toBe('/api/bots/bot/approvals/ap%2F1');
+    expect(init).toMatchObject({method:'POST',body:JSON.stringify({decision:'approved'})});
+    expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('current-session-csrf');
+    await request('GET /bots');
+    expect(fetch.mock.calls[2][0]).toBe('/api/bots');
+  });
+  it('shares the GET cache with api() for the same path',async()=>{
+    const fetch=vi.fn().mockResolvedValue(ok({text:'saved',attachments:[],revision:1,reason:'edit',sentRevision:0}));
+    vi.stubGlobal('fetch',fetch);
+    const first=await request('GET /bots/:id/draft',{params:{id:'bot'}});
+    expect(first?.revision).toBe(1);
+    expect(await api('/bots/bot/draft')).toBe(first);
   });
 });

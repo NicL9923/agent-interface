@@ -64,3 +64,11 @@ it("protects inference settings with sign-in and CSRF and only accepts native re
   delete s.runtime.inferenceSettings;
   expect((await s.app.inject({url,headers:s.one})).statusCode).toBe(409);
 });
+
+it("reports an unavailable capability before judging the request body", async () => {
+  const s = await setup();
+  s.runtime.capabilities = async () => ({ botConfiguration: { supported: false, reason: "Bot settings are off." } }) as never;
+  const refused = await s.app.inject({ method: "PATCH", url: "/api/bots/house/inference", headers: s.one, payload: {} });
+  expect([refused.statusCode, refused.json().error]).toEqual([409, "Bot settings are off."]);
+  expect(s.inferenceSettings).not.toHaveBeenCalled();
+});
