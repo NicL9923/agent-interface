@@ -2,7 +2,6 @@
 import assert from "node:assert/strict";
 import {
   readFileSync,
-  readdirSync,
   existsSync,
   mkdtempSync,
   rmSync,
@@ -15,6 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createApp } from "../../src/server/app.ts";
 import { createHermesRuntime } from "../../src/server/hermes.ts";
 import { loadConfig } from "../../src/server/config.ts";
+import { probeScope } from "./app-probe-scope.mjs";
 const accessPath = process.env.HERMES_SPIKE_ACCESS;
 assert(
   accessPath,
@@ -56,30 +56,7 @@ const start = async () => {
   config.origin = origin;
 };
 await start();
-const scopeFiles = [
-  ...readdirSync("src/server").filter(name => name.endsWith(".ts"))
-    .map(name => `src/server/${name}`),
-  "src/hermes/experience.py",
-  "src/hermes/vault.py", "src/shared/vault.ts",
-  "src/shared/experience.ts",
-  "src/shared/reply-cards.ts",
-  "src/shared/routine-presets.ts",
-  "src/shared/voice.ts",
-  "src/hermes/extension.py",
-  "src/hermes/dashboard.py",
-  "src/hermes/service_auth.py",
-  "src/hermes/qualification.py",
-  "src/hermes/gateway_guard.py",
-  "src/hermes/bot_delivery.py",
-  "src/shared/types.ts",
-  "src/shared/upgrades.ts",
-  "src/shared/integrations.ts",
-  "src/hermes/integrations.py",
-  "src/hermes/private_fs.py",
-  "scripts/spike/app-probe.mjs",
-  "package.json",
-  "package-lock.json",
-].sort();
+const scopeFiles = probeScope();
 function sourceDigest() {
   const hash = createHash("sha256");
   for (const file of scopeFiles) {

@@ -7,23 +7,33 @@ from pathlib import Path
 
 import host_access
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--host", default="home-hermes-vps")
-parser.add_argument("--python", required=True, help="Absolute path to a previously qualified disposable native interpreter")
-parser.add_argument("--real-resource-home", help="Explicitly authorized idle shared resource for real browser acceptance")
-parser.add_argument("--cdp-url", help="Fixed loopback CDP origin for that real resource")
-args = parser.parse_args()
-if not Path(args.python).is_absolute():
-    parser.error("The qualified native interpreter must have an absolute path")
-if bool(args.real_resource_home) != bool(args.cdp_url):
-    parser.error("Real acceptance requires both --real-resource-home and --cdp-url")
-if args.real_resource_home and not Path(args.real_resource_home).is_absolute():
-    parser.error("The selected real resource must have an absolute owner home")
-root = Path(__file__).resolve().parents[2]
-probe = "scripts/spike/computer_acceptance.py" if args.real_resource_home else "scripts/spike/computer_probe.py"
-payload = {"python": args.python, "probe": probe, "resource": args.real_resource_home, "endpoint": args.cdp_url,
-    "files": {name: base64.b64encode((root / name).read_bytes()).decode() for name in ("src/hermes/computer.py", probe)}}
-remote = '''import base64,json,os,pathlib,subprocess,tempfile
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def stage_files(probe, root=ROOT):
+    """The selected probe and every add-on module, base64-encoded by repository path. The
+    add-on loads its siblings by file, so a module missing from the stage fails at import."""
+    names = [str(path.relative_to(root)) for path in sorted((root / "src/hermes").glob("*.py"))] + [probe]
+    return {name: base64.b64encode((root / name).read_bytes()).decode() for name in names}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="home-hermes-vps")
+    parser.add_argument("--python", required=True, help="Absolute path to a previously qualified disposable native interpreter")
+    parser.add_argument("--real-resource-home", help="Explicitly authorized idle shared resource for real browser acceptance")
+    parser.add_argument("--cdp-url", help="Fixed loopback CDP origin for that real resource")
+    args = parser.parse_args(argv)
+    if not Path(args.python).is_absolute():
+        parser.error("The qualified native interpreter must have an absolute path")
+    if bool(args.real_resource_home) != bool(args.cdp_url):
+        parser.error("Real acceptance requires both --real-resource-home and --cdp-url")
+    if args.real_resource_home and not Path(args.real_resource_home).is_absolute():
+        parser.error("The selected real resource must have an absolute owner home")
+    probe = "scripts/spike/computer_acceptance.py" if args.real_resource_home else "scripts/spike/computer_probe.py"
+    payload = {"python": args.python, "probe": probe, "resource": args.real_resource_home, "endpoint": args.cdp_url,
+               "files": stage_files(probe)}
+    remote = '''import base64,json,os,pathlib,subprocess,tempfile
 payload=json.loads(%r)
 stage=pathlib.Path(tempfile.mkdtemp(prefix="agent-interface-computer-probe-"))
 stage.chmod(0o700)
@@ -43,6 +53,10 @@ print("Disposable probe stage:",stage,flush=True)
 result=subprocess.run([payload["python"],str(stage/payload["probe"])],env=env,cwd=stage)
 raise SystemExit(result.returncode)
 ''' % json.dumps(payload)
-# The probe drives a native browser in a fresh disposable home; allow it an hour.
-result = host_access.ssh(args.host, ["python3", "-"], input=remote, timeout=3600, check=False)
-raise SystemExit(result.returncode)
+    # The probe drives a native browser in a fresh disposable home; allow it an hour.
+    result = host_access.ssh(args.host, ["python3", "-"], input=remote, timeout=3600, check=False)
+    raise SystemExit(result.returncode)
+
+
+if __name__ == "__main__":
+    main()
