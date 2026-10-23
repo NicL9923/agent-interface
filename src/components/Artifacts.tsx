@@ -4,6 +4,7 @@ import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../client-api";
+import { useResource } from "../app/use-resource";
 import type { EarlierFiles } from "../shared/history";
 import type { Bot, Conversation, FileRef } from "../shared/types";
 import { Icon } from "./Icon";
@@ -205,51 +206,54 @@ function FilePreview({ file, url }: { file: FileRef; url: string }) {
 }
 
 const textPreviewLimit = 256 * 1024;
+type TextContent = { text: string; truncated: boolean };
+/** Reads the start of a file as text, up to the preview limit, and gives up after 20 seconds. */
+async function readTextPreview(url: string, signal: AbortSignal): Promise<TextContent> {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  let late = false;
+  const timer = setTimeout(() => { late = true; controller.abort(); }, 20_000);
+  signal.addEventListener("abort", stop);
+  try {
+    const response = await fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
+    if (!response.ok) throw new Error(response.status === 401 ? "Sign in again to open this file." : "This file could not be loaded. Try again when the connection is restored.");
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    let truncated = false;
+    if (response.body) {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const remaining = textPreviewLimit - length;
+        chunks.push(value.slice(0, remaining));
+        length += Math.min(value.length, remaining);
+        if (value.length > remaining || length === textPreviewLimit) { truncated = true; await reader.cancel(); break; }
+      }
+    } else {
+      const value = new TextEncoder().encode(await response.text());
+      chunks.push(value.slice(0, textPreviewLimit)); length = Math.min(value.length, textPreviewLimit);
+      truncated = value.length > textPreviewLimit;
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    return { text: new TextDecoder().decode(bytes), truncated };
+  } catch (error) {
+    throw late ? new Error("The preview took too long to load. Try again.") : error;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", stop);
+  }
+}
 function TextPreview({ file, url }: { file: FileRef; url: string }) {
-  const [attempt, setAttempt] = useState(0);
-  const [preview, setPreview] = useState<{ text?: string; truncated?: boolean; error?: string }>({});
-  useEffect(() => {
-    const controller = new AbortController();
-    let live = true;
-    setPreview({});
-    const timer = setTimeout(() => controller.abort(), 20_000);
-    const load = async () => {
-      try {
-        const response = await fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
-        if (!response.ok) throw new Error(response.status === 401 ? "Sign in again to open this file." : "This file could not be loaded. Try again when the connection is restored.");
-        const chunks: Uint8Array[] = [];
-        let length = 0;
-        let truncated = false;
-        if (response.body) {
-          const reader = response.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const remaining = textPreviewLimit - length;
-            chunks.push(value.slice(0, remaining));
-            length += Math.min(value.length, remaining);
-            if (value.length > remaining || length === textPreviewLimit) { truncated = true; await reader.cancel(); break; }
-          }
-        } else {
-          const value = new TextEncoder().encode(await response.text());
-          chunks.push(value.slice(0, textPreviewLimit)); length = Math.min(value.length, textPreviewLimit);
-          truncated = value.length > textPreviewLimit;
-        }
-        const bytes = new Uint8Array(length);
-        let offset = 0;
-        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-        if (live) setPreview({ text: new TextDecoder().decode(bytes), truncated });
-      } catch (error) {
-        if (live) setPreview({ error: controller.signal.aborted ? "The preview took too long to load. Try again."
-          : error instanceof Error ? error.message : "The preview could not be loaded." });
-      } finally { clearTimeout(timer); }
-    };
-    void load();
-    return () => { live = false; controller.abort(); clearTimeout(timer); };
-  }, [url, attempt]);
+  const preview = useResource<TextContent>(url, {
+    load: readTextPreview,
+    errorMessage: cause => cause instanceof Error ? cause.message : "The preview could not be loaded.",
+  });
   return preview.error ? <div className="artifact-preview-error" role="alert"><p>{preview.error}</p>
-    <Button onClick={() => setAttempt(value => value + 1)}>Retry preview</Button></div>
-    : preview.text === undefined ? <p role="status">Loading preview…</p>
-      : <div className="artifact-text-preview"><pre aria-label={`Contents of ${file.name}`}>{preview.text || "This file is empty."}</pre>
-        {preview.truncated && <p className="artifact-preview-status">Showing the first 256 KB. Download the file to read the rest.</p>}</div>;
+    <Button onClick={() => void preview.reload()}>Retry preview</Button></div>
+    : !preview.data ? <p role="status">Loading preview…</p>
+      : <div className="artifact-text-preview"><pre aria-label={`Contents of ${file.name}`}>{preview.data.text || "This file is empty."}</pre>
+        {preview.data.truncated && <p className="artifact-preview-status">Showing the first 256 KB. Download the file to read the rest.</p>}</div>;
 }

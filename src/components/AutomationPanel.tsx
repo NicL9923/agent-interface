@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError, write } from "../client-api";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
+import { goalResumeKey } from "../app/storage";
 import type { Bot, Routine } from "../shared/types";
 import type { AutomationOverview, AutomationTask, EventSubscription, SkillContent, SkillDiff, TaskInput, TriggerInput } from "../shared/automation";
 import { Button } from "./ui/button";
@@ -9,50 +12,45 @@ import "./automation.css";
 
 function useAutomation(botId: string) {
   const path = `/bots/${encodeURIComponent(botId)}/automation`;
-  const [value, setValue] = useState<AutomationOverview>();
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const [uncertain, setUncertain] = useState(false);
-  const alive = useRef(true);
-  const locked = useRef(false);
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const next = await api<AutomationOverview>(path);
-      if (alive.current) { setValue(next); setError(""); setUncertain(false); }
-      return true;
-    } catch (cause) { if (alive.current) setError((cause as Error).message); return false; }
-    finally { if (alive.current) setLoading(false); }
-  }, [path]);
-  useEffect(() => { alive.current = true; void refresh(); return () => { alive.current = false; }; }, [refresh]);
-  async function change<T>(suffix: string, body: unknown, method = "POST", onRefused?: () => void): Promise<T | undefined> {
-    if (locked.current || uncertain || loading) return;
-    locked.current = true; setBusy(true); setError(""); setNotice("");
-    try {
-      const result = await write<T>(path + suffix, body, method);
-      const resume = (result as AutomationOverview | undefined)?.goals?.resume;
-      if (resume?.status === "uncertain") {
-        if (alive.current) { setUncertain(true); setError("The goal's start is uncertain. Refresh status and review the conversation before trying again."); }
-        return result;
-      }
-      if (alive.current) {
-        if (await refresh()) setNotice("Saved in Hermes.");
-        else { setUncertain(true); setError("The change was accepted, but status could not refresh. Refresh status before making another change."); }
-      }
-      if (alive.current && resume?.status === "rejected") { setNotice(""); setError(resume.message || "Hermes refused to start this goal. Review its status before resuming."); }
-      return result;
-    } catch (cause) {
-      if (alive.current) {
+  // A status someone loaded answers "Refresh status before trying again", so it retires that warning.
+  const overview = useResource<AutomationOverview>(path, { onData: () => { setUncertain(false); action.setError(""); } });
+  const { data: value, loading } = overview;
+  const change = <T,>(suffix: string, body: unknown, method = "POST", onRefused?: () => void): Promise<T | undefined> => {
+    if (uncertain || loading) return Promise.resolve(undefined);
+    return action.run(async ({ current }) => {
+      let result: T;
+      try { result = await write<T>(path + suffix, body, method); }
+      catch (cause) {
+        if (!current()) throw cause;
         if (cause instanceof ApiError && cause.status < 500) onRefused?.();
         const unknown = !(cause instanceof ApiError) || cause.status >= 500;
         setUncertain(unknown || cause instanceof ApiError && cause.status === 409);
-        setError(unknown ? "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically." : (cause as Error).message);
+        throw unknown ? new Error("We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically.") : cause;
       }
-    } finally { locked.current = false; if (alive.current) setBusy(false); }
-  }
-  return { value, path, change, refresh, disabled: busy || loading || uncertain, loading, error, notice, uncertain };
+      if (!current()) return result;
+      const resume = (result as AutomationOverview | undefined)?.goals?.resume;
+      if (resume?.status === "uncertain") {
+        setUncertain(true); action.setError("The goal's start is uncertain. Refresh status and review the conversation before trying again.");
+        return result;
+      }
+      let next: AutomationOverview;
+      try { next = await api<AutomationOverview>(path); }
+      catch {
+        if (current()) { setUncertain(true); action.setError("The change was accepted, but status could not refresh. Refresh status before making another change."); }
+        return result;
+      }
+      if (!current()) return result;
+      // Fresher than any load still running, which is dropped.
+      overview.setData(next);
+      if (resume?.status === "rejected") action.setError(resume.message || "Hermes refused to start this goal. Review its status before resuming.");
+      else action.setNotice("Saved in Hermes.");
+      return result;
+    });
+  };
+  return { value: value ?? undefined, path, change, refresh: overview.reload, disabled: action.busy || loading || uncertain, loading,
+    error: action.error || overview.error, notice: action.notice, uncertain };
 }
 type Controls = ReturnType<typeof useAutomation>;
 
@@ -68,7 +66,7 @@ export function AutomationPanel({ botId, bots, accountScope }: { botId: string; 
   return <div className="automation-panel"><h2>Goals, tasks & triggers</h2>
     <p className="muted">Give this assistant work, track its tasks, or run a routine when an event arrives.</p>
     <Status control={control} />
-    {control.value && <><GoalSection control={control} intentKey={accountScope ? `automation-goal-resume:${accountScope}:${botId}` : undefined} /><TaskSection control={control} bots={bots} botId={botId} /><TriggerSection control={control} botId={botId} /></>}
+    {control.value && <><GoalSection control={control} intentKey={accountScope ? goalResumeKey(accountScope, botId) : undefined} /><TaskSection control={control} bots={bots} botId={botId} /><TriggerSection control={control} botId={botId} /></>}
   </div>;
 }
 
@@ -197,8 +195,9 @@ function TaskCard({ task, control, bots }: { task: AutomationTask; control: Cont
 function TriggerSection({ control, botId }: { control: Controls; botId: string }) {
   const state = control.value!.triggers;
   const disabled = control.disabled || control.value!.canManageTriggers === false;
-  const [routines, setRoutines] = useState<Routine[]>([]);
-  const [routineError, setRoutineError] = useState("");
+  const routineList = useResource<Routine[]>(state.supported ? "/routines" : null);
+  const routines = routineList.data?.filter(row => row.botId === botId) ?? [];
+  const routineError = routineList.error;
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<EventSubscription>();
   const [draft, setDraft] = useState<TriggerInput>({ id: "", description: "", events: [], routineId: "" });
@@ -206,7 +205,6 @@ function TriggerSection({ control, botId }: { control: Controls; botId: string }
   const [secret, setSecret] = useState<{ url: string; secret: string }>();
   const [reveal, setReveal] = useState(false);
   const [deleting, setDeleting] = useState("");
-  useEffect(() => { let current = true; if (state.supported) void api<Routine[]>("/routines").then(rows => { if (current) setRoutines(rows.filter(row => row.botId === botId)); }).catch(cause => { if (current) setRoutineError(cause.message); }); return () => { current = false; }; }, [botId, state.supported]);
   return <section className="automation-section"><h3>Event triggers</h3>
     {!state.supported ? <p className="capability-note">{state.reason || "Event triggers are unavailable on this Hermes installation."}</p> : <>
       <p className="muted">Run an existing routine when a service sends Hermes a matching event.</p>
@@ -242,16 +240,11 @@ export function LearningPanel({ botId }: { botId: string }) {
   const control = useAutomation(botId);
   const [content, setContent] = useState<SkillContent>();
   const [diff, setDiff] = useState<SkillDiff>();
-  const [reading, setReading] = useState(false);
-  const [readError, setReadError] = useState("");
-  const generation = useRef(0);
-  useEffect(() => () => { generation.current++; }, []);
-  async function read<T>(path: string, accept: (value: T) => void) {
-    const request = ++generation.current; setReading(true); setReadError("");
-    try { const value = await api<T>(control.path + path); if (request === generation.current) accept(value); }
-    catch (cause) { if (request === generation.current) setReadError((cause as Error).message); }
-    finally { if (request === generation.current) setReading(false); }
-  }
+  // Reading a skill or a pending change, one at a time.
+  const reader = useAction();
+  const { busy: reading, error: readError } = reader;
+  const read = <T,>(path: string, accept: (value: T) => void) =>
+    reader.run(async ({ current }) => { const value = await api<T>(control.path + path); if (current()) accept(value); });
   const state = control.value?.skills;
   return <div className="automation-panel"><h2>Skills & learning</h2><p className="muted">Inspect reusable instructions and review changes the assistant wants to save.</p><Status control={control} />
     {readError && <p className="form-error" role="alert">{readError}</p>}

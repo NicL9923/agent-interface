@@ -48,7 +48,7 @@ it("requires conversation review before replacing an uncertain resume with a fre
   const value = initial();
   const previous = crypto.randomUUID();
   value.goals.resume = { requestId: previous, status: "uncertain" };
-  vi.mocked(api).mockResolvedValue(value);
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
   vi.mocked(write).mockResolvedValue({ ...value, goals: { ...value.goals, resume: { requestId: "accepted", status: "accepted" } } });
   await work();
   expect(button("Resume goal").disabled).toBe(true);
@@ -99,7 +99,7 @@ it("requires an explicit whole-goal replacement before discarding native goal de
 it("clears task assignment explicitly and shows when the board is truncated", async () => {
   const value = initial();
   value.tasks = { supported: true, truncated: true, limit: 100, items: [{ id: "task", title: "Gate", body: "Inspect", status: "blocked", priority: 0, assignee: "ranch", owner: "ranch", dependencies: [] }] };
-  vi.mocked(api).mockResolvedValue(value); vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value); vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
   await work();
   expect(container.textContent).toContain("Showing the newest 100 visible tasks");
   await click("Edit task");

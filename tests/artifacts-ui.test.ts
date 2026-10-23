@@ -120,6 +120,24 @@ describe("conversation artifacts", () => {
     expect(signal.aborted).toBe(true);
   });
 
+  it("gives up on a text preview after 20 seconds and loads it again on retry", async () => {
+    vi.useFakeTimers();
+    conversation.files = [file("text", "notes.txt")];
+    let signal!: AbortSignal;
+    fetchFile.mockImplementationOnce((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal;
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+    });
+    await render(); await open();
+    expect(container.textContent).toContain("Loading preview…");
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(signal.aborted).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("The preview took too long to load. Try again.");
+    await act(async () => Array.from(container.querySelectorAll("button")).find(item => item.textContent === "Retry preview")!.click());
+    expect(container.querySelector("pre")?.textContent).toBe("Plain preview");
+    vi.useRealTimers();
+  });
+
   it("keeps external files behind an explicit source link and rejects active URLs and documents", async () => {
     conversation.files = [file("external", "external.png", "image/png", "https://files.example.test/photo.png"),
       file("script", "bad.txt", "text/plain", "javascript:alert(1)"),

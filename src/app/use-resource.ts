@@ -10,7 +10,7 @@ export type ResourceOptions<T> = {
   pollMs?: number;
   /** Refreshes quietly when the window regains focus, the network returns, or the page is shown. */
   wake?: boolean;
-  /** Turns a failure into the text shown. Defaults to the error's message. */
+  /** Turns a failure into the text shown. Defaults to the error's message. It runs only for a current load. */
   errorMessage?: (cause: unknown) => string;
   /** Returns text to show instead of making the request, such as while offline. */
   skip?: () => string | undefined;
@@ -18,6 +18,8 @@ export type ResourceOptions<T> = {
   validate?: (value: T) => void;
   /** Runs for each accepted response, before it is stored. */
   onData?: (value: T) => void;
+  /** Loads the value for path instead of a JSON GET of it. It must stop when signal aborts. */
+  load?: (path: string, signal: AbortSignal) => Promise<T>;
 };
 
 export type Resource<T> = {
@@ -65,7 +67,8 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     const controller = inflight.current = new AbortController();
     if (!quiet) { setLoading(true); setError(""); }
     try {
-      const value = await api<T>(path, { signal: controller.signal });
+      const custom = latest.current.load;
+      const value = await (custom ? custom(path, controller.signal) : api<T>(path, { signal: controller.signal }));
       if (controller.signal.aborted) return;
       latest.current.validate?.(value);
       latest.current.onData?.(value);

@@ -86,6 +86,19 @@ describe("useResource", () => {
     expect(latest).toMatchObject({ data: "ok", error: "" });
   });
 
+  it("uses a custom loader with the path and an abort signal, and drops its result for an old path", async () => {
+    const slow = deferred<string>();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn((path: string, signal: AbortSignal) => { signals.push(signal); return path === "/a" ? slow.promise : Promise.resolve("b text"); });
+    await show("/a", { load });
+    await show("/b", { load });
+    expect(load.mock.calls.map(([path]) => path)).toEqual(["/a", "/b"]);
+    expect(signals[0].aborted).toBe(true);
+    await act(async () => slow.resolve("a text"));
+    expect(latest).toMatchObject({ data: "b text", error: "" });
+    expect(api).not.toHaveBeenCalled();
+  });
+
   it("rejects an unusable response through validate", async () => {
     vi.mocked(api).mockResolvedValueOnce("");
     await show("/a", { validate: value => { if (!value) throw new Error("Incomplete."); } });

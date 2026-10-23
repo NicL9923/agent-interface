@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, pollWhileVisible, write } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
+import { routineTrialKey } from "../app/storage";
 import "./experience.css";
 import { FormMessage } from "./ui/form-message";
 function runTime(instant: string, timezone: string) {
@@ -34,7 +35,7 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
 }
 
 export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }: { routine: Routine; userId: string; disabled?: boolean; onOpenResults?: () => void }) {
-  const key = `agent-interface:routine-trial:${userId}:${routine.id}`;
+  const key = routineTrialKey(userId, routine.id);
   const [requestId, setRequestId] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
   const [receipt, setReceipt] = useState<RoutineRunReceipt | null>(null);
   const [busy, setBusy] = useState(false);

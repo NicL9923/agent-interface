@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { write } from "../client-api";
+import { notificationPromptKey as promptKey } from "../app/storage";
 
-const promptKey = "agent-interface:notifications-prompt:v1";
 let promptedInPage = false;
 function alreadyPrompted() {
   try { return localStorage.getItem(promptKey) === "shown"; }

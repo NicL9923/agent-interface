@@ -86,4 +86,35 @@ describe("integration connections", () => {
     expect(container.querySelector('input[type="password"]')).toBeNull();
     expect(sessionStorage.length).toBe(0);
   });
+  it("keeps the sign-in answer when a check that started before it lands later", async () => {
+    sessionStorage.setItem("integration-flow:bot", "oauth");
+    const asking = { kind: "instructions", status: "pending", flowId: "oauth", callbackInput: true, message: "Paste the returned address." };
+    let held: ((value: unknown) => void) | undefined;
+    vi.mocked(api).mockImplementation(path => path.includes("flows")
+      ? held === undefined && vi.mocked(api).mock.calls.filter(([called]) => called.includes("flows")).length > 1 ? new Promise(done => { held = done; }) as never : Promise.resolve(asking as never)
+      : Promise.resolve(catalog as never));
+    await render();
+    await advance(2500);
+    expect(held).toBeDefined();
+    vi.mocked(write).mockResolvedValueOnce({ ...asking, callbackInput: false, message: "Waiting for Google to confirm." });
+    await typeInto(container.querySelector<HTMLInputElement>('input[type="url"]')!, "https://localhost/callback?code=private");
+    await click("Finish connection");
+    expect(container.textContent).toContain("Waiting for Google to confirm.");
+    await act(async () => held!(asking));
+    expect(container.textContent).toContain("Waiting for Google to confirm.");
+    expect(container.textContent).not.toContain("Paste the returned address.");
+  });
+  it("clears a failed sign-in check once a later check succeeds", async () => {
+    sessionStorage.setItem("integration-flow:bot", "oauth");
+    vi.mocked(api).mockImplementation(async path => {
+      if (!path.includes("flows")) return catalog as never;
+      if (vi.mocked(api).mock.calls.filter(([called]) => called.includes("flows")).length === 1) throw new Error("Hermes is restarting.");
+      return { kind: "redirect", status: "pending", flowId: "oauth", message: "Approve access." } as never;
+    });
+    await render();
+    expect(container.textContent).toContain("Hermes is restarting.");
+    await advance(2500);
+    expect(container.textContent).toContain("Approve access.");
+    expect(container.textContent).not.toContain("Hermes is restarting.");
+  });
 });

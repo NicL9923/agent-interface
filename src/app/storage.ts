@@ -51,10 +51,19 @@ export type Pending = {
   /** The draft revision this message was written on, so the server clears a draft whose final edits were never saved. */
   draftBaseRevision?: number;
 };
+// Every key this app keeps in browser storage. The names are persisted: renaming one orphans what a
+// browser already saved, such as a request whose outcome is uncertain and must be retried, not resent.
 export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
+export const goalResumeKey = (user: string, bot: string) => `automation-goal-resume:${user}:${bot}`;
+/** In sessionStorage: a sign-in flow belongs to this tab. */
+export const integrationFlowKey = (user: string, profile: string) => `integration-flow:${user ? `${user}:` : ""}${profile}`;
+export const groupCreateKey = (user: string) => `agent-interface:group-create:${user}`;
+export const groupSendKey = (user: string, room: string) => `agent-interface:group-send:${user}:${room}`;
+export const routineTrialKey = (user: string, routine: string) => `agent-interface:routine-trial:${user}:${routine}`;
+export const notificationPromptKey = "agent-interface:notifications-prompt:v1";
 export function localRead<T>(key: string): T | null {
   try {
     return JSON.parse(localStorage.getItem(key) || "null");
