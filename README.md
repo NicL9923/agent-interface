@@ -271,11 +271,16 @@ a magnifying glass for search and browsing, a laptop for terminal and code, a bo
 for reading, or a notepad for writing. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
 
-Avatar settings include Pumpkin, Santa, Rudolph, Turkey and Easter Bunny
-in both web and native iOS. The web picker groups these under Seasonal. Each keeps its character during
-working/thinking animation and supports the existing eye and accessory controls.
-Choosing a seasonal character applies its default color and preserves your other
-customization. All five use original artwork.
+Mascot avatars offer eight everyday characters: Bear, Fox, Sprout, Panda, Raccoon,
+Owl, Cactus and Dinosaur. They take whichever color you choose; a panda keeps its
+white face and wears the color on its ears and eye patches. Ten seasonal characters
+follow under their own heading in calendar order: Leprechaun, Easter Bunny, Bald
+Eagle, Pumpkin, Bat, Ghost, Turkey, Santa, Rudolph and Snowman. Both web and native
+iOS offer every character. Each keeps its character during working/thinking
+animation and supports the existing eye and accessory controls. Choosing a seasonal
+character applies its default color and preserves your other customization. Very
+light heads get a soft edge so they stay visible on the light theme. All use
+original artwork.
 
 Open Artifacts from the assistant's details (tap its name in the conversation header) to browse its generated
 outputs and shared attachments. Search filenames, filter by type, and preview

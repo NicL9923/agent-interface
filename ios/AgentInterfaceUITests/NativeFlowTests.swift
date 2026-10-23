@@ -111,7 +111,8 @@ import XCTest
       }
       XCTAssertTrue(button.canTap)
     }
-    for family in ["pumpkin", "santa", "rudolph", "turkey", "bunny"] {
+    // The UI tests cannot see app types; SettingsParityTests pins this list to AvatarConfig.seasonalFamilies.
+    for family in ["leprechaun", "bunny", "eagle", "pumpkin", "bat", "ghost", "turkey", "santa", "rudolph", "snowman"] {
       let choice = app.buttons["avatarTile.family.\(family)"]
       scrollTo(choice, up: true)
       choice.tap()

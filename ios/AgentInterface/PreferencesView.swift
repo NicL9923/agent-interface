@@ -234,7 +234,7 @@ struct PreferencesView: View {
       ("Fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
       ("Sprout", AvatarConfig(mode: "mascot", shape: nil, family: "sprout", color: "#00BCA6", accessory: "hat")),
       ("Portrait", AvatarConfig(mode: "portrait", shape: nil, origin: "uploaded")),
-    ] + AvatarConfig.families.filter { AvatarConfig.seasonalColors[$0.id] != nil }.map {
+    ] + AvatarConfig.families.filter { AvatarConfig.characterFamilies.contains($0.id) }.map {
       ($0.label, AvatarConfig(mode: "mascot", shape: nil, eyes: "round").selectingFamily($0.id))
     }
     var body: some View {
