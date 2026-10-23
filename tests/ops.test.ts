@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -30,7 +31,7 @@ function runtime(overrides: Partial<Runtime> = {}) {
   let status: RuntimeStatus = { connected: true };
   const value = fakeRuntime({
     status: async () => status,
-    capabilities: async () => ({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
+    capabilities: async () => capabilitiesFixture({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
     listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
     download: async () => ({ body: new Blob(["hello"]).stream(), name: "note.txt", mime: "text/plain" }),
     close: async () => {},

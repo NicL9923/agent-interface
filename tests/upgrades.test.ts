@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -23,7 +24,7 @@ async function setup(enabled = true) {
   } : {}) });
   let activity: ActivityState = "idle", connected = true;
   const runtime = fakeRuntime({ status: async () => ({ connected }), listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity }],
-    close: async () => {}, capabilities: async () => ({ chat: { supported: true } }), submit: vi.fn() });
+    close: async () => {}, capabilities: async () => capabilitiesFixture({ chat: { supported: true } }), submit: vi.fn() });
   const launch = vi.fn(), upgrades = new HermesUpgrades(config, runtime, launch);
   const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
   const stateFile = join(directory, "status.json");

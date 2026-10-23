@@ -33,9 +33,9 @@ async function setup(options: {admins?: string; terminals?: ReturnType<typeof te
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, GOOGLE_CLIENT_ID: "fixture",
     HOUSEHOLD_EMAILS: "one@example.invalid,two@example.invalid",
     ...(options.admins === undefined ? {} : {COMPUTER_TERMINAL_ADMINS: options.admins}) });
-  const computerRequest = vi.fn(async (input: {action: string}) => input.action === "observe"
+  const computerRequest = vi.fn<NonNullable<Runtime["computerRequest"]>>(async (input) => input.action === "observe"
     ? {ticket: "native-ticket-does-not-leave-the-server", path: "/api/display/ws", viewerId: "fixture-viewer-123456"}
-    : {available: true, running: true, browserReady: true, label: "Household computer", control: {kind: "idle"}});
+    : {available: true, running: true, browserReady: true, label: "Household computer", control: {kind: "idle"}, terminal: {available: false, target: ""}});
   const upstream = new WebSocketServer({port: 0, host: "127.0.0.1"});
   await once(upstream, "listening");
   upstream.on("connection", socket => socket.on("message", (data, binary) => socket.send(data, {binary})));

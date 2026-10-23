@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { expect, it } from "vitest";
 import { loadConfig, type Config } from "../src/server/config.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
@@ -5,7 +6,7 @@ import { presenceTtl, Store } from "../src/server/store.js";
 import type { RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime } from "./helpers/server.js";
 
-const runtime = fakeRuntime({ capabilities: async () => ({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
+const runtime = fakeRuntime({ capabilities: async () => capabilitiesFixture({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
 const apns = (): NonNullable<Config["apns"]> => ({ teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" });
 const reply = (id: string, extra: Partial<RuntimeEvent> = {}): RuntimeEvent =>
   ({ id, botId: "shared", runId: "run", kind: "completed", title: "Done", occurredAt: new Date().toISOString(), ...extra });

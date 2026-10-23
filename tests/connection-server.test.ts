@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/server/app.js';
@@ -11,10 +12,10 @@ const apps:Awaited<ReturnType<typeof createApp>>['app'][]=[];
 afterEach(async()=>{await Promise.all(apps.splice(0).map(app=>app.close()));});
 async function installation(overrides:Partial<Runtime>={}){
   const runtime=fakeRuntime({
-    listBots:vi.fn(async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'},{id:'other',name:'Other',shared:true,model:'test',activity:'idle'}]),
+    listBots:vi.fn(async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle' as const},{id:'other',name:'Other',shared:true,model:'test',activity:'idle' as const}]),
     capabilities:vi.fn(async()=>capabilities),
-    status:vi.fn(async()=>({connected:true,code:'connected'})),
-    reconnect:vi.fn(async()=>({connected:true,code:'connected'})),
+    status:vi.fn(async()=>({connected:true,code:'ready' as const})),
+    reconnect:vi.fn(async()=>({connected:true,code:'ready' as const})),
     close:vi.fn(async()=>{}),...overrides,
   });
   const result=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
@@ -39,7 +40,7 @@ describe('connection recovery API',()=>{
     await vi.waitFor(()=>expect(listBots).toHaveBeenCalledTimes(1));
     await new Promise(resolve=>setImmediate(resolve));
     expect(runtime.capabilities).toHaveBeenCalledTimes(1);
-    finish([{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}]);
+    finish([{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle' as const}]);
     const [a,b]=await Promise.all([first,second]);
     expect(a.statusCode).toBe(200);expect(b.statusCode).toBe(200);
     expect(runtime.status).toHaveBeenCalledTimes(1);
@@ -82,8 +83,8 @@ describe('connection recovery API',()=>{
     let avatar:Avatar|undefined;
     const setAvatar=vi.fn(async(_id:string,value:Avatar)=>{avatar=value;});
     const {app}=await installation({
-      capabilities:async()=>({...capabilities,avatarMetadata:{supported:true}}),
-      listBots:async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle',avatar}],setAvatar,
+      capabilities:async()=>capabilitiesFixture({...capabilities,avatarMetadata:{supported:true}}),
+      listBots:async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle' as const,avatar}],setAvatar,
     });
     const headers=await identity(app);
     expect((await app.inject({method:'PUT',url:'/api/bots/shared/avatar',headers,payload:saved})).statusCode).toBe(200);
@@ -97,7 +98,7 @@ describe('connection recovery API',()=>{
   it('retains app avatar fallback when native avatar metadata is unsupported',async()=>{
     const avatar:Avatar={mode:'mascot',family:'fox',color:'#FF6700',eyes:'round',accessory:'hat'};
     const setAvatar=vi.fn();
-    const {app}=await installation({capabilities:async()=>({...capabilities,avatarMetadata:{supported:false}}),setAvatar});
+    const {app}=await installation({capabilities:async()=>capabilitiesFixture({...capabilities,avatarMetadata:{supported:false}}),setAvatar});
     const headers=await identity(app);
     expect((await app.inject({method:'PUT',url:'/api/bots/shared/avatar',headers,payload:avatar})).statusCode).toBe(200);
     expect(setAvatar).not.toHaveBeenCalled();

@@ -152,6 +152,11 @@ changes, offline sign-out and change server, launch recovery, discarding unconfi
 `AgentInterfaceUITests` exercises native controls with an explicit Debug-only
 transport fixture. These tests establish client behavior; they do not establish
 Hermes execution or delivery from APNs. Release builds omit the fixture code.
+`AutomationTests` holds transport responses until account/client changes, cancellation,
+backgrounding or view dismissal occur. It checks that stale responses cannot publish
+controls, notices, learning details or signing secrets, start follow-up reads, or replay
+writes. Resume tests also check that unconfirmed request IDs survive reopening and that
+confirmed receipts retire only their matching intent.
 
 Server contract fixtures keep the app and server in step.
 `tests/native-contract.test.ts` builds the real app server with a fully populated

@@ -17,6 +17,11 @@ import SwiftUI
   private var acceptsSecrets = false
   private var generation = UUID()
   private var resumeIntentKey: String?
+  private weak var ownerStore: AppStore?
+  private weak var ownerAPI: APIClient?
+  private var ownerScope: String?
+  private var bound = false
+  private var secretGeneration = UUID()
   init(botId: String) { self.botId = botId }
   var path: String { "/bots/\(APIClient.component(botId))/automation" }
   var disabled: Bool { loading || busy || needsRefresh || value == nil }
@@ -46,91 +51,125 @@ import SwiftUI
   func appear(foreground: Bool) { visible = true; acceptsSecrets = foreground }
   func foreground(_ active: Bool) {
     acceptsSecrets = active && visible
-    if !active { secret.clear() }
+    if !active { secretGeneration = UUID(); secret.clear() }
   }
   func disappear() {
-    visible = false; acceptsSecrets = false; generation = UUID(); secret.clear()
+    visible = false; acceptsSecrets = false; generation = UUID()
+    secretGeneration = UUID(); secret.clear()
   }
-  func loadTriggerRoutines(_ api: APIClient?) async {
-    guard let api, !loadingTriggerRoutines, visible else { return }
-    loadingTriggerRoutines = true; triggerRoutineError = nil
-    let current = generation
+  /// A controls instance belongs to the session that first loaded it. Never send old form
+  /// values through a replacement client, even before SwiftUI removes the old view.
+  func isCurrent(_ store: AppStore) -> Bool {
+    visible && !Task.isCancelled && bound && ownerStore === store
+      && ownerScope == store.scope && ownerAPI != nil && ownerAPI === store.api
+  }
+  func attempt<T>(
+    _ store: AppStore, current: @escaping @MainActor () -> Bool = { true },
+    _ work: @MainActor (RequestContext) async throws -> T
+  ) async -> Result<T, Error>? {
+    if !bound, let api = store.api {
+      bound = true; ownerStore = store; ownerAPI = api; ownerScope = store.scope
+    }
+    let started = generation
+    return await store.attempt(current: { self.isCurrent(store) && self.generation == started && current() }, work)
+  }
+  func loadTriggerRoutines(_ store: AppStore) async {
+    guard !loadingTriggerRoutines else { return }
+    loadingTriggerRoutines = true
     defer { loadingTriggerRoutines = false }
-    do {
-      let all: [Routine] = try await api.get("/routines")
-      guard current == generation, visible, !Task.isCancelled else { return }
-      triggerRoutines = all.filter { $0.botId == botId }
-    } catch {
-      if current == generation, visible, !Task.isCancelled {
-        triggerRoutineError = "Could not load this assistant's routines. " + error.localizedDescription
-      }
+    let outcome = await attempt(store) { context -> [Routine] in
+      try await context.api.get("/routines")
+    }
+    switch outcome {
+    case .success(let all)?:
+      triggerRoutines = all.filter { $0.botId == botId }; triggerRoutineError = nil
+    case .failure(let error)?:
+      triggerRoutineError = "Could not load this assistant's routines. " + error.localizedDescription
+    case nil: break
     }
   }
-  @discardableResult func refresh(_ api: APIClient?) async -> Bool {
-    guard let api, !loading, visible else { return false }
+  @discardableResult func refresh(
+    _ store: AppStore, current: @escaping @MainActor () -> Bool = { true }
+  ) async -> Bool {
+    guard !loading else { return false }
     loading = true
-    let current = generation
     defer { loading = false }
-    do {
-      let next: HermesAutomationOverview = try await api.get(path)
-      guard current == generation, visible else { return false }
-      guard next.botId == botId else {
+    let outcome = await attempt(store, current: current) { context -> HermesAutomationOverview in
+      let next: HermesAutomationOverview = try await context.api.get(self.path)
+      guard next.botId == self.botId else {
         throw APIError(message: "The server returned another assistant's controls. Refresh status.", status: 502)
       }
-      value = next; error = nil; needsRefresh = false
-      resumeIntent.resolve(next.goals.resume)
-      saveResumeIntent()
-      return true
-    } catch {
-      if current == generation, visible { self.error = error.localizedDescription; needsRefresh = true }
-      return false
+      return next
     }
+    switch outcome {
+    case .success(let next)?:
+      value = next; error = nil; needsRefresh = false
+      resumeIntent.resolve(next.goals.resume); saveResumeIntent()
+      return true
+    case .failure(let error)?: self.error = error.localizedDescription; needsRefresh = true
+    case nil: break
+    }
+    return false
   }
-  /// Exactly one send. A failed response can hide a successful native write.
+  /// Exactly one send. A failed or cancelled response can hide a successful native write.
   func change<T: Decodable, V: Encodable>(
-    _ api: APIClient?, _ suffix: String, _ input: V, method: String = "POST"
+    _ store: AppStore, _ suffix: String, _ input: V, method: String = "POST",
+    current: @escaping @MainActor () -> Bool = { true }
   ) async -> T? {
-    guard let api, !disabled, visible else { return nil }
+    guard !disabled, isCurrent(store), current() else { return nil }
     busy = true; error = nil; notice = nil
-    let current = generation
+    // Invalidate before dispatch. Cancellation must still require reconciliation before retry.
+    needsRefresh = true
+    let secretStarted = secretGeneration
     defer { busy = false }
-    do {
-      let result: T = try await api.write(path + suffix, input, method: method)
-      guard current == generation, visible else { return nil }
-      if let trigger = result as? HermesTriggerResult, acceptsSecrets { secret.receive(trigger) }
+    let outcome = await attempt(store, current: current) { context -> T in
+      let result: T = try await context.api.write(self.path + suffix, input, method: method)
+      try context.checkCurrent()
       if suffix == "/goal" || suffix == "/goal/clear" {
         // A confirmed replacement or clear retires the preceding goal's resume intent.
-        resumeIntent = HermesGoalResumeIntent(); saveResumeIntent()
+        self.resumeIntent = HermesGoalResumeIntent(); self.saveResumeIntent()
       }
-      if suffix == "/goal/resume", let overview = result as? HermesAutomationOverview {
-        value = overview
-        resumeIntent.resolve(overview.goals.resume)
-        saveResumeIntent()
-        needsRefresh = true
-        let refreshed = await refresh(api)
-        let currentReceipt = value?.goals.resume
+      let overview = suffix == "/goal/resume" ? result as? HermesAutomationOverview : nil
+      if let overview {
+        guard overview.botId == self.botId else {
+          throw APIError(message: "The server returned another assistant's controls. Refresh status.", status: 502)
+        }
+        self.value = overview
+        self.resumeIntent.resolve(overview.goals.resume); self.saveResumeIntent()
+      }
+      // The write has succeeded. Reconcile through the original session and check again after
+      // the read, since the sheet, account or client can change during that second await.
+      try context.checkCurrent()
+      let refreshed = await self.refresh(store, current: context.isCurrent)
+      try context.checkCurrent()
+      if let overview {
+        let currentReceipt = self.value?.goals.resume
         let receipt = currentReceipt?.requestId == overview.goals.resume?.requestId ? currentReceipt : overview.goals.resume
         switch receipt?.status {
         case "accepted":
-          notice = receipt?.message ?? "Hermes accepted the goal continuation."
-          if !refreshed { notice = (notice ?? "") + " Refresh status before making another change." }
+          self.notice = receipt?.message ?? "Hermes accepted the goal continuation."
+          if !refreshed { self.notice = (self.notice ?? "") + " Refresh status before making another change." }
         case "rejected":
-          notice = nil
+          self.notice = nil
           self.error = receipt?.message ?? "Hermes refused this goal continuation. Review the conversation before trying again."
         default:
-          notice = nil; needsRefresh = true
+          self.notice = nil; self.needsRefresh = true
           self.error = (receipt?.message ?? "Hermes could not confirm this goal continuation.")
             + " Refresh status and review the conversation before trying again. Nothing will be sent again automatically."
         }
-        return result
+      } else {
+        self.notice = refreshed ? "Saved in Hermes." : "The change was saved. Refresh status before making another change."
       }
-      // The write has succeeded. Require a fresh overview even if its follow-up read fails.
-      needsRefresh = true
-      let refreshed = await refresh(api)
-      notice = refreshed ? "Saved in Hermes." : "The change was saved. Refresh status before making another change."
+      // Backgrounding invalidates this response's secret even if Work becomes active again
+      // before the response arrives. Do not publish a returned secret until the follow-up is current.
+      if let trigger = result as? HermesTriggerResult, self.acceptsSecrets, self.secretGeneration == secretStarted {
+        self.secret.receive(trigger)
+      }
       return result
-    } catch {
-      guard current == generation, visible else { return nil }
+    }
+    switch outcome {
+    case .success(let result)?: return result
+    case .failure(let error)?:
       let status = (error as? APIError)?.status
       // Native transitions can partially succeed before a conflict. Reconcile all failures.
       needsRefresh = true
@@ -140,34 +179,38 @@ import SwiftUI
         self.error = error.localizedDescription + " Refresh status before trying again."
       }
       return nil
+    case nil: return nil
     }
   }
   func changeOK<V: Encodable>(
-    _ api: APIClient?, _ suffix: String, _ input: V, method: String = "POST"
+    _ store: AppStore, _ suffix: String, _ input: V, method: String = "POST",
+    current: @escaping @MainActor () -> Bool = { true }
   ) async -> Bool {
-    let result: EmptyResponse? = await change(api, suffix, input, method: method)
+    let result: EmptyResponse? = await change(store, suffix, input, method: method, current: current)
     return result != nil
   }
-  func resume(_ api: APIClient?, reviewedInterruption: Bool = false) async {
-    guard !disabled, canResume, value?.goals.interruptionPending != true || reviewedInterruption else { return }
-    await sendResume(api, reviewedInterruption: reviewedInterruption)
+  func resume(_ store: AppStore, reviewedInterruption: Bool = false) async {
+    guard !disabled, isCurrent(store), canResume, value?.goals.interruptionPending != true || reviewedInterruption else { return }
+    await sendResume(store, reviewedInterruption: reviewedInterruption)
   }
   /// A different request can repeat work. Only the explicit review form calls this method.
   func startNewResumeAttempt(
-    _ api: APIClient?, reviewedConversation: Bool, acceptsRepeatedWork: Bool, reviewedInterruption: Bool
+    _ store: AppStore, reviewedConversation: Bool, acceptsRepeatedWork: Bool, reviewedInterruption: Bool,
+    current: @escaping @MainActor () -> Bool = { true }
   ) async -> Bool {
-    guard !disabled, canStartNewResumeAttempt, reviewedConversation, acceptsRepeatedWork,
+    guard !disabled, isCurrent(store), current(), canStartNewResumeAttempt, reviewedConversation, acceptsRepeatedWork,
       value?.goals.interruptionPending != true || reviewedInterruption else { return false }
     resumeIntent = HermesGoalResumeIntent(requestId: UUID().uuidString)
     saveResumeIntent()
-    await sendResume(api, reviewedInterruption: reviewedInterruption)
-    return true
+    await sendResume(store, reviewedInterruption: reviewedInterruption, current: current)
+    return isCurrent(store) && current()
   }
-  private func sendResume(_ api: APIClient?, reviewedInterruption: Bool) async {
+  private func sendResume(
+    _ store: AppStore, reviewedInterruption: Bool, current: @escaping @MainActor () -> Bool = { true }
+  ) async {
     let input = resumeIntent.prepare(reviewedInterruption: reviewedInterruption)
     saveResumeIntent()
-    let result: HermesAutomationOverview? = await change(api, "/goal/resume", input)
-    if let result { resumeIntent.resolve(result.goals.resume); saveResumeIntent() }
+    let _: HermesAutomationOverview? = await change(store, "/goal/resume", input, current: current)
   }
 }
 
@@ -181,7 +224,7 @@ struct HermesAutomationStatus: View {
       if let error = control.error { ErrorBanner(message: error) }
       if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
       if control.loading { ProgressView("Refreshing assistant controls") }
-      Button("Refresh status") { Task { await control.refresh(store.api) } }
+      Button("Refresh status") { Task { await control.refresh(store) } }
         .disabled(control.busy || control.loading)
         .accessibilityIdentifier("automation.refresh")
       if control.needsRefresh { Text("Refresh and review the current status before making another change.").font(.footnote) }
@@ -228,10 +271,10 @@ struct HermesWorkView: View {
       .task {
         control.restoreResumeIntent(key: store.key(.goalResume, botId))
         control.appear(foreground: scenePhase == .active)
-        await control.refresh(store.api)
+        await control.refresh(store)
       }
       .task(id: control.value?.triggers.supported) {
-        if control.value?.triggers.supported == true { await control.loadTriggerRoutines(store.api) }
+        if control.value?.triggers.supported == true { await control.loadTriggerRoutines(store) }
       }
       // Child page sheets keep Work mounted. This ends ownership when Work closes; a future
       // full-screen cover would need a lifecycle that keeps the shared controls alive beneath it.
@@ -279,7 +322,7 @@ private struct HermesGoalSection: View {
             }
           }
           if goal.status == "active" {
-            Button("Pause goal") { Task { _ = await control.changeOK(store.api, "/goal/pause", [String: String]()) } }
+            Button("Pause goal") { Task { _ = await control.changeOK(store, "/goal/pause", [String: String]()) } }
               .disabled(disabled)
           } else {
             if state.interruptionPending == true {
@@ -287,7 +330,7 @@ private struct HermesGoalSection: View {
                 .disabled(disabled).accessibilityIdentifier("automation.reviewedInterruption")
             }
             Button(control.resumeIntent.requestId == nil ? "Resume goal" : "Retry same resume") {
-              Task { await control.resume(store.api, reviewedInterruption: state.interruptionPending == true && reviewedInterruption) }
+              Task { await control.resume(store, reviewedInterruption: state.interruptionPending == true && reviewedInterruption) }
             }.disabled(disabled || !control.canResume || state.interruptionPending == true && !reviewedInterruption)
             if control.canStartNewResumeAttempt {
               Button("Start a new resume attempt") { startingNewAttempt = true }.disabled(disabled)
@@ -308,7 +351,7 @@ private struct HermesGoalSection: View {
     .sheet(isPresented: $startingNewAttempt) { HermesNewResumeAttempt(control: control) }
     .confirmationDialog("Clear this standing goal?", isPresented: $clearing, titleVisibility: .visible) {
       Button("Clear goal", role: .destructive) {
-        Task { _ = await control.changeOK(store.api, "/goal/clear", [String: String]()) }
+        Task { _ = await control.changeOK(store, "/goal/clear", [String: String]()) }
       }
     } message: { Text("The conversation stays saved.") }
   }
@@ -318,6 +361,7 @@ private struct HermesNewResumeAttempt: View {
   var control: HermesAutomationControls
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @State private var lifetime = HermesAutomationLifetime()
   @State private var reviewedConversation = false
   @State private var acceptsRepeatedWork = false
   @State private var reviewedInterruption = false
@@ -343,13 +387,15 @@ private struct HermesNewResumeAttempt: View {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(control.busy) }
           ToolbarItem(placement: .confirmationAction) {
             Button("Start new attempt") {
+              let current = lifetime.current
               Task {
-                if await control.startNewResumeAttempt(store.api, reviewedConversation: reviewedConversation,
-                  acceptsRepeatedWork: acceptsRepeatedWork, reviewedInterruption: interruptionPending && reviewedInterruption) { dismiss() }
+                if await control.startNewResumeAttempt(store, reviewedConversation: reviewedConversation,
+                  acceptsRepeatedWork: acceptsRepeatedWork, reviewedInterruption: interruptionPending && reviewedInterruption, current: current) { dismiss() }
               }
             }.disabled(!canSubmit)
           }
         }.interactiveDismissDisabled(control.busy)
+        .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
     }
   }
 }
@@ -358,6 +404,7 @@ private struct HermesGoalEditor: View {
   var control: HermesAutomationControls
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @State private var lifetime = HermesAutomationLifetime()
   @State private var title: String
   @State private var maxTurns: Int
   @State private var confirmingReplacement = false
@@ -390,14 +437,16 @@ private struct HermesGoalEditor: View {
             }.disabled(control.disabled || !store.connected || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.utf16.count > 10_000)
           }
         }.interactiveDismissDisabled(control.busy)
+        .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
         .confirmationDialog("Replace this standing goal?", isPresented: $confirmingReplacement, titleVisibility: .visible) {
           Button("Replace goal", role: .destructive) { save() }
         } message: { Text(replacementWarning) }
     }
   }
   private func save() {
+    let current = lifetime.current
     Task {
-      if await control.changeOK(store.api, "/goal", HermesGoalInput(title: title, maxTurns: maxTurns), method: "PUT") { dismiss() }
+      if await control.changeOK(store, "/goal", HermesGoalInput(title: title, maxTurns: maxTurns), method: "PUT", current: current) { dismiss() }
     }
   }
 }
@@ -465,6 +514,7 @@ private struct HermesTaskEditor: View {
   var task: HermesTask?
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @State private var lifetime = HermesAutomationLifetime()
   @State private var draft: HermesTaskDraft
   @State private var intent = HermesTaskCreationIntent()
   init(control: HermesAutomationControls, task: HermesTask?) {
@@ -495,6 +545,7 @@ private struct HermesTaskEditor: View {
               .accessibilityIdentifier("automation.saveTask")
           }
         }.interactiveDismissDisabled(control.busy)
+        .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
     }
   }
   private var fields: some View {
@@ -522,13 +573,14 @@ private struct HermesTaskEditor: View {
     }
   }
   private func save() {
+    let current = lifetime.current
     Task {
       let result: HermesTask?
       if let task {
-        result = await control.change(store.api, "/tasks/\(APIClient.component(task.id))", HermesTaskUpdate(draft), method: "PATCH")
+        result = await control.change(store, "/tasks/\(APIClient.component(task.id))", HermesTaskUpdate(draft), method: "PATCH", current: current)
       } else {
         let request = intent.prepare(draft)
-        result = await control.change(store.api, "/tasks", request)
+        result = await control.change(store, "/tasks", request, current: current)
       }
       if result != nil { dismiss() }
     }
@@ -540,6 +592,7 @@ private struct HermesTaskDetail: View {
   var initial: HermesTask
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @State private var lifetime = HermesAutomationLifetime()
   @State private var editing = false
   @State private var reason = ""
   @State private var reviewer = ""
@@ -560,6 +613,7 @@ private struct HermesTaskDetail: View {
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(control.busy) } }
         .sheet(isPresented: $editing) { HermesTaskEditor(control: control, task: task) }
         .interactiveDismissDisabled(control.busy)
+        .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
     }
   }
   private var summary: some View {
@@ -618,14 +672,16 @@ private struct HermesTaskDetail: View {
     let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     let input = HermesTaskAction(action: value, reason: trimmed.isEmpty ? nil : trimmed,
       reviewer: value == .requestReview && !reviewer.isEmpty ? reviewer : nil)
+    let current = lifetime.current
     Task {
-      let result: HermesTask? = await control.change(store.api, path + "/actions", input)
+      let result: HermesTask? = await control.change(store, path + "/actions", input, current: current)
       if result != nil { reason = ""; reviewer = "" }
     }
   }
   private func changeDependency(_ id: String, remove: Bool) {
+    let current = lifetime.current
     Task {
-      let result: HermesTask? = await control.change(store.api, path + "/dependencies/\(APIClient.component(id))", HermesDependencyInput(remove: remove), method: "PUT")
+      let result: HermesTask? = await control.change(store, path + "/dependencies/\(APIClient.component(id))", HermesDependencyInput(remove: remove), method: "PUT", current: current)
       if result != nil { dependency = "" }
     }
   }

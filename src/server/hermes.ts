@@ -2,8 +2,10 @@ import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
-import type { RoutineOutput, RoutineResult } from '../shared/collaboration.js';
 import { withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
+import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-operation-contracts.js';
+import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
+import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
 import { formatBytes } from '../shared/uploads.js';
 import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
@@ -330,10 +332,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   return {
     async routineResults(botId, routineId) {
-      return await this.experienceRequest!({ operation: 'routine_results', profile: botId, routineId }) as RoutineResult[];
+      return this.experienceRequest!({ operation: 'routine_results', profile: botId, routineId });
     },
     async routineOutput(botId, routineId, resultId) {
-      return await this.experienceRequest!({ operation: 'routine_output', profile: botId, routineId, resultId }) as RoutineOutput;
+      return this.experienceRequest!({ operation: 'routine_output', profile: botId, routineId, resultId });
     },
     async groupRequest(input) {
       if (input.operation === 'list') {
@@ -673,32 +675,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       if (!data.length || data.length > 8 * 1024 * 1024) throw new Error('Hermes returned oversized speech audio.');
       return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
     },
-    async automationRequest(input) {
-      return (await http('/api/agent-interface/automation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
+    async automationRequest<R extends AutomationRequest>(input: R): Promise<AutomationResult<R['operation']>> {
+      const response = await http('/api/agent-interface/automation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+      const value = await readOperationJson(response, 'automation', input.operation);
+      return decodeAutomation<R['operation']>(input.operation, value);
     },
-    async experienceRequest(input) {
-      const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
+    async experienceRequest<R extends ExperienceRequest>(input: R): Promise<ExperienceResult<R['operation']>> {
+      const response = await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+      const value = await readOperationJson(response, 'experience', input.operation);
+      const result = decodeExperience<R['operation']>(input.operation, value, input.profile, artifacts);
       if (input.operation === 'run') {
         discoveryFull = true;
         discoveryGeneration++;
       }
-      if (input.operation === 'history') {
-        const seed = value.app_prior_prompt;
-        const seedOrigin = seed ? wireOrigin({ id: 'prior', role: 'user', text: seed.text ?? '' }, seed) : undefined;
-        value.messages = withMessageOrigins(value.messages.map((row: Wire) => {
-          // Expose the app contract only. Raw native metadata can duplicate private message content.
-          const message: Message & { app_sender_id?: string } = {
-            id: String(row.id), role: row.role, text: exposedText(row.app_tool_result) ?? row.app_display_text ?? row.text ?? '',
-            createdAt: row.createdAt, reasoning: row.reasoning, toolName: row.toolName, files: artifacts(input.profile, row),
-            ...(typeof row.app_sender_id === 'string' ? {app_sender_id: row.app_sender_id} : {}),
-            ...(row.role === 'tool' ? {toolCall: toolDetails({name: row.name, args: row.args, result: row.app_tool_result ?? row.text}, String(row.tool_call_id ?? row.id), 'completed')} : {}),
-          };
-          const origin = wireOrigin(message, row);
-          return origin ? { ...message, origin } : message;
-        }), seedOrigin?.kind === 'human' ? undefined : seedOrigin);
-        delete value.app_prior_prompt;
-      }
-      return value;
+      return result;
     },
     async vaultRequest(input) {
       // An earlier add-on has no address-only logins and refuses the member field; it fails closed for them.

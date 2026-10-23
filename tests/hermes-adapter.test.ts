@@ -1,3 +1,6 @@
+import { automationOverviewFixture, automationTaskFixture, memoryFixture, runReceiptFixture, subscriptionFixture } from './helpers/runtime-fixtures.js';
+import type { ExperienceRequest } from '../src/shared/experience.js';
+import type { AutomationRequest } from '../src/shared/automation.js';
 import { Store } from "../src/server/store.js";
 import { IncompleteCreationError } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
@@ -1101,8 +1104,8 @@ it('preserves native event provenance and inherits scheduled replies without cha
 });
 
 it('carries preceding prompt provenance into a history page that starts with a reply',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',messages:[{id:'a',role:'assistant',text:'The reminder is ready.'}],app_tool_result:'internal wire value',app_prior_prompt:{role:'user',text:'Scheduled input',display_metadata:{origin:{kind:'scheduled',visibility:'activity'}}}})));
-  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:100}) as any;
+  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',sessionId:'stored',offset:0,hasMore:false,messages:[{id:'a',role:'assistant',text:'The reminder is ready.'}],app_tool_result:'internal wire value',app_prior_prompt:{role:'user',text:'Scheduled input',display_metadata:{origin:{kind:'scheduled',visibility:'activity'}}}})));
+  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:100});
   expect(page.messages[0].origin).toEqual({kind:'scheduled',visibility:'conversation'});
   expect(page).not.toHaveProperty('app_prior_prompt');
   expect(page.messages[0]).not.toHaveProperty('display_metadata');
@@ -1119,12 +1122,12 @@ it('does not give a newer inflight human reply the previous bot prompt origin',a
 
 it('allowlists history fields before redacting a private bot handoff and its inherited reply',async()=>{
   const privateId='private-bot',canary='private-canary';
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',messages:[
+  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',sessionId:'stored',offset:0,hasMore:false,messages:[
     {id:'prompt',role:'user',text:canary,display_metadata:{origin:{kind:'agent',visibility:'activity',handle:privateId,name:'Private bot'}},content:canary,labels:{secret:canary}},
     {id:'reply',role:'assistant',text:canary,reasoning_content:canary,codex_message_items:[canary]},
     {id:'tool',role:'tool',name:'message_agent',text:canary,args:{target:privateId,message:canary},context:canary,app_tool_result:canary,content:canary},
   ]})));
-  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:0}) as any;
+  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:0});
   expect(page.messages[1].origin?.handle).toBe(privateId);
   const store=new Store(':memory:');
   try {
@@ -1319,4 +1322,97 @@ describe('Review round two regressions', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notices).toHaveBeenCalledOnce();
   });
+});
+
+
+describe('owned Hermes operation response decoding', () => {
+  const profile = 'shared';
+  const receipt = runReceiptFixture({ botId: profile });
+  const memory = memoryFixture({ botId: profile, profile });
+  const preview = { botId: profile, schedule: '0 7 * * *', timezone: 'UTC', nextRuns: ['2026-10-24T07:00:00Z'], kind: 'cron' };
+  const history = { botId: profile, sessionId: 'stored', messages: [], offset: 0, hasMore: false };
+  const usage = { botId: profile, days: 30, sessions: 1, inputTokens: 3, outputTokens: 2, actualCost: null, estimatedCost: 0.01, partial: true, notice: 'Recorded usage' };
+  const experienceCases: { input: ExperienceRequest; result: unknown }[] = [
+    { input: {operation:'search',profile,query:'fence'}, result:[{botId:profile,botName:'Shared',sessionId:'stored',title:'Fence',snippet:'Fixed'}] },
+    { input: {operation:'history',profile,sessionId:'stored',offset:0}, result:history },
+    { input: {operation:'usage',profile,days:30}, result:usage },
+    { input: {operation:'routine_results',profile,routineId:'routine'}, result:[{id:'run',title:'Fence',previewOnly:false}] },
+    { input: {operation:'routine_output',profile,routineId:'routine',resultId:'run'}, result:{messages:[{id:'reply',role:'assistant',text:'Fixed'}],previewOnly:false} },
+    { input: {operation:'memory',profile}, result:memory },
+    { input: {operation:'save_memory',profile,target:'memory',revision:'a'.repeat(64),entries:[]}, result:memory },
+    { input: {operation:'delete_memory',profile,target:'user',revision:'a'.repeat(64),entryId:'entry'}, result:memory },
+    { input: {operation:'preview',profile,schedule:'0 7 * * *'}, result:preview },
+    { input: {operation:'run',profile,routineId:'routine',requestId:'request',senderId:'person'}, result:receipt },
+    { input: {operation:'run_receipt',profile,routineId:'routine',requestId:'request',senderId:'person'}, result:receipt },
+  ];
+  it.each(experienceCases)('decodes the experience $input.operation result', async ({input,result}) => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json(result)));
+    expect(await runtime.experienceRequest!(input)).toEqual(result);
+  });
+  const overview = automationOverviewFixture({botId:profile});
+  const task = automationTaskFixture();
+  const subscription = subscriptionFixture();
+  const automationCases: { input: AutomationRequest; result: unknown }[] = [
+    {input:{operation:'overview',profile},result:overview},
+    {input:{operation:'goal_set',profile,title:'Repair',maxTurns:10},result:overview},
+    {input:{operation:'goal_pause',profile},result:overview},
+    {input:{operation:'goal_clear',profile},result:overview},
+    {input:{operation:'goal_resume',profile,requestId:'request',senderId:'person'},result:overview},
+    {input:{operation:'task_create',profile,task:{title:'Repair',requestId:'request'}},result:task},
+    {input:{operation:'task_get',profile,taskId:'task'},result:task},
+    {input:{operation:'task_update',profile,taskId:'task',title:'Repair'},result:task},
+    {input:{operation:'task_action',profile,taskId:'task',action:'start'},result:task},
+    {input:{operation:'task_dependency',profile,taskId:'task',dependencyId:'parent',remove:false},result:task},
+    {input:{operation:'trigger_create',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'}},result:{subscription,secret:'minted-secret'}},
+    {input:{operation:'trigger_update',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'},revision:'a'},result:{subscription}},
+    {input:{operation:'trigger_toggle',profile,triggerId:'event',enabled:true,revision:'a'},result:{subscription}},
+    {input:{operation:'trigger_delete',profile,triggerId:'event',revision:'a'},result:{ok:true}},
+    {input:{operation:'skill_content',profile,name:'fence'},result:{name:'fence',content:'Skill content',truncated:false}},
+    {input:{operation:'skill_diff',profile,pendingId:'deadbeef'},result:{id:'deadbeef',diff:'Skill diff',revision:'a',truncated:false}},
+    {input:{operation:'skill_decide',profile,pendingId:'deadbeef',decision:'approve',revision:'a'},result:{ok:true}},
+    {input:{operation:'skill_policy',profile,approvalRequired:true},result:{ok:true}},
+  ];
+  it.each(automationCases)('decodes the automation $input.operation result', async ({input,result}) => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json(result)));
+    expect(await runtime.automationRequest!(input)).toEqual(result);
+  });
+  it.each([
+    {input:{operation:'memory',profile},result:preview},
+    {input:{operation:'usage',profile,days:30},result:[]},
+    {input:{operation:'history',profile,sessionId:'stored',offset:0},result:{...history,messages:[{id:'row',role:'unexpected',text:'private-canary'}]}},
+    {input:{operation:'routine_results',profile,routineId:'routine'},result:[{id:'run',title:'Fence',previewOnly:'false'}]},
+    {input:{operation:'run_receipt',profile,routineId:'routine',requestId:'request',senderId:'person'},result:null},
+  ] satisfies {input:ExperienceRequest;result:unknown}[])('rejects malformed or wrong-operation experience $input.operation data', async ({input,result}) => {
+    const fetcher=vi.fn(async()=>Response.json(result)); vi.stubGlobal('fetch',fetcher);
+    await expect(runtime.experienceRequest!(input)).rejects.toMatchObject({statusCode:502,message:`Hermes returned an invalid experience response for ${input.operation}.`});
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it.each([
+    {input:{operation:'overview',profile},result:{ok:true}},
+    {input:{operation:'task_get',profile,taskId:'task'},result:overview},
+    {input:{operation:'goal_pause',profile},result:{...overview,tasks:{supported:true,items:[{id:'invalid'}]}}},
+    {input:{operation:'trigger_create',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'}},result:{subscription}},
+    {input:{operation:'skill_policy',profile,approvalRequired:true},result:{ok:false,secret:'private-canary'}},
+  ] satisfies {input:AutomationRequest;result:unknown}[])('rejects malformed or wrong-operation automation $input.operation data', async ({input,result}) => {
+    const fetcher=vi.fn(async()=>Response.json(result)); vi.stubGlobal('fetch',fetcher);
+    await expect(runtime.automationRequest!(input)).rejects.toMatchObject({statusCode:502,message:`Hermes returned an invalid automation response for ${input.operation}.`});
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it('normalizes native nullable routine result metadata', async () => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json([{id:'run',title:'Fence',startedAt:null,preview:null,previewOnly:true}])));
+    expect(await runtime.routineResults!('shared','routine')).toEqual([{id:'run',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true}]);
+  });
+  it('registers only attested history files and removes native metadata', async () => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({...history,messages:[{id:'tool',role:'tool',text:'Generated',app_artifacts:[{path:'/workspace/fence.txt',name:'fence.txt',mime:'text/plain'}],content:'private-canary'}]})));
+    const page=await runtime.experienceRequest!({operation:'history',profile,sessionId:'stored',offset:0});
+    expect(page.messages[0].files).toHaveLength(1);
+    expect(runtime.fileBotId!(page.messages[0].files![0].id)).toBe(profile);
+    expect(JSON.stringify(page)).not.toContain('private-canary');
+  });
+});
+
+it('does not expose native contents when an owned response is not JSON', async () => {
+  vi.stubGlobal('fetch',vi.fn(async()=>new Response('private-canary invalid JSON')));
+  await expect(runtime.automationRequest!({operation:'overview',profile:'shared'})).rejects.toMatchObject({statusCode:502,message:'Hermes returned an invalid automation response for overview.'});
+  await expect(runtime.experienceRequest!({operation:'memory',profile:'shared'})).rejects.toMatchObject({statusCode:502,message:'Hermes returned an invalid experience response for memory.'});
 });

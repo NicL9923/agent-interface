@@ -201,3 +201,17 @@ describe('typed route requests',()=>{
     expect(await api('/bots/bot/draft')).toBe(first);
   });
 });
+
+// Compiled with the suite. Invalid calls must stay compile errors as routes evolve.
+function checkFeatureRouteTypes() {
+  const memory: Promise<import('../src/shared/experience').ProfileMemory> = request('GET /bots/:id/memory', { params: { id: 'ranch' } });
+  const task: Promise<import('../src/shared/automation').AutomationTask> = request('POST /bots/:id/automation/tasks', { params: { id: 'ranch' }, body: { requestId: 'request', title: 'Fix fence' } });
+  void memory; void task;
+  // @ts-expect-error Search requires its query, even when an options object is supplied.
+  void request('GET /search', {});
+  // @ts-expect-error Each operation has its own body, not an arbitrary suffix and payload.
+  void request('PUT /bots/:id/automation/goal', { params: { id: 'ranch' }, body: { enabled: true } });
+  // @ts-expect-error A routine saved item needs its native output locator.
+  void request('POST /saved', { body: { kind: 'routine', botId: 'ranch', title: 'Output' } });
+}
+void checkFeatureRouteTypes;

@@ -58,7 +58,7 @@ export interface RoutineRunReceipt {
   executionId?: string;
   ownerStatus?: string;
 }
-export type ExperienceRequest =
+type ExperienceRequestUnion =
   | { operation: 'search'; profile: string; query: string }
   | { operation: 'history'; profile: string; sessionId: string; offset: number; messageId?: string }
   | { operation: 'usage'; profile: string; days: number }
@@ -70,4 +70,23 @@ export type ExperienceRequest =
   | { operation: 'preview'; profile: string; schedule: string }
   | { operation: 'run'; profile: string; routineId: string; requestId: string; senderId: string }
   | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string };
-export type ExperienceResponse = ProfileMemory | RoutinePreview | RoutineRunReceipt | RoutineResult[] | RoutineOutput | SearchHit[] | HistoryPage | UsageSummary;
+/** The result belongs to the requested operation. Missing receipts are HTTP 404 errors. */
+export interface ExperienceResults {
+  search: SearchHit[];
+  history: HistoryPage;
+  usage: UsageSummary;
+  routine_results: RoutineResult[];
+  routine_output: RoutineOutput;
+  memory: ProfileMemory;
+  save_memory: ProfileMemory;
+  delete_memory: ProfileMemory;
+  preview: RoutinePreview;
+  run: RoutineRunReceipt;
+  run_receipt: RoutineRunReceipt;
+}
+export type ExperienceOperation = ExperienceRequestUnion['operation'];
+export type ExperienceRequests = { [O in ExperienceOperation]: Extract<ExperienceRequestUnion, { operation: O }> };
+export type ExperienceRequest<K extends ExperienceOperation = ExperienceOperation> = { [O in K]: ExperienceRequests[O] }[K];
+export type ExperienceResponse<K extends ExperienceOperation = ExperienceOperation> = ExperienceResults[K];
+export type ExperienceRequester = <R extends ExperienceRequest>(input: R) => Promise<ExperienceResult<R['operation']>>;
+export type ExperienceResult<O extends ExperienceOperation> = ExperienceResults[O];

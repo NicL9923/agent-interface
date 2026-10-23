@@ -128,7 +128,7 @@ function LoadedBotSettings({
   useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
   // Escape and the close button both land here, so nothing is discarded without asking.
   const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
-  const routinesResource = useResource<Routine[]>(existing && tab === "routines" && bootstrap.capabilities.routines.supported ? "/routines" : null);
+  const routinesResource = useResource(existing && tab === "routines" && bootstrap.capabilities.routines.supported ? routeUrl("GET /routines", {}) : null, { load: (_, signal) => request("GET /routines", { signal }) });
   const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
   const [confirmModel, setConfirmModel] = useState(false);
   // Making a shared or ownerless assistant personal hides it from everyone else, so it asks first.
@@ -713,15 +713,11 @@ function RoutineManager({
               disabled={busy}
               onClick={() =>
                 void action(() =>
-                  write(
-                    `/routines/${encodeURIComponent(routine.id)}`,
-                    {
+                  request("PUT /routines/:id", { params: { id: routine.id }, body: {
                       ...routine,
                       enabled: !routine.enabled,
                       recipientIds: routine.recipientIds || [],
-                    },
-                    "PUT",
-                  ),
+                    } }),
                 )
               }
             >
@@ -742,9 +738,7 @@ function RoutineManager({
                   className="danger"
                   onClick={() =>
                     void action(() =>
-                      api(`/routines/${encodeURIComponent(routine.id)}`, {
-                        method: "DELETE",
-                      }),
+                      request("DELETE /routines/:id", { params: { id: routine.id } }),
                     )
                   }
                 >
@@ -770,13 +764,8 @@ function RoutineManager({
           if (form.noAgent && !form.script?.trim()) { actions.setError("Script-only routines require a profile script."); return; }
           if (!form.prompt.trim() && !form.script?.trim() && !form.skills?.length) { actions.setError("Add instructions, a skill, or a profile script."); return; }
           void action(async () => {
-            await write(
-              editing
-                ? `/routines/${encodeURIComponent(editing)}`
-                : "/routines",
-              { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)) },
-              editing ? "PUT" : "POST",
-            );
+            const body = { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)) };
+            await (editing ? request("PUT /routines/:id", { params: { id: editing }, body }) : request("POST /routines", { body }));
             setEditing(null);
             setPreviewedSchedule("");
             setForm({

@@ -17,7 +17,7 @@ async function setup() {
   // Only the app's authenticated boundary is under test. Native behavior has its own probe.
   const integrationRequest = vi.fn(async (request: IntegrationRequest) => request.operation === "list"
     ? { profile: request.profile, connections: [], canManage: true }
-    : { kind: "connected", status: "approved", message: "Fixture operation completed" });
+    : { kind: "connected" as const, status: "approved" as const, message: "Fixture operation completed" });
   const runtime = fakeRuntime({ integrationRequest, close: async () => {} });
   const upgrades = new HermesUpgrades(config, runtime);
   const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);

@@ -1,3 +1,4 @@
+import { botFixture } from "./helpers/runtime-fixtures.js";
 import { randomBytes } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import Fastify from "fastify";
@@ -46,7 +47,7 @@ it("never forwards an upstream 401 or 403 from the credential bridge", async () 
   app.addHook("onRequest", async req => { req.user = { id: "member", name: "Member", email: "member@example.invalid" }; });
   app.setErrorHandler(errorHandler({ production: true }));
   let failure: Error = new Error();
-  await installVaultRoutes(app, fakeRuntime({ listBots: async () => [{ id: "ranch" }], vaultRequest: async () => { throw failure; } }));
+  await installVaultRoutes(app, fakeRuntime({ listBots: async () => [botFixture({ id: "ranch" })], vaultRequest: async () => { throw failure; } }));
   for (const status of [401, 403]) {
     failure = Object.assign(new Error("native detail"), { statusCode: status });
     expect((await app.inject("/api/bots/ranch/vault")).statusCode).toBe(502);

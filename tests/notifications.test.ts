@@ -1,9 +1,17 @@
+import { createApp } from "../src/server/app.js";
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { expect, it, vi } from "vitest";
 import { Store } from "../src/server/store.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { loadConfig } from "../src/server/config.js";
+import * as apns from "../src/server/apns.js";
 import type { RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime } from "./helpers/server.js";
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 const event: RuntimeEvent = {
   id: "evt-1",
   botId: "shared",
@@ -48,7 +56,7 @@ it("keeps completion pending without a subscription and retries failed delivery 
   store.recordEvents([event], "cursor-1");
   const seen: string[] = [];
   const runtime = fakeRuntime({
-    capabilities: async () => ({
+    capabilities: async () => capabilitiesFixture({
       idempotency: { supported: false },
       durableEvents: { supported: false },
     }),
@@ -92,7 +100,7 @@ it("recovers admission receipts before event discovery so recovered completions 
     attachments: [],
   });
   const runtime = fakeRuntime({
-    capabilities: async () => ({
+    capabilities: async () => capabilitiesFixture({
       idempotency: { supported: true },
       durableEvents: { supported: true },
     }),
@@ -150,6 +158,186 @@ it("delivers an existing outbox while Hermes is offline", async () => {
   expect(deliveries).toBe(1);
   expect(store.outbox()).toHaveLength(0);
   store.close();
+});
+it("delivers durable alerts while receipt recovery waits, then delivers recovered completions to their sender", async () => {
+  const store = storeWithUsers();
+  store.participate("previous-run", "two");
+  store.recordEvents([{ ...event, id: "previous", runId: "previous-run" }], "previous-cursor");
+  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+  for (const user of ["one", "two"]) store.subscribe(user, {
+    endpoint: `https://push.example.test/${user}`, keys: { p256dh: "key", auth: "auth" },
+  });
+  const entered = deferred(), release = deferred();
+  const discoverEvents = vi.fn(async () => ({ cursor: "recovered", events: [event] }));
+  const submit = vi.fn();
+  const runtime = fakeRuntime({
+    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }),
+    lookupSubmission: async () => {
+      entered.resolve();
+      await release.promise;
+      return { requestId: "request", status: "accepted" as const, runId: "run" };
+    },
+    discoverEvents, submit,
+  });
+  const sent: string[] = [];
+  const worker = new BackgroundWorker(store, runtime, household(), async subscription => { sent.push(subscription.endpoint); });
+  const tick = worker.tick();
+  try {
+    await entered.promise;
+    expect([...sent]).toEqual(["https://push.example.test/two"]);
+    expect(discoverEvents).not.toHaveBeenCalled();
+    expect(store.cursor()).toBe("previous-cursor");
+  } finally {
+    release.resolve();
+    await tick;
+    await worker.stop();
+  }
+  expect(sent).toEqual(["https://push.example.test/two", "https://push.example.test/one"]);
+  expect(store.submission("request")!.receipt.status).toBe("accepted");
+  expect(store.cursor()).toBe("recovered");
+  expect(store.outbox()).toHaveLength(0);
+  expect(submit).not.toHaveBeenCalled();
+  store.close();
+});
+it("keeps each job nonoverlapping across repeated ticks while other jobs are stalled", async () => {
+  const store = storeWithUsers();
+  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
+  queue(store, "first", Date.now());
+  const receipt = deferred(), discovery = deferred();
+  const delivery = deferred(), live = deferred();
+  const capabilities = vi.fn(async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }));
+  const lookupSubmission = vi.fn(async () => {
+    await receipt.promise;
+    return { requestId: "request", status: "accepted" as const, runId: "run" };
+  });
+  const discoverEvents = vi.fn(async () => { await discovery.promise; return { events: [], cursor: "advanced" }; });
+  const send = vi.fn(async () => { await delivery.promise; });
+  const worker = new BackgroundWorker(store, fakeRuntime({ capabilities, lookupSubmission, discoverEvents }), household(), send);
+  const liveTick = vi.spyOn(worker.live, "tick").mockImplementation(async () => { await live.promise; });
+  const ticks = [worker.tick(), worker.tick(), worker.tick()];
+  try {
+    await vi.waitFor(() => expect(lookupSubmission).toHaveBeenCalledTimes(1));
+    expect(capabilities).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(liveTick).toHaveBeenCalledTimes(1);
+    expect(discoverEvents).not.toHaveBeenCalled();
+    receipt.resolve();
+    await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
+    delivery.resolve();
+    await vi.waitFor(() => expect(store.outbox()).toHaveLength(0));
+    queue(store, "second", Date.now());
+    ticks.push(worker.tick());
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(capabilities).toHaveBeenCalledTimes(1);
+    expect(discoverEvents).toHaveBeenCalledTimes(1);
+    expect(liveTick).toHaveBeenCalledTimes(1);
+  } finally {
+    receipt.resolve(); discovery.resolve(); delivery.resolve(); live.resolve();
+    await Promise.all(ticks);
+    await worker.stop();
+    liveTick.mockRestore();
+  }
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(store.outbox()).toHaveLength(0);
+  expect(store.cursor()).toBe("advanced");
+  store.close();
+});
+it("continues scheduled delivery during slow recovery without overlapping recovery passes", async () => {
+  vi.useFakeTimers();
+  const store = storeWithUsers();
+  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
+  queue(store, "first", Date.now());
+  const release = deferred();
+  const lookupSubmission = vi.fn(async () => { await release.promise; return null; });
+  const send = vi.fn(async () => {});
+  const worker = new BackgroundWorker(store, fakeRuntime({
+    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: false } }),
+    lookupSubmission,
+  }), household(), send);
+  try {
+    worker.start();
+    worker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).toHaveBeenCalledTimes(1);
+    queue(store, "second", Date.now());
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(lookupSubmission).toHaveBeenCalledTimes(1);
+    const stopping = worker.stop();
+    release.resolve();
+    await stopping;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(lookupSubmission).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
+  } finally {
+    release.resolve();
+    await worker.stop();
+    store.close();
+    vi.useRealTimers();
+  }
+});
+it.each(["runtime", "outbox", "live"] as const)("drains every job before closing APNs when %s settles last", async last => {
+  const store = storeWithUsers();
+  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+  queue(store, "existing", Date.now());
+  store.nativeSession("session", "one", Date.now() + 60_000);
+  store.registerNativeDevice("one", "session", "phone", "ab".repeat(32), "sandbox");
+  const gates = { runtime: deferred(), outbox: deferred(), live: deferred() };
+  const finished = { runtime: deferred(), outbox: deferred(), live: deferred() };
+  const close = vi.fn();
+  const sender = Object.assign(vi.fn(async () => { await gates.outbox.promise; finished.outbox.resolve(); }), {
+    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}),
+  });
+  const factory = vi.spyOn(apns, "createApnsSender").mockReturnValue(sender);
+  const config = household();
+  config.apns = { teamId: "team", keyId: "key", topic: "test", privateKeyFile: "unused", environment: "sandbox" };
+  const discoverEvents = vi.fn(async () => {
+    await gates.runtime.promise;
+    finished.runtime.resolve();
+    return { events: [event], cursor: "recovered" };
+  });
+  const worker = new BackgroundWorker(store, fakeRuntime({
+    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }),
+    lookupSubmission: async () => ({ requestId: "request", status: "accepted", runId: "run" }),
+    discoverEvents,
+  }), config);
+  const liveTick = vi.spyOn(worker.live, "tick").mockImplementation(async () => { await gates.live.promise; finished.live.resolve(); });
+  const tick = worker.tick();
+  let stopped = false;
+  try {
+    await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(liveTick).toHaveBeenCalledTimes(1);
+    const stopping = worker.stop().then(() => { stopped = true; });
+    for (const name of ["runtime", "outbox", "live"] as const) if (name !== last) {
+      gates[name].resolve();
+      await finished[name].promise;
+    }
+    await worker.tick();
+    expect(stopped).toBe(false);
+    expect(close).not.toHaveBeenCalled();
+    gates[last].resolve();
+    await stopping;
+    await tick;
+    expect(sender).toHaveBeenCalledTimes(2);
+    expect(store.outbox()).toHaveLength(0);
+    expect(store.cursor()).toBe("recovered");
+    expect(close).toHaveBeenCalledTimes(1);
+    await worker.stop();
+    await worker.tick();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(discoverEvents).toHaveBeenCalledTimes(1);
+    expect(liveTick).toHaveBeenCalledTimes(1);
+  } finally {
+    Object.values(gates).forEach(gate => gate.resolve());
+    await tick;
+    await worker.stop();
+    liveTick.mockRestore();
+    factory.mockRestore();
+    store.close();
+  }
 });
 it("lists explicit routine recipients without adding bot followers", () => {
   const store = storeWithUsers();
@@ -278,11 +466,39 @@ it("delivers security alerts at once, through quiet hours and digest batching, a
   expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(true);
   expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(false);
   const sent: string[] = [];
-  const runtime = fakeRuntime({ capabilities: async () => ({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
+  const runtime = fakeRuntime({ capabilities: async () => capabilitiesFixture({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
   const worker = new BackgroundWorker(store, runtime, loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }),
     async (_subscription, payload) => { sent.push(JSON.parse(payload).title); });
   await worker.tick();
   expect(sent).toEqual(["System terminal opened"]);
   expect(store.outbox().map(row => JSON.parse(row.payload).kind)).toEqual(["completed"]);
   store.close();
+});
+
+it("drains the worker before closing its runtime and database", async () => {
+  const store = storeWithUsers();
+  store.intent({ requestId: "shutdown", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+  const entered = deferred(), release = deferred();
+  const close = vi.fn(async () => {});
+  const runtime = fakeRuntime({
+    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: false } }),
+    lookupSubmission: async () => { entered.resolve(); await release.promise; return null; },
+    listBots: async () => [], close,
+  });
+  const { app, worker } = await createApp(household(), runtime, { store, background: false });
+  await app.ready();
+  const tick = worker.tick();
+  await entered.promise;
+  const stop = vi.spyOn(worker, "stop");
+  const closing = app.close();
+  try {
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    expect(close).not.toHaveBeenCalled();
+    expect(store.users()).toHaveLength(2);
+  } finally {
+    release.resolve();
+    await Promise.all([tick, closing]);
+  }
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(() => store.users()).toThrow();
 });
