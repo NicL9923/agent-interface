@@ -8,7 +8,7 @@ import CryptoKit
 /// `@ObservationIgnored`, so changing it renders nothing.
 @MainActor @Observable
 final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding {
-  var host = UserDefaults.standard.string(forKey: "connection.host") ?? ""
+  var host = UserDefaults.standard.string(forKey: DeviceDefaults.host) ?? ""
   var api: APIClient? { didSet { updateScope() } }
   var bootstrap: Bootstrap? {
     didSet { updateScope(); appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); scheduleAdditions() }
@@ -249,7 +249,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     bootstrap?[capability: key]?.reason
       ?? "This capability is unavailable from the connected Hermes installation."
   }
-  /// What the app keeps in UserDefaults per scope, optionally per assistant.
+  /// What the app keeps in UserDefaults per scope, optionally per assistant. `DeviceDefaults` holds
+  /// the keys that outlive a scope.
   enum StorageKind: String {
     case draft, draftAdditions, pending, recovered, selected, notifications, notificationPrompt, goalResume
   }
@@ -281,7 +282,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       if api?.token != nil {
         if bootstrap == nil, let api, let url = offlineURL,
           let snapshot = OfflineLibrary.read(url),
-          let expiry = UserDefaults.standard.string(forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
+          let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
           let expires = ServerDate.parse(expiry), expires > Date() {
           bootstrap = snapshot.bootstrap
           // Sends still unsettled come back before any draft is ready, so nothing joins a sent copy.
@@ -349,7 +350,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       api = candidate
       authConfig = config
       host = url.absoluteString
-      UserDefaults.standard.set(host, forKey: "connection.host")
+      UserDefaults.standard.set(host, forKey: DeviceDefaults.host)
       error = nil
       if candidate.token != nil {
         await refreshBootstrap()
@@ -402,7 +403,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       api.token = result.token
       sessionExpired = false
       UserDefaults.standard.set(
-        result.expiresAt, forKey: "connection.expiry.\(api.baseURL.absoluteString)")
+        result.expiresAt, forKey: DeviceDefaults.expiry(api.baseURL))
       await refreshBootstrap()
       startPolling()
     } catch {
@@ -427,8 +428,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
   func pollOnce() async -> Bool {
     if let api,
-      let expiry = UserDefaults.standard.string(
-        forKey: "connection.expiry.\(api.baseURL.absoluteString)"),
+      let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
     {
       clearOfflineLibrary()

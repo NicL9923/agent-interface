@@ -136,7 +136,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   /// The sign-in a notification action uses. After a launch in the background just for the action, the
   /// store has not restored, so this falls back to the saved server address and the Keychain sign-in.
   var actionClient: @MainActor () -> APIClient? = {
-    guard let host = UserDefaults.standard.string(forKey: "connection.host"), let url = try? ConnectionAddress.parse(host) else { return nil }
+    guard let host = UserDefaults.standard.string(forKey: DeviceDefaults.host), let url = try? ConnectionAddress.parse(host) else { return nil }
     let api = APIClient(baseURL: url)
     return api.token == nil ? nil : api
   }
@@ -196,9 +196,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
   }
   var deviceId: String {
-    if let value = UserDefaults.standard.string(forKey: "push.deviceId") { return value }
+    if let value = UserDefaults.standard.string(forKey: DeviceDefaults.pushDeviceId) { return value }
     let value = UUID().uuidString.lowercased()
-    UserDefaults.standard.set(value, forKey: "push.deviceId")
+    UserDefaults.standard.set(value, forKey: DeviceDefaults.pushDeviceId)
     return value
   }
   /// Brings this device's registration in line with what the person chose and what iOS allows.

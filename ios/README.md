@@ -107,6 +107,18 @@ the repo's validation wrapper:
 bash .agents/tools/validate-ios.sh SIMULATOR_UUID test
 ```
 
+The wrapper holds the lock every checkout of this repository shares,
+`.private/ios-validation.lock` in the main checkout, so two runs never drive
+simulators at once; a second run exits at once instead of waiting. Do not wrap it
+in `lockf` yourself. It refuses to boot a fourth simulator and shuts down the one
+it booted. Tests run from a copy of the built `.xctestrun` that limits XCTest's
+crash-report wait to 15 seconds, because the Mac mini otherwise waits about 300
+seconds after every UI test. A failed test skips the `simctl diagnose` collector,
+which stalls there for ten minutes; pass `-collect-test-diagnostics on-failure` to
+keep it. Each run writes `.private/ios-<run>.txt` beside its result bundle with the
+commit, the fingerprint of the iOS inputs, Xcode, the simulator and the test
+summary. Another run with the same fingerprint, Xcode and runtime can reuse it.
+
 The same wrapper accepts Xcode test filters. The parity suite exercises home,
 pinning, Settings saves and recovery, the model catalog and inference controls,
 conversation grouping, and Today. It uses synthetic transport fixtures.
@@ -116,7 +128,7 @@ bash .agents/tools/validate-ios.sh SIMULATOR_UUID test \
   -only-testing:AgentInterfaceUITests/ParityFlowTests
 ```
 
-Or run directly from the repository root:
+Or run directly from the repository root, without the shorter crash-report wait:
 
 ```sh
 xcodebuild -project ios/AgentInterface.xcodeproj \

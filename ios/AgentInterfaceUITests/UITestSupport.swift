@@ -51,15 +51,34 @@ extension XCUIElement {
   func waitForKeyboardFocus(_ focused: Bool = true, timeout: TimeInterval = 10) -> Bool {
     wait(until: "hasKeyboardFocus == %@", NSNumber(value: focused), timeout: timeout)
   }
-  /// Taps a text input once, waits for keyboard focus, then types. Typing before focus arrives fails
-  /// on a slow simulator. Never tap twice: while the keyboard slides in, a second tap's position is
-  /// stale and can land on the transcript, whose tap puts the keyboard away.
+  /// Taps a text input once, waits for keyboard focus, types, then waits for the keyboard's layout.
+  /// Typing before focus arrives fails on a slow simulator. Never tap twice: while the keyboard
+  /// slides in, a second tap's position is stale and can land on the transcript, whose tap puts the
+  /// keyboard away.
   func typeWhenFocused(_ text: String, timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line) {
     if !waitForKeyboardFocus(true, timeout: 0) { tapWhenReady(timeout: timeout, file: file, line: line) }
     guard waitForKeyboardFocus(true, timeout: timeout) else {
       XCTFail("\(self) never took keyboard focus", file: file, line: line); return
     }
     typeText(text)
+    // Return submits, which can put the keyboard away or close the field's screen.
+    if !text.hasSuffix("\n") { waitForKeyboardLayout() }
+  }
+  /// On the iOS 27 simulator, `typeText` hides the software keyboard while it types and shows it
+  /// again as typing ends, and the layout moves with it. A tap aimed at a button's frame from the
+  /// keyboard-less layout then lands beside the button. Waits for the keyboard and for this element
+  /// to stop moving. A hardware keyboard shows no software keyboard; the wait ends after 3 seconds.
+  private func waitForKeyboardLayout() {
+    guard XCUIApplication().keyboards.firstMatch.waitForExistence(timeout: 3) else { return }
+    // Reading a missing element's frame fails the test, so a field that went away reads as null.
+    var last = exists ? frame : .null
+    var unchanged = 0
+    _ = poll(2) {
+      let current = exists ? frame : .null
+      unchanged = current == last ? unchanged + 1 : 0
+      last = current
+      return unchanged >= 3
+    }
   }
 }
 

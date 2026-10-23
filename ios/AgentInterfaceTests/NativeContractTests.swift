@@ -1307,8 +1307,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         _ = await value.pollOnce()
         try await until { server.requestCount("/api/bots/bot/events") == 1 && server.conversationQueries.count >= 2 }
         let reads = server.conversationQueries.count
-        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), forKey: "connection.expiry.\(server.origin.absoluteString)")
-        defer { UserDefaults.standard.removeObject(forKey: "connection.expiry.\(server.origin.absoluteString)") }
+        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), forKey: DeviceDefaults.expiry(server.origin))
+        defer { UserDefaults.standard.removeObject(forKey: DeviceDefaults.expiry(server.origin)) }
         let continues = await value.pollOnce()
         XCTAssertFalse(continues); XCTAssertTrue(value.sessionExpired)
         // Absence check: a live stream would read within this window.
@@ -2347,7 +2347,7 @@ extension NativeContractTests {
         let chat = try JSONDecoder().decode(Conversation.self, from: server.conversationData())
         let url = OfflineLibrary.url(origin: server.origin.absoluteString, token: "synthetic-native-session", root: root)
         OfflineLibrary(savedAt: Date(), bootstrap: bootstrap, conversations: ["bot": chat], selected: "bot").write(url)
-        let expiryKey = "connection.expiry.\(server.origin.absoluteString)"
+        let expiryKey = DeviceDefaults.expiry(server.origin)
         UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: 3600)), forKey: expiryKey)
         defer { UserDefaults.standard.removeObject(forKey: expiryKey) }
         server.setOffline(true)
@@ -2427,7 +2427,7 @@ extension NativeContractTests {
     func testAnOfflineRelaunchKeepsHeldTextOffTheSentCopyUntilItsSendSettles() async throws {
         let server = NativeMockServer()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let expiryKey = "connection.expiry.\(server.origin.absoluteString)"
+        let expiryKey = DeviceDefaults.expiry(server.origin)
         UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: 3600)), forKey: expiryKey)
         defer { try? FileManager.default.removeItem(at: root); UserDefaults.standard.removeObject(forKey: expiryKey); clean(server) }
         let value = try store(server)

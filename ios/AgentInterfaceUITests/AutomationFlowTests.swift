@@ -30,19 +30,25 @@ import XCTest
   }
   /// One native thumb drag. The labelled row supplies the state; its inner UISwitch supplies
   /// the gesture bounds. A failed precondition or result fails the test without another gesture.
+  /// It scrolls `container` until the inner UISwitch can be tapped. A row at the edge of a form
+  /// can show a sliver below the navigation bar, which makes the row hittable while the switch
+  /// stays covered.
   @discardableResult private func setSwitch(
-    _ row: XCUIElement, to enabled: Bool, expectedFinalValue: Bool? = nil,
-    afterGesture: () -> Bool = { true }, file: StaticString = #filePath, line: UInt = #line
+    _ row: XCUIElement, in container: XCUIElement, downward: Bool = false, to enabled: Bool,
+    expectedFinalValue: Bool? = nil, afterGesture: () -> Bool = { true },
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Bool {
-    guard row.waitForExistence(timeout: 5), row.wait(until: "enabled == true"), row.waitUntilHittable() else {
-      XCTFail("The switch row must be enabled and hittable.\n\(row.debugDescription)", file: file, line: line)
+    // A form lists only the rows near the screen, so the row may not exist before this scroll.
+    let control = row.switches.firstMatch
+    reveal(control, in: container, downward: downward)
+    guard row.waitForExistence(timeout: 5), row.wait(until: "enabled == true") else {
+      XCTFail("The switch row must be enabled.\n\(row.debugDescription)", file: file, line: line)
       return false
     }
     guard row.wait(until: "value == %@", enabled ? "0" : "1") else {
       XCTFail("The switch must start \(enabled ? "off" : "on").\n\(row.debugDescription)", file: file, line: line)
       return false
     }
-    let control = row.switches.firstMatch
     guard control.waitForExistence(timeout: 5), control.wait(until: "enabled == true"), control.waitUntilHittable() else {
       XCTFail("The row must contain an enabled, hittable UISwitch.\n\(row.debugDescription)", file: file, line: line)
       return false
@@ -65,8 +71,7 @@ import XCTest
     XCTAssertFalse(resume.isEnabled)
     let review = app.switches["automation.reviewedInterruption"]
     XCTAssertTrue(review.exists)
-    reveal(review, in: form)
-    guard setSwitch(review, to: true) else { return }
+    guard setSwitch(review, in: form, to: true) else { return }
     XCTAssertTrue(resume.wait(until: "enabled == true"))
     reveal(resume, in: form)
     capture(app, "Native interrupted goal review")
@@ -178,7 +183,7 @@ import XCTest
     let message = text("Nothing will be sent again automatically.", app: app)
     // This server-confirmed toggle stays on while confirmation is pending and after a failed save.
     // The confirmation and error prove the off gesture reached the binding without optimistic state.
-    guard setSwitch(policy, to: false, expectedFinalValue: true, afterGesture: {
+    guard setSwitch(policy, in: app.collectionViews["automation.learning"], to: false, expectedFinalValue: true, afterGesture: {
       let confirm = app.buttons["Allow changes without review"]
       guard confirm.waitForExistence(timeout: 5) else {
         XCTFail("Turning the policy off must ask for confirmation.\n\(app.debugDescription)")
@@ -207,8 +212,7 @@ import XCTest
     let inherit = app.buttons["Use assistant model and provider"]
     reveal(inherit, in: form); inherit.tapWhenReady()
     let scriptOnly = app.switches["routine.runScriptWithoutModel"]
-    reveal(scriptOnly, in: form, downward: true)
-    guard setSwitch(scriptOnly, to: true) else { return }
+    guard setSwitch(scriptOnly, in: form, downward: true, to: true) else { return }
     guard scriptOnly.wait(until: "value == %@", "1") else {
       XCTFail("The script-only switch did not turn on.\n\(app.debugDescription)")
       return

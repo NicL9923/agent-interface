@@ -1021,6 +1021,15 @@ enum ServerDate {
   static func string(_ date: Date) -> String { fractional.string(from: date) }
 }
 
+/// UserDefaults keys for this device rather than a household scope. `AppStore.StorageKind` holds
+/// the scoped ones. Changing a value here forgets what installed apps saved under the old name.
+enum DeviceDefaults {
+  static let host = "connection.host"
+  static let pushDeviceId = "push.deviceId"
+  /// When the sign-in to `server` expires.
+  static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
+}
+
 enum ConnectionAddress {
   static func parse(_ raw: String) throws -> URL {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
