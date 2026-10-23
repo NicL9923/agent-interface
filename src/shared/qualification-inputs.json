@@ -26,6 +26,7 @@
   "src/hermes/extension.py",
   "src/hermes/gateway_guard.py",
   "src/hermes/integrations.py",
+  "src/hermes/private_fs.py",
   "src/hermes/qualification.py",
   "src/hermes/service_auth.py",
   "src/hermes/vault.py",

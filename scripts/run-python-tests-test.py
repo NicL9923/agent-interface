@@ -1,14 +1,15 @@
 """The Python test runner must not let a test silently not run."""
-import importlib.util
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("run_python_tests", ROOT / "scripts/run-python-tests.py")
-runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+runner = load_source("scripts/run-python-tests.py", "run_python_tests")
 
 
 class Classification(unittest.TestCase):

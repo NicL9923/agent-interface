@@ -2,7 +2,6 @@
 import contextlib
 import datetime as dt
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -17,9 +16,10 @@ import unittest
 from unittest.mock import patch
 import uuid
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("linux_upgrade", ROOT / "scripts/hermes-upgrade-linux.py")
-linux = importlib.util.module_from_spec(spec); spec.loader.exec_module(linux)
+linux = load_source("scripts/hermes-upgrade-linux.py", "linux_upgrade")
 
 
 class FixturePlatform(linux.Platform):
@@ -256,7 +256,7 @@ class PlatformTests(unittest.TestCase):
         offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
         tree = self.git("cat-file", "-p", self.candidate).splitlines()[0].split()[1]
         missing = subprocess.run(["git", "-C", str(self.source), "cat-file", "-e", tree], env=offline,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(missing.returncode, 0, "The production fixture must lack the candidate tree")
         self.assertEqual(self.git("config", "--get", "remote.origin.partialclonefilter").strip(), "tree:0")
         self.platform.quiescence()

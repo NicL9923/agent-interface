@@ -14,6 +14,7 @@ import re
 import secrets
 import socket
 import stat
+import sys
 import threading
 import time
 from pathlib import Path
@@ -49,6 +50,31 @@ KEYS = {
 }
 
 
+def sibling_module(name):
+    """Load src/hermes/NAME.py once per process, under its one canonical module name.
+
+    A second load under another name would be a separate instance with its own state.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
+
+private_fs = sibling_module("private_fs")
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -63,8 +89,7 @@ def card(identity, name, category, profile, status="not_connected", detail="Not 
 
 def private_json(path):
     path = Path(path)
-    info = path.lstat()
-    if path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536:
+    if not private_fs.owner_private(path, max_bytes=65536):
         raise IntegrationError("OAuth client file must be an owner-only regular file.")
     return json.loads(path.read_text())
 
@@ -85,7 +110,7 @@ def cache_check(home, result):
     except (ValueError, OSError):
         cached = {}
     cached[result["id"]] = dict(fingerprint=fingerprint(home), checked=result)
-    atomic_json(path, cached)
+    private_fs.atomic_json(path, cached)
 
 
 def apply_checks(home, rows):
@@ -102,20 +127,6 @@ def apply_checks(home, rows):
                 if field in evidence:
                     row[field] = evidence[field]
     return rows
-
-
-def atomic_json(path, payload):
-    path = Path(path)
-    temp = path.with_name(path.name + "." + secrets.token_hex(8))
-    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(payload, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
 
 
 def maintenance():
@@ -418,7 +429,7 @@ def google_callback(callback_url, flow_id=None, profile=None):
                 with FLOW_LOCK:
                     if entry["status"] != "exchanging" or entry["expires"] < time.time():
                         raise IntegrationError("Google authorization was cancelled or expired before completion.")
-                    atomic_json(old_path, payload)
+                    private_fs.atomic_json(old_path, payload)
                     entry["status"] = "approved"
             finally:
                 retirement.cancel(permit["token"])
@@ -574,7 +585,6 @@ async def inventory(profile):
         platforms = (await messaging.get_messaging_platforms(profile)).get("platforms", [])
         if isinstance(platforms, dict):
             platforms = list(platforms.values())
-        discord = next((p for p in platforms if p.get("id") == "discord"), {})
         configured = bool(env.get("DISCORD_BOT_TOKEN"))
         rows.append(card("discord", "Discord", "messaging", profile, "configured" if configured else "not_connected", "Native Discord channel is configured. Check verifies its token." if configured else "Connect the Discord bot in the official Hermes Channels page.", actions=dict(connect=False, check=configured, disconnect=False), capabilities=["Native Discord messaging"]))
     except Exception:

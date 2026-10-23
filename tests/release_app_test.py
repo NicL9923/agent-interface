@@ -1,7 +1,6 @@
 """Release wrapper rules and host programs, against temporary directories only."""
 import datetime
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,15 +13,13 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
 from deploy_common import Fence  # noqa: E402
-spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
-release_app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(release_app)
-spec = importlib.util.spec_from_file_location("qualify_app", ROOT / ".agents/tools/qualify-app-release.py")
-qualify_app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(qualify_app)
+release_app = load_source(".agents/tools/release-app.py", "release_app")
+qualify_app = load_source(".agents/tools/qualify-app-release.py", "qualify_app")
 
 FAKE_RECOVERY_HELPER = """
 import json, sys
@@ -42,7 +39,7 @@ if __name__ == "__main__":
 
 def run_remote(program, payload):
     """Execute a host program locally, exactly as the wrapper sends it over SSH."""
-    done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True)
+    done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True, check=False)
     return done.returncode, done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "", done.stderr
 
 
@@ -56,7 +53,8 @@ class QualificationBrowser(unittest.TestCase):
             (release / 'src/shared').mkdir()
             (release / 'scripts/spike').mkdir(parents=True)
             (release / 'node_modules').mkdir()
-            shutil.copy2(ROOT / 'src/hermes/qualification.py', release / 'src/hermes/qualification.py')
+            for name in ('qualification.py', 'private_fs.py'):
+                shutil.copy2(ROOT / 'src/hermes' / name, release / 'src/hermes' / name)
             shutil.copy2(ROOT / 'scripts/hermes-upgrade-worker.py', release / 'scripts/hermes-upgrade-worker.py')
             (release / 'src/shared/qualification-inputs.json').write_text('["src/hermes/qualification.py"]')
             seen = base / 'browser-seen.json'

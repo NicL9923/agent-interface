@@ -15,6 +15,27 @@ UPDATE_HANDOFF_MESSAGE = ("Hermes updates are managed by WildBots. Check for and
                           "from Hermes updates in the app.")
 
 
+def sibling_module(name):
+    """Load src/hermes/NAME.py once per process, under its one canonical module name.
+
+    A second load under another name would be a separate instance with its own state.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
 def hand_updates_to_app():
     """Turn off the native dashboard's own Hermes updater.
 
@@ -41,12 +62,7 @@ def main():
         raise SystemExit("This wrapper starts the existing supervised dashboard only.")
     if os.environ.get("HERMES_SERVE_HEADLESS") == "1":
         raise SystemExit("A production dashboard must preserve its UI. Remove HERMES_SERVE_HEADLESS.")
-    def sibling(name):
-        spec = importlib.util.spec_from_file_location("agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py"))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    extension, service = sibling("extension"), sibling("service_auth")
+    extension, service = sibling_module("extension"), sibling_module("service_auth")
     secret = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", "")
     qualified = True
     try:
@@ -66,11 +82,11 @@ def main():
     if qualified:
         import hermes_cli.web_server as web
         from tui_gateway import server
-        sibling("computer").install_tools()
+        sibling_module("computer").install_tools()
         journal = extension.install()
-        sibling("experience").install(web, journal, server._history_to_messages)
-        sibling("vault").install(web, journal)
-        sibling("integrations").install(web)
+        sibling_module("experience").install(web, journal, server._history_to_messages)
+        sibling_module("vault").install(web, journal)
+        sibling_module("integrations").install(web)
         service.install_service_auth(web, secret)
     cli.main()
 

@@ -8,18 +8,43 @@ import contextlib
 import functools
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 from pathlib import Path
 import secrets
 import re
-import stat
 import subprocess
 import sys
 import time
 import threading
 from urllib.parse import urlsplit
 import urllib.request
+
+
+def sibling_module(name):
+    """Load src/hermes/NAME.py once per process, under its one canonical module name.
+
+    A second load under another name would be a separate instance with its own state.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
+
+private_fs = sibling_module("private_fs")
 
 
 class ComputerError(RuntimeError):
@@ -186,8 +211,7 @@ class Computer:
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state.mkdir(exist_ok=True, mode=0o700)
         for path in (self.home, self.state):
-            st = path.lstat()
-            if path.is_symlink() or st.st_uid != os.getuid() or st.st_mode & 0o077:
+            if not private_fs.owner_private(path, "dir"):
                 raise ComputerError("The household computer directory must be owner-only.")
 
     @contextlib.contextmanager
@@ -203,7 +227,7 @@ class Computer:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise ComputerError("The household computer is busy. Try again after the current action finishes.")
+                        raise ComputerError("The household computer is busy. Try again after the current action finishes.") from None
                     time.sleep(.025)
             try:
                 yield fd
@@ -224,17 +248,7 @@ class Computer:
             raise ComputerError("The household computer ownership record cannot be read.") from exc
 
     def _write(self, name, value):
-        target = self.state / name
-        temporary = self.state / (name + "." + secrets.token_hex(8))
-        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        try:
-            with os.fdopen(fd, "w") as handle:
-                json.dump(value, handle)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        private_fs.atomic_json(self.state / name, value)
 
     def _actor(self, params):
         actor, name = params.get("actorId"), params.get("actorName")
@@ -269,7 +283,7 @@ class Computer:
         env.update(record["environment"])
         try:
             result = subprocess.run([record["python"], "-c", HARNESS_RECOVERY], env=env,
-                input=json.dumps(record).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                input=json.dumps(record).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
             if result.returncode:
                 return False
         except (OSError, subprocess.TimeoutExpired):
@@ -332,9 +346,7 @@ class Computer:
             self._private_dir()
             fd = os.open(self.state / "computer-browser.json", os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(fd) as handle:
-                info = os.fstat(handle.fileno())
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                        or info.st_mode & 0o077 or info.st_size > 4096):
+                if not private_fs.owner_private(handle.fileno(), max_bytes=4096):
                     return False
                 record = json.load(handle)
             if not isinstance(record, dict) or record.get("endpoint") != self.endpoint:
@@ -480,7 +492,7 @@ class Computer:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise ComputerError("The household computer is busy. Retry after its current action finishes.")
+                        raise ComputerError("The household computer is busy. Retry after its current action finishes.") from None
                     time.sleep(.025)
             self._check_bot_admission()
             if self._lease().epoch != lease_epoch:
@@ -582,8 +594,7 @@ def install_tools():
         # Unix sockets need one fixed short namespace for this shared resource.
         shared_ipc = Path("/tmp") / ("agentui-computer-" + str(os.getuid()) + "-" + hashlib.sha256(str(home).encode()).hexdigest()[:12])
         shared_ipc.mkdir(mode=0o700, exist_ok=True)
-        info = shared_ipc.lstat()
-        if shared_ipc.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        if not private_fs.owner_private(shared_ipc, "dir"):
             raise ComputerError("The household browser IPC directory must be private.")
         env.update(BH_HOME=str(computer.state / "harness"), BH_RUNTIME_DIR=str(shared_ipc), BH_RUNTIME_DIR_SHARED="1",
                    BH_TMP_DIR=str(computer.state / "harness" / "tmp"), BH_TMP_DIR_SHARED="1")

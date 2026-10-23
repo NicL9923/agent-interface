@@ -85,7 +85,7 @@ parser.add_argument("--hermes-home", default="~/.hermes")
 parser.add_argument("--source", default="~/.hermes/hermes-agent")
 args = parser.parse_args()
 payload = {"files": files, "inlineInstructions": base64.b64encode((REPO / "src/shared/inline-ui-instructions.json").read_bytes()).decode(), "hermesHome": args.hermes_home, "launcher": args.launcher, "source": args.source}
-result = subprocess.run(["ssh", args.ssh_host, "python3 -c " + shlex.quote(REMOTE)], input=json.dumps(payload), text=True, capture_output=True)
+result = subprocess.run(["ssh", args.ssh_host, "python3 -c " + shlex.quote(REMOTE)], input=json.dumps(payload), text=True, capture_output=True, check=False)
 if result.returncode:
     raise SystemExit(result.stderr)
 evidence = json.loads(result.stdout)
