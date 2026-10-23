@@ -30,58 +30,50 @@ enum ActivityState: String, Codable, CaseIterable {
   var active: Bool { [.thinking, .working, .waiting, .blocked].contains(self) }
 }
 struct AvatarConfig: Codable, Equatable {
-  var mode = "geometric"
-  var shape: String? = "blob"
-  var family: String? = nil
+  var mode = AvatarMode.geometric
+  var shape: AvatarShape? = .blob
+  var family: AvatarFamily? = nil
   var color: String? = "#1084FE"
-  var eyes: String? = "oval"
-  var accessory: String? = "none"
+  var eyes: AvatarEyes? = .oval
+  var accessory: AvatarAccessory? = .plain
   var eyeWidth: Double? = 1
   var eyeHeight: Double? = 1
   var eyeSpacing: Double? = 1
   var src: String? = nil
   var origin: String? = nil
-  static let shapes = [
-    "blob", "pebble", "squircle", "capsule", "triangle", "hex", "cloud", "drop", "circle",
-    "diamond", "sparkle", "clover", "heart", "cookie", "pentagon", "burst", "alien", "ghost",
-    "flower", "sun",
-  ]
-  static let everydayFamilies: [(id: String, label: String)] = [
-    ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"), ("panda", "Panda"),
-    ("raccoon", "Raccoon"), ("owl", "Owl"), ("cactus", "Cactus"), ("dinosaur", "Dinosaur"),
+  static let shapes = AvatarShape.all
+  static let everydayFamilies: [(id: AvatarFamily, label: String)] = [
+    (.bear, "Bear"), (.fox, "Fox"), (.sprout, "Sprout"), (.panda, "Panda"),
+    (.raccoon, "Raccoon"), (.owl, "Owl"), (.cactus, "Cactus"), (.dinosaur, "Dinosaur"),
   ]
   /// Listed under their own "Seasonal" heading, in calendar order from spring, like the web editor.
-  static let seasonalFamilies: [(id: String, label: String)] = [
-    ("leprechaun", "Leprechaun"), ("bunny", "Easter Bunny"), ("eagle", "Bald Eagle"),
-    ("pumpkin", "Pumpkin"), ("bat", "Bat"), ("ghost", "Ghost"), ("turkey", "Turkey"),
-    ("santa", "Santa"), ("rudolph", "Rudolph"), ("snowman", "Snowman"),
+  static let seasonalFamilies: [(id: AvatarFamily, label: String)] = [
+    (.leprechaun, "Leprechaun"), (.bunny, "Easter Bunny"), (.eagle, "Bald Eagle"),
+    (.pumpkin, "Pumpkin"), (.bat, "Bat"), (.ghost, "Ghost"), (.turkey, "Turkey"),
+    (.santa, "Santa"), (.rudolph, "Rudolph"), (.snowman, "Snowman"),
   ]
-  static var families: [(id: String, label: String)] { everydayFamilies + seasonalFamilies }
-  static let seasonalColors = [
-    "leprechaun": "#F2B08B", "bunny": "#F5E9D8", "eagle": "#F7F3EA", "pumpkin": "#FF9800",
-    "bat": "#5E4B8B", "ghost": "#F2EEF8", "turkey": "#97683D", "santa": "#F2B08B",
-    "rudolph": "#97683D", "snowman": "#F4F8FB",
+  static var families: [(id: AvatarFamily, label: String)] { everydayFamilies + seasonalFamilies }
+  static let seasonalColors: [AvatarFamily: String] = [
+    .leprechaun: "#F2B08B", .bunny: "#F5E9D8", .eagle: "#F7F3EA", .pumpkin: "#FF9800",
+    .bat: "#5E4B8B", .ghost: "#F2EEF8", .turkey: "#97683D", .santa: "#F2B08B",
+    .rudolph: "#97683D", .snowman: "#F4F8FB",
   ]
   /// Bear, fox and sprout are drawn by AvatarArtwork itself; every later mascot is a character.
-  static let characterFamilies: [String] = families.map(\.id).filter {
-    !["bear", "fox", "sprout"].contains($0)
+  static let characterFamilies: [AvatarFamily] = families.map(\.id).filter {
+    ![.bear, .fox, .sprout].contains($0)
   }
   /// The character a mascot avatar draws, if its family is one.
-  var character: String? {
-    guard mode == "mascot", let family, Self.characterFamilies.contains(family) else { return nil }
+  var character: AvatarFamily? {
+    guard mode == .mascot, let family, Self.characterFamilies.contains(family) else { return nil }
     return family
   }
-  var geometry: String {
-    if mode == "geometric" { return shape ?? "blob" }
-    return character ?? "mascot"
+  /// The outline this avatar morphs to. An unknown shape draws as the blob, an unknown or
+  /// plain mascot as the shared mascot head.
+  var body: AvatarBody {
+    if mode == .geometric { return .shape(shape ?? .blob) }
+    return character.map(AvatarBody.character) ?? .mascot
   }
-  /// The key of the body outline. A character named like a geometric shape, the ghost, still
-  /// gets its own silhouette.
-  var silhouette: String {
-    if mode == "geometric" { return shape ?? "blob" }
-    return character.map(AvatarGeometry.characterKey) ?? "mascot"
-  }
-  func selectingFamily(_ family: String) -> AvatarConfig {
+  func selectingFamily(_ family: AvatarFamily) -> AvatarConfig {
     var next = self
     next.family = family
     if let color = Self.seasonalColors[family] { next.color = color }
@@ -123,6 +115,20 @@ struct Preferences: Codable, Equatable {
 struct Capability: Codable, Equatable {
   var supported: Bool
   var reason: String?
+}
+/// The capability names the server reports, mirroring `CapabilityKey` in src/shared/types.ts.
+/// Bootstrap keeps its capabilities keyed by raw name, so a name a newer server adds still
+/// decodes and survives an offline-cache round trip; code asks by case, so a typo cannot compile.
+/// ContractFixtureTests checks `allCases` against the server's own bootstrap fixture.
+enum CapabilityKey: String, CaseIterable {
+  case chat, steering, approvals, uploads, generatedFiles, botConfiguration, tools, skills
+  case routines, durableEvents, idempotency, imageGeneration, stop, portraitGeneration
+  case avatarMetadata
+}
+/// The bot settings tabs that load a catalog from the server; each is named for its capability.
+enum CatalogKind: String, CaseIterable {
+  case tools, skills
+  var capability: CapabilityKey { self == .tools ? .tools : .skills }
 }
 struct RuntimeStatus: Codable, Equatable {
   var connected: Bool
@@ -771,6 +777,7 @@ struct Bootstrap: Codable, Equatable {
   var preferences: Preferences
   var bots: [Bot]
   var capabilities: [String: Capability]
+  subscript(capability key: CapabilityKey) -> Capability? { capabilities[key.rawValue] }
   var connection: RuntimeStatus
   var csrfToken: String?
   /// Present when the host publishes the latest distributed iOS build.

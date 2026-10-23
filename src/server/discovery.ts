@@ -6,15 +6,15 @@ import type { Runtime } from '../shared/types.js';
 import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
-const id = z.string().min(1).max(200);
-const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
+import { httpError } from './http-error.js';
+import { id } from './schemas.js';
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {
-    if (!(await visible(userId)).some(row => row.id === botId)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
+    if (!(await visible(userId)).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   }
   function experience() {
-    if (!runtime.experienceRequest) throw fail(409, 'Search and usage require the current qualified Hermes integration.');
+    if (!runtime.experienceRequest) throw httpError(409, 'Search and usage require the current qualified Hermes integration.');
     return runtime.experienceRequest.bind(runtime);
   }
   app.get('/api/search', async req => {
@@ -62,9 +62,9 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
       const locate = body.messageId && body.offset === undefined;
       const page = await experience()({ operation: 'history', profile: body.botId, sessionId: body.sessionId, offset: body.offset ?? 0, ...(locate ? {messageId: body.messageId} : {}) }) as HistoryPage;
       if (locate) { body.offset = page.offset; body.messageId = page.targetMessageId ?? body.messageId; }
-      if (body.messageId && !page.messages.some(message=>message.id===body.messageId)) throw fail(404,'The saved reply is no longer in this history page.');
+      if (body.messageId && !page.messages.some(message=>message.id===body.messageId)) throw httpError(404,'The saved reply is no longer in this history page.');
     }
-    else { if (!runtime.routineOutput) throw fail(409, 'Routine outputs unavailable'); await runtime.routineOutput(body.botId, body.routineId, body.resultId); }
+    else { if (!runtime.routineOutput) throw httpError(409, 'Routine outputs unavailable'); await runtime.routineOutput(body.botId, body.routineId, body.resultId); }
     return store.saveItem(userId, body);
   });
   app.delete('/api/saved/:id', async req => { store.deleteSavedItem(signedIn(req).id, z.object({ id }).parse(req.params).id); return { ok: true }; });
@@ -72,9 +72,9 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const routineId = z.object({id}).parse(req.params).id;
     const {enabled} = z.object({enabled:z.boolean()}).strict().parse(req.body);
     const row=(await runtime.routines()).find(row=>row.id===routineId);
-    if(!row)throw fail(404,'Routine not found');
+    if(!row)throw httpError(404,'Routine not found');
     await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId);
-    if(!runtime.setRoutineEnabled)throw fail(409,'This integration cannot change routine state independently.');
+    if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
     await runtime.setRoutineEnabled(row.botId,routineId,enabled);return {ok:true};
   });
   app.get('/api/automations', async req => {
@@ -89,7 +89,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   });
   app.get('/api/bots/:id/starters', async req => {
     const botId = z.object({ id }).parse(req.params).id;
-    if (!(await runtime.listBots()).some(row => row.id === botId)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
     const tools = await runtime.tools(botId);
     const enabled = new Set(tools.filter(tool => tool.enabled).map(tool => tool.id));
     const starters: Starter[] = [{ id: 'meals', title: 'Plan dinners', prompt: 'Help me plan five easy dinners. Ask about our preferences, budget and what we already have before making the plan.' }];

@@ -5,6 +5,7 @@ import { Icon } from "./Icon";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import "./model-selector.css";
+import { FormMessage } from "./ui/form-message";
 
 const identity = (choice: ModelChoice) => JSON.stringify([choice.provider, choice.model]);
 const matchesProvider = (provider: ModelProvider, id: string) =>
@@ -101,7 +102,7 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
         </div>
         {loading && <p className="muted" role="status">Loading models from Hermes…</p>}
         {error && <div className="model-load-error"><p role="alert">{error}</p><Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button></div>}
-        {favoriteError && <p className="form-error" role="alert">{favoriteError}</p>}
+        {favoriteError && <FormMessage tone="error">{favoriteError}</FormMessage>}
         {favoriteChoices.length > 0 && <div className="model-favorites"><h3>Favorites</h3>
           {favoriteChoices.map(({ choice, provider, model }) => row(choice, model.name, model.available, provider.name))}</div>}
         {providers.map((provider) => <details className="model-provider" key={`${provider.id}:${!!query}`} open={query || matchesProvider(provider, value.provider) ? true : undefined}>

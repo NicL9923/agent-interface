@@ -66,6 +66,7 @@ def tree_digest(root, listing=None):
 
 
 def private_directory(path):
+    # Not private_fs.owner_private: prepare freezes this file alone into the candidate stage.
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
         raise RuntimeError("Candidate stage must be a private directory owned by this user")
@@ -297,7 +298,7 @@ def prepare(source, stage, launcher, installed_source, installed_home):
     log = stage / "pm-build.log"
     with log.open("w") as output:
         log.chmod(0o600)
-        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800)
+        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800, check=False)
     if result.returncode:
         raise RuntimeError("Candidate native PM dependency build failed; inspect its private build log")
     built = json.loads(result.stdout)
@@ -393,4 +394,4 @@ if __name__ == "__main__":
     except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as error:
         # The caller's log needs the stack: "Permission denied: '/'" alone cannot be traced.
         traceback.print_exc()
-        raise SystemExit("Managed qualification failed: " + str(error))
+        raise SystemExit("Managed qualification failed: " + str(error)) from error

@@ -1,22 +1,21 @@
-import { useEffect, useState } from "react";
-import { api, ApiError, write } from "../client-api";
+import { useState } from "react";
+import { ApiError, write } from "../client-api";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
+import { FormMessage } from "./ui/form-message";
 import type { MemoryDocument, ProfileMemory } from "../shared/experience";
 import "./experience.css";
 
 function MemoryEditor({ document, botId, busy, onChange }: { document: MemoryDocument; botId: string; busy: boolean; onChange: (memory: ProfileMemory) => void }) {
   const [entries, setEntries] = useState(document.entries.map(entry => ({ ...entry })));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const { busy: saving, error, run, setError } = useAction();
   const [conflict, setConflict] = useState(false);
   const [forget, setForget] = useState<string | null>(null);
   const changed = JSON.stringify(entries) !== JSON.stringify(document.entries);
   const path = `/bots/${encodeURIComponent(botId)}/memory/${document.target}`;
-  async function mutate(action: () => Promise<ProfileMemory>) {
-    setSaving(true); setError("");
-    try { onChange(await action()); }
-    catch (e) { setError((e as Error).message); if (e instanceof ApiError && e.status === 409) setConflict(true); }
-    finally { setSaving(false); }
-  }
+  const mutate = (work: () => Promise<ProfileMemory>) => run(async () => onChange(await work()), {
+    onError: cause => { if (cause instanceof ApiError && cause.status === 409) setConflict(true); },
+  });
   return <section className="memory-document">
     <div className="memory-heading"><h3>{document.label}</h3><small>{document.charCount} / {document.charLimit} characters</small></div>
     {!document.enabled && <p className="capability-note">This memory is disabled in the Hermes profile.</p>}
@@ -37,24 +36,16 @@ function MemoryEditor({ document, botId, busy, onChange }: { document: MemoryDoc
         onClick={() => void mutate(() => write<ProfileMemory>(path, { revision: document.revision,
           entries: entries.map(entry => ({ ...(entry.id ? { id: entry.id } : {}), text: entry.text })) }, "PATCH"))}>{saving ? "Saving..." : "Save memories"}</button>
       {changed && <button type="button" disabled={saving} onClick={() => { setEntries(document.entries.map(entry => ({ ...entry }))); setError(""); }}>Discard edits</button>}</div>
-    {error && <p className="form-error" role="alert">{error}{conflict && " Your edits are kept. Copy them before reloading the newer profile memory."}</p>}
+    {error && <FormMessage tone="error">{error}{conflict && " Your edits are kept. Copy them before reloading the newer profile memory."}</FormMessage>}
   </section>;
 }
 export function MemoryPanel({ botId }: { botId: string }) {
-  const [memory, setMemory] = useState<ProfileMemory | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    let current = true; setLoading(true); setError("");
-    void api<ProfileMemory>(`/bots/${encodeURIComponent(botId)}/memory`).then(result => { if (current) setMemory(result); })
-      .catch(e => { if (current) setError(e.message); }).finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
-  }, [botId, retry]);
+  const resource = useResource<ProfileMemory>(`/bots/${encodeURIComponent(botId)}/memory`);
+  const { data: memory, error, loading, setData: setMemory } = resource;
   return <div className="memory-panel"><h2>What Hermes remembers</h2>
     <p className="muted">Inspect and correct the facts saved in the assistant's Hermes profile.</p>
     {loading && <p role="status">Loading profile memory...</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}
+    {error && <FormMessage tone="error">{error}</FormMessage>}
     {memory && <><p className="capability-note"><strong>Profile: {memory.profile}.</strong> {memory.notice}</p>
       {memory.refresh && <p role="status">{memory.refresh.message}</p>}
       {memory.documents.map(document => <MemoryEditor key={`${document.target}:${document.revision}`} document={document} botId={botId} busy={loading}
@@ -62,6 +53,6 @@ export function MemoryPanel({ botId }: { botId: string }) {
           refresh: result.refresh, notice: result.notice,
           documents: previous.documents.map(saved => saved.target === document.target
             ? result.documents.find(updated => updated.target === saved.target) || saved : saved) } : result)} />)}</>}
-    <button type="button" disabled={loading} onClick={() => setRetry(retry + 1)}>{error ? "Try loading again" : "Reload profile memory"}</button>
+    <button type="button" disabled={loading} onClick={() => void resource.reload()}>{error ? "Try loading again" : "Reload profile memory"}</button>
   </div>;
 }

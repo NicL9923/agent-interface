@@ -77,7 +77,8 @@ result["checks"]["only_probe_process_stopped"] = True
 print(json.dumps(result))
 '''
 
-files = {name: base64.b64encode((REPO / "src/hermes" / name).read_bytes()).decode() for name in ("dashboard.py", "automation.py", "experience.py", "vault.py", "extension.py", "service_auth.py", "integrations.py", "qualification.py", "computer.py")}
+# Ship every add-on module: the add-on loads its siblings by file, so a missing one fails at startup.
+files = {path.name: base64.b64encode(path.read_bytes()).decode() for path in sorted((REPO / "src/hermes").glob("*.py"))}
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--ssh-host", required=True)
 parser.add_argument("--launcher", default="~/.local/bin/hermes")
@@ -85,7 +86,7 @@ parser.add_argument("--hermes-home", default="~/.hermes")
 parser.add_argument("--source", default="~/.hermes/hermes-agent")
 args = parser.parse_args()
 payload = {"files": files, "inlineInstructions": base64.b64encode((REPO / "src/shared/inline-ui-instructions.json").read_bytes()).decode(), "hermesHome": args.hermes_home, "launcher": args.launcher, "source": args.source}
-result = subprocess.run(["ssh", args.ssh_host, "python3 -c " + shlex.quote(REMOTE)], input=json.dumps(payload), text=True, capture_output=True)
+result = subprocess.run(["ssh", args.ssh_host, "python3 -c " + shlex.quote(REMOTE)], input=json.dumps(payload), text=True, capture_output=True, check=False)
 if result.returncode:
     raise SystemExit(result.stderr)
 evidence = json.loads(result.stdout)

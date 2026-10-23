@@ -1,5 +1,4 @@
 """Qualification runs browser policy coverage when possible and records any skip."""
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -8,10 +7,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from support import load_source
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-spec = importlib.util.spec_from_file_location("spike_runner", Path(__file__).with_name("run.py"))
-runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+runner = load_source("scripts/spike/run.py", "spike_runner")
 
 
 class ComputerProbeRunnerTests(unittest.TestCase):

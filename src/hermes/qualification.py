@@ -72,6 +72,7 @@ def read_receipt(path, app_root):
     path = Path(path)
     if not path.is_absolute() or path.is_symlink():
         raise ValueError("Qualification receipt must be a private absolute file.")
+    # Not private_fs.owner_private: tools run this file from other release trees with runpy.
     info = path.stat()
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 8192:
         raise ValueError("Qualification receipt must be owner-only and owned by this runtime.")

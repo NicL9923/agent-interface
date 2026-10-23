@@ -10,10 +10,13 @@ import type {
   BotInput,
   FileRef,
   Routine,
-  Skill,
-  Tool,
 } from "./shared/types";
 import { api, ApiError, write } from "./client-api";
+import { useAction } from "./app/use-action";
+import { useCatalogDraft } from "./app/use-catalog-draft";
+import { useResource } from "./app/use-resource";
+import { CatalogEditor } from "./components/CatalogEditor";
+import { FormMessage } from "./components/ui/form-message";
 import { IntegrationList } from "./components/IntegrationsPanel";
 import { Icon } from "./components/Icon";
 import { defaultAvatar } from "./components/Avatar";
@@ -26,8 +29,21 @@ import { RoutineEnhancements, RoutineSchedulePreview } from "./components/Routin
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
 import { AdvancedRoutineFields } from "./components/AdvancedRoutineFields";
-const enabledKey = (items: Skill[]) => items.filter((item) => item.enabled).map((item) => item.id).sort().join("\n");
-const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "work", "learning", "memory", "logins"];
+const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "work", "learning", "memory", "logins"] as const;
+type SettingsTab = (typeof settingsSections)[number];
+/** A lean roster row lacks some fields, so each one has a safe default. A missing bot takes the first one's model. */
+function formFromBot(bot: Bot | null, fallback?: Bot): BotInput {
+  const modelSource = bot?.model ? bot : fallback;
+  return {
+    name: bot?.name || "",
+    description: bot?.description || "",
+    instructions: bot?.instructions || "",
+    model: modelSource?.model || "",
+    provider: modelSource?.provider,
+    shared: bot?.shared ?? true,
+    enabledMcpServers: bot?.enabledMcpServers ?? [],
+  };
+}
 function useCompactSettings() {
   const query = "(max-width: 620px)";
   const [compact, setCompact] = useState(() => typeof window.matchMedia === "function" && window.matchMedia(query).matches);
@@ -64,22 +80,14 @@ function LoadedBotSettings({
   const existing = created ?? (bot === "new" ? null : bot);
   const [step, setStep] = useState<"look" | "role">("look");
   const [avatarFailure, setAvatarFailure] = useState("");
-  const [tab, setTab] = useState("details");
+  const [tab, setTab] = useState<SettingsTab>("details");
   const compactSettings = useCompactSettings();
   const overflowMenu = useRef<HTMLDetailsElement>(null);
   const overflowTrigger = useRef<HTMLElement>(null);
   const overflowMenuId = useId();
   // What the form and avatar last matched on the server; saves move it forward.
   const [baseline, setBaseline] = useState<{ form: BotInput; avatar: AvatarConfig }>(() => ({
-    form: {
-      name: existing?.name || "",
-      description: existing?.description || "",
-      instructions: existing?.instructions || "",
-      model: existing?.model || bootstrap.bots[0]?.model || "",
-      provider: existing?.provider || bootstrap.bots[0]?.provider || "",
-      shared: existing?.shared ?? true,
-      enabledMcpServers: existing ? existing.enabledMcpServers : [],
-    },
+    form: formFromBot(existing, bootstrap.bots[0]),
     avatar: existing?.avatar || defaultAvatar,
   }));
   // The dialog stays mounted while detail loads; only authoritative detail seeds the form.
@@ -88,31 +96,20 @@ function LoadedBotSettings({
     if (loading) { wasLoading.current = true; return; }
     if (!wasLoading.current || !existing) return;
     wasLoading.current = false;
-    const form: BotInput = {
-      name: existing.name,
-      description: existing.description ?? "",
-      instructions: existing.instructions!,
-      model: existing.model,
-      provider: existing.provider,
-      shared: existing.shared,
-      enabledMcpServers: existing.enabledMcpServers,
-    };
+    const form = formFromBot(existing);
     setBaseline({ form, avatar: existing.avatar || defaultAvatar });
     setForm(form);
     setAvatar(existing.avatar || defaultAvatar);
   }, [loading, existing]);
   const [form, setForm] = useState<BotInput>(baseline.form);
   const [avatar, setAvatar] = useState<AvatarConfig>(baseline.avatar);
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
-  // Tool and skill choices wait for their own Save button, so the loaded or saved choice is their baseline.
-  const [catalogBaseline, setCatalogBaseline] = useState<{ tools?: string; skills?: string }>({});
-  const stagedCatalog = {
-    tools: catalogBaseline.tools !== undefined && enabledKey(tools) !== catalogBaseline.tools,
-    skills: catalogBaseline.skills !== undefined && enabledKey(skills) !== catalogBaseline.skills,
-  };
+  const actions = useAction();
+  const { busy, error, notice, setError, setNotice } = actions;
+  const catalogOptions = (kind: "tools" | "skills") => ({ botId: existing?.id, active: tab === kind, supported: bootstrap.capabilities[kind].supported, report: setError });
+  const toolsDraft = useCatalogDraft("tools", catalogOptions("tools"));
+  const skillsDraft = useCatalogDraft("skills", catalogOptions("skills"));
   const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar])
-    || stagedCatalog.tools || stagedCatalog.skills;
+    || toolsDraft.staged || skillsDraft.staged;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const keepEditing = useRef<HTMLButtonElement>(null);
   const beforePrompt = useRef<HTMLElement | null>(null);
@@ -131,23 +128,14 @@ function LoadedBotSettings({
   useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
   // Escape and the close button both land here, so nothing is discarded without asking.
   const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
-  const [catalog, setCatalog] = useState<{
-    tab: string;
-    botId: string;
-    status: "loading" | "ready" | "error";
-  }>();
-  const [catalogRetry, setCatalogRetry] = useState(0);
-  const catalogReady = catalog?.tab === tab &&
-    catalog.botId === existing?.id && catalog.status === "ready";
-  const [routines, setRoutines] = useState<Routine[]>([]);
-  const [error, setError] = useState("");
+  const routinesResource = useResource<Routine[]>(existing && tab === "routines" && bootstrap.capabilities.routines.supported ? "/routines" : null);
+  const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
   const [confirmModel, setConfirmModel] = useState(false);
   // Making a shared or ownerless assistant personal hides it from everyone else, so it asks first.
   const [confirmPersonal, setConfirmPersonal] = useState(false);
   const [personalConfirmed, setPersonalConfirmed] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const shownError = error || routinesResource.error;
   const [prompt, setPrompt] = useState("");
-  const [notice, setNotice] = useState("");
   // The banner sits above the fold on phones, so each save button reports its own progress.
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -155,75 +143,32 @@ function LoadedBotSettings({
   useEffect(() => () => clearTimeout(savedTimer.current), []);
   const progress = (key: string) => saving === key ? "saving" : saved === key ? "saved" : undefined;
   const errorBanner = useRef<HTMLParagraphElement>(null);
-  useEffect(() => { if (error) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [error]);
+  useEffect(() => { if (shownError) errorBanner.current?.scrollIntoView?.({ block: "nearest" }); }, [shownError]);
   // Each creation step, and the created assistant's first view, starts at the top, where its message is.
   useEffect(() => { dialog.current?.querySelector(".settings-content")?.scrollTo?.(0, 0); }, [step, created]);
   const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (!existing) return;
-    let current = true;
-    const id = encodeURIComponent(existing.id);
-    // Reloading would replace choices that are still waiting for their Save button.
-    if ((tab === "tools" || tab === "skills") && stagedCatalog[tab]) setCatalog({ tab, botId: existing.id, status: "ready" });
-    else if ((tab === "tools" || tab === "skills") && bootstrap.capabilities[tab].supported) {
-      setCatalog({ tab, botId: existing.id, status: "loading" });
-      void api<Skill[]>(`/bots/${id}/${tab}`)
-        .then((items) => {
-          if (!current) return;
-          if (tab === "tools") setTools(items);
-          else setSkills(items);
-          setCatalogBaseline((current) => ({ ...current, [tab]: enabledKey(items) }));
-          setCatalog({ tab, botId: existing.id, status: "ready" });
-        })
-        .catch((e) => {
-          if (!current) return;
-          setError(e.message);
-          setCatalog({ tab, botId: existing.id, status: "error" });
-        });
-    }
-    if (tab === "routines" && bootstrap.capabilities.routines.supported)
-      void api<Routine[]>("/routines")
-        .then((result) => {
-          if (current) setRoutines(result.filter((r) => r.botId === existing.id));
-        })
-        .catch((e) => { if (current) setError(e.message); });
-    return () => { current = false; };
-  }, [tab, existing?.id, catalogRetry, bootstrap.capabilities.tools.supported,
-    bootstrap.capabilities.skills.supported, bootstrap.capabilities.routines.supported]);
-  const run = async (action: () => Promise<unknown>, success = "Saved", key?: string) => {
-    setBusy(true);
-    setError("");
-    setNotice("");
+  const run = (action: () => Promise<unknown>, success = "Saved", key?: string) => actions.run(async () => {
     if (key) { setSaving(key); setSaved(null); clearTimeout(savedTimer.current); }
-    try {
-      await action();
-      setNotice(success);
-      if (key) {
-        setSaved(key);
-        savedTimer.current = setTimeout(() => setSaved(current => current === key ? null : current), 2500);
-      }
-      onSaved();
-    } catch (e) {
-      setError((e as Error).message);
-      if (e instanceof ApiError && e.confirmRequired) setConfirmModel(true);
-      if (e instanceof ApiError && e.code === "private_confirmation_required") { setError(""); setConfirmPersonal(true); }
-    } finally {
-      setBusy(false);
-      if (key) setSaving(null);
+    try { await action(); } finally { if (key) setSaving(null); }
+    if (key) {
+      setSaved(key);
+      savedTimer.current = setTimeout(() => setSaved(current => current === key ? null : current), 2500);
     }
-  };
-  const createBot = async (submitted: BotInput, confirmed: boolean) => {
-    setBusy(true); setError(""); setNotice(""); setSaving("details");
+    onSaved();
+  }, {
+    success,
+    onError: cause => {
+      if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true);
+      if (cause instanceof ApiError && cause.code === "private_confirmation_required") { setConfirmPersonal(true); return null; }
+    },
+  });
+  const createBot = (submitted: BotInput, confirmed: boolean) => actions.run(async () => {
+    setSaving("details");
     let saved: Bot;
     try {
       saved = await write<Bot>("/bots", { ...submitted, confirmModel: confirmed });
       setConfirmModel(false);
-    } catch (e) {
-      setError((e as Error).message);
-      if (e instanceof ApiError && e.confirmRequired) setConfirmModel(true);
-      setBusy(false); setSaving(null);
-      return;
-    }
+    } finally { setSaving(null); }
     const chosen = avatar;
     // Portraits are stored with the assistant, so a portrait is added once it exists.
     const portraitNext = chosen.mode === "portrait" && !chosen.src;
@@ -232,7 +177,6 @@ function LoadedBotSettings({
       try { await write(`/bots/${encodeURIComponent(saved.id)}/avatar`, chosen, "PUT"); }
       catch (e) { failure = (e as Error).message || "The avatar could not be saved."; }
     }
-    setBusy(false); setSaving(null);
     onSaved();
     if (!failure && !portraitNext) return onClose();
     setCreated(saved);
@@ -240,7 +184,7 @@ function LoadedBotSettings({
     setTab("avatar");
     if (failure) setAvatarFailure(failure);
     else setNotice(`${saved.name} is ready. Upload or generate its portrait here, then save it.`);
-  };
+  }, { onError: cause => { if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true); } });
   const saveAvatar = () => void run(async () => {
     const submitted = avatar;
     await write(`/bots/${encodeURIComponent(existing!.id)}/avatar`, submitted, "PUT");
@@ -308,7 +252,7 @@ function LoadedBotSettings({
           "This capability is unavailable from the connected Hermes installation."}
       </p>
     ) : null;
-  const selectTab = (section: string, fromOverflow = false) => {
+  const selectTab = (section: SettingsTab, fromOverflow = false) => {
     setTab(section);
     setError("");
     setNotice("");
@@ -389,16 +333,8 @@ function LoadedBotSettings({
         </details>}
       </nav>}
       <div className="settings-content">
-        {error && (
-          <p ref={errorBanner} className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        {notice && (
-          <p className="form-notice" role="status">
-            {notice}
-          </p>
-        )}
+        {shownError && <FormMessage tone="error" ref={errorBanner}>{shownError}</FormMessage>}
+        {notice && <FormMessage tone="notice">{notice}</FormMessage>}
         {confirmDiscard && (
           <div className="capability-note" role="alert">
             <p>Discard your unsaved changes?</p>
@@ -662,82 +598,12 @@ function LoadedBotSettings({
             </div>
           </>
         )}
-        {existing && (tab === "tools" || tab === "skills") && (
-          <>
-            {unavailable(tab)}
-              <>
-                {bootstrap.capabilities[tab].supported && !catalogReady && (
-                  catalog?.tab === tab && catalog.status === "error" ? (
-                    <Button onClick={() => { setError(""); setCatalogRetry((value) => value + 1); }}>
-                      Retry loading {tab}
-                    </Button>
-                  ) : <p role="status">Loading {tab}…</p>
-                )}
-                {(tab === "tools" ? tools : skills).map((item) => (
-                  <label className="capability-item" key={item.id}>
-                    <Input
-                      type="checkbox"
-                      checked={
-                        item.enabled || ("required" in item && !!item.required)
-                      }
-                      disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported || ("required" in item && !!item.required)}
-                      onChange={(e) => {
-                        if (tab === "tools")
-                          setTools((items) =>
-                            items.map((t) =>
-                              t.id === item.id
-                                ? { ...t, enabled: e.target.checked }
-                                : t,
-                            ),
-                          );
-                        else
-                          setSkills((items) =>
-                            items.map((s) =>
-                              s.id === item.id
-                                ? { ...s, enabled: e.target.checked }
-                                : s,
-                            ),
-                          );
-                      }}
-                    />
-                    <span>
-                      <strong>{item.name}</strong>
-                      <small>{item.description}</small>
-                      {"required" in item && !!item.required && (
-                        <small>Required by Hermes</small>
-                      )}
-                    </span>
-                  </label>
-                ))}
-                {catalogReady && bootstrap.capabilities[tab].supported &&
-                  !(tab === "tools" ? tools : skills).length && (
-                    <p className="muted">No {tab} were reported by Hermes.</p>
-                  )}
-                <Button
-                  className="primary with-progress"
-                  disabled={busy || !catalogReady || !bootstrap.capabilities[tab].supported}
-                  onClick={() =>
-                    void run(async () => {
-                      const submitted = tab === "tools" ? tools : skills;
-                      await write(
-                        `/bots/${encodeURIComponent(existing.id)}/${tab}`,
-                        {
-                          ids: submitted
-                            .filter((item) => item.enabled)
-                            .map((item) => item.id),
-                        },
-                        "PUT",
-                      );
-                      setCatalogBaseline((current) => ({ ...current, [tab]: enabledKey(submitted) }));
-                    }, "Saved", tab,
-                    )
-                  }
-                >
-                  <SaveProgress state={progress(tab)} label={`Save ${tab}`} />
-                </Button>
-              </>
-          </>
-        )}
+        {existing && (tab === "tools" || tab === "skills") && (() => {
+          const draft = tab === "tools" ? toolsDraft : skillsDraft;
+          return <CatalogEditor draft={draft} supported={bootstrap.capabilities[tab].supported} note={unavailable(tab)} busy={busy}
+            progress={<SaveProgress state={progress(tab)} label={`Save ${tab}`} />}
+            onSave={() => void run(() => draft.save(existing.id), "Saved", tab)} />;
+        })()}
         {existing && tab === "connections" && <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "work" && <AutomationPanel key={existing.id} botId={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "learning" && <LearningPanel key={existing.id} botId={existing.id} />}
@@ -750,9 +616,9 @@ function LoadedBotSettings({
                 onOpenRoutine={onOpenRoutine}
                 botId={existing.id}
                 routines={routines}
-                setRoutines={setRoutines}
+                reload={routinesResource.reload}
                 bootstrap={bootstrap}
-                report={setError}
+                actions={actions}
               />
           </>
         )}
@@ -796,16 +662,17 @@ function RoutineManager({
   onOpenRoutine,
   botId,
   routines,
-  setRoutines,
+  reload,
   bootstrap,
-  report,
+  actions,
 }: {
   onOpenRoutine?: (botId: string, routineId: string) => void;
   botId: string;
   routines: Routine[];
-  setRoutines: (v: Routine[]) => void;
+  reload: () => Promise<void>;
   bootstrap: Bootstrap;
-  report: (s: string) => void;
+  /** The settings sheet's own action, so its error banner and busy state cover routines too. */
+  actions: ReturnType<typeof useAction>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Omit<Routine, "id">>({
@@ -817,7 +684,7 @@ function RoutineManager({
     recipientIds: [],
     contextFrom: ["self"],
   });
-  const [busy, setBusy] = useState(false);
+  const { busy } = actions;
   const [deleteId, setDeleteId] = useState("");
   const [previewedSchedule, setPreviewedSchedule] = useState("");
   const supported = bootstrap.capabilities.routines.supported;
@@ -826,22 +693,10 @@ function RoutineManager({
   const recipients = bot && !bot.shared && bot.ownerId
     ? bootstrap.household.filter((user) => user.id === bot.ownerId)
     : bootstrap.household;
-  const refresh = async () =>
-    setRoutines(
-      (await api<Routine[]>("/routines")).filter((r) => r.botId === botId),
-    );
-  const action = async (work: () => Promise<unknown>) => {
-    setBusy(true);
-    report("");
-    try {
-      await work();
-      await refresh();
-    } catch (e) {
-      report((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const action = (work: () => Promise<unknown>) => actions.run(async () => {
+    await work();
+    await reload();
+  });
   return (
     <>
       <p className="muted">
@@ -916,9 +771,9 @@ function RoutineManager({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (previewedSchedule !== form.schedule) { report("Preview the schedule before saving this routine."); return; }
-          if (form.noAgent && !form.script?.trim()) { report("Script-only routines require a profile script."); return; }
-          if (!form.prompt.trim() && !form.script?.trim() && !form.skills?.length) { report("Add instructions, a skill, or a profile script."); return; }
+          if (previewedSchedule !== form.schedule) { actions.setError("Preview the schedule before saving this routine."); return; }
+          if (form.noAgent && !form.script?.trim()) { actions.setError("Script-only routines require a profile script."); return; }
+          if (!form.prompt.trim() && !form.script?.trim() && !form.skills?.length) { actions.setError("Add instructions, a skill, or a profile script."); return; }
           void action(async () => {
             await write(
               editing
@@ -1041,25 +896,13 @@ function SaveProgress({ state, label }: { state?: "saving" | "saved"; label: str
 
 /** Lean roster rows cannot initialize a writable form. */
 export function BotSettings(props: Parameters<typeof LoadedBotSettings>[0]) {
-  const [detail, setDetail] = useState<Bot>();
-  const [error, setError] = useState("");
-  const [retry, setRetry] = useState(0);
   const botId = props.bot === "new" ? undefined : props.bot.id;
   const hasConfiguration = props.bot === "new" || typeof props.bot.instructions === "string";
-  useEffect(() => {
-    if (!botId || hasConfiguration) return;
-    const controller = new AbortController();
-    setError("");
-    void api<Bot>(`/bots/${encodeURIComponent(botId)}`, { signal: controller.signal })
-      .then(value => {
-        if (typeof value.instructions !== "string") throw new Error("Assistant settings are incomplete. Try again.");
-        if (!controller.signal.aborted) setDetail(value);
-      })
-      .catch(error => { if (!controller.signal.aborted) setError(error.message); });
-    return () => controller.abort();
-  }, [botId, hasConfiguration, retry]);
-  const ready = hasConfiguration || detail?.id === botId;
+  const detail = useResource<Bot>(botId && !hasConfiguration ? `/bots/${encodeURIComponent(botId)}` : null, {
+    validate: value => { if (typeof value.instructions !== "string") throw new Error("Assistant settings are incomplete. Try again."); },
+  });
+  const ready = hasConfiguration || detail.data?.id === botId;
   return <LoadedBotSettings {...props} key={botId ?? "new"}
-    bot={detail?.id === botId ? detail! : props.bot}
-    loading={ready ? undefined : { error, retry: () => setRetry(value => value + 1) }} />;
+    bot={detail.data?.id === botId ? detail.data! : props.bot}
+    loading={ready ? undefined : { error: detail.error, retry: () => void detail.reload() }} />;
 }

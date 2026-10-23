@@ -34,6 +34,73 @@ const reauthenticate = (cause: unknown) => cause instanceof ApiError && cause.co
 function retryable(cause: unknown) {
   return !(cause instanceof ApiError && [401, 403].includes(cause.status));
 }
+/** What a connection attempt can do while it runs; everything stops when it is replaced or unmounted. */
+type Attachment = {
+  signal: AbortSignal;
+  connected: () => void;
+  /** Shows the message, runs the teardown and tries again after a pause. */
+  retry: (message: string) => void;
+  /** Registers teardown for this attempt. */
+  onCleanup: (teardown: () => void) => void;
+};
+/**
+ * The connection state of a desktop or terminal attachment, and the ladder for a failed attempt: a retired
+ * chunk is raised, a request to confirm identity is handed to the caller, a refusal ends the attempt, and
+ * anything else retries. `connect` runs again for each attempt and reports a lost stream through `retry`.
+ */
+function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { fallback, onReauthenticate, onRetry, canRetry }: {
+  /** Shown when a failed attempt has no better message. */
+  fallback: string;
+  /** Without it, a request to confirm identity fails the attempt like any other refusal. */
+  onReauthenticate?: () => void;
+  /** Runs before each retry is scheduled. */
+  onRetry?: () => void;
+  /** False once the caller ended the session on purpose. */
+  canRetry?: () => boolean;
+}) {
+  const [connection, setConnection] = useState<Connection>("connecting");
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const raise = useRaise();
+  const latest = useRef({ connect, onReauthenticate, onRetry, canRetry, raise });
+  latest.current = { connect, onReauthenticate, onRetry, canRetry, raise };
+  useEffect(() => {
+    const controller = new AbortController();
+    const teardowns: Array<() => void> = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attachment: Attachment = {
+      signal: controller.signal,
+      connected: () => {
+        if (controller.signal.aborted) return;
+        setConnection("connected"); setError("");
+      },
+      retry: message => {
+        if (controller.signal.aborted || latest.current.canRetry?.() === false) return;
+        latest.current.onRetry?.();
+        setError(message); setConnection("reconnecting");
+        clearTimeout(timer);
+        timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
+      },
+      onCleanup: teardown => { teardowns.push(teardown); },
+    };
+    setConnection("connecting");
+    latest.current.connect(attachment).catch(cause => {
+      if (controller.signal.aborted) return;
+      if (reauthenticate(cause) && latest.current.onReauthenticate) { latest.current.onReauthenticate(); return; }
+      // A retired chunk never comes back for this page, so surface it rather than reconnect forever.
+      if (isChunkFailure(cause)) { latest.current.raise(cause); return; }
+      const message = failure(cause, fallback);
+      if (retryable(cause)) attachment.retry(message);
+      else { setConnection("failed"); setError(message); }
+    });
+    return () => {
+      controller.abort(); clearTimeout(timer);
+      for (const teardown of teardowns) teardown();
+    };
+  }, [attempt, fallback]);
+  const reconnect = useCallback(() => setAttempt(value => value + 1), []);
+  return { connection, setConnection, error, setError, reconnect };
+}
 function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   if (controlling) return "You have control";
   if (status?.control.kind === "human") return status.control.mine
@@ -226,74 +293,45 @@ function DesktopView({ status, onStatus, viewerId }: {
 }) {
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
-  const [connection, setConnection] = useState<Connection>("connecting");
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const raise = useRaise();
   const [controlling, setControlling] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
   const [typedText, setTypedText] = useState("");
   const attachmentEpoch = useRef(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  const { connection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: RFB | null = null;
-    const detached = () => {
-      attachmentEpoch.current++;
-      setControlling(false);
-      if (client) client.viewOnly = true;
-    };
-    const retry = (message: string) => {
-      if (controller.signal.aborted) return;
-      detached();
-      setError(message);
-      setConnection("reconnecting");
-      clearTimeout(timer);
-      timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
-    };
-    const connect = async () => {
-      setControlling(false);
-      setConnection("connecting");
-      try {
-        const [{ default: RemoteFrameBuffer }, ticket] = await Promise.all([
-          import("@novnc/novnc"),
-          api<ComputerStreamTicket>("/computer/desktop", {
-            method: "POST", body: JSON.stringify({ viewerId: viewerId.current }), signal: controller.signal,
-          }),
-        ]);
-        if (controller.signal.aborted || !screen.current) return;
-        if (!ticket.viewerId) throw new Error("The desktop did not provide an attachment identity.");
-        viewerId.current = ticket.viewerId;
-        client = new RemoteFrameBuffer(screen.current, socketUrl(ticket.path));
-        rfb.current = client;
-        client.viewOnly = true;
-        client.scaleViewport = true;
-        client.resizeSession = false;
-        client.addEventListener("connect", () => {
-          if (controller.signal.aborted) return;
-          setConnection("connected"); setError("");
-        });
-        client.addEventListener("disconnect", () => retry("Desktop disconnected. Reconnecting in watch mode."));
-        client.addEventListener("securityfailure", () => retry("The desktop connection was rejected. Reconnecting in watch mode."));
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        // A retired chunk never comes back for this page, so surface it rather than reconnect forever.
-        if (isChunkFailure(cause)) { raise(cause); return; }
-        const message = failure(cause, "Can't connect to the desktop. We'll keep trying.");
-        if (retryable(cause)) retry(message);
-        else { setConnection("failed"); setError(message); }
-      }
-    };
-    void connect();
-    return () => {
-      controller.abort(); clearTimeout(timer);
+    onCleanup(() => {
       attachmentEpoch.current++;
       rfb.current = null;
       client?.disconnect();
-    };
-  }, [attempt, viewerId]);
+    });
+    setControlling(false);
+    const [{ default: RemoteFrameBuffer }, ticket] = await Promise.all([
+      import("@novnc/novnc"),
+      api<ComputerStreamTicket>("/computer/desktop", {
+        method: "POST", body: JSON.stringify({ viewerId: viewerId.current }), signal,
+      }),
+    ]);
+    if (signal.aborted || !screen.current) return;
+    if (!ticket.viewerId) throw new Error("The desktop did not provide an attachment identity.");
+    viewerId.current = ticket.viewerId;
+    client = new RemoteFrameBuffer(screen.current, socketUrl(ticket.path));
+    rfb.current = client;
+    client.viewOnly = true;
+    client.scaleViewport = true;
+    client.resizeSession = false;
+    client.addEventListener("connect", connected);
+    client.addEventListener("disconnect", () => retry("Desktop disconnected. Reconnecting in watch mode."));
+    client.addEventListener("securityfailure", () => retry("The desktop connection was rejected. Reconnecting in watch mode."));
+  }, {
+    fallback: "Can't connect to the desktop. We'll keep trying.",
+    // Local input stops at once, before the next attempt has a chance to start.
+    onRetry: () => {
+      attachmentEpoch.current++;
+      setControlling(false);
+      if (rfb.current) rfb.current.viewOnly = true;
+    },
+  });
 
   // Losing ownership must immediately remove local input, even before the server fences it.
   useEffect(() => {
@@ -346,7 +384,7 @@ function DesktopView({ status, onStatus, viewerId }: {
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="computer" size={30} /><strong>{connection === "failed" ? "Desktop connection unavailable" : connection === "reconnecting" ? "Reconnecting desktop" : "Opening desktop"}</strong>
-        {connection === "failed" && <Button onClick={() => setAttempt(value => value + 1)}>Reconnect</Button>}
+        {connection === "failed" && <Button onClick={reconnect}>Reconnect</Button>}
       </div>}
     </div>
     <div className="terminal-tools">
@@ -377,10 +415,6 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   const socket = useRef<WebSocket | null>(null);
   const fit = useRef<(() => void) | null>(null);
   const sessionId = useRef<string | undefined>(undefined);
-  const [connection, setConnection] = useState<Connection>("connecting");
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const raise = useRaise();
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [confirmEnd, setConfirmEnd] = useState(false);
@@ -392,100 +426,78 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(message));
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  const { connection, setConnection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: WebSocket | undefined;
     let emulator: Terminal | undefined;
     let observer: ResizeObserver | undefined;
     let resize: (() => void) | undefined;
-    stopped.current = false;
-    const retry = (message: string) => {
-      if (controller.signal.aborted || stopped.current) return;
-      setError(message); setConnection("reconnecting");
-      clearTimeout(timer);
-      timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
-    };
-    const connect = async () => {
-      setConnection("connecting");
-      try {
-        const [{ Terminal: Emulator }, { FitAddon }, ticket] = await Promise.all([
-          import("@xterm/xterm"), import("@xterm/addon-fit"),
-          api<ComputerStreamTicket>("/computer/terminal", { method: "POST", body: "{}", signal: controller.signal }),
-        ]);
-        if (controller.signal.aborted || !surface.current) return;
-        if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
-        sessionId.current = ticket.sessionId;
-        emulator = new Emulator({ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 14,
-          cursorBlink: true, screenReaderMode: true, scrollback: 3000, theme: { background: "#151c18", foreground: "#f1efdf", cursor: "#8bd2b2", selectionBackground: "#3a5947" } });
-        terminal.current = emulator;
-        const fitting = new FitAddon();
-        emulator.loadAddon(fitting);
-        emulator.open(surface.current);
-        resize = () => {
-          if (!surface.current?.clientWidth || !surface.current.clientHeight) return;
-          fitting.fit();
-          send({ type: "resize", columns: emulator!.cols, rows: emulator!.rows });
-        };
-        fit.current = resize;
-        resize();
-        emulator.onData(data => {
-          // xterm emits an entire paste at once. Keep each wire message bounded
-          // without splitting Unicode code points or queueing disconnected input.
-          let chunk = "", bytes = 0;
-          const encoder = new TextEncoder();
-          for (const character of data) {
-            const size = encoder.encode(character).length;
-            if (bytes + size > 16384) { send({type: "input", data: chunk}); chunk = ""; bytes = 0; }
-            chunk += character; bytes += size;
-          }
-          if (chunk) send({type: "input", data: chunk});
-        });
-        client = new WebSocket(socketUrl(ticket.path));
-        socket.current = client;
-        client.addEventListener("open", () => {
-          if (controller.signal.aborted || stopped.current) return;
-          setConnection("connected"); setError(""); resize?.();
-        });
-        client.addEventListener("message", event => {
-          if (controller.signal.aborted || stopped.current) return;
-          try {
-            const message = JSON.parse(String(event.data));
-            if (message.type === "output" && typeof message.data === "string") emulator?.write(message.data);
-            else if (message.type === "error") setError(typeof message.message === "string" ? message.message : "The shell reported an error.");
-            else if (message.type === "exit") {
-              stopped.current = true;
-              setConnection("ended"); setError("");
-              client?.close();
-            }
-          } catch { setError("The terminal returned an unreadable response."); }
-        });
-        client.addEventListener("close", () => retry("Terminal disconnected. Reconnecting to your shell."));
-        client.addEventListener("error", () => retry("Can't reach the terminal. Reconnecting to your shell."));
-        if (typeof ResizeObserver !== "undefined") {
-          observer = new ResizeObserver(resize);
-          observer.observe(surface.current);
-        }
-        window.addEventListener("resize", resize);
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        if (reauthenticate(cause)) { onReauthenticate(); return; }
-        if (isChunkFailure(cause)) { raise(cause); return; }
-        const message = failure(cause, "Can't connect to the terminal. We'll keep trying.");
-        if (retryable(cause)) retry(message);
-        else { setConnection("failed"); setError(message); }
-      }
-    };
-    void connect();
-    return () => {
-      controller.abort(); clearTimeout(timer);
+    onCleanup(() => {
       observer?.disconnect();
       if (resize) window.removeEventListener("resize", resize);
       socket.current = null; terminal.current = null; fit.current = null;
       client?.close(); emulator?.dispose();
       // The server-side tmux session intentionally continues after this attachment closes.
+    });
+    stopped.current = false;
+    const [{ Terminal: Emulator }, { FitAddon }, ticket] = await Promise.all([
+      import("@xterm/xterm"), import("@xterm/addon-fit"),
+      api<ComputerStreamTicket>("/computer/terminal", { method: "POST", body: "{}", signal }),
+    ]);
+    if (signal.aborted || !surface.current) return;
+    if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
+    sessionId.current = ticket.sessionId;
+    emulator = new Emulator({ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 14,
+      cursorBlink: true, screenReaderMode: true, scrollback: 3000, theme: { background: "#151c18", foreground: "#f1efdf", cursor: "#8bd2b2", selectionBackground: "#3a5947" } });
+    terminal.current = emulator;
+    const fitting = new FitAddon();
+    emulator.loadAddon(fitting);
+    emulator.open(surface.current);
+    resize = () => {
+      if (!surface.current?.clientWidth || !surface.current.clientHeight) return;
+      fitting.fit();
+      send({ type: "resize", columns: emulator!.cols, rows: emulator!.rows });
     };
-  }, [attempt, send, onReauthenticate]);
+    fit.current = resize;
+    resize();
+    emulator.onData(data => {
+      // xterm emits an entire paste at once. Keep each wire message bounded
+      // without splitting Unicode code points or queueing disconnected input.
+      let chunk = "", bytes = 0;
+      const encoder = new TextEncoder();
+      for (const character of data) {
+        const size = encoder.encode(character).length;
+        if (bytes + size > 16384) { send({type: "input", data: chunk}); chunk = ""; bytes = 0; }
+        chunk += character; bytes += size;
+      }
+      if (chunk) send({type: "input", data: chunk});
+    });
+    client = new WebSocket(socketUrl(ticket.path));
+    socket.current = client;
+    client.addEventListener("open", () => {
+      if (signal.aborted || stopped.current) return;
+      connected(); resize?.();
+    });
+    client.addEventListener("message", event => {
+      if (signal.aborted || stopped.current) return;
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.type === "output" && typeof message.data === "string") emulator?.write(message.data);
+        else if (message.type === "error") setError(typeof message.message === "string" ? message.message : "The shell reported an error.");
+        else if (message.type === "exit") {
+          stopped.current = true;
+          setConnection("ended"); setError("");
+          client?.close();
+        }
+      } catch { setError("The terminal returned an unreadable response."); }
+    });
+    client.addEventListener("close", () => retry("Terminal disconnected. Reconnecting to your shell."));
+    client.addEventListener("error", () => retry("Can't reach the terminal. Reconnecting to your shell."));
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(resize);
+      observer.observe(surface.current);
+    }
+    window.addEventListener("resize", resize);
+  }, { fallback: "Can't connect to the terminal. We'll keep trying.", onReauthenticate, canRetry: () => !stopped.current });
 
   useEffect(() => {
     if (active) fit.current?.();
@@ -520,7 +532,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
       <div ref={surface} className="computer-terminal" aria-label="System terminal" />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="terminal" size={30} /><strong>{connection === "ended" ? "Your shell has ended" : connection === "failed" ? "Terminal connection unavailable" : connection === "reconnecting" ? "Reconnecting terminal" : "Opening your shell"}</strong>
-        {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); setAttempt(value => value + 1); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
+        {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); reconnect(); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
       </div>}
     </div>
     <div className="terminal-tools">

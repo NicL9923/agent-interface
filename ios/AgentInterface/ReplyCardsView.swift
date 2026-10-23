@@ -257,17 +257,23 @@ struct InteractiveReplyCard: View {
   }
   private var path: String { "/bots/\(APIClient.component(store?.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
   private func load() async {
-    guard card.type != "event", let api = store?.api else { return }
-    let scope = store?.scope; status = .loading; error = nil
-    do { let value: ReplyCardState = try await api.get(path); guard store?.scope == scope, store?.api === api else { return }; saved = value; draft = value; status = .ready }
-    catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
+    guard card.type != "event", let store, store.api != nil else { return }
+    status = .loading; error = nil
+    switch await store.attempt({ (context) -> ReplyCardState in try await context.api.get(path) }) {
+    case .success(let value)?: saved = value; draft = value; status = .ready
+    case .failure(let failure)?: error = failure.localizedDescription; status = .failed
+    case nil: break
+    }
   }
   private func save(_ value: ReplyCardState) {
-    guard let api = store?.api, !busy else { return }
-    let scope = store?.scope; let route = path; draft = value; status = .saving; error = nil
+    guard let store, store.api != nil, !busy else { return }
+    let route = path; draft = value; status = .saving; error = nil
     Task {
-      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store?.scope == scope, store?.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
-      catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
+      switch await store.attempt({ (context) -> ReplyCardState in try await context.api.write(route, value, method: "PUT") }) {
+      case .success(let result)?: saved = result; draft = result; status = .ready; editing = nil
+      case .failure(let failure)?: error = failure.localizedDescription; status = .failed
+      case nil: break
+      }
     }
   }
 }

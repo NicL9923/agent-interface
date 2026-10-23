@@ -144,7 +144,7 @@ struct AppleDeviceConnectionsView: View {
               VStack(alignment: .leading) { Text(reminder.title); Text(reminder.list).font(.caption).foregroundStyle(.secondary) }
             }
           }
-          Button("Share with \(botName)") { confirmShare = true }.disabled(!store.connected || !store.supports("uploads") || botId.isEmpty)
+          Button("Share with \(botName)") { confirmShare = true }.disabled(!store.connected || !store.supports(.uploads) || botId.isEmpty)
         }
       }
       if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }

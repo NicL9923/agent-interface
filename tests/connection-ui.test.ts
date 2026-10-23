@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import type { Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
 import { api, cachedResponse, clearResponseCache, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 import { FakeEventSource } from './fake-event-source';
+import { advance, button, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 
 vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.
@@ -17,11 +18,10 @@ let authConfig:{localDevAuth:boolean;googleClientId?:string};
 let pendingBootstrap:Promise<Bootstrap>|undefined;
 let hermesDown:boolean;
 beforeEach(()=>{
-  vi.useFakeTimers();vi.clearAllMocks();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
-  FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+  vi.useFakeTimers();vi.clearAllMocks();  FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
   vi.mocked(write).mockReset().mockResolvedValue({});
-  vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
-  localStorage.clear();history.replaceState(null,'','/');
+  stubMatchMedia();
+  history.replaceState(null,'','/');
   boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:{...structuredClone(defaultPreferences),startPage:"assistant"},bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}],capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
   conversation={botId:'shared',messages:[{id:'answer-one',role:'assistant',text:'Existing canonical answer'}],approvals:[],files:[],activity:{state:'idle'}};
   authConfig={localDevAuth:false};pendingBootstrap=undefined;hermesDown=false;
@@ -32,11 +32,10 @@ beforeEach(()=>{
     if(path==='/bots/shared/draft')return {text:boot.user.id==='one'?'My unsent draft':'Second member draft',attachments:[]} as T;
     return null as T;
   });
-  container=document.createElement('div');document.body.append(container);root=createRoot(container);
+  ({container,root}=mountRoot());
 });
-afterEach(async()=>{await act(async()=>root.unmount());container.remove();localStorage.clear();vi.useRealTimers();vi.unstubAllGlobals();Reflect.deleteProperty(window,'google');Reflect.deleteProperty(navigator,'onLine');});
+afterEach(()=>{Reflect.deleteProperty(window,'google');Reflect.deleteProperty(navigator,'onLine');});
 async function renderApp(){await act(async()=>root.render(createElement(App)));}
-async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync(ms));}
 // The server reports a change, as Hermes frames or a write would.
 async function changed(){await act(async()=>FakeEventSource.notifyAll());await advance(1500);}
 // Screens such as preferences load on first use.
@@ -314,9 +313,7 @@ describe('setup and recovery interface',()=>{
     }
     await renderApp();await advance(400);
     if(mode==='admission'){
-      const textarea=container.querySelector('textarea')!;
-      const setValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!;
-      await act(async()=>{setValue.call(textarea,'Edited immediately before sending');textarea.dispatchEvent(new Event('input',{bubbles:true}));});
+      await typeInto(container.querySelector('textarea')!,'Edited immediately before sending');
       await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
       requestId=(vi.mocked(write).mock.calls.find(([path])=>path==='/bots/shared/messages')![1] as {requestId:string}).requestId;
     }
@@ -334,7 +331,7 @@ describe('setup and recovery interface',()=>{
     await renderApp();await advance(400);expect(write).not.toHaveBeenCalled();
     const original=vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path==='/bots/shared/draft'?{text:'New draft from my phone',attachments:[]} as T:await original(path,init) as T);
-    await act(async()=>root.unmount());root=createRoot(container);await renderApp();await advance(400);
+    await act(async()=>root.unmount());await renderApp();await advance(400);
     expect(container.querySelector('textarea')?.value).toBe('New draft from my phone');
     expect(JSON.parse(localStorage.getItem('agent-interface:draft:one:shared')!).text).toBe('New draft from my phone');
     expect(write).not.toHaveBeenCalled();
@@ -344,14 +341,12 @@ describe('setup and recovery interface',()=>{
     await renderApp();
     Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
     await act(async()=>window.dispatchEvent(new Event('offline')));
-    const textarea=container.querySelector('textarea')!;
-    const setValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!;
-    await act(async()=>{setValue.call(textarea,'Written while offline');textarea.dispatchEvent(new Event('input',{bubbles:true}));});
+    await typeInto(container.querySelector('textarea')!,'Written while offline');
     await advance(400);
     const key='agent-interface:draft:one:shared';
     expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({text:'Written while offline',dirty:true});
     expect(write).not.toHaveBeenCalled();
-    await act(async()=>root.unmount());root=createRoot(container);await renderApp();
+    await act(async()=>root.unmount());await renderApp();
     expect(container.querySelector('textarea')?.value).toBe('Written while offline');
     // The server answers a save with the draft it now holds.
     vi.mocked(write).mockImplementation(async <T>(_path:string,value:unknown)=>({...value as object,revision:1,reason:'edit',sentRevision:0}) as T);
@@ -384,7 +379,6 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   const previous=vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path.startsWith('/submissions/')?{status:'rejected'} as T:await previous(path,init) as T);
   vi.mocked(write).mockImplementation(async <T>(path:string)=>path==='/bots/shared/messages'?await new Promise<T>(()=>{}):{} as T);
-  const button=(label:string)=>[...container.querySelectorAll('button')].find(node=>node.textContent?.trim()===label)!;
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());

@@ -3,6 +3,7 @@ import { api, ApiError, write } from "../client-api";
 import type { Conversation } from "../shared/types";
 import type { ExplicitLoginRequest, SecureRequest, SecureRequestAnswer } from "../shared/vault";
 import "./vault.css";
+import { FormMessage } from "./ui/form-message";
 
 // Volatile binding metadata only. Reopening the same native prompt must not turn
 // an uncertain submission into a fresh attempt. Never persist entered values.
@@ -102,7 +103,7 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
         <button type="button" disabled={busy || uncertain} onClick={() => void answer(true)}>Cancel request</button></div>
     </form>}
     {(uncertain || settled || error) && <button type="button" disabled={busy} onClick={() => void refresh()}>Refresh request</button>}
-    {error && <p className="form-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && <FormMessage tone="error">{error}</FormMessage>}{notice && <FormMessage tone="notice">{notice}</FormMessage>}
   </article>;
 }
 

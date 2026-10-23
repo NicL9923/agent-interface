@@ -10,6 +10,7 @@ import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import { HermesUpgrades } from "../src/server/upgrades.js";
 import { defaultPreferences, type Runtime } from "../src/shared/types.js";
+import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): unknown }[] = [], directories: string[] = [];
 afterEach(async () => {
@@ -74,11 +75,7 @@ async function setup() {
   const runtime = runtimeDouble(calls);
   const created = await createApp(config, runtime, { background: false, upgrades: new HermesUpgrades(config, runtime, () => {}) });
   apps.push(created.app);
-  const login = async (member: "one" | "two") => {
-    const result = await created.app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member } });
-    return { cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken as string, origin };
-  };
-  const owner = await login("one"), other = await login("two");
+  const owner = await localLogin(created.app, origin, "one"), other = await localLogin(created.app, origin, "two");
   created.store.savePresentation(secret, { shared: false, ownerId: "local-one" });
   created.store.savePresentation("family", { shared: true });
   created.store.savePresentation("legacy", { shared: false });

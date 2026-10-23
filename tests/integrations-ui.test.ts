@@ -1,30 +1,34 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IntegrationList } from "../src/components/IntegrationsPanel";
-import { api, write } from "../src/client-api";
+import { ApiError, api, write } from "../src/client-api";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../src/shared/integrations";
+import { advance, button, click, mountRoot, typeInto } from "./ui-harness";
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 let root: Root;
 let container: HTMLDivElement;
 let catalog: IntegrationCatalog;
 const connection = (overrides: Partial<IntegrationConnection> = {}): IntegrationConnection => ({ id: "workspace", name: "Google Workspace", category: "productivity", owner: "Hermes", profile: "bot", account: "one@example.test", status: "configured", detail: "Saved credentials have not been checked.", permissions: [{ id: "drive", name: "Drive", granted: null }], actions: { connect: true, check: true, disconnect: true }, setup: [], capabilities: ["search"], botIds: ["bot"], ...overrides });
 beforeEach(() => {
-  vi.clearAllMocks(); vi.useFakeTimers(); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  sessionStorage.clear();
+  vi.clearAllMocks(); vi.useFakeTimers();
   catalog = { profile: "bot", canManage: true, connections: [connection()] };
   vi.mocked(api).mockImplementation(async path => path.includes("flows") ? { kind: "redirect", status: "pending", flowId: "oauth", message: "Approve access." } as never : catalog as never);
   vi.mocked(write).mockResolvedValue({ kind: "connected", status: "approved", message: "Connected." });
   vi.spyOn(window, "open").mockReturnValue(null);
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function render() { await act(async () => root.render(createElement(IntegrationList, { profile: "bot", bots: [{ id: "bot", name: "Ranch hand", shared: true, model: "test", activity: "idle" }] }))); }
-function button(text: string) { return Array.from(container.querySelectorAll("button")).find(item => item.textContent === text)!; }
-async function click(text: string) { await act(async () => button(text).click()); }
-async function enter(input: HTMLInputElement, value: string) { await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); }); }
 describe("integration connections", () => {
+  it("retires the refresh-first warning once a refresh someone asked for succeeds", async () => {
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("upstream detail", 502));
+    await render();
+    await click("Check connection");
+    expect(container.textContent).toContain("Refresh status or try the check again");
+    await click("Refresh status");
+    expect(container.textContent).not.toContain("Refresh status or try the check again");
+  });
   it("distinguishes configured credentials from checked access and checks the selected profile", async () => {
     await render();
     expect(container.textContent).toContain("Configured · not checked");
@@ -40,7 +44,7 @@ describe("integration connections", () => {
     expect(container.textContent).toContain("Approve access.");
     expect(button("Reconnect").disabled).toBe(true);
     vi.mocked(api).mockImplementation(async path => path.includes("flows") ? { kind: "connected", status: "approved", flowId: "oauth", message: "Account approved." } as never : catalog as never);
-    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    await advance(2500);
     expect(container.textContent).toContain("Account approved.");
     expect(sessionStorage.getItem("integration-flow:bot")).toBeNull();
     expect(write).not.toHaveBeenCalled();
@@ -72,7 +76,7 @@ describe("integration connections", () => {
     catalog.connections = [connection({ setup: [{ key: "token", label: "Access token", kind: "secret", required: true }] })];
     await render(); await click("Reconnect");
     const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
-    await enter(input, "private-token");
+    await typeInto(input, "private-token");
     vi.mocked(write).mockRejectedValueOnce(new Error("Connection not accepted."));
     await click("Connect");
     expect(input.value).toBe("private-token");

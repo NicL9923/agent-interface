@@ -1,32 +1,24 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { ReactElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
 import { SecureRequestCard } from "../src/components/SecureRequestCard";
 import { VaultPanel } from "../src/components/VaultPanel";
 import type { ProfileVault, SecureRequest } from "../src/shared/vault";
+import { button, click, mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.mocked(api).mockReset(); vi.mocked(write).mockReset(); localStorage.clear();
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); localStorage.clear(); });
 async function render(element: ReactElement) { await act(async () => root.render(element)); }
-async function click(text: string) {
-  const button = Array.from(container.querySelectorAll("button")).find(item => item.textContent?.trim() === text);
-  expect(button).toBeDefined(); await act(async () => button!.click());
-}
 async function type(label: string, value: string) {
   const field = Array.from(container.querySelectorAll("label")).find(item => item.textContent?.trim() === label)?.querySelector("input");
-  expect(field).toBeDefined(); await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
-    field!.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  expect(field).toBeDefined(); await typeInto(field!, value);
 }
 async function submit() { await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
 const request: SecureRequest = { method: "vault.save_login", epoch: "epoch", sessionId: "session", origin: "https://example.invalid", site: "example.invalid" };
@@ -94,7 +86,9 @@ it("adds a login through the dedicated vault route and requires review after unc
   await type("Label", "Ranch account"); await type("Website origin", "https://example.invalid"); await type("Username, email or phone", "ranch@example.invalid"); await type("Password", "private-password"); await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/vault/logins", { label: "Ranch account", origin: "https://example.invalid", identifierType: "email", identifier: "ranch@example.invalid", password: "private-password" });
   expect(container.textContent).not.toContain("leaked upstream"); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
-  await submit(); expect(write).toHaveBeenCalledOnce(); await click("Reload logins"); expect(api).toHaveBeenCalledTimes(2); expect(localStorage.length).toBe(0);
+  await submit(); expect(write).toHaveBeenCalledOnce(); expect(container.textContent).toContain("Hermes could not confirm this change");
+  await click("Reload logins"); expect(api).toHaveBeenCalledTimes(2); expect(localStorage.length).toBe(0);
+  expect(container.textContent).not.toContain("Hermes could not confirm this change"); expect(button("Add login").disabled).toBe(false);
 });
 it("requires local deletion confirmation and leaves external entries to their owner", async () => {
   vi.mocked(api).mockResolvedValue(vault); vi.mocked(write).mockResolvedValue({ removed: true }); await render(createElement(VaultPanel, { botId: "ranch" }));

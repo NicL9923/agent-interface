@@ -2,7 +2,8 @@ import { expect, it, vi } from "vitest";
 import { Store } from "../src/server/store.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { loadConfig } from "../src/server/config.js";
-import type { Runtime, RuntimeEvent } from "../src/shared/types.js";
+import type { RuntimeEvent } from "../src/shared/types.js";
+import { fakeRuntime } from "./helpers/server.js";
 const event: RuntimeEvent = {
   id: "evt-1",
   botId: "shared",
@@ -46,12 +47,12 @@ it("keeps completion pending without a subscription and retries failed delivery 
   store.participate("run", "one");
   store.recordEvents([event], "cursor-1");
   const seen: string[] = [];
-  const runtime = {
+  const runtime = fakeRuntime({
     capabilities: async () => ({
       idempotency: { supported: false },
       durableEvents: { supported: false },
     }),
-  } as unknown as Runtime;
+  });
   const worker = new BackgroundWorker(
     store,
     runtime,
@@ -90,7 +91,7 @@ it("recovers admission receipts before event discovery so recovered completions 
     text: "Hello",
     attachments: [],
   });
-  const runtime = {
+  const runtime = fakeRuntime({
     capabilities: async () => ({
       idempotency: { supported: true },
       durableEvents: { supported: true },
@@ -101,7 +102,7 @@ it("recovers admission receipts before event discovery so recovered completions 
       runId: "run",
     }),
     discoverEvents: async () => ({ cursor: "recovered", events: [event] }),
-  } as unknown as Runtime;
+  });
   const worker = new BackgroundWorker(
     store,
     runtime,
@@ -131,11 +132,11 @@ it("delivers an existing outbox while Hermes is offline", async () => {
     endpoint: "https://push.example.test/device",
     keys: { p256dh: "key", auth: "auth" },
   });
-  const runtime = {
+  const runtime = fakeRuntime({
     capabilities: async () => {
       throw new Error("Hermes offline");
     },
-  } as unknown as Runtime;
+  });
   let deliveries = 0;
   const worker = new BackgroundWorker(
     store,
@@ -168,7 +169,7 @@ it("lists explicit routine recipients without adding bot followers", () => {
   store.close();
 });
 const day = 86400000;
-const offline = { capabilities: async () => { throw new Error("Hermes offline"); } } as unknown as Runtime;
+const offline = fakeRuntime({ capabilities: async () => { throw new Error("Hermes offline"); } });
 const household = () => loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
 const outboxRow = (store: Store, id: string) =>
   store.db.prepare("SELECT state,attempts,last_error FROM outbox WHERE id=?").get(id) as { state: string; attempts: number; last_error: string | null } | undefined;
@@ -277,7 +278,7 @@ it("delivers security alerts at once, through quiet hours and digest batching, a
   expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(true);
   expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(false);
   const sent: string[] = [];
-  const runtime = { capabilities: async () => ({ idempotency: { supported: false }, durableEvents: { supported: false } }) } as unknown as Runtime;
+  const runtime = fakeRuntime({ capabilities: async () => ({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
   const worker = new BackgroundWorker(store, runtime, loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }),
     async (_subscription, payload) => { sent.push(JSON.parse(payload).title); });
   await worker.tick();

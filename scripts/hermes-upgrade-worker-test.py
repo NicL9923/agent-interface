@@ -22,8 +22,10 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("worker", Path(__file__).with_name("hermes-upgrade-worker.py"))
-worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from support import load_source
+
+worker = load_source("scripts/hermes-upgrade-worker.py", "worker")
 
 HOOK = r'''
 import json, os, pathlib, subprocess, sys, time
@@ -836,7 +838,7 @@ print('fixture real candidate patch identity passed')
         tree = self.git('cat-file', '-p', self.new).decode().splitlines()[0].split()[1]
         offline = dict(os.environ, GIT_NO_LAZY_FETCH='1')
         missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(missing.returncode, 0, 'The fixture must lack the candidate tree')
         self.assertEqual(self.git('config', '--get', 'remote.origin.promisor').decode().strip(), 'true')
         self.git('remote', 'set-url', 'origin', worker.OFFICIAL_UPSTREAM)
@@ -853,7 +855,7 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(worker.git(target, 'rev-list', '--count', 'v0.1.0..HEAD'), self.git('rev-list', '--count', 'v0.1.0..' + self.new))
         self.assertFalse((target / '.git/shallow').exists())
         still_missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(still_missing.returncode, 0, 'Staging must not hydrate installed Git objects')
         self.assertFalse((target / '.git/objects/info/alternates').exists())
         self.assertFalse(list((target / '.git/objects/pack').glob('*.promisor')))

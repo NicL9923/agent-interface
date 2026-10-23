@@ -4,7 +4,6 @@ The actual Hermes store/scheduler qualification lives in experience_probe.py.
 """
 import contextlib
 import copy
-import importlib.util
 import json
 import sqlite3
 import sys
@@ -16,9 +15,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('experience_test', ROOT / 'src/hermes/experience.py')
-experience = importlib.util.module_from_spec(spec); spec.loader.exec_module(experience)
+experience = load_source('src/hermes/experience.py', 'experience_test')
 
 
 class MemoryRefreshTests(unittest.TestCase):

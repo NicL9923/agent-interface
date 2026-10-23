@@ -62,6 +62,7 @@ def fingerprint(path):
 
 
 def private_file(path):
+    # Not private_fs.owner_private: stage-recovery-tools.py stages this helper without src/hermes.
     path = Path(path)
     info = path.lstat()
     fence(path.is_absolute() and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077, "private file is absolute, regular, owner-only and owned by this user")

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { isHashedAsset } from "../src/server/static-cache.js";
-import type { Runtime } from "../src/shared/types.js";
+import { fakeRuntime } from "./helpers/server.js";
 
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
 const directories: string[] = [];
@@ -23,7 +23,7 @@ async function client() {
     "assets/index-AbC12345.js", "assets/xterm-Zx_9-Q01.css", "assets/logo.png",
   ]) writeFileSync(join(root, file), "x");
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
-  const { app } = await createApp(config, { close: async () => {} } as unknown as Runtime, { background: false, clientRoot: root });
+  const { app } = await createApp(config, fakeRuntime({ close: async () => {} }), { background: false, clientRoot: root });
   apps.push(app);
   return app;
 }

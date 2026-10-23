@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_CHECK_MS, useAppInstall } from "../src/app/use-browser";
 import { UpdateNotice } from "../src/app/UpdateNotice";
+import { mountRoot } from "./ui-harness";
 
 class Target extends EventTarget {}
 let container: HTMLDivElement, root: Root, reload: ReturnType<typeof vi.fn>;
@@ -21,21 +22,13 @@ const button = () => container.querySelector<HTMLButtonElement>(".app-update but
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubEnv("PROD", true);
   registration = Object.assign(new Target(), { waiting: null, installing: null, update: vi.fn(async () => undefined) });
   worker = Object.assign(new Target(), { controller: {}, register: vi.fn(async () => registration) });
   vi.stubGlobal("navigator", { serviceWorker: worker });
   reload = vi.fn();
   vi.stubGlobal("location", { reload });
-  container = document.createElement("div");
-  root = createRoot(container);
-});
-afterEach(() => {
-  act(() => root.unmount());
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
+  ({ container, root } = mountRoot());
 });
 
 describe("app update notice", () => {

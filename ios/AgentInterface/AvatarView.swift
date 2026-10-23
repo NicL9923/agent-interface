@@ -906,65 +906,66 @@ struct PointVector: Equatable {
 enum AvatarGeometry {
   static let mascotHead =
     "M50 14 C77 14 95 32 95 56 C95 81 76 95 50 95 C24 95 5 81 5 56 C5 32 23 14 50 14Z"
-  /// Characters get their own key because one of them, the ghost, shares a name with a shape.
-  static let characterPrefix = "character:"
-  static func characterKey(_ family: String) -> String { characterPrefix + family }
   /// Everything a body outline can be keyed by.
-  static let keys: [String] =
-    AvatarConfig.shapes + ["mascot"] + AvatarConfig.characterFamilies.map(characterKey)
-  static func svg(_ shape: String) -> String {
-    if shape.hasPrefix(characterPrefix) {
-      return CharacterAvatarArt.heads[String(shape.dropFirst(characterPrefix.count))] ?? mascotHead
+  static let keys: [AvatarBody] =
+    AvatarConfig.shapes.map(AvatarBody.shape) + [.mascot]
+    + AvatarConfig.characterFamilies.map(AvatarBody.character)
+  static func svg(_ body: AvatarBody) -> String {
+    switch body {
+    case .mascot: return mascotHead
+    case .character(let family): return CharacterAvatarArt.heads[family] ?? mascotHead
+    case .shape(let shape): return svg(shape)
     }
-    return switch shape {
-    case "mascot": mascotHead
-    case "drop": "M50 7 C42 16 13 42 13 64 C13 87 29 95 50 95 C71 95 87 82 87 62 C87 39 61 17 50 7Z"
-    case "triangle": "M43 12 Q50 0 57 12 L95 78 Q103 94 85 94 H15 Q-3 94 5 78Z"
-    case "cloud":
+  }
+  static func svg(_ shape: AvatarShape) -> String {
+    switch shape {
+    case .drop: "M50 7 C42 16 13 42 13 64 C13 87 29 95 50 95 C71 95 87 82 87 62 C87 39 61 17 50 7Z"
+    case .triangle: "M43 12 Q50 0 57 12 L95 78 Q103 94 85 94 H15 Q-3 94 5 78Z"
+    case .cloud:
       "M20 40 C15 15 46 7 58 25 C78 9 104 29 91 50 C109 71 90 99 68 89 C48 108 19 95 23 79 C-1 72 0 46 20 40Z"
-    case "capsule":
+    case .capsule:
       "M48 5 H52 C75 5 84 18 84 40 V61 C84 83 73 96 52 96 H48 C26 96 16 84 16 61 V40 C16 18 26 5 48 5Z"
-    case "pebble": "M22 9 C48 -4 86 7 94 32 C105 60 90 90 69 96 C36 105 2 88 4 63 C1 38 7 21 22 9Z"
-    case "squircle": "M25 5 H75 Q95 5 95 25 V75 Q95 95 75 95 H25 Q5 95 5 75 V25 Q5 5 25 5Z"
-    case "hex":
+    case .pebble: "M22 9 C48 -4 86 7 94 32 C105 60 90 90 69 96 C36 105 2 88 4 63 C1 38 7 21 22 9Z"
+    case .squircle: "M25 5 H75 Q95 5 95 25 V75 Q95 95 75 95 H25 Q5 95 5 75 V25 Q5 5 25 5Z"
+    case .hex:
       "M28 8 Q32 5 37 5 H64 Q70 5 73 10 L95 43 Q99 50 95 57 L73 90 Q70 95 64 95 H36 Q30 95 27 90 L5 57 Q1 50 5 43Z"
-    case "diamond":
+    case .diamond:
       "M50 5.1 C56.3 5.1 60 9.6 64.1 13.7 C71.8 21.4 79.5 29.1 87.1 36.7 C91 40.6 95 44.1 95 50 C95 56.3 90.4 60 86.3 64.1 C78.5 71.8 70.8 79.6 63.1 87.3 C59.3 91.1 55.8 94.9 50 94.9 C43.7 94.9 40 90.3 35.9 86.2 C28.2 78.5 20.4 70.8 12.7 63.1 C8.9 59.3 5 55.8 5 50 C5 43.7 9.6 40 13.7 35.8 C21.4 28.1 29.2 20.4 36.9 12.7 C40.7 8.9 44.2 5.1 50 5.1Z"
-    case "sparkle":
+    case .sparkle:
       "M50 4.1 C58.3 4.1 61.2 11.9 65.5 17.6 C72.2 26.5 80.6 33.7 90 39.6 C93.6 41.9 95.9 45.6 95.9 50 C95.9 54.3 93.7 58 90.1 60.3 C80.7 66.3 72.4 73.3 65.6 82.2 C61.2 88 58.4 96 49.9 95.9 C45.7 95.9 41.9 93.7 39.7 90.1 C33.7 80.6 26.5 72.3 17.5 65.5 C11.9 61.2 4.1 58.4 4.1 50.1 C4 41.7 11.9 38.9 17.6 34.5 C26.6 27.7 33.7 19.4 39.7 9.9 C42 6.3 45.7 4.1 50 4.1Z"
-    case "clover":
+    case .clover:
       "M50 4 C58.7 4 66.8 9.1 70.6 16.9 C71.8 19.3 72.4 24.5 73.9 26 C75.5 27.6 80.6 28.1 83 29.3 C90.9 33.1 96 41.2 96 49.9 C96 58.4 91.2 66.5 83.6 70.4 C81.2 71.7 75.2 72.6 73.9 74 C72.6 75.4 71.6 81.2 70.4 83.6 C66.6 91.1 58.6 96 50.2 96 C41.4 96 33.3 91 29.4 83.2 C28.2 80.8 27.6 75.5 26 73.9 C24.4 72.4 19.4 71.9 17.1 70.7 C9.1 66.9 4 58.7 4 50 C4 41.5 8.9 33.4 16.5 29.5 C18.9 28.3 24.7 27.4 26.1 26 C27.4 24.7 28.3 18.9 29.5 16.5 C33.4 8.9 41.5 4 50 4Z"
-    case "heart":
+    case .heart:
       "M50 17.2 C53.1 17.2 57.3 13.3 60.6 12 C69.7 8.5 80.4 10.8 87.4 17.7 C89.5 19.7 91.2 22.2 92.5 24.8 C96.4 32.8 95.7 42.6 90.7 50 C88.4 53.4 85.4 56.2 82.6 59.2 C78.3 63.9 74 68.6 69.7 73.3 C66.4 76.8 59.3 85.7 55.8 87.9 C54.1 89 52.1 89.6 50 89.6 C47.9 89.6 45.8 89 44 87.8 C40.6 85.5 33.6 76.9 30.4 73.4 C26 68.7 21.7 63.9 17.4 59.2 C14.7 56.3 11.6 53.4 9.4 50.1 C4.3 42.7 3.7 32.9 7.5 24.9 C8.7 22.2 10.5 19.8 12.6 17.7 C19.5 10.9 30 8.6 39.2 11.9 C42.4 13.1 47.1 17.2 50 17.2Z"
-    case "cookie":
+    case .cookie:
       "M50 5.5 C53.6 5.4 57.2 7 59.8 9.6 C61 10.8 61.8 13.2 63.4 13.8 C65.2 14.5 67.4 13.1 69.2 13 C72.8 12.6 76.5 13.8 79.3 16.1 C82.1 18.5 83.8 22 84.1 25.6 C84.2 27.3 83.3 29.7 84.2 31.3 C85.1 32.8 87.5 33.1 89 34.1 C92 36.1 94.1 39.4 94.8 43 C95.5 46.6 94.6 50.5 92.4 53.5 C91.3 54.9 89.2 56 88.9 57.8 C88.6 59.6 90.3 61.6 90.8 63.4 C91.7 66.9 91.2 70.6 89.4 73.7 C87.6 76.8 84.6 79.1 81.1 80.1 C79.4 80.5 76.8 80 75.4 81.2 C74 82.3 74 85 73.3 86.6 C71.8 89.9 68.9 92.5 65.5 93.7 C62 95 58.2 94.7 54.9 93.1 C53.3 92.4 51.8 90.5 50 90.4 C48.2 90.4 46.7 92.4 45.1 93.1 C41.9 94.7 38 95 34.6 93.8 C31 92.5 28.1 89.8 26.6 86.4 C25.9 84.8 26 82.4 24.7 81.2 C23.3 80 20.6 80.5 18.9 80.1 C15.4 79.2 12.4 76.8 10.6 73.8 C8.8 70.6 8.3 66.8 9.3 63.2 C9.7 61.5 11.4 59.6 11.1 57.8 C10.8 56.1 8.7 54.9 7.7 53.6 C5.4 50.6 4.5 46.7 5.2 43 C5.9 39.4 8 36.2 11 34.1 C12.5 33.1 15.1 32.7 15.9 31.1 C16.7 29.6 15.8 27.3 15.9 25.7 C16.2 22 17.9 18.5 20.7 16.2 C23.5 13.8 27.1 12.6 30.8 13 C32.6 13.1 34.8 14.5 36.5 13.9 C38.2 13.2 39 10.8 40.2 9.6 C42.7 7 46.3 5.5 50 5.5Z"
-    case "pentagon":
+    case .pentagon:
       "M50 7.6 C54.9 7.6 58.4 11 62.2 13.7 C69.6 19 76.9 24.4 84.3 29.8 C87.9 32.4 91.9 34.7 93.4 39.1 C94.9 43.6 92.9 47.9 91.5 52.1 C88.8 60.5 86.1 69 83.3 77.4 C81.9 81.7 81.1 86.5 77.6 89.5 C73.9 92.8 69.2 92.4 64.5 92.4 C55.1 92.4 45.7 92.4 36.3 92.4 C31.4 92.4 26.4 93 22.4 89.6 C19 86.6 18.1 81.8 16.8 77.7 C14 69.2 11.3 60.7 8.5 52.1 C7.1 47.9 5.1 43.6 6.6 39.1 C8.1 34.6 12.2 32.3 15.8 29.7 C23.3 24.3 30.7 18.8 38.1 13.5 C41.8 10.8 45.2 7.6 50 7.6Z"
-    case "burst":
+    case .burst:
       "M50 5.1 C53.8 5 63 14.3 67.1 16.3 C71.4 18.6 83.7 19.5 86.5 22.5 C88.7 24.8 88 29.4 88.1 32.3 C88.2 35.5 87.9 41 88.8 43.8 C90.1 47.8 96.6 59.1 95.9 62.5 C95.2 65.6 91 68 88.8 69.9 C81.2 76.5 81.8 75.1 77 84 C75.6 86.8 73.2 93.2 70.4 94.5 C66.7 96.2 54.7 91.6 49.9 91.7 C45.3 91.8 33.2 96.1 29.7 94.5 C26.9 93.2 24.4 86.8 23 84 C18.1 74.9 18.8 76.5 11.1 69.8 C8.9 67.9 4.8 65.6 4.2 62.6 C3.3 59 9.8 47.9 11.2 43.9 C12.1 41.1 11.8 35.5 11.9 32.4 C12 29.4 11.3 24.9 13.5 22.5 C16.2 19.5 28.6 18.5 32.9 16.4 C37.1 14.3 46 5.1 50 5.1Z"
-    case "alien":
+    case .alien:
       "M50 6 C66.4 6 85.1 13.5 91.8 29.5 C94.1 34.8 94.6 40.7 93.2 46.3 C90.7 56.9 80.7 65.3 73.5 73.1 C69.1 78 64.7 82.8 60.2 87.6 C57.3 90.8 54.7 94 50 94 C45.3 94 42.6 90.7 39.6 87.5 C35.2 82.7 30.8 77.8 26.3 73 C19.1 65.1 9.1 56.6 6.7 45.9 C5.4 40.5 6 34.9 8.1 29.7 C14.6 13.6 33.6 6 50 6Z"
-    case "ghost":
+    case .ghost:
       "M50 5 C67.9 5 84.2 17.1 89.2 34.3 C91.5 42 90.9 50.2 90.9 58.1 C90.9 65.6 90.9 73.1 90.9 80.6 C90.9 85.4 90.9 90 86.7 93 C83.4 95.4 78.8 95.6 75.4 93.5 C73.9 92.6 72.9 90.9 71.1 90.6 C68.1 90 65.6 95 60.3 95 C55 95 52.8 90.4 49.9 90.5 C47.1 90.6 45 95 39.8 95 C34.6 95 31.9 90.1 29 90.5 C27.1 90.8 26 92.7 24.5 93.6 C20.9 95.7 16.2 95.4 13 92.8 C9 89.6 9.1 85.1 9.1 80.4 C9.1 73 9.1 65.6 9.1 58.2 C9.1 50.2 8.5 42.1 10.8 34.4 C15.8 17.2 32.1 5 50 5Z"
-    case "flower":
+    case .flower:
       "M50 5.4 C57.2 5.4 63.9 9.6 66.9 16.1 C68.1 18.5 68.2 23.4 70.3 24.9 C72.4 26.4 76.6 25 79.2 25.2 C86.5 26 92.8 31.1 95 38 C97.3 44.9 95.3 52.7 90 57.6 C88 59.5 83.6 61 82.8 63.4 C82 66.2 84.6 69.4 85.2 72 C86.7 79.1 83.8 86.8 77.9 91 C72 95.3 64 95.8 57.7 92.3 C55.3 90.9 52.6 87.3 50 87.3 C47.4 87.3 44.5 91.1 42.1 92.4 C35.8 95.8 27.8 95.2 22 91 C16.2 86.7 13.4 79.3 14.8 72.2 C15.3 69.6 18 65.9 17.2 63.4 C16.4 60.9 12.1 59.6 10.2 57.8 C4.7 52.8 2.6 45 5 38 C7.3 31.1 13.4 26.1 20.6 25.3 C23.2 24.9 27.6 26.4 29.7 24.8 C31.8 23.3 31.9 18.5 33.1 16 C36.2 9.6 42.9 5.4 50 5.4Z"
-    case "sun":
+    case .sun:
       "M50 4.1 C52.7 4 55.1 14.4 58.1 15.5 C58.9 15.9 60.3 16.3 61.2 16.2 C64 15.6 70.1 9.8 72.4 10 C74.1 10.2 73.8 12.3 73.8 13.6 C73.7 15.8 73 22.7 74.3 24.2 C74.8 24.9 75.7 25.9 76.4 26.2 C77.8 26.9 83.7 26.3 85.6 26.3 C86.9 26.3 89.6 25.7 90 27.5 C90.5 29.6 84.3 36.2 83.9 38.9 C83.7 39.8 84.2 41 84.5 41.8 C85.6 45 95.8 47.1 95.9 49.9 C96.1 52.7 85.7 55.1 84.5 58 C84.2 58.9 83.7 60.3 83.9 61.2 C84.4 63.8 90.5 70.5 90 72.6 C89.5 74.4 86.8 73.8 85.5 73.8 C83.5 73.8 78.2 73.2 76.6 73.8 C75.8 74.1 75 75 74.4 75.7 C72.9 77.3 73.7 83.9 73.8 86.3 C73.8 87.5 74.2 89.6 72.6 90 C70.5 90.5 63.8 84.3 61.2 83.9 C60.3 83.7 59 84.2 58.2 84.5 C55 85.6 52.9 95.8 50.1 95.9 C47.4 96.1 44.9 85.7 42 84.5 C41.2 84.2 39.8 83.7 38.9 83.9 C36.3 84.3 29.5 90.5 27.5 90 C25.8 89.6 26.3 87.5 26.3 86.3 C26.3 83.9 27.1 77.3 25.6 75.7 C25.1 75.1 24.4 74.2 23.6 73.8 C22.3 73.2 16.4 73.8 14.5 73.8 C13.2 73.8 10.5 74.4 10.1 72.6 C9.6 70.5 15.7 63.8 16.2 61.2 C16.3 60.3 15.9 58.8 15.5 58 C14.4 55.2 3.9 52.6 4.1 50 C4.2 47.2 14.4 45 15.6 41.9 C15.9 41.1 16.3 39.8 16.2 38.9 C15.8 36.2 9.6 29.8 10 27.5 C10.4 25.7 13.1 26.3 14.4 26.3 C16.4 26.3 22.1 26.9 23.6 26.2 C24.3 25.9 25.2 24.9 25.7 24.3 C27.1 22.7 26.3 15.9 26.3 13.6 C26.2 12.4 25.9 10.3 27.6 10 C30 9.7 36.2 15.9 39 16.2 C39.9 16.3 41.2 15.9 42 15.5 C44.9 14.4 47.3 4.1 50 4.1Z"
     // The web draws an SVG arc from the top, clockwise; four cubic quarters match it.
-    case "circle":
+    case .circle:
       "M50 3 C75.96 3 97 24.04 97 50 C97 75.96 75.96 97 50 97 C24.04 97 3 75.96 3 50 C3 24.04 24.04 3 50 3Z"
     default: "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z"
     }
   }
   static let paths = Dictionary(uniqueKeysWithValues: keys.map { ($0, SVGPath.parse(svg($0))) })
   static let cached = Dictionary(uniqueKeysWithValues: keys.map { ($0, points($0)) })
-  static func path(_ shape: String) -> Path { paths[shape] ?? SVGPath.parse(svg(shape)) }
-  static func sampled(_ shape: String) -> PointVector { cached[shape] ?? points(shape) }
-  static func points(_ shape: String) -> PointVector {
+  static func path(_ body: AvatarBody) -> Path { paths[body] ?? SVGPath.parse(svg(body)) }
+  static func sampled(_ body: AvatarBody) -> PointVector { cached[body] ?? points(body) }
+  static func points(_ body: AvatarBody) -> PointVector {
     var all: [CGPoint] = []
     var current = CGPoint.zero
     var start = CGPoint.zero
-    SVGPath.parse(svg(shape)).cgPath.applyWithBlock { elementPointer in
+    SVGPath.parse(svg(body)).cgPath.applyWithBlock { elementPointer in
       let element = elementPointer.pointee
       switch element.type {
       case .moveToPoint:
@@ -1039,43 +1040,46 @@ enum AvatarGeometry {
   }
   /// Where a character's face sits, by family. Characters without one use the shared mascot anchor.
   /// Listed before `faces` because the ghost is both a character and a shape.
-  static let characterFaces: [String: Anchor] = [
-    "cactus": Anchor(cy: 50, scale: 0.88, top: 10, hat: 0.7),
-    "pumpkin": Anchor(cy: 53, scale: 0.95, top: 18, hat: 0.75),
-    "ghost": Anchor(cy: 47, scale: 0.95, top: 12, hat: 0.8),
-    "leprechaun": Anchor(cy: 54, scale: 0.9, top: 22, hat: 0.75),
-    "santa": Anchor(cy: 51, scale: 0.9, top: 22, hat: 0.75),
-    "rudolph": Anchor(cy: 54, scale: 0.9, top: 25, hat: 0.7),
-    "turkey": Anchor(cy: 54, scale: 0.85, top: 30, hat: 0.65),
-    "bunny": Anchor(cy: 57, scale: 0.9, top: 31, hat: 0.65),
-    "snowman": Anchor(cy: 52, scale: 0.95, top: 13, hat: 0.8),
+  static let characterFaces: [AvatarFamily: Anchor] = [
+    .cactus: Anchor(cy: 50, scale: 0.88, top: 10, hat: 0.7),
+    .pumpkin: Anchor(cy: 53, scale: 0.95, top: 18, hat: 0.75),
+    .ghost: Anchor(cy: 47, scale: 0.95, top: 12, hat: 0.8),
+    .leprechaun: Anchor(cy: 54, scale: 0.9, top: 22, hat: 0.75),
+    .santa: Anchor(cy: 51, scale: 0.9, top: 22, hat: 0.75),
+    .rudolph: Anchor(cy: 54, scale: 0.9, top: 25, hat: 0.7),
+    .turkey: Anchor(cy: 54, scale: 0.85, top: 30, hat: 0.65),
+    .bunny: Anchor(cy: 57, scale: 0.9, top: 31, hat: 0.65),
+    .snowman: Anchor(cy: 52, scale: 0.95, top: 13, hat: 0.8),
   ]
   static func anchor(for avatar: AvatarConfig) -> Anchor {
-    if let character = avatar.character { return characterFaces[character] ?? faces["mascot"]! }
-    return faces[avatar.geometry] ?? faces["blob"]!
+    switch avatar.body {
+    case .character(let family): return characterFaces[family] ?? mascotFace
+    case .mascot: return mascotFace
+    case .shape(let shape): return faces[shape] ?? faces[.blob]!
+    }
   }
-  static let faces: [String: Anchor] = [
-    "blob": Anchor(cy: 50, scale: 1, top: 3, hat: 1),
-    "pebble": Anchor(cy: 50, scale: 1, top: 2, hat: 1),
-    "squircle": Anchor(cy: 50, scale: 1, top: 5, hat: 1),
-    "capsule": Anchor(cy: 47, scale: 0.9, top: 5, hat: 0.85),
-    "triangle": Anchor(cy: 65, scale: 0.82, top: 3, hat: 0.6),
-    "hex": Anchor(cy: 50, scale: 0.95, top: 5, hat: 0.95),
-    "cloud": Anchor(cy: 55, scale: 0.95, top: 12, hat: 0.9),
-    "drop": Anchor(cy: 63, scale: 0.9, top: 8, hat: 0.62),
-    "circle": Anchor(cy: 50, scale: 1, top: 3, hat: 1),
-    "diamond": Anchor(cy: 50, scale: 0.88, top: 7, hat: 0.7),
-    "sparkle": Anchor(cy: 50, scale: 0.8, top: 6, hat: 0.6),
-    "clover": Anchor(cy: 50, scale: 0.95, top: 5, hat: 0.75),
-    "heart": Anchor(cy: 48, scale: 0.95, top: 12, hat: 0.75),
-    "cookie": Anchor(cy: 50, scale: 0.95, top: 6, hat: 0.95),
-    "pentagon": Anchor(cy: 54, scale: 0.92, top: 7, hat: 0.7),
-    "burst": Anchor(cy: 51, scale: 0.9, top: 6, hat: 0.75),
-    "alien": Anchor(cy: 42, scale: 1, top: 6, hat: 1),
-    "ghost": Anchor(cy: 45, scale: 0.95, top: 5, hat: 0.95),
-    "flower": Anchor(cy: 51, scale: 0.85, top: 8, hat: 0.75),
-    "sun": Anchor(cy: 50, scale: 0.85, top: 15, hat: 0.8),
-    "mascot": Anchor(cy: 55, scale: 1, top: 15, hat: 0.82),
+  static let mascotFace = Anchor(cy: 55, scale: 1, top: 15, hat: 0.82)
+  static let faces: [AvatarShape: Anchor] = [
+    .blob: Anchor(cy: 50, scale: 1, top: 3, hat: 1),
+    .pebble: Anchor(cy: 50, scale: 1, top: 2, hat: 1),
+    .squircle: Anchor(cy: 50, scale: 1, top: 5, hat: 1),
+    .capsule: Anchor(cy: 47, scale: 0.9, top: 5, hat: 0.85),
+    .triangle: Anchor(cy: 65, scale: 0.82, top: 3, hat: 0.6),
+    .hex: Anchor(cy: 50, scale: 0.95, top: 5, hat: 0.95),
+    .cloud: Anchor(cy: 55, scale: 0.95, top: 12, hat: 0.9),
+    .drop: Anchor(cy: 63, scale: 0.9, top: 8, hat: 0.62),
+    .circle: Anchor(cy: 50, scale: 1, top: 3, hat: 1),
+    .diamond: Anchor(cy: 50, scale: 0.88, top: 7, hat: 0.7),
+    .sparkle: Anchor(cy: 50, scale: 0.8, top: 6, hat: 0.6),
+    .clover: Anchor(cy: 50, scale: 0.95, top: 5, hat: 0.75),
+    .heart: Anchor(cy: 48, scale: 0.95, top: 12, hat: 0.75),
+    .cookie: Anchor(cy: 50, scale: 0.95, top: 6, hat: 0.95),
+    .pentagon: Anchor(cy: 54, scale: 0.92, top: 7, hat: 0.7),
+    .burst: Anchor(cy: 51, scale: 0.9, top: 6, hat: 0.75),
+    .alien: Anchor(cy: 42, scale: 1, top: 6, hat: 1),
+    .ghost: Anchor(cy: 45, scale: 0.95, top: 5, hat: 0.95),
+    .flower: Anchor(cy: 51, scale: 0.85, top: 8, hat: 0.75),
+    .sun: Anchor(cy: 50, scale: 0.85, top: 15, hat: 0.8),
   ]
 }
 
@@ -1097,25 +1101,22 @@ private enum AvatarArt {
     p.addQuadCurve(to: CGPoint(x: 56.5, y: 73), control: CGPoint(x: 53.25, y: y))
     return p
   }
-  static let foxEar = SVGPath.parse("M-19 42 L-14 5 Q-12 -1 -7.5 3 L14 23Z")
-  static let foxEarInner = SVGPath.parse("M-13 31 L-10.5 11 L3 23Z")
-  static let foxMuzzle = SVGPath.parse(
-    "M50 60 C43 67 24 65 10 70 C16 86 33 96 50 96 C67 96 84 86 90 70 C76 65 57 67 50 60Z")
-  static let nose = SVGPath.parse("M45.5 66 Q50 63 54.5 66 Q53 70.5 50 71 Q47 70.5 45.5 66Z")
-  static let happyMouth = SVGPath.parse("M44 73 Q50 83 56 73 Q50 75.5 44 73Z")
-  static let happySproutMouth = SVGPath.parse("M44 69 Q50 79 56 69 Q50 71.5 44 69Z")
-  static let stem = SVGPath.parse("M50 18 Q48.5 10 51 3")
-  static let leafLeft = SVGPath.parse("M50 10 C41 -1 27 1 24 7 C33 14 44 15 50 10Z")
-  static let leafRight = SVGPath.parse("M51 7 C58 -4 73 -4 77 2 C69 9 58 11 51 7Z")
-  static let veins = SVGPath.parse("M47 9.5 Q37 6 29 7 M54 6.5 Q63 2.5 72 2.5")
-  static let hatCrown = SVGPath.parse("M-20 -2 Q-21 -20 -10 -21 Q0 -16 10 -21 Q21 -20 20 -2Z")
-  static let hatBand = SVGPath.parse("M-20.3 -7 Q0 -3 20.3 -7 L20 -2 Q0 2 -20 -2Z")
-  static let hatBrim = SVGPath.parse(
-    "M-37 -4 Q-34 5 0 5 Q34 5 37 -4 Q38 -8 33 -6 Q0 2 -33 -6 Q-38 -8 -37 -4Z")
-  static let bang = SVGPath.parse("M42.5 21 Q50 12 57.5 21 L54.5 61 Q50 68 45.5 61Z")
-  static let spark = SVGPath.parse(
-    "M0 -10 L3.2 -3.2 L10 0 L3.2 3.2 L0 10 L-3.2 3.2 L-10 0 L-3.2 -3.2Z")
-  static let happyEye = SVGPath.parse("M-7 3 Q0 -8 7 3")
+  static let foxEar = AvatarPathData.foxEar.path
+  static let foxEarInner = AvatarPathData.foxEarInner.path
+  static let foxMuzzle = AvatarPathData.foxMuzzle.path
+  static let nose = AvatarPathData.nose.path
+  static let happyMouth = AvatarPathData.happyMouth.path
+  static let happySproutMouth = AvatarPathData.happySproutMouth.path
+  static let stem = AvatarPathData.stem.path
+  static let leafLeft = AvatarPathData.leafLeft.path
+  static let leafRight = AvatarPathData.leafRight.path
+  static let veins = AvatarPathData.veins.path
+  static let hatCrown = AvatarPathData.hatCrown.path
+  static let hatBand = AvatarPathData.hatBand.path
+  static let hatBrim = AvatarPathData.hatBrim.path
+  static let bang = AvatarPathData.bang.path
+  static let spark = AvatarPathData.spark.path
+  static let happyEye = AvatarPathData.happyEye.path
   static let trailColors = ["#ff729d", "#85bcfb", "#b790fc", "#92d899"].map { Color(hex: $0) }
   static let trailOrbits: [(Double, Double, Double)] = [
     (58, 13, -0.24), (56, 16, 0.16), (60, 11, 0.38), (54, 18, -0.48),
@@ -1131,23 +1132,22 @@ private enum AvatarArt {
 /// The held props from `PropArt` in src/components/Avatar.tsx. Their colors are fixed, as on
 /// the web, so a prop reads the same on any body color and in light or dark appearance.
 private enum AvatarPropArt {
-  static let handle = SVGPath.parse("M8 8 L19 19")
-  static let lensGlint = SVGPath.parse("M-6 -3 Q-5 -6 -2 -7")
+  static let handle = AvatarPathData.handle.path
+  static let lensGlint = AvatarPathData.lensGlint.path
   static let screen = Path(
     roundedRect: CGRect(x: -21, y: -23, width: 42, height: 27), cornerRadius: 4, style: .circular)
-  static let keyboard = SVGPath.parse("M-27 4 H27 L24 10 H-24Z")
-  static let pageLeft = SVGPath.parse("M0 -10 Q-12 -15 -24 -11 V7 Q-12 3 0 8Z")
-  static let pageRight = SVGPath.parse("M0 -10 Q12 -15 24 -11 V7 Q12 3 0 8Z")
-  static let textLines = SVGPath.parse(
-    "M-19 -6 Q-11 -9 -4 -6 M-19 -1 Q-11 -4 -4 -1 M4 -6 Q11 -9 19 -6 M4 -1 Q11 -4 19 -1")
-  static let spine = SVGPath.parse("M-25 8 Q-12 4 0 9 Q12 4 25 8")
+  static let keyboard = AvatarPathData.keyboard.path
+  static let pageLeft = AvatarPathData.pageLeft.path
+  static let pageRight = AvatarPathData.pageRight.path
+  static let textLines = AvatarPathData.textLines.path
+  static let spine = AvatarPathData.spine.path
   static let paper = Path(
     roundedRect: CGRect(x: -15, y: 2, width: 26, height: 20), cornerRadius: 2.5, style: .circular)
   static let pencil = Path(
     roundedRect: CGRect(x: -3.2, y: -22, width: 6.4, height: 22), cornerRadius: 1.2,
     style: .circular)
-  static let eraser = SVGPath.parse("M-3.2 -22 H3.2 V-25.5 Q3.2 -27 0 -27 Q-3.2 -27 -3.2 -25.5Z")
-  static let tip = SVGPath.parse("M-3.2 0 L0 6 L3.2 0Z")
+  static let eraser = AvatarPathData.eraser.path
+  static let tip = AvatarPathData.tip.path
   static let ink = Color(hex: "#2b201b")
 
   static func style(_ width: Double) -> StrokeStyle {
@@ -1225,12 +1225,12 @@ struct AvatarArtwork {
     let face = frame.expression
     let bang = frame.morph.bang
     let symbolic = bang
-    let mascot = avatar.mode == "mascot"
-    let family = avatar.family ?? "sprout"
+    let mascot = avatar.mode == .mascot
+    let family = avatar.family ?? .sprout
     let colorHex = avatar.color ?? "#1084FE"
     let color = Color(hex: colorHex)
-    let eyes = avatar.eyes ?? "oval"
-    let accessory = avatar.accessory ?? "none"
+    let eyes = avatar.eyes ?? .oval
+    let accessory = avatar.accessory ?? .plain
     let character = avatar.character
     let anchor = AvatarGeometry.anchor(for: avatar)
     let inkHex = AvatarMotion.faceInk(
@@ -1253,7 +1253,7 @@ struct AvatarArtwork {
     // A pitched face rolls everything painted on it, eyes and muzzle alike, around the sphere.
     let roll = AvatarMotion.pitchEyes(pose.pitch)
     // Dots replace pills outright; other eye styles shrink toward a dot instead.
-    let drawsPill = !(mascot && (eyes == "oval" || eyes == "round")) && !["spark", "visor", "round"].contains(eyes)
+    let drawsPill = !(mascot && (eyes == .oval || eyes == .round)) && ![.spark, .visor, .round].contains(eyes)
     let dotShrink = drawsPill ? 1 + 0.12 * face.dot : 1 - 0.3 * face.dot
     let pillHeight = 25 - 14 * face.dot
     // A smaller extra hat leaves a character's own cap, ears and antlers visible.
@@ -1309,15 +1309,15 @@ struct AvatarArtwork {
         }
         trails(front: false)
         if let character { CharacterAvatarArt.back(layer, family: character, color: colorHex, yaw: pose.yaw) }
-        if mascot && (family == "bear" || family == "fox") {
+        if mascot && (family == .bear || family == .fox) {
           let inner = Color(
-            hex: AvatarMotion.tint(colorHex, family == "fox" ? -0.35 : 0.45))
+            hex: AvatarMotion.tint(colorHex, family == .fox ? -0.35 : 0.45))
           for direction in [-1.0, 1.0] {
             let p = AvatarMotion.project(direction * 31, yaw: pose.yaw, radius: 44)
             var ear = layer
             ear.translateBy(x: 50 + p.x, y: 0)
             ear.scaleBy(x: max(abs(cos(pose.yaw)), 0.35) * (direction < 0 ? 1 : -1), y: 1)
-            if family == "bear" {
+            if family == .bear {
               ear.fill(AvatarArt.circle(0, 24, 15), with: .color(color))
               ear.fill(AvatarArt.circle(0, 25, 8), with: .color(inner))
             } else {
@@ -1326,7 +1326,7 @@ struct AvatarArtwork {
             }
           }
         }
-        if mascot && family == "sprout" {
+        if mascot && family == .sprout {
           var sprout = layer
           sprout.translateBy(x: AvatarMotion.project(0, yaw: pose.yaw).x * 0.3, y: 0)
           sprout.stroke(AvatarArt.stem, with: .color(Color(hex: "#3f7f55")), style: stroke(3))
@@ -1352,12 +1352,12 @@ struct AvatarArtwork {
           if let character {
             CharacterAvatarArt.face(muzzle, family: character, color: colorHex, ink: ink, mouth: face.mouth, happy: face.happy)
           } else {
-            if family == "bear" { muzzle.fill(AvatarArt.ellipse(50, 71, 18, 13), with: .color(cream)) }
-            if family == "fox" { muzzle.fill(AvatarArt.foxMuzzle, with: .color(cream)) }
-            if family != "sprout" { muzzle.fill(AvatarArt.nose, with: .color(dark)) }
+            if family == .bear { muzzle.fill(AvatarArt.ellipse(50, 71, 18, 13), with: .color(cream)) }
+            if family == .fox { muzzle.fill(AvatarArt.foxMuzzle, with: .color(cream)) }
+            if family != .sprout { muzzle.fill(AvatarArt.nose, with: .color(dark)) }
             var mouth = muzzle
             mouth.opacity = 1 - face.happy
-            if family == "sprout" {
+            if family == .sprout {
               mouth.stroke(AvatarArt.sproutMouth(face.mouth), with: .color(ink), style: stroke(2.4))
             } else {
               let curve = 73 + 4 * face.mouth
@@ -1367,7 +1367,7 @@ struct AvatarArtwork {
               var smile = muzzle
               smile.opacity = face.happy
               smile.fill(
-                family == "sprout" ? AvatarArt.happySproutMouth : AvatarArt.happyMouth,
+                family == .sprout ? AvatarArt.happySproutMouth : AvatarArt.happyMouth,
                 with: .color(dark))
             }
           }
@@ -1402,9 +1402,9 @@ struct AvatarArtwork {
             let squint = 1 + (1 - min(face.open, 1)) * 0.4
             let widthScale = p.scale * eyeWidth * eyeScale * grow * squint
             shape.scaleBy(x: widthScale, y: open * grow)
-            if mascot && (eyes == "oval" || eyes == "round") {
+            if mascot && (eyes == .oval || eyes == .round) {
               shape.fill(
-                AvatarArt.ellipse(0, 0, eyes == "oval" ? 6.5 : 7.5, eyes == "oval" ? 8.5 : 7.5),
+                AvatarArt.ellipse(0, 0, eyes == .oval ? 6.5 : 7.5, eyes == .oval ? 8.5 : 7.5),
                 with: .color(ink))
               if inkHex != "#fff3db" {
                 shape.fill(AvatarArt.circle(-2 * side, -3.6, 2.5), with: .color(.white))
@@ -1412,14 +1412,14 @@ struct AvatarArtwork {
                 glint.opacity *= 0.8
                 glint.fill(AvatarArt.circle(2.4 * side, 2.8, 1.1), with: .color(.white))
               }
-            } else if eyes == "spark" {
+            } else if eyes == .spark {
               shape.fill(AvatarArt.spark, with: .color(ink))
-            } else if eyes == "visor" {
+            } else if eyes == .visor {
               shape.fill(
                 Path(
                   roundedRect: CGRect(x: -10, y: -4.5, width: 20, height: 9), cornerRadius: 4.5,
                   style: .circular), with: .color(ink))
-            } else if eyes == "round" {
+            } else if eyes == .round {
               shape.fill(AvatarArt.circle(0, 0, 7.5), with: .color(ink))
             } else {
               shape.rotate(by: .degrees(face.tilt * side))
@@ -1436,13 +1436,13 @@ struct AvatarArtwork {
             arc.scaleBy(x: p.scale * eyeWidth * eyeScale, y: eyeScale)
             arc.stroke(AvatarArt.happyEye, with: .color(ink), style: stroke(4.5))
           }
-          if accessory == "glasses" {
+          if accessory == .glasses {
             eye.stroke(
               AvatarArt.ellipse(0, 0, 12.5 * eyeScale * p.scale, 12.5 * eyeScale),
               with: .color(frameInk), lineWidth: 2.5)
           }
         }
-        if accessory == "glasses" && center.visible && roll.visible {
+        if accessory == .glasses && center.visible && roll.visible {
           var bridge = Path()
           bridge.move(to: CGPoint(x: 50 + center.x - 4 * center.scale, y: eyeY - 2))
           bridge.addQuadCurve(
@@ -1454,7 +1454,7 @@ struct AvatarArtwork {
           layer.stroke(body, with: .color(Color(hex: edge)), style: StrokeStyle(lineWidth: 2.2))
         }
         if let character { CharacterAvatarArt.front(layer, family: character, yaw: pose.yaw) }
-        if accessory == "hat" {
+        if accessory == .hat {
           var hat = layer
           hat.translateBy(x: 50, y: hatAnchor.top + 15 * hatAnchor.hat)
           hat.scaleBy(x: hatAnchor.hat, y: hatAnchor.hat)
@@ -1544,7 +1544,7 @@ struct AvatarView: View {
   }
 
   private var reduceMotion: Bool { systemReduceMotion || forceReducedMotion }
-  private var portrait: Bool { avatar.mode == "portrait" }
+  private var portrait: Bool { avatar.mode == .portrait }
   private var heldProp: AvatarProp? { portrait ? nil : prop }
   /// Who the conductor sees: the conductor keeps different bots from gesturing alike.
   private var owner: String { AvatarView.motionOwner(botId: botId, name: botName, instance: instance) }
@@ -1565,7 +1565,7 @@ struct AvatarView: View {
         entered: snapshot.entered, held: heldProp != nil,
         now: date.timeIntervalSinceReferenceDate)
   }
-  private var geometry: String { avatar.silhouette }
+  private var geometry: AvatarBody { avatar.body }
   private var colorHex: String { avatar.color ?? "#1084FE" }
   private var frozen: Bool { AvatarMotion.frozenStates.contains(state) }
   private func still(_ state: ActivityState) -> Bool {
@@ -1653,7 +1653,7 @@ struct AvatarView: View {
   private func morphProgress(_ date: Date) -> Double {
     AvatarMotion.smoothstep(date.timeIntervalSince(morphAt) / AvatarMotion.shapeDuration)
   }
-  private func bodyPoints(at date: Date, previous: String) -> PointVector {
+  private func bodyPoints(at date: Date, previous: AvatarBody) -> PointVector {
     let target = AvatarGeometry.sampled(previous)
     guard let morphFrom, morphProgress(date) < 1 else { return target }
     return morphFrom.mixed(with: target, morphProgress(date))

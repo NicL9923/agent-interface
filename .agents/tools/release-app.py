@@ -34,6 +34,7 @@ import uuid
 from pathlib import Path
 
 from deploy_common import OPTIMIZED_REFUSAL, fence
+import host_access
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = ROOT / ".private/releases"
@@ -434,8 +435,7 @@ def remote_source(program, payload):
 
 def remote(host, program, payload, timeout=900):
     """Run a Python program on the host with a JSON payload; return its final JSON line."""
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", host, "python3", "-"], input=remote_source(program, payload),
-                          capture_output=True, text=True, timeout=timeout)
+    done = host_access.ssh(host, ["python3", "-"], input=remote_source(program, payload), timeout=timeout, check=False, capture=True)
     if done.returncode:
         raise SystemExit(f"Host step failed:\n{(done.stderr or done.stdout).strip()[-3000:]}")
     return json.loads(done.stdout.strip().splitlines()[-1])
@@ -443,8 +443,7 @@ def remote(host, program, payload, timeout=900):
 
 def guarded(host, manifest, check):
     command = f"cd {shlex.quote(manifest['release'])} && python3 {GUARDED_TOOL} --config {shlex.quote(manifest['configPath'])}"
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", host, command + (" --check" if check else "")],
-                          capture_output=True, text=True, timeout=1800)
+    done = host_access.ssh(host, command + (" --check" if check else ""), timeout=1800, check=False, capture=True)
     output = done.stdout.strip()
     print(output)
     if done.returncode:
@@ -475,7 +474,7 @@ def manifest_lock(name):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.")
+            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.") from None
         yield
 
 
@@ -492,7 +491,7 @@ def build_locally(commit, work):
         archive = json.loads(subprocess.check_output(
             [sys.executable, ".agents/tools/archive-release.py", str(work / "release.tar.gz")], cwd=checkout, text=True))
         log = subprocess.run("npm ci --no-audit --no-fund && npm run build", shell=True, cwd=checkout,
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         if log.returncode:
             raise SystemExit("The local build failed:\n" + (log.stdout + log.stderr)[-3000:])
         return archive["sha256"], built_web_version(log.stdout)
@@ -503,7 +502,7 @@ def build_locally(commit, work):
 def prepare(args):
     git("fetch", "--quiet", "origin", "main")
     commit = git("rev-parse", "--verify", args.commit + "^{commit}")
-    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"], cwd=ROOT).returncode:
+    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"], cwd=ROOT, check=False).returncode:
         raise SystemExit("Release only commits that are merged to origin/main.")
     name = release_name(commit, datetime.datetime.now(datetime.timezone.utc))
     base = Path(args.app_base)
@@ -524,10 +523,8 @@ def prepare(args):
         manifest["archiveSha256"] = archive_sha
         # Recorded before the host changes, so discard can always clean up.
         save_manifest(manifest)
-        subprocess.run(["ssh", "-o", "BatchMode=yes", args.host,
-                        f"umask 077 && mkdir {shlex.quote(str(operation_dir))}"], check=True)
-        subprocess.run(["scp", "-q", "-o", "BatchMode=yes", str(work / "release.tar.gz"),
-                        f"{args.host}:{operation_dir}/release.tar.gz"], check=True)
+        host_access.ssh(args.host, f"umask 077 && mkdir {shlex.quote(str(operation_dir))}", timeout=60)
+        host_access.scp(str(work / "release.tar.gz"), f"{args.host}:{operation_dir}/release.tar.gz", timeout=900)
     built = remote(args.host, REMOTE_BUILD, {
         "appBase": str(base), "release": str(release), "operationDir": str(operation_dir),
         "archiveSha256": archive_sha, "node": prior["node"], "qualification": args.qualification,

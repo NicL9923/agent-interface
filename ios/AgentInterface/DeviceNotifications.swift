@@ -29,7 +29,7 @@ struct DeviceNotificationState: Equatable {
 /// which iOS permission alone then decides, as before the switch existed.
 @MainActor enum NotificationIntent: String {
   case on, off
-  static func key(_ store: AppStore) -> String? { store.key("notifications") }
+  static func key(_ store: AppStore) -> String? { store.key(.notifications) }
   static func read(_ store: AppStore) -> NotificationIntent? {
     key(store).flatMap { UserDefaults.standard.string(forKey: $0) }.flatMap(NotificationIntent.init)
   }
@@ -38,7 +38,7 @@ struct DeviceNotificationState: Equatable {
   static func write(_ value: NotificationIntent, key: String?) {
     if let key { UserDefaults.standard.set(value.rawValue, forKey: key) }
   }
-  static func promptKey(_ store: AppStore) -> String? { store.key("notificationPrompt") }
+  static func promptKey(_ store: AppStore) -> String? { store.key(.notificationPrompt) }
   static func prompted(_ store: AppStore) -> Bool { promptKey(store).flatMap { UserDefaults.standard.string(forKey: $0) } != nil }
   static func rememberPrompt(_ store: AppStore) {
     if let key = promptKey(store) { UserDefaults.standard.set("shown", forKey: key) }

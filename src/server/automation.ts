@@ -4,6 +4,7 @@ import type { Runtime } from '../shared/types.js';
 import type { AutomationRequest } from '../shared/automation.js';
 import { signedIn } from './auth.js';
 import { notFound, visibleBots } from './bot-access.js';
+import { httpError } from './http-error.js';
 import type { Store } from './store.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
@@ -11,20 +12,19 @@ const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const taskFields = { title: z.string().trim().min(1).max(500), body: z.string().max(20000), priority: z.number().int().min(-100).max(100), assignee: id.nullable() };
 const triggerFields = { description: z.string().max(1000), events: z.array(z.string().regex(/^[A-Za-z0-9_.*:-]{1,100}$/)).min(1).max(20), routineId: id };
 type OperationInput<T = AutomationRequest> = T extends AutomationRequest ? Omit<T, 'profile' | 'visibleProfiles'> : never;
-const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 
 export async function installAutomationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, maintenance = () => false, canManage: (req: import('fastify').FastifyRequest) => boolean = () => false) {
   const request = async (req: import('fastify').FastifyRequest, input: OperationInput) => {
     const profile = z.object({ id }).parse(req.params).id;
     const bots = await visibleBots(runtime, store, signedIn(req).id);
-    if (!bots.some(bot => bot.id === profile)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
-    if (input.operation.startsWith('trigger_') && !canManage(req)) throw fail(403, 'Only an integration administrator can change event triggers and view a new signing secret.');
-    if (input.operation === 'skill_policy' && !canManage(req)) throw fail(403, 'Only an integration administrator can change learned skill approval policy.');
-    if (!runtime.automationRequest) throw fail(409, 'Update and qualify the Hermes integration to use goals, tasks, event triggers and learned skill review.');
-    if (input.operation !== 'overview' && !['task_get', 'skill_content', 'skill_diff'].includes(input.operation) && maintenance()) throw fail(409, 'Hermes is being upgraded. Automation changes are paused.');
+    if (!bots.some(bot => bot.id === profile)) throw httpError(404, notFound.error, { code: notFound.code });
+    if (input.operation.startsWith('trigger_') && !canManage(req)) throw httpError(403, 'Only an integration administrator can change event triggers and view a new signing secret.');
+    if (input.operation === 'skill_policy' && !canManage(req)) throw httpError(403, 'Only an integration administrator can change learned skill approval policy.');
+    if (!runtime.automationRequest) throw httpError(409, 'Update and qualify the Hermes integration to use goals, tasks, event triggers and learned skill review.');
+    if (input.operation !== 'overview' && !['task_get', 'skill_content', 'skill_diff'].includes(input.operation) && maintenance()) throw httpError(409, 'Hermes is being upgraded. Automation changes are paused.');
     const row = input as Record<string, unknown>;
     const task = row.task as { assignee?: string } | undefined;
-    for (const candidate of [row.assignee, row.reviewer, task?.assignee]) if (typeof candidate === 'string' && !bots.some(bot => bot.id === candidate)) throw fail(404, notFound.error);
+    for (const candidate of [row.assignee, row.reviewer, task?.assignee]) if (typeof candidate === 'string' && !bots.some(bot => bot.id === candidate)) throw httpError(404, notFound.error);
     const result = await runtime.automationRequest({ ...input, profile, visibleProfiles: bots.map(bot => bot.id) } as AutomationRequest);
     return 'goals' in result ? { ...result, canManageTriggers: canManage(req), canManageLearningPolicy: canManage(req) } : result;
   };

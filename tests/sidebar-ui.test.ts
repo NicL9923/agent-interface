@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { Sidebar } from "../src/app/Sidebar";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { ComponentProps } from "react";
+import { mountRoot } from "./ui-harness";
 
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -15,10 +16,7 @@ let root: Root;
 let container: HTMLDivElement;
 let props: ComponentProps<typeof Sidebar>;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   props = {
     boot: {
       user: { id: "one", name: "One" },
@@ -34,11 +32,6 @@ beforeEach(() => {
     onSettings: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
     onMoveToSection: vi.fn(), onNewSection: vi.fn(),
   };
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
 });
 const render = () => act(async () => root.render(createElement(Sidebar, props)));
 const statuses = () => [...container.querySelectorAll(".pinned-activity")].map(node => node.textContent);

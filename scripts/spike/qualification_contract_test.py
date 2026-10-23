@@ -11,12 +11,12 @@ import types
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from support import load_source
+
 APP = Path(__file__).resolve().parents[2]
 def module(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    value = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(value)
-    return value
+    return load_source(path, name)
 qualification = module("qualification_contract", APP / "src/hermes/qualification.py")
 extension = module("extension_contract", APP / "src/hermes/extension.py")
 

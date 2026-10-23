@@ -248,11 +248,7 @@
           "connection": ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"],
           "csrfToken": NSNull(),
           "capabilities": Dictionary(
-            uniqueKeysWithValues: [
-              "chat", "steering", "approvals", "uploads", "generatedFiles", "botConfiguration",
-              "tools", "skills", "routines", "durableEvents", "idempotency", "imageGeneration",
-              "stop", "portraitGeneration", "avatarMetadata",
-            ].map { ($0, ["supported": true]) }),
+            uniqueKeysWithValues: CapabilityKey.allCases.map { ($0.rawValue, ["supported": true]) }),
         ]
         // A distributed build newer than any local build, so the update banner shows.
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {

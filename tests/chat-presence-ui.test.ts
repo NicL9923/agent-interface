@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { write } from "../src/client-api";
 import { IDLE_MS, useChatPresence } from "../src/app/use-chat-presence";
+import { advance, mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), write: vi.fn() }));
 let root: Root, container: HTMLDivElement, visibility: DocumentVisibilityState, focused: boolean;
@@ -15,10 +15,8 @@ function Chat({ botId }: { botId?: string }) {
 }
 const states = () => vi.mocked(write).mock.calls.map(([path, body]) => `${path} ${(body as { state: string }).state}`);
 async function render(botId?: string) { await act(async () => root.render(createElement(Chat, { botId }))); }
-async function advance(ms: number) { await act(async () => vi.advanceTimersByTimeAsync(ms)); }
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(write).mockReset().mockResolvedValue({ ok: true });
   visibility = "visible"; focused = true; closed.length = 0;
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
@@ -27,13 +25,9 @@ beforeEach(() => {
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: async () => ({
     getNotifications: async () => [notification("https://app.test/?bot=ranch"), notification("https://app.test/?bot=ranch&routine=brief"), notification("https://app.test/?bot=barn")],
   }) } });
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => {
-  await act(async () => root.unmount()); container.remove();
-  Reflect.deleteProperty(document, "visibilityState"); Reflect.deleteProperty(navigator, "serviceWorker");
-  vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals();
-});
+afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); Reflect.deleteProperty(navigator, "serviceWorker"); });
 
 it("beats while the chat is attended, closes its notifications here and reports leaving", async () => {
   await render("ranch");

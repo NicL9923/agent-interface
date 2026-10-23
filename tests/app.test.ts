@@ -12,6 +12,7 @@ import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, 
 import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
+import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
 function runtimeDouble() {
@@ -121,23 +122,7 @@ function runtimeDouble() {
     },
   };
 }
-async function login(
-  app: Awaited<ReturnType<typeof createApp>>["app"],
-  member = "one",
-) {
-  const result = await app.inject({
-    method: "POST",
-    url: "/api/auth/local",
-    headers: { origin },
-    payload: { member },
-  });
-  expect(result.statusCode).toBe(200);
-  return {
-    cookie: result.cookies[0].name + "=" + result.cookies[0].value,
-    "x-csrf-token": result.json().csrfToken,
-    origin,
-  };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") => localLogin(app, origin, member);
 const config = () =>
   loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
 describe("default roster detail fallback", () => {
@@ -532,6 +517,36 @@ describe("safe admission, steering, and approvals", () => {
     expect(sent.json().status).toBe("accepted");
     expect(fake.runtime.conversation).not.toHaveBeenCalled();
     expect(store.recipients({id:"event",botId:"shared",runId:"run",kind:"completed",title:"Done",occurredAt:""})).toEqual(["local-one"]);
+    await app.close();
+  });
+  it("recognizes an interruption rejection by its recorded reason, and legacy rows by their sentence", async () => {
+    const fake=runtimeDouble();
+    fake.runtime.canonicalSubmit=async()=>true;
+    fake.runtime.submit=vi.fn(async input=>{
+      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
+      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
+    });
+    const {app,store}=await createApp(config(),fake.runtime,{background:false});
+    const headers=await login(app);
+    const send=(payload:{requestId:string;text:string;reviewedInterruption?:boolean})=>app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
+    const current={requestId:randomUUID(),text:"Continue"};
+    expect((await send(current)).statusCode).toBe(409);
+    expect(store.submission(current.requestId)).toMatchObject({reason:"interruption_pending",receipt:{status:"rejected"}});
+    expect(store.submission(current.requestId)!.receipt).not.toHaveProperty("reason");
+    expect((await send(current)).statusCode).toBe(409);
+    expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
+    // A row stored before reasons were recorded carries only the sentence.
+    const legacy={requestId:randomUUID(),text:"Older"};
+    store.intent({...legacy,attachments:[],botId:"shared",senderId:"local-one"});
+    store.receipt({requestId:legacy.requestId,status:"rejected",message:"Review the interrupted task before starting another message."});
+    expect((await send(legacy)).json().error).toBe("Review the interrupted task before starting another message.");
+    expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
+    expect((await send({...legacy,reviewedInterruption:true})).json().status).toBe("accepted");
+    // Another rejection is returned as recorded, never mistaken for an interruption.
+    const other={requestId:randomUUID(),text:"Image"};
+    store.intent({...other,attachments:[],botId:"shared",senderId:"local-one"});
+    store.receipt({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
+    expect((await send(other)).json()).toEqual({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
     await app.close();
   });
   it("forwards a request once, rejects reused IDs with changed content, and persists uncertain intent across app restart", async () => {

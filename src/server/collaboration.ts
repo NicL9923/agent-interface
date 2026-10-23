@@ -6,33 +6,33 @@ import type { Runtime } from '../shared/types.js';
 import type { GroupCatalog, GroupPage, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
-const id = z.string().min(1).max(200);
+import { httpError } from './http-error.js';
+import { id } from './schemas.js';
 const uuid = z.string().uuid();
-const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   // A group with someone else's private assistant does not exist for this person: its
   // other assistants' replies would quote and answer the private one.
   const bots = (userId: string) => visibleBots(runtime, store, userId);
   async function profile(userId: string, botId: string) {
-    if (!(await bots(userId)).some(bot => bot.id === botId)) throw Object.assign(fail(404, notFound.error), { code: notFound.code });
+    if (!(await bots(userId)).some(bot => bot.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   }
   app.get('/api/bots/:botId/routines/:routineId/results', async req => {
     const p = z.object({ botId: id, routineId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
-    if (!runtime.routineResults) throw fail(409, 'Routine history is unavailable on this Hermes integration.');
+    if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
     return runtime.routineResults(p.botId, p.routineId);
   });
   app.get('/api/bots/:botId/routines/:routineId/results/:resultId', async req => {
     const p = z.object({ botId: id, routineId: id, resultId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
-    if (!runtime.routineOutput) throw fail(409, 'Routine output is unavailable on this Hermes integration.');
+    if (!runtime.routineOutput) throw httpError(409, 'Routine output is unavailable on this Hermes integration.');
     const output = await runtime.routineOutput(p.botId, p.routineId, p.resultId);
     const redact = await redactAgents(store, roster, signedIn(req).id);
     return { ...output, messages: output.messages.map(redact.message) };
   });
   async function request(input: GroupRequest) {
-    if (!runtime.groupRequest) throw fail(409, 'Hosted group chats are unavailable on this Hermes integration.');
+    if (!runtime.groupRequest) throw httpError(409, 'Hosted group chats are unavailable on this Hermes integration.');
     return runtime.groupRequest(input);
   }
   function accessible(room: GroupRoom, allowed: Set<string>) {
@@ -41,7 +41,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
   async function room(userId: string, roomId: string) {
     const allowed = new Set((await bots(userId)).map(bot => bot.id));
     const state = await request({ operation: 'state', roomId }) as GroupState;
-    if (!accessible(state.room, allowed)) throw fail(404, 'Group chat not found');
+    if (!accessible(state.room, allowed)) throw httpError(404, 'Group chat not found');
     return state;
   }
   app.get('/api/groups', async req => {
@@ -55,7 +55,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const allowed = await bots(signedIn(req).id);
     const members = body.botIds.map(botId => {
       const bot = allowed.find(bot => bot.id === botId);
-      if (!bot || ['all', 'everyone'].includes(bot.id.toLowerCase())) throw fail(400, 'Choose local assistants with unique, non-reserved handles.');
+      if (!bot || ['all', 'everyone'].includes(bot.id.toLowerCase())) throw httpError(400, 'Choose local assistants with unique, non-reserved handles.');
       return { member_id: bot.id, profile: bot.id, handle: bot.id, display_name: bot.name };
     });
     return request({ operation: 'create', roomId: body.requestId, name: body.name, members });

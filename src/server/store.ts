@@ -18,6 +18,8 @@ import { defaultPreferences } from "../shared/types.js";
 import type { SavedItem } from "../shared/discovery.js";
 import { visible } from "./bot-access.js";
 import type { LiveState } from "./live-activity.js";
+import { httpError } from "./http-error.js";
+import type { ErrorCode } from "../shared/errors.js";
 
 export interface LiveActivityRegistration {
   deviceId: string;
@@ -107,6 +109,14 @@ const additions = `
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;
+/** Why this server rejected a submission itself, recorded so a retry is judged by it rather than by its text. */
+export type RejectionReason = Extract<ErrorCode, "interruption_pending">;
+type StoredReceipt = SubmissionReceipt & { reason?: RejectionReason };
+// Releases before reasons were recorded stored only this exact sentence. It stays frozen even if
+// the message clients see is reworded, and is checked only for rows that carry no reason.
+const legacyInterruptionMessage = "Review the interrupted task before starting another message.";
+const legacyReason = (receipt: SubmissionReceipt): RejectionReason | undefined =>
+  receipt.status === "rejected" && receipt.message === legacyInterruptionMessage ? "interruption_pending" : undefined;
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
 // Clients report an open chat every 15 seconds, so a missed beat or two never counts as leaving.
@@ -240,7 +250,7 @@ export class Store {
   nativeFlow(hash: string, state: string, challenge: string, nonce: string, expires: number) {
     this.pruneNativeAuth();
     const count = this.db.prepare("SELECT count(*) AS count FROM native_flows").get() as { count: number };
-    if (count.count >= 1000) throw Object.assign(new Error("Too many sign-in attempts. Try again shortly."), { statusCode: 429 });
+    if (count.count >= 1000) throw httpError(429, "Too many sign-in attempts. Try again shortly.");
     this.db.prepare("INSERT INTO native_flows VALUES(?,?,?,?,?)").run(hash, state, challenge, nonce, expires);
   }
   getNativeFlow(hash: string) {
@@ -270,7 +280,7 @@ export class Store {
     const conflicts = this.db.prepare("SELECT user_id FROM native_devices WHERE device_id=? OR (token=? AND environment=?)")
       .all(deviceId, token, environment) as { user_id: string }[];
     if (conflicts.some(row => row.user_id !== userId))
-      throw Object.assign(new Error("This notification device belongs to another household member. Sign out there first."), { statusCode: 409 });
+      throw httpError(409, "This notification device belongs to another household member. Sign out there first.");
     // Token rotation can retain an older installation ID. Keep exactly one current registration.
     this.transaction(() => {
       this.db.prepare("DELETE FROM native_devices WHERE user_id=? AND token=? AND environment=? AND device_id<>?").run(userId, token, environment, deviceId);
@@ -291,7 +301,7 @@ export class Store {
     const conflicts = this.db.prepare("SELECT user_id FROM live_activities WHERE device_id=? OR (token=? AND environment=?)")
       .all(deviceId, token, environment) as { user_id: string }[];
     if (conflicts.some(row => row.user_id !== userId))
-      throw Object.assign(new Error("This device's Live Activity belongs to another household member. Sign out there first."), { statusCode: 409 });
+      throw httpError(409, "This device's Live Activity belongs to another household member. Sign out there first.");
     // A new token replaces the device's previous activity and replays the current state.
     this.transaction(() => {
       const previous = this.liveActivityContext(userId, sessionHash, deviceId);
@@ -647,12 +657,7 @@ export class Store {
       const previous = this.submission(input.requestId);
       if (previous) {
         if (JSON.stringify(previous.input) !== JSON.stringify(input))
-          throw Object.assign(
-            new Error(
-              "This submission ID was already used for different content",
-            ),
-            { statusCode: 409 },
-          );
+          throw httpError(409, "This submission ID was already used for different content");
         return { created: false, ...previous };
       }
       const receipt: SubmissionReceipt = {
@@ -678,12 +683,9 @@ export class Store {
     const row = this.db
       .prepare("SELECT payload,receipt FROM submissions WHERE request_id=?")
       .get(id) as { payload: string; receipt: string } | undefined;
-    return row
-      ? {
-          input: JSON.parse(row.payload) as Submission,
-          receipt: JSON.parse(row.receipt) as SubmissionReceipt,
-        }
-      : undefined;
+    if (!row) return undefined;
+    const { reason, ...receipt } = JSON.parse(row.receipt) as StoredReceipt;
+    return { input: JSON.parse(row.payload) as Submission, receipt, reason: reason ?? legacyReason(receipt) };
   }
   submissionForMessage(botId: string, messageId: string) {
     const row = this.db
@@ -701,12 +703,14 @@ export class Store {
       }[]
     ).map((r) => this.submission(r.request_id)!);
   }
-  receipt(receipt: SubmissionReceipt) {
+  /** A reason stays with the stored receipt, never with the one clients receive. */
+  receipt(receipt: SubmissionReceipt, reason?: RejectionReason) {
     this.transaction(() => {
       const previous = this.submission(receipt.requestId);
+      const stored: StoredReceipt = reason ? { ...receipt, reason } : receipt;
       this.db
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
-        .run(JSON.stringify(receipt), receipt.requestId);
+        .run(JSON.stringify(stored), receipt.requestId);
       const row = this.submission(receipt.requestId);
       if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
         this.clearSubmittedDraft(row.input.senderId, row.input.botId, {
@@ -881,12 +885,7 @@ export class Store {
       .prepare("SELECT user_id FROM subscriptions WHERE endpoint=?")
       .get(subscription.endpoint) as { user_id: string } | undefined;
     if (existing && existing.user_id !== userId)
-      throw Object.assign(
-        new Error(
-          "This browser push subscription belongs to another household member. Remove it from that session before subscribing.",
-        ),
-        { statusCode: 409 },
-      );
+      throw httpError(409, "This browser push subscription belongs to another household member. Remove it from that session before subscribing.");
     this.db
       .prepare(
         "INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET value=excluded.value",

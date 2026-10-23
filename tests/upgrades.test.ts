@@ -9,6 +9,7 @@ import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { HermesUpgrades, launchWorker, transientRunner } from "../src/server/upgrades.js";
 import type { ActivityState, Runtime } from "../src/shared/types.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const origin = "http://127.0.0.1:3000", revision = "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6";
 const temporary: string[] = [], apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -21,8 +22,8 @@ async function setup(enabled = true) {
     HERMES_UPGRADE_STATE_DIR: directory, HERMES_UPGRADE_PYTHON: "/usr/bin/python3",
   } : {}) });
   let activity: ActivityState = "idle", connected = true;
-  const runtime = { status: async () => ({ connected }), listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity }],
-    close: async () => {}, capabilities: async () => ({ chat: { supported: true } }), submit: vi.fn() } as unknown as Runtime;
+  const runtime = fakeRuntime({ status: async () => ({ connected }), listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity }],
+    close: async () => {}, capabilities: async () => ({ chat: { supported: true } }), submit: vi.fn() });
   const launch = vi.fn(), upgrades = new HermesUpgrades(config, runtime, launch);
   const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
   const stateFile = join(directory, "status.json");
@@ -33,10 +34,7 @@ async function setup(enabled = true) {
   return { ...result, config, directory, workerConfig, upgrades, launch, runtime, state, save, ready,
     activity: (value: ActivityState) => { activity = value; }, connected: (value: boolean) => { connected = value; } };
 }
-async function login(app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") {
-  const result = await app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member } });
-  return { origin, cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") => localLogin(app, origin, member);
 
 it("keeps upgrades opt-in, restricts administrators, and rejects client commands or refs", async () => {
   const disabled = await setup(false), disabledHeaders = await login(disabled.app);

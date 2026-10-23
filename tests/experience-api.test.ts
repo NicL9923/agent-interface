@@ -1,14 +1,14 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import { installAuth, hash } from '../src/server/auth.js';
+import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installExperienceRoutes } from '../src/server/experience.js';
 import { installEtags } from '../src/server/etag.js';
-import type { Runtime } from '../src/shared/types.js';
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 const origin = 'https://experience.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
@@ -18,23 +18,17 @@ async function setup(etags = false) {
   const store = new Store(':memory:');
   const config = loadConfig({ NODE_ENV: 'production', APP_ORIGIN: origin, APP_DATABASE: ':memory:', GOOGLE_CLIENT_ID: 'fixture', HOUSEHOLD_EMAILS: 'first@example.invalid,second@example.invalid' });
   await app.register(cookie); await installAuth(app, store, config);
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 502).send({ error: (error as Error).message }));
+  app.setErrorHandler(errorHandler({ production: true }));
   const conversation = vi.fn(async (id: string) => {
     if (id === 'offline') throw new Error('private transport failure');
     return { botId: id, messages: [{ id: 'reply', role: 'assistant', text: '```agent-ui\n{"version":1,"cards":[{"id":"list","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}\n```', createdAt: new Date().toISOString(), files: [{ id: 'file', name: 'plan.pdf', mime: 'application/pdf' }] }], activity: { state: 'blocked' }, approvals: [{ id: 'pending', status: 'pending' }, { id: 'resolved', status: 'approved' }], attention: [{ id: 'clarify', kind: 'clarify', title: 'Which day?', detail: 'Confirm Saturday' }], files: [] };
   });
   const experienceRequest = vi.fn(async (value: unknown) => value);
   const routines = vi.fn(async () => [{ id: 'routine', botId: 'ranch' }]);
-  const runtime = { conversation, experienceRequest, routines, listBots: vi.fn(async () => [{ id: 'ranch', name: 'Ranch' }, { id: 'offline', name: 'Offline' }]) } as unknown as Runtime;
+  const runtime = fakeRuntime({ conversation, experienceRequest, routines, listBots: vi.fn(async () => [{ id: 'ranch', name: 'Ranch' }, { id: 'offline', name: 'Offline' }]) });
   await installExperienceRoutes(app, runtime, store);
-  const login = (id: string) => {
-    store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString('hex'), csrf = randomBytes(32).toString('hex');
-    store.session(hash(token), id, csrf, Date.now() + 600000);
-    return { origin, cookie: `session=${token}`, 'x-csrf-token': csrf };
-  };
   app.addHook('onClose', async () => store.close());
-  return { app, store, runtime, experienceRequest, conversation, routines, first: login('first'), second: login('second') };
+  return { app, store, runtime, experienceRequest, conversation, routines, first: signIn(store, origin, 'first'), second: signIn(store, origin, 'second') };
 }
 it('authenticates profile memory reads, protects edits and validates native profile identity', async () => {
   const s = await setup();

@@ -1,14 +1,13 @@
 """Scoped settlement races with the native immutable request-ID contract."""
-import importlib.util
 import sqlite3
-from pathlib import Path
 import sys
 import threading
 import types
 import unittest
 from unittest.mock import patch
-spec = importlib.util.spec_from_file_location('vault_addon', Path(__file__).resolve().parents[1] / 'src/hermes/vault.py')
-vault = importlib.util.module_from_spec(spec); spec.loader.exec_module(vault)
+
+from support import load_source
+vault = load_source('src/hermes/vault.py', 'vault_addon')
 
 class VaultTests(unittest.TestCase):
     def setUp(self):

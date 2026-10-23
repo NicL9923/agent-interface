@@ -138,7 +138,7 @@ struct ApprovalDecisionView: View {
       HStack {
         Button(decision == "approved" ? settled ? "Approved" : "Approving…" : "Approve") { decide("approved") }.buttonStyle(.borderedProminent)
         Button(decision == "denied" ? settled ? "Declined" : "Declining…" : "Decline") { decide("denied") }.buttonStyle(.bordered)
-      }.disabled(decision != nil || !store.connected || !store.supports("approvals"))
+      }.disabled(decision != nil || !store.connected || !store.supports(.approvals))
     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
       .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
       .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14).fill(Palette.attention).frame(width: 4) }

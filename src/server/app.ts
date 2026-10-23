@@ -1,5 +1,5 @@
-import { installAutomationRoutes } from './automation.js';
-import { avatarShapes, mascotFamilies, reasoningLevels, serviceTiers } from "../shared/types.js";
+import { installAutomationRoutes } from "./automation.js";
+import { reasoningLevels, serviceTiers } from "../shared/types.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -11,9 +11,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { botIdFor } from "../shared/types.js";
 import type {
-  Avatar,
   Bot,
-  BotInput,
   Bootstrap,
   CapabilityKey,
   Preferences,
@@ -36,7 +34,11 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from './collaboration.js';
-import { loggerOptions, RepeatFilter, safeError } from "./logging.js";
+import { loggerOptions } from "./logging.js";
+import { errorHandler, httpError } from "./http-error.js";
+import { openEventStream } from "./event-stream.js";
+import { apnsToken, avatar, botSaveRequest, id, modelFavoriteList, preferences } from "./schemas.js";
+import { interruptionPendingMessage } from "../shared/errors.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
@@ -45,63 +47,6 @@ import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
 import { isApiRequest, routePattern } from "./route-path.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
-const id = z.string().min(1).max(200);
-const avatar = z.discriminatedUnion("mode", [
-  z.object({
-    mode: z.literal("geometric"),
-    shape: z.enum(avatarShapes),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i),
-    eyes: z.enum(["round", "oval", "visor", "spark"]),
-    accessory: z.enum(["none", "hat", "glasses"]),
-    eyeWidth: z.number().min(0.6).max(1.5).optional(),
-    eyeHeight: z.number().min(0.6).max(1.5).optional(),
-    eyeSpacing: z.number().min(0.6).max(1.5).optional(),
-  }),
-  z.object({
-    mode: z.literal("mascot"),
-    family: z.enum(mascotFamilies),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i),
-    eyes: z.enum(["round", "oval", "visor", "spark"]),
-    accessory: z.enum(["none", "hat", "glasses"]),
-    eyeWidth: z.number().min(0.6).max(1.5).optional(),
-    eyeHeight: z.number().min(0.6).max(1.5).optional(),
-    eyeSpacing: z.number().min(0.6).max(1.5).optional(),
-  }),
-  z.object({
-    mode: z.literal("portrait"),
-    src: z.string().regex(/^\/api\/files\//),
-    origin: z.enum(["uploaded", "generated"]),
-  }),
-]);
-const botInput = z.object({
-  confirmModel: z.boolean().optional(),
-  name: z.string().min(1).max(100),
-  description: z.string().max(1000).optional(),
-  instructions: z.string().max(50000),
-  model: z.string().min(1).max(200),
-  provider: z.string().min(1).max(200).optional(),
-  enabledMcpServers: z.array(id).max(100).optional(),
-  shared: z.boolean(),
-  // Making an assistant personal hides it from everyone else, so the person confirms that.
-  confirmPrivate: z.boolean().optional(),
-  enabledTools: z.array(id).optional(),
-  enabledSkills: z.array(id).optional(),
-});
-const preferenceInput = z.object({
-  presentation: z.enum(["simple", "advanced"]),
-  theme: z.enum(["system", "light", "dark"]),
-  favorites: z.array(id).max(100),
-  modelFavorites: z.array(z.object({ provider: id, model: id })).max(100).optional(),
-  defaultBotId: id.optional(),
-  sections: z
-    .array(
-      z.object({ id, name: z.string().max(100), botIds: z.array(id).max(100) }),
-    )
-    .max(30),
-  followBots: z.array(id).max(100),
-  startPage: z.enum(["today", "assistant"]).optional(),
-  notifications: z.object({ timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat("en", {timeZone:value}); return true; } catch { return false; } }), quietStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), quietEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), batchMinutes: z.number().int().min(0).max(60) }).refine(value => !!value.quietStart === !!value.quietEnd && (!value.quietStart || value.quietStart !== value.quietEnd), "Choose different quiet start and end times.").optional(),
-});
 const fileRef = z.object({
   id: z
     .string()
@@ -114,9 +59,6 @@ const fileRef = z.object({
   url: z.string().optional(),
 });
 const draftInput = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
-function failure(statusCode: number, message: string) {
-  return Object.assign(new Error(message), { statusCode });
-}
 export async function createApp(
   config: Config,
   runtime: Runtime,
@@ -163,48 +105,11 @@ export async function createApp(
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
         : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
   });
-  const serverErrors = new RepeatFilter();
-  app.setErrorHandler((error, req, reply) => {
-    if (error instanceof z.ZodError)
-      return reply.code(400).send({
-        error: "Invalid request",
-        details: error.issues.map((x) => ({
-          path: x.path,
-          message: x.message,
-        })),
-      });
-    const err = error as Error & {
-      statusCode?: number;
-      code?: string;
-      confirmRequired?: boolean;
-      // A 5xx whose fixed message tells the person what to do next.
-      expose?: boolean;
-    };
-    const status = err.statusCode ?? 502;
-    if (status >= 500) {
-      const route = `${req.method} ${req.routeOptions.url ?? "unmatched"}`;
-      const repeats = serverErrors.hit(`${route} ${status} ${err.message}`);
-      if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");
-      else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
-    }
-    // A stream can fail after a route set file headers; the error is always JSON.
-    reply.removeHeader("Content-Disposition");
-    reply.removeHeader("Content-Length");
-    reply.type("application/json; charset=utf-8");
-    reply.code(status).send({
-      error:
-        err.statusCode && (err.statusCode < 500 || err.expose)
-          ? err.message
-          : "The Hermes operation could not be completed",
-      detail: config.production ? undefined : err.message,
-      code: err.code,
-      confirmRequired: err.confirmRequired,
-    });
-  });
+  app.setErrorHandler(errorHandler({ production: config.production }));
   const requireCapability = async (key: CapabilityKey) => {
     const cap = (await runtime.capabilities())[key];
     if (!cap?.supported)
-      throw failure(409, cap?.reason ?? `${key} is unavailable`);
+      throw httpError(409, cap?.reason ?? `${key} is unavailable`);
   };
   const params = (req: { params: unknown }) =>
     req.params as { id: string; approvalId?: string };
@@ -315,7 +220,7 @@ export async function createApp(
     dated(await (runtime.reconnect ? runtime.reconnect() : runtime.status())),
   );
   app.patch("/api/preferences", async (req) => {
-    const value = preferenceInput.parse(req.body) as Preferences;
+    const value = preferences.parse(req.body);
     const previous = store.preferences(signedIn(req).id);
     value.modelFavorites ??= previous.modelFavorites;
     value.startPage ??= previous.startPage;
@@ -324,27 +229,25 @@ export async function createApp(
     return value;
   });
   app.put("/api/preferences/models", async (req) => {
-    const { modelFavorites } = z.object({
-      modelFavorites: z.array(z.object({ provider: id, model: id })).max(100),
-    }).strict().parse(req.body);
+    const { modelFavorites } = z.object({ modelFavorites: modelFavoriteList }).strict().parse(req.body);
     const userId = signedIn(req).id;
     store.savePreferences(userId, { ...store.preferences(userId), modelFavorites });
     return { modelFavorites };
   });
   app.get("/api/bots/:id/inference", async req => {
-    if (!runtime.inferenceSettings) throw failure(409, "Hermes inference controls are unavailable.");
+    if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
     return runtime.inferenceSettings(params(req).id);
   });
   app.patch("/api/bots/:id/inference", async req => {
     await requireCapability("botConfiguration");
-    if (!runtime.inferenceSettings) throw failure(409, "Hermes inference controls are unavailable.");
+    if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
     const update = z.object({ reasoning: z.enum(reasoningLevels).optional(), speed: z.enum(serviceTiers).optional() })
       .strict().refine(value => Object.keys(value).length > 0).parse(req.body);
     return runtime.inferenceSettings(params(req).id, update);
   });
   app.get("/api/models", async (req) => {
     const { botId } = z.object({ botId: id.optional() }).parse(req.query);
-    if (!runtime.modelOptions) throw failure(409, "The connected Hermes installation does not expose model options.");
+    if (!runtime.modelOptions) throw httpError(409, "The connected Hermes installation does not expose model options.");
     return runtime.modelOptions(botId);
   });
   app.get("/api/bots", async (req) => {
@@ -353,24 +256,24 @@ export async function createApp(
   });
   app.post("/api/bots", async (req) => {
     await requireCapability("botConfiguration");
-    const { confirmPrivate: _, ...input } = botInput.parse(req.body);
+    const { confirmPrivate: _, ...input } = botSaveRequest.parse(req.body);
     const next = { shared: input.shared, ownerId: input.shared ? undefined : signedIn(req).id };
     // Its sharing is recorded before Hermes creates it, so a personal one is never briefly
     // public and a recreated ID never inherits an old record. An existing assistant's is never touched.
     const id = botIdFor(input.name);
     if (id && await roster.has(id))
-      throw failure(409, "An assistant with this name already exists. Choose another name.");
+      throw httpError(409, "An assistant with this name already exists. Choose another name.");
     const prior = id ? store.presentation(id) : {};
     const version = id ? store.swapPresentation(id, prior, next) : false;
     let bot;
-    try { bot = await runtime.saveBot(input as BotInput); }
+    try { bot = await runtime.saveBot(input); }
     catch (error) {
       // Hermes may have created the profile and then failed to remove it; it stays the creator's.
       const created = (error as { createdBotId?: unknown }).createdBotId;
       if (typeof created === "string") {
         if (created !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(created, next); }
         roster.forget();
-        throw Object.assign(failure(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`), { expose: true, code: "created_incomplete" });
+        throw httpError(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`, { expose: true, code: "created_incomplete" });
       }
       if (version !== false) store.restorePresentation(id, version, prior);
       throw error;
@@ -384,28 +287,28 @@ export async function createApp(
     const botId = params(req).id;
     const value = runtime.botDetail ? await runtime.botDetail(botId)
       : (await runtime.listBots()).find(bot => bot.id === botId);
-    if (!value) throw failure(404, "Bot not found");
+    if (!value) throw httpError(404, "Bot not found");
     return decorateBot(rememberBot(value), (await runtime.capabilities()).avatarMetadata.supported);
   });
   app.patch("/api/bots/:id", async (req) => {
     await requireCapability("botConfiguration");
-    const { confirmPrivate, ...input } = botInput.parse(req.body);
+    const { confirmPrivate, ...input } = botSaveRequest.parse(req.body);
     // Only its owner reaches a private assistant, so a personal one always belongs to the
     // person saving it. Claiming one everyone could see hides it from them, so it needs a yes.
     const id = params(req).id, userId = signedIn(req).id;
     const previous = store.presentation(id);
     // Another member may have made it theirs since this request was let in.
-    if (!visible(previous, userId)) throw Object.assign(failure(404, notFound.error), { code: notFound.code });
+    if (!visible(previous, userId)) throw httpError(404, notFound.error, { code: notFound.code });
     if (!input.shared && !(previous.shared === false && previous.ownerId) && !confirmPrivate)
-      throw Object.assign(failure(409, "Confirm making this assistant personal. It will disappear for the rest of the household."), { code: "private_confirmation_required" });
+      throw httpError(409, "Confirm making this assistant personal. It will disappear for the rest of the household.", { code: "private_confirmation_required" });
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
     const version = store.swapPresentation(id, previous, next);
     if (version === false)
-      throw Object.assign(failure(409, "Someone changed who can see this assistant while you were saving. Review it and try again."), { code: "sharing_changed" });
+      throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
     let bot;
     // A failed save puts sharing back only if no later save has changed it since.
-    try { bot = await runtime.saveBot(input as BotInput, id); }
+    try { bot = await runtime.saveBot(input, id); }
     catch (error) { store.restorePresentation(id, version, previous); throw error; }
     roster.forget();
     return decorateBot(rememberBot(bot), (await runtime.capabilities()).avatarMetadata.supported);
@@ -420,9 +323,9 @@ export async function createApp(
     return { ok: true };
   });
   app.put("/api/bots/:id/avatar", async (req) => {
-    const value = avatar.parse(req.body) as Avatar;
+    const value = avatar.parse(req.body);
     const bot = (await runtime.listBots()).find((b) => b.id === params(req).id);
-    if (!bot) throw failure(404, "Bot not found");
+    if (!bot) throw httpError(404, "Bot not found");
     if (
       (await runtime.capabilities()).avatarMetadata?.supported &&
       runtime.setAvatar
@@ -542,78 +445,51 @@ export async function createApp(
   app.get("/api/events", { exposeHeadRoute: false }, async (req, reply) => {
     const initial = await runtimeSnapshot();
     let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
-    reply.hijack();
-    const response = reply.raw;
-    response.writeHead(200, {
-      ...reply.getHeaders() as Record<string, string>,
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Content-Encoding": "identity",
-      "X-Accel-Buffering": "no",
-      "Connection": "close",
+    const stream = openEventStream(reply, streams, {
+      allowed: () => stillSignedIn(store, config, req),
+      teardown: () => {
+        rosterListeners.delete(changed);
+        if (!rosterListeners.size) {
+          unwatchRoster?.();
+          unwatchRoster = undefined;
+          clearTimeout(rosterPending);
+          rosterPending = undefined;
+        }
+      },
     });
-    let ended = false;
-    const send = (text: string) => {
-      if (!stillSignedIn(store, config, req)) end();
-      else if (!ended) response.write(text);
-    };
     const changed = (bots: Bot[], nativeAvatar: boolean) => {
-      if (!stillSignedIn(store, config, req)) { end(); return; }
+      if (!stillSignedIn(store, config, req)) { stream.end(); return; }
       const next = rosterProjection(bots, signedIn(req).id, nativeAvatar);
       if (next === projection) return;
       projection = next;
-      send("event: roster\ndata: roster\n\n");
+      stream.send("event: roster\ndata: roster\n\n");
     };
     rosterListeners.add(changed);
     unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
-    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
-    function end() {
-      if (ended) return;
-      ended = true;
-      rosterListeners.delete(changed);
-      if (!rosterListeners.size) {
-        unwatchRoster?.();
-        unwatchRoster = undefined;
-        clearTimeout(rosterPending);
-        rosterPending = undefined;
-      }
-      clearInterval(heartbeat);
-      streams.delete(end);
-      response.end();
-    }
-    streams.add(end);
-    response.on("close", end);
-    // Clients refetch on open; an initial notice would duplicate that read.
-    response.write("retry: 3000\n\n");
   });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     const botId = id.parse(params(req).id);
     const optedIn = (req.query as { inflight?: string }).inflight === "1";
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
     let hidden = JSON.stringify(store.privateBots());
-    reply.hijack();
-    const response = reply.raw;
-    // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
-    response.writeHead(200, {
-      ...reply.getHeaders() as Record<string, string | number | string[]>,
-      "Content-Type": "text/event-stream; charset=utf-8",
-      // Caddy's encode handler would hold notices in its compressor; it skips an encoded body.
-      "Content-Encoding": "identity",
-      "X-Accel-Buffering": "no",
-      // An ended stream's connection is never reused, so shutdown need not wait for it.
-      "Connection": "close",
-    });
-    let last = 0, ended = false, pending: ReturnType<typeof setTimeout> | undefined;
-    const send = (text: string) => {
+    let last = 0, pending: ReturnType<typeof setTimeout> | undefined;
+    let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
+    const stream = openEventStream(reply, streams, {
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-      if (!stillSignedIn(store, config, req) || !visibleTo(store, botId, req.user?.id)) end();
-      else if (!ended) response.write(text);
-    };
+      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+      teardown: () => {
+        unwatch?.();
+        listeners.delete(changed);
+        if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+        clearTimeout(pending);
+        clearTimeout(livePending);
+      },
+    });
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
-      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); send("data: change\n\n"); },
+      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream.send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
-    let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
     const notice = (kind?: "inflight") => {
       if (!optedIn || kind !== "inflight") {
         clearTimeout(livePending); livePending = undefined;
@@ -630,30 +506,13 @@ export async function createApp(
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+          stream.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
     watchers.set(botId, listeners.add(changed));
     const unwatch = runtime.watch?.(botId, notice);
-    // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
-    const heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
-    function end() {
-      if (ended) return;
-      ended = true;
-      unwatch?.();
-      listeners.delete(changed);
-      if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
-      clearTimeout(pending);
-      clearTimeout(livePending);
-      clearInterval(heartbeat);
-      streams.delete(end);
-      response.end();
-    }
-    streams.add(end);
-    response.on("close", end);
-    response.write("retry: 3000\n\n");
   });
   const submit = async (req: FastifyRequest, explicitSteering = false) => {
     const body = z
@@ -676,17 +535,16 @@ export async function createApp(
       senderId: signedIn(req).id,
     };
     const previous = store.submission(input.requestId);
-    const interruptionRejected = previous?.receipt.status === "rejected"
-      && previous.receipt.message === "Review the interrupted task before starting another message.";
+    const interruptionRejected = previous?.reason === "interruption_pending";
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
-        throw failure(
+        throw httpError(
           409,
           "This submission ID was already used for different content",
         );
       if (interruptionRejected && !reviewedInterruption)
-        throw failure(409, "Review the interrupted task before starting another message.");
+        throw httpError(409, interruptionPendingMessage);
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
       await requireCapability("idempotency");
@@ -702,10 +560,7 @@ export async function createApp(
     const fast = await runtime.canonicalSubmit?.() === true;
     const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
-      throw failure(
-        409,
-        "Review the interrupted task before starting another message.",
-      );
+      throw httpError(409, interruptionPendingMessage);
     const steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
@@ -725,9 +580,8 @@ export async function createApp(
       return receipt;
     } catch (error) {
       if ((error as { code?: string }).code === "interruption_pending") {
-        store.receipt({ requestId: input.requestId, status: "rejected",
-          message: "Review the interrupted task before starting another message." });
-        throw failure(409, "Review the interrupted task before starting another message.");
+        store.receipt({ requestId: input.requestId, status: "rejected", message: interruptionPendingMessage }, "interruption_pending");
+        throw httpError(409, interruptionPendingMessage);
       }
       return store.submission(input.requestId)!.receipt;
     }
@@ -779,7 +633,7 @@ export async function createApp(
       (x) => x.id === p.approvalId,
     );
     if (!attention || attention.kind !== "clarify")
-      throw failure(
+      throw httpError(
         409,
         "This request must be handled in the official Hermes interface or is no longer pending",
       );
@@ -801,7 +655,7 @@ export async function createApp(
     const p = params(req);
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
     if (account !== undefined && account !== accountMarker(signedIn(req).id))
-      throw failure(409, "This approval was sent to a different account");
+      throw httpError(409, "This approval was sent to a different account");
     const conversation = await runtime.conversation(p.id, { history: false });
     const approval = conversation.approvals.find((a) => a.id === p.approvalId);
     if (
@@ -810,7 +664,7 @@ export async function createApp(
       store.approval(p.approvalId!) ||
       (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
     )
-      throw failure(409, "This approval is no longer pending");
+      throw httpError(409, "This approval is no longer pending");
     await runtime.approve(p.id, p.approvalId!, decision, signedIn(req).id);
     store.attributeApproval(p.approvalId!, p.id, signedIn(req).id, decision);
     if (conversation.activity.runId)
@@ -847,11 +701,11 @@ export async function createApp(
   app.post("/api/bots/:id/uploads", async (req) => {
     await requireCapability("uploads");
     const file = await req.file();
-    if (!file) throw failure(400, "No file provided");
+    if (!file) throw httpError(400, "No file provided");
     if (!(UPLOAD_MIME_TYPES as readonly string[]).includes(file.mimetype))
-      throw failure(415, `Use ${UPLOAD_KINDS}.`);
+      throw httpError(415, `Use ${UPLOAD_KINDS}.`);
     const data = await file.toBuffer();
-    if (file.file.truncated) throw failure(413, `${file.filename || "This file"} is larger than ${formatBytes(MAX_UPLOAD_BYTES)}.`);
+    if (file.file.truncated) throw httpError(413, `${file.filename || "This file"} is larger than ${formatBytes(MAX_UPLOAD_BYTES)}.`);
     return runtime.upload(params(req).id, {
       name: file.filename,
       mime: file.mimetype,
@@ -939,28 +793,28 @@ export async function createApp(
       .parse(req.body);
     const all = routineId || input.contextFrom?.some(ref => ref !== 'self') ? await runtime.routines() : [];
     const previous = routineId ? all.find(row => row.id === routineId) : undefined;
-    if (routineId && (!previous || previous.botId !== input.botId)) throw failure(404, "Routine not found");
+    if (routineId && (!previous || previous.botId !== input.botId)) throw httpError(404, "Routine not found");
     // Compare against native state before forwarding updates. This also preserves
     // uneditable settings and avoids revalidating an untouched, missing script/source.
     for (const key of ['skills','model','provider','enabledToolsets','script','noAgent','contextFrom'] as const) {
       if (previous && input[key] !== undefined && JSON.stringify(input[key]) === JSON.stringify(previous[key])) delete input[key];
     }
     const effective = { ...previous, ...input };
-    if (effective.noAgent && !effective.script?.trim()) throw failure(400, "Script-only routines require a script from this assistant's scripts directory.");
+    if (effective.noAgent && !effective.script?.trim()) throw httpError(400, "Script-only routines require a script from this assistant's scripts directory.");
     if (!effective.prompt.trim() && !effective.script?.trim() && !effective.skills?.length)
-      throw failure(400, "Add instructions, a skill, or a profile script for this routine to run.");
+      throw httpError(400, "Add instructions, a skill, or a profile script for this routine to run.");
     // 41dfcf2c dashboard _cron_string_list converts [] to None. Do not turn a
     // deliberate zero-tool restriction into unrestricted access silently.
     if (Array.isArray(input.enabledToolsets) && input.enabledToolsets.length === 0)
-      throw failure(400, "Select at least one toolset or use profile tools. This Hermes dashboard cannot save an empty toolset allowlist.");
+      throw httpError(400, "Select at least one toolset or use profile tools. This Hermes dashboard cannot save an empty toolset allowlist.");
     if (input.contextFrom?.some(ref => ref !== 'self' && !all.some(row => row.id === ref && row.botId === input.botId)))
-      throw failure(400, "Context sources must be existing routines for this assistant.");
+      throw httpError(400, "Context sources must be existing routines for this assistant.");
     if ((input.model !== undefined || input.provider !== undefined) && (effective.model || effective.provider)) {
-      if (!runtime.modelOptions) throw failure(409, "Model choices are unavailable. Keep the existing model or try again after reconnecting.");
+      if (!runtime.modelOptions) throw httpError(409, "Model choices are unavailable. Keep the existing model or try again after reconnecting.");
       const catalog = await runtime.modelOptions(input.botId);
       const provider = catalog.providers.find(row => row.id === effective.provider || row.aliases?.includes(effective.provider ?? ''));
       if (!provider || !provider.authenticated || effective.model && !provider.models.some(row => row.id === effective.model && row.available))
-        throw failure(400, "Choose a model from an existing connected provider, or use the assistant's model.");
+        throw httpError(400, "Choose a model from an existing connected provider, or use the assistant's model.");
     }
     if (
       input.recipientIds.some((id) => {
@@ -968,14 +822,14 @@ export async function createApp(
         return !user || !allowedIdentity(config, user);
       })
     )
-      throw failure(
+      throw httpError(
         400,
         "Routine recipients must be signed-in household members",
       );
     // Nobody else would ever receive a private assistant's results, so do not pretend they will.
     const owner = store.presentation(input.botId);
     if (owner.shared === false && owner.ownerId && input.recipientIds.some(id => id !== owner.ownerId))
-      throw Object.assign(failure(400, "Only you can receive your personal assistant's routine results."), { code: "private_recipients" });
+      throw httpError(400, "Only you can receive your personal assistant's routine results.", { code: "private_recipients" });
     const routine = await runtime.saveRoutine(input, routineId);
     store.routineRecipients(routine.id, input.recipientIds);
     return { ...effective, ...routine, recipientIds: input.recipientIds };
@@ -995,7 +849,7 @@ export async function createApp(
   });
   app.post("/api/push/subscriptions", async (req) => {
     if (!config.vapidPublicKey)
-      throw failure(409, "Web Push is not configured");
+      throw httpError(409, "Web Push is not configured");
     const input = z
       .object({
         endpoint: z
@@ -1013,7 +867,7 @@ export async function createApp(
   });
   app.post("/api/push/test", async (req) => {
     if (!config.vapidPublicKey)
-      throw failure(409, "Web Push is not configured");
+      throw httpError(409, "Web Push is not configured");
     const botId = z.object({ botId: id }).parse(req.body).botId;
     const eventId = crypto.randomUUID();
     store.queueNotification(eventId, signedIn(req).id, {
@@ -1036,26 +890,26 @@ export async function createApp(
     return { ok: true };
   });
   const requireNativePush = (req: FastifyRequest) => {
-    if (!req.nativeSessionHash) throw failure(403, "Native device registration requires native sign-in");
-    if (!config.apns) throw failure(409, "Apple push notifications are not configured on this host");
+    if (!req.nativeSessionHash) throw httpError(403, "Native device registration requires native sign-in");
+    if (!config.apns) throw httpError(409, "Apple push notifications are not configured on this host");
     return config.apns;
   };
   app.get("/api/native/push/config", async () => ({ available: !!config.apns, environment: config.apns?.environment }));
   app.put("/api/native/push/device", async req => {
     const apns = requireNativePush(req);
-    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
+    const body = z.object({ deviceId: z.string().uuid(), token: apnsToken }).strict().parse(req.body);
     store.registerNativeDevice(signedIn(req).id, req.nativeSessionHash!, body.deviceId, body.token.toLowerCase(), apns.environment);
     return { ok: true };
   });
   app.delete("/api/native/push/device", async req => {
-    if (!req.nativeSessionHash) throw failure(403, "Native device registration requires native sign-in");
+    if (!req.nativeSessionHash) throw httpError(403, "Native device registration requires native sign-in");
     const body = z.object({ deviceId: z.string().uuid() }).strict().parse(req.body);
     store.removeNativeDevice(signedIn(req).id, body.deviceId);
     return { ok: true };
   });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   app.get("/api/native/live-activity", async req => {
-    if (!req.nativeSessionHash) throw failure(403, "Live Activities require native sign-in");
+    if (!req.nativeSessionHash) throw httpError(403, "Live Activities require native sign-in");
     const { deviceId } = z.object({ deviceId: z.string().uuid().optional() }).strict().parse(req.query);
     const userId = signedIn(req).id;
     const context = deviceId ? store.liveActivityContext(userId, req.nativeSessionHash, deviceId) : undefined;
@@ -1063,7 +917,7 @@ export async function createApp(
   });
   app.put("/api/native/live-activity", async req => {
     const apns = requireNativePush(req);
-    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/), botIds: z.array(id).max(10).default([]) })
+    const body = z.object({ deviceId: z.string().uuid(), token: apnsToken, botIds: z.array(id).max(10).default([]) })
       .strict().parse(req.body);
     const userId = signedIn(req).id, armedAt = Date.now();
     const armed = [...new Set(body.botIds)].filter(botId => visibleTo(store, botId, userId));
@@ -1072,15 +926,15 @@ export async function createApp(
     return { ok: true };
   });
   app.delete("/api/native/live-activity", async req => {
-    if (!req.nativeSessionHash) throw failure(403, "Live Activities require native sign-in");
-    const body = z.object({ deviceId: z.string().uuid(), token: z.string().regex(/^(?:[0-9a-fA-F]{2}){16,256}$/) }).strict().parse(req.body);
+    if (!req.nativeSessionHash) throw httpError(403, "Live Activities require native sign-in");
+    const body = z.object({ deviceId: z.string().uuid(), token: apnsToken }).strict().parse(req.body);
     store.removeLiveActivity(signedIn(req).id, body.deviceId, body.token.toLowerCase());
     return { ok: true };
   });
   app.post("/api/native/push/test", async req => {
     requireNativePush(req);
     const { botId } = z.object({ botId: id }).strict().parse(req.body);
-    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw failure(404, "Bot not found");
+    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw httpError(404, "Bot not found");
     const eventId = crypto.randomUUID();
     store.queueNotification(eventId, signedIn(req).id, { title: "WildBots test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId });
     return { ok: true, detail: "Queued for this person. Confirm delivery on the signed-in physical device." };

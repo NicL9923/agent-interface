@@ -1,3 +1,4 @@
+import type { ErrorCode } from "./shared/errors";
 import type { Inflight } from "./shared/types";
 let csrf = "";
 export function setCsrf(value: string) {
@@ -35,7 +36,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
-    public code?: string,
+    /** An unknown server code still arrives as its string and matches no comparison. */
+    public code?: ErrorCode,
     public confirmRequired?: boolean,
     /** The error response body, such as the current draft with a draft conflict. */
     public data?: Record<string, unknown>,

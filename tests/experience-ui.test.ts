@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { ReactElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
 import { TodayPanel } from "../src/components/TodayPanel";
 import { MemoryPanel } from "../src/components/MemoryPanel";
@@ -13,23 +12,16 @@ import { RoutineEnhancements, RoutineSchedulePreview } from "../src/components/R
 import type { ProfileMemory, TodayOverview } from "../src/shared/experience";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
+import { click, mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: () => createElement("span") }));
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.mocked(api).mockReset(); vi.mocked(write).mockReset(); localStorage.clear();
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); localStorage.clear(); });
 async function render(element: ReactElement) { await act(async () => root.render(element)); }
-async function click(text: string) {
-  const button = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === text);
-  expect(button).toBeDefined(); await act(async () => button!.click());
-}
-async function type(input: HTMLTextAreaElement, value: string) {
-  await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); });
-}
 const bootstrap = { user: { id: "one", name: "One" }, preferences: defaultPreferences, bots: [{ id: "ranch", name: "Ranch", activity: "idle" }] } as Bootstrap;
 it("shows every loaded recap event, opens the right assistant and marks only the loaded frontier", async () => {
   const generatedAt = "2026-10-02T02:00:00Z";
@@ -70,7 +62,7 @@ it("preserves another document's draft and original revision when saving profile
     { ...memory.documents[1], revision: "d".repeat(64), entries: [{ id: "4", text: "External edit" }] },
   ] }).mockRejectedValueOnce(new ApiError("Memory changed. Reload before saving.", 409));
   await render(createElement(MemoryPanel, { botId: "ranch" }));
-  const fields = container.querySelectorAll<HTMLTextAreaElement>("textarea"); await type(fields[0], "Changed first"); await type(fields[1], "My unsaved second edit");
+  const fields = container.querySelectorAll<HTMLTextAreaElement>("textarea"); await typeInto(fields[0], "Changed first"); await typeInto(fields[1], "My unsaved second edit");
   await act(async () => container.querySelectorAll<HTMLButtonElement>(".memory-document .primary")[0].click());
   expect(container.querySelectorAll<HTMLTextAreaElement>("textarea")[1].value).toBe("My unsaved second edit");
   await act(async () => container.querySelectorAll<HTMLButtonElement>(".memory-document .primary")[1].click());
@@ -94,7 +86,7 @@ it("preserves interactive state and pending edits when conversation polling rere
   vi.mocked(api).mockResolvedValue({ checkedIds: [], notes: {} });
   const props = { text, botId: "ranch", messageId: "reply", userId: "one" };
   await render(createElement(MessageMarkdown, props)); await click("Add note");
-  await type(container.querySelector("textarea")!, "Let's leave at noon"); await render(createElement(MessageMarkdown, props));
+  await typeInto(container.querySelector("textarea")!, "Let's leave at noon"); await render(createElement(MessageMarkdown, props));
   expect(container.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Let's leave at noon"); expect(api).toHaveBeenCalledTimes(1);
   await render(createElement(MessageMarkdown, { ...props, unavailable: true }));
   expect(container.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Let's leave at noon"); expect(api).toHaveBeenCalledTimes(1);

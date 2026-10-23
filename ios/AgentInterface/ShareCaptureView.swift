@@ -22,7 +22,7 @@ struct ShareCaptureView: View {
         }
         if let error { ErrorBanner(message:error) }
         if waitingForSend { Text("Your last message to this assistant is still on its way. This is added to the draft once it settles.").font(.footnote).foregroundStyle(.secondary) }
-        Button("Add to draft") { Task { await importDraft() } }.disabled(botId.isEmpty || busy || waitingForSend || !store.connected || !store.supports("uploads") && !capture.files.isEmpty)
+        Button("Add to draft") { Task { await importDraft() } }.disabled(botId.isEmpty || busy || waitingForSend || !store.connected || !store.supports(.uploads) && !capture.files.isEmpty)
         Button("Discard shared draft",role:.destructive) { ShareInbox.remove(capture);dismiss() }.disabled(busy)
         if busy { ProgressView("Adding to draft…") }
       }.navigationTitle("Review shared content").toolbar { ToolbarItem(placement:.cancellationAction) { Button("Later") { dismiss() }.disabled(busy) } }

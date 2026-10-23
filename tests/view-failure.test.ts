@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }));
 // SVG geometry is a browser concern, not part of this regression.
@@ -34,21 +35,11 @@ const bootstrap: Bootstrap = {
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  stubMatchMedia();
   vi.spyOn(console, "error").mockImplementation(() => {});
-  localStorage.clear();
   history.replaceState(null, "", "/");
   vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean" ? bootstrap : null) as T);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 

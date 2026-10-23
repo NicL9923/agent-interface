@@ -75,6 +75,7 @@ const scopeFiles = [
   "src/shared/upgrades.ts",
   "src/shared/integrations.ts",
   "src/hermes/integrations.py",
+  "src/hermes/private_fs.py",
   "scripts/spike/app-probe.mjs",
   "package.json",
   "package-lock.json",

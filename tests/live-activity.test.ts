@@ -31,7 +31,8 @@ beforeEach(() => {
   store = new Store(":memory:");
   for (const id of ["one", "two"]) {
     store.user({ id, name: id, email: `${id}@example.test` });
-    store.nativeSession(id, id, clock + 7 * 86400000);
+    // The store prunes sessions by real time, not this test's fixed clock, so they must outlive today.
+    store.nativeSession(id, id, Date.now() + 7 * 86400000);
   }
   bots = [bot("kitchen"), bot("garden"), bot("secret")];
   conversations = {};

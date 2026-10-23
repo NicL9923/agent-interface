@@ -4,10 +4,10 @@ import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { apiPolicy, contentSecurityPolicy, installSecurityHeaders } from "../src/server/security-headers.js";
-import type { Runtime } from "../src/shared/types.js";
+import { fakeRuntime } from "./helpers/server.js";
 
 const origin = "http://127.0.0.1:3000";
-const runtime = { close: async () => {} } as unknown as Runtime;
+const runtime = fakeRuntime({ close: async () => {} });
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 async function start(env: Record<string, string>, verifyGoogle?: () => Promise<Record<string, unknown>>) {

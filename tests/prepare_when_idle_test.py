@@ -1,14 +1,14 @@
 """Busy preflights retry; unrelated release failures stop without another attempt."""
-import importlib.util
-from pathlib import Path
 import subprocess
 import sys
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('prepare_when_idle', Path(__file__).resolve().parents[1] / '.agents/tools/prepare-when-idle.py')
-idle = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(idle)
+from support import ROOT, load_source
+
+sys.path.insert(0, str(ROOT / ".agents/tools"))
+
+idle = load_source('.agents/tools/prepare-when-idle.py', 'prepare_when_idle')
 
 
 class IdlePreparationTests(unittest.TestCase):
