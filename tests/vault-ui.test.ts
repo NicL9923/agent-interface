@@ -7,7 +7,7 @@ import { api, ApiError, write } from "../src/client-api";
 import { SecureRequestCard } from "../src/components/SecureRequestCard";
 import { VaultPanel } from "../src/components/VaultPanel";
 import type { ProfileVault, SecureRequest } from "../src/shared/vault";
-import { click, mountRoot, typeInto } from "./ui-harness";
+import { button, click, mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 let root: Root; let container: HTMLDivElement;
@@ -86,7 +86,9 @@ it("adds a login through the dedicated vault route and requires review after unc
   await type("Label", "Ranch account"); await type("Website origin", "https://example.invalid"); await type("Username, email or phone", "ranch@example.invalid"); await type("Password", "private-password"); await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/vault/logins", { label: "Ranch account", origin: "https://example.invalid", identifierType: "email", identifier: "ranch@example.invalid", password: "private-password" });
   expect(container.textContent).not.toContain("leaked upstream"); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
-  await submit(); expect(write).toHaveBeenCalledOnce(); await click("Reload logins"); expect(api).toHaveBeenCalledTimes(2); expect(localStorage.length).toBe(0);
+  await submit(); expect(write).toHaveBeenCalledOnce(); expect(container.textContent).toContain("Hermes could not confirm this change");
+  await click("Reload logins"); expect(api).toHaveBeenCalledTimes(2); expect(localStorage.length).toBe(0);
+  expect(container.textContent).not.toContain("Hermes could not confirm this change"); expect(button("Add login").disabled).toBe(false);
 });
 it("requires local deletion confirmation and leaves external entries to their owner", async () => {
   vi.mocked(api).mockResolvedValue(vault); vi.mocked(write).mockResolvedValue({ removed: true }); await render(createElement(VaultPanel, { botId: "ranch" }));

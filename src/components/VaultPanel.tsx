@@ -36,7 +36,8 @@ export function VaultPanel({ botId }: { botId: string }) {
     document.addEventListener("visibilitychange", hidden); window.addEventListener("pagehide", clear);
     return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", clear); };
   }, []);
-  function reload() { setPassword(""); setMaster(""); void vaultResource.reload(); }
+  // Reloading is how a person reviews an uncertain change, so it retires that warning.
+  function reload() { setPassword(""); setMaster(""); action.setError(""); void vaultResource.reload(); }
   async function mutate(work: () => Promise<unknown>, success: string) {
     if (loading || uncertain) return;
     setPassword(""); setMaster("");

@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IntegrationList } from "../src/components/IntegrationsPanel";
-import { api, write } from "../src/client-api";
+import { ApiError, api, write } from "../src/client-api";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../src/shared/integrations";
 import { advance, button, click, mountRoot, typeInto } from "./ui-harness";
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
@@ -21,6 +21,14 @@ beforeEach(() => {
 });
 async function render() { await act(async () => root.render(createElement(IntegrationList, { profile: "bot", bots: [{ id: "bot", name: "Ranch hand", shared: true, model: "test", activity: "idle" }] }))); }
 describe("integration connections", () => {
+  it("retires the refresh-first warning once a refresh someone asked for succeeds", async () => {
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("upstream detail", 502));
+    await render();
+    await click("Check connection");
+    expect(container.textContent).toContain("Refresh status or try the check again");
+    await click("Refresh status");
+    expect(container.textContent).not.toContain("Refresh status or try the check again");
+  });
   it("distinguishes configured credentials from checked access and checks the selected profile", async () => {
     await render();
     expect(container.textContent).toContain("Configured · not checked");

@@ -49,6 +49,8 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   // Which control started the work, to label it "Working…".
   const [working, setWorking] = useState("");
   const error = action.error || connections.error;
+  // A refresh someone asks for answers "Refresh status before trying again", so it retires that error.
+  const refreshStatus = () => { action.setError(""); void refresh(); };
   useEffect(() => {
     let saved: string | null = null;
     try { saved = sessionStorage.getItem(flowKey); } catch { /* Private browsing can disable storage. */ }
@@ -101,9 +103,9 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   };
   const categories = [...new Set(catalog?.connections.map(item => item.category))];
   return <div className="integration-list">
-    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button disabled={loading || busy} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
+    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
     {error && <FormMessage tone="error">{error}</FormMessage>}
-    {!catalog && !loading && error && <Button onClick={() => void refresh()}>Try again</Button>}
+    {!catalog && !loading && error && <Button onClick={refreshStatus}>Try again</Button>}
     {flow && <section className="integration-flow" aria-label="Connection sign-in" role="status">
       <strong>{flow.status === "approved" || flow.kind === "connected" ? "Connection ready" : flow.status === "pending" ? "Finish connecting your account" : "Sign-in status"}</strong>
       <p>{flow.message}</p>

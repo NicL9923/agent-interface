@@ -59,7 +59,8 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
   const load = useCallback(async (quiet: boolean) => {
     if (path === null || !mounted.current || quiet && inflight.current) return;
     const skipped = latest.current.skip?.();
-    if (skipped) { setError(skipped); return; }
+    // A skipped load settles at once, unless a load already running still owns `loading`.
+    if (skipped) { setError(skipped); if (!inflight.current) setLoading(false); return; }
     inflight.current?.abort();
     const controller = inflight.current = new AbortController();
     if (!quiet) { setLoading(true); setError(""); }

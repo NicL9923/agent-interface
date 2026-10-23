@@ -106,6 +106,12 @@ describe("useResource", () => {
     expect(latest.data).toBe("second");
   });
 
+  it("settles loading at once when skip answers instead of a request", async () => {
+    await show("/a", { skip: () => "You're offline." });
+    expect(api).not.toHaveBeenCalled();
+    expect(latest).toMatchObject({ loading: false, error: "You're offline." });
+  });
+
   it("makes no request without a path", async () => {
     await show(null);
     expect(api).not.toHaveBeenCalled();
