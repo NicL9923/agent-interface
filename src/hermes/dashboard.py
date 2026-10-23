@@ -85,6 +85,7 @@ def main():
         sibling_module("computer").install_tools()
         journal = extension.install()
         sibling_module("experience").install(web, journal, server._history_to_messages)
+        sibling_module("automation").install(web, journal)
         sibling_module("vault").install(web, journal)
         sibling_module("integrations").install(web)
         service.install_service_auth(web, secret)

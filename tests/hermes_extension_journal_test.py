@@ -415,6 +415,7 @@ class InlineGuidanceTests(unittest.TestCase):
 
     def test_current_native_invocation_uses_post_model_switch_agent_and_restores_on_error(self):
         with FakeHermes([], invocation=True) as hermes:
+            hermes.journal.memory_refresh.before_turn = Mock()
             server = hermes.modules["tui_gateway.server"]
             hermes.open()
             self.pending_app_turn(hermes)
@@ -438,6 +439,35 @@ class InlineGuidanceTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 server._invoke_agent("sid", session, turn, None, None, None, [], None, None, None, "Other client text")
             self.assertEqual(hermes.invoked[-1][0], "Current model")
+            self.assertEqual(hermes.journal.memory_refresh.before_turn.call_count, 4)
+            hermes.journal.memory_refresh.before_turn.assert_called_with("default", session, agent)
+
+    def test_memory_refresh_runs_at_goal_and_steering_invocation_boundaries(self):
+        with FakeHermes([], invocation=True) as hermes:
+            server = hermes.modules["tui_gateway.server"]
+            hermes.open()
+            session = server._sessions["sid"]
+            session['agent'] = agent = types.SimpleNamespace(ephemeral_system_prompt='Original system')
+            refresh = hermes.journal.memory_refresh.before_turn = Mock()
+            for kind in ('goal_continue', 'steering'):
+                with self.assertRaisesRegex(RuntimeError, 'Synthetic provider failure'):
+                    server._invoke_agent('sid', session, types.SimpleNamespace(agent=agent), None, None, None, [], kind, None, None, 'Followup')
+                refresh.assert_called_with('default', session, agent)
+            self.assertEqual(refresh.call_count, 2)
+            self.assertEqual([text for _, text in hermes.invoked], ['Followup', 'Followup'])
+
+    def test_memory_refresh_hook_ignores_other_native_sessions_in_the_same_profile(self):
+        with FakeHermes([], invocation=True) as hermes:
+            server = hermes.modules['tui_gateway.server']
+            hermes.open()
+            agent = types.SimpleNamespace(ephemeral_system_prompt='Native frozen system')
+            native = dict(session_key='native-stored', agent=agent)
+            server._sessions['native-chat'] = native
+            refresh = hermes.journal.memory_refresh.before_turn = Mock()
+            with self.assertRaisesRegex(RuntimeError, 'Synthetic provider failure'):
+                server._invoke_agent('native-chat', native, types.SimpleNamespace(agent=agent), None, None, None, [], None, None, None, 'Native chat text')
+            refresh.assert_not_called()
+            self.assertEqual(hermes.invoked[-1], ('Native frozen system', 'Native chat text'))
 
     def test_guidance_is_ephemeral_and_only_for_app_sessions(self):
         with FakeHermes([]) as hermes:
@@ -754,6 +784,47 @@ class DiscoveryTests(unittest.TestCase):
                 events = hermes.methods["agent-interface.discover"]("tick", {"cursor": "0"})["result"]["events"]
         self.assertEqual([(event["kind"], event.get("approvalId")) for event in events],
                          [("approval", "request:7"), ("approval", None), ("approval", None), ("completed", None)])
+
+
+class SubmissionRecoveryGateTests(unittest.TestCase):
+    def test_gate_reads_restart_marker_inflight_and_prior_owner_across_runtime_sid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = extension.Journal(Path(directory) / 'gates.db')
+            try:
+                session = dict(session_key='stored', running=False)
+                self.assertFalse(journal.submission_state('ranch', 'sid', session)['interrupted'])
+                session['inflight_turn'] = dict(interrupted=True)
+                self.assertTrue(journal.submission_state('ranch', 'sid', session)['interrupted'])
+                session.pop('inflight_turn')
+                with journal.db:
+                    journal.db.execute("INSERT INTO interruptions VALUES('ranch','stored','crashed',1)")
+                self.assertTrue(journal.submission_state('ranch', 'sid', session)['interrupted'])
+                self.assertFalse(journal.submission_state('other', 'sid', session)['interrupted'])
+                with journal.db:
+                    journal.db.execute("DELETE FROM interruptions")
+                    journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,status,terminal,created) VALUES('past','d','ranch','old-sid','stored','person','e','interrupted',1,1)")
+                journal.event('ranch', 'old-sid', 'interrupted', 'Stopped', 'past')
+                self.assertTrue(journal.submission_state('ranch', 'new-sid', session)['interrupted'])
+            finally:
+                journal.db.close()
+
+    def test_unsettled_receipt_and_resume_require_idle_use_the_same_submit_gate(self):
+        with FakeHermes([]) as hermes:
+            hermes.open()
+            session = hermes.modules['tui_gateway.server']._sessions['sid']
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,status,terminal,created) VALUES('previous','d','default','sid','stored','person','e','accepted',0,1)")
+            self.assertEqual(hermes.journal.submission_state('default', 'sid', session)['current'], ('previous',))
+            submit = hermes.methods['agent-interface.submit']
+            params = dict(profile='default', request_id='continuation', sender_id='person', text='Continue', require_idle=True)
+            refused = submit('resume', params)['result']
+            self.assertEqual(refused['status'], 'rejected')
+            with hermes.journal.db:
+                hermes.journal.db.execute("UPDATE receipts SET terminal=1")
+            session['running'] = True
+            busy = submit('resume', dict(params, request_id='busy'))
+            self.assertEqual(busy['error']['code'], 4091)
+            self.assertIsNone(hermes.journal.receipt('busy'))
 
 
 if __name__ == "__main__":

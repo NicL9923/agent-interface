@@ -1,0 +1,79 @@
+{
+  "request": "POST /api/bots/household/automation/goal/resume",
+  "response": {
+    "botId": "household",
+    "owner": "Hermes",
+    "goals": {
+      "supported": true,
+      "goal": {
+        "title": "Maintain the pasture",
+        "status": "paused",
+        "turnsUsed": 4,
+        "maxTurns": 20,
+        "pausedReason": "Waiting for your approval."
+      },
+      "resume": {
+        "requestId": "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6",
+        "status": "accepted",
+        "runId": "run-goal"
+      }
+    },
+    "tasks": {
+      "supported": true,
+      "items": [
+        {
+          "id": "task-fence",
+          "title": "Check the north gate",
+          "body": "Inspect the latch before opening the pasture.",
+          "status": "blocked",
+          "priority": 5,
+          "assignee": "garden",
+          "owner": "household",
+          "dependencies": [
+            "task-supplies"
+          ],
+          "blockedReason": "Waiting for supplies."
+        }
+      ]
+    },
+    "triggers": {
+      "supported": true,
+      "items": [
+        {
+          "id": "gate-event",
+          "description": "Gate alert",
+          "events": [
+            "gate.open",
+            "gate.closed"
+          ],
+          "routineId": "routine-morning",
+          "enabled": false,
+          "url": "https://hermes.example.test/webhook/gate-event",
+          "secretSet": true,
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "platformEnabled": false
+    },
+    "skills": {
+      "supported": true,
+      "installed": [
+        {
+          "name": "ranch/fences",
+          "description": "Fence inspection"
+        }
+      ],
+      "pending": [
+        {
+          "id": "deadbeef",
+          "summary": "Add gate check",
+          "origin": "agent",
+          "revision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ],
+      "approvalRequired": true
+    },
+    "canManageTriggers": true,
+    "canManageLearningPolicy": true
+  }
+}

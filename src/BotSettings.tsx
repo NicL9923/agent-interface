@@ -23,11 +23,13 @@ import { defaultAvatar } from "./components/Avatar";
 import { AvatarEditor } from "./components/AvatarEditor";
 import { ModelSelector } from "./components/ModelSelector";
 import { MemoryPanel } from "./components/MemoryPanel";
+import { AutomationPanel, LearningPanel } from "./components/AutomationPanel";
 import { VaultPanel } from "./components/VaultPanel";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
-const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "memory", "logins"] as const;
+import { AdvancedRoutineFields } from "./components/AdvancedRoutineFields";
+const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "work", "learning", "memory", "logins"] as const;
 type SettingsTab = (typeof settingsSections)[number];
 /** A lean roster row lacks some fields, so each one has a safe default. A missing bot takes the first one's model. */
 function formFromBot(bot: Bot | null, fallback?: Bot): BotInput {
@@ -603,6 +605,8 @@ function LoadedBotSettings({
             onSave={() => void run(() => draft.save(existing.id), "Saved", tab)} />;
         })()}
         {existing && tab === "connections" && <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
+        {existing && tab === "work" && <AutomationPanel key={existing.id} botId={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
+        {existing && tab === "learning" && <LearningPanel key={existing.id} botId={existing.id} />}
         {existing && tab === "memory" && <MemoryPanel key={existing.id} botId={existing.id} />}
         {existing && tab === "logins" && <VaultPanel key={existing.id} botId={existing.id} />}
         {existing && tab === "routines" && (
@@ -678,6 +682,7 @@ function RoutineManager({
     schedule: "",
     enabled: true,
     recipientIds: [],
+    contextFrom: ["self"],
   });
   const { busy } = actions;
   const [deleteId, setDeleteId] = useState("");
@@ -699,7 +704,7 @@ function RoutineManager({
         explicitly.
       </p>
       <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <Button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
-        onClick={() => { setEditing(null); setPreviewedSchedule(""); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id] }); }}>
+        onClick={() => { setEditing(null); setPreviewedSchedule(""); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], contextFrom: ["self"] }); }}>
         <strong>{preset.name}</strong><small>{preset.description}</small></Button>)}</div>
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
@@ -730,6 +735,7 @@ function RoutineManager({
             <Button
               onClick={() => {
                 setEditing(routine.id);
+                setPreviewedSchedule("");
                 setForm(routine);
               }}
             >
@@ -766,6 +772,8 @@ function RoutineManager({
         onSubmit={(e) => {
           e.preventDefault();
           if (previewedSchedule !== form.schedule) { actions.setError("Preview the schedule before saving this routine."); return; }
+          if (form.noAgent && !form.script?.trim()) { actions.setError("Script-only routines require a profile script."); return; }
+          if (!form.prompt.trim() && !form.script?.trim() && !form.skills?.length) { actions.setError("Add instructions, a skill, or a profile script."); return; }
           void action(async () => {
             await write(
               editing
@@ -775,6 +783,7 @@ function RoutineManager({
               editing ? "PUT" : "POST",
             );
             setEditing(null);
+            setPreviewedSchedule("");
             setForm({
               botId,
               name: "",
@@ -782,6 +791,7 @@ function RoutineManager({
               schedule: "",
               enabled: true,
               recipientIds: [],
+              contextFrom: ["self"],
             });
           });
         }}
@@ -798,7 +808,7 @@ function RoutineManager({
         <label>
           Instructions
           <Textarea
-            required
+            required={!form.noAgent && !form.script?.trim() && !form.skills?.length}
             rows={4}
             value={form.prompt}
             onChange={(e) => setForm({ ...form, prompt: e.target.value })}
@@ -814,6 +824,7 @@ function RoutineManager({
           />
         </label>
         <RoutineSchedulePreview key={editing || "new"} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
+        <AdvancedRoutineFields key={editing ?? "new"} value={form} onChange={setForm} routines={routines} editing={editing} />
         <label className="checkbox-label">
           <Input
             type="checkbox"
@@ -857,6 +868,7 @@ function RoutineManager({
               type="button"
               onClick={() => {
                 setEditing(null);
+                setPreviewedSchedule("");
                 setForm({
                   botId,
                   name: "",
@@ -864,6 +876,7 @@ function RoutineManager({
                   schedule: "",
                   enabled: true,
                   recipientIds: [],
+                  contextFrom: ["self"],
                 });
               }}
             >

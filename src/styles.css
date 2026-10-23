@@ -931,6 +931,10 @@ a {
   min-width: 0;
   flex-shrink: 0;
 }
+.settings-tabs:not(.settings-tabs-mobile) {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
 .settings-tabs button {
   font-size: 12px;
   text-transform: capitalize;

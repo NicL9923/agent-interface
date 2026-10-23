@@ -142,6 +142,29 @@ class Journal:
         row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor FROM receipts WHERE request_id=?", (request_id,)).fetchone()
         return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3]}
 
+    def last_terminal(self, profile, sid, stored):
+        """The newest settled outcome of the session, or of its canonical owner after a cold resume."""
+        terminal = self.db.execute(LATEST_TERMINAL, (profile, sid)).fetchone()
+        if not terminal:
+            latest = self.db.execute(LATEST_ROOT, (profile, stored)).fetchone()
+            terminal = self.db.execute(RUN_TERMINAL, (latest[0],)).fetchone() if latest else None
+        return terminal
+
+    def submission_state(self, profile, sid, session):
+        """The shared recovery gates for app input and goal continuation.
+
+        Callers doing a goal mutation also hold this session's history_lock.
+        """
+        with self.lock:
+            stored = session.get("session_key")
+            running = bool(session.get("running"))
+            current = self.db.execute(OPEN_RUN, (sid,)).fetchone()
+            interrupted = self.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
+            terminal = self.last_terminal(profile, sid, stored)
+            inflight = session.get("inflight_turn") or {}
+            interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
+            return dict(stored=stored, running=running, current=current, interrupted=interrupted)
+
     def admission_response(self, request_id):
         row = self.db.execute("SELECT admission_response FROM receipts WHERE request_id=?", (request_id,)).fetchone()
         if row is None:
@@ -286,6 +309,8 @@ class Bridge:
         journal.canonical_session = self.canonical.get
         journal.profile_for_session = self.profile_for
         journal.live_profile_for_session = self.live_profile_for
+        journal.memory_refresh = sibling_module("experience").MemoryRefresh(journal, server,
+            lambda profile: (session for sid, session in server._sessions.copy().items() if sid == self.canonical.get(profile)))
 
     # Maintenance lease: a held lease fences every native admission except reads.
 
@@ -488,6 +513,9 @@ class Bridge:
         if hasattr(server, "_invoke_agent"):
             original_invoke = server._invoke_agent
             def invoke(sid, session, turn, *args, **kwargs):
+                profile = self.live_profile_for(sid)
+                if self.canonical.get(profile) == sid:
+                    self.journal.memory_refresh.before_turn(profile, session, turn.agent)
                 text = kwargs.get("text", args[7] if len(args) > 7 else None)
                 display_kind = kwargs.get("display_kind", args[4] if len(args) > 4 else None)
                 author = kwargs.get("turn_author", args[6] if len(args) > 6 else None)
@@ -725,15 +753,6 @@ class Bridge:
                 if credential:
                     request["app_credential"] = credential
 
-    def last_terminal(self, profile, sid, stored):
-        """The newest settled outcome of the session, or of its canonical owner after a cold resume."""
-        db = self.journal.db
-        terminal = db.execute(LATEST_TERMINAL, (profile, sid)).fetchone()
-        if not terminal:
-            latest = db.execute(LATEST_ROOT, (profile, stored)).fetchone()
-            terminal = db.execute(RUN_TERMINAL, (latest[0],)).fetchone() if latest else None
-        return terminal
-
     def describe_task(self, profile, sid, session, value):
         if session.get("running") and session.get("app_exposed_reasoning"):
             value.setdefault("inflight", {})
@@ -751,7 +770,7 @@ class Bridge:
         current = db.execute(OPEN_RUN, (sid,)).fetchone()
         value["app_run_id"] = current[0] if current else None
         # Cold resume has a new runtime SID; use the canonical journal owner.
-        terminal = self.last_terminal(profile, sid, value["canonical_stored_session_id"])
+        terminal = self.journal.last_terminal(profile, sid, value["canonical_stored_session_id"])
         value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
 
     def attribute(self, profile, sid, value):
@@ -987,13 +1006,10 @@ class Bridge:
             with journal.lock:
                 if sid is None or self.canonical.get(profile) != sid:
                     return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
-                stored = server._sessions[sid].get("session_key")
-                running = bool(server._sessions[sid].get("running"))
-                current = journal.db.execute(OPEN_RUN, (sid,)).fetchone()
-                interrupted = journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
-                terminal = self.last_terminal(profile, sid, stored)
-                inflight = server._sessions[sid].get("inflight_turn") or {}
-                interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
+                state = journal.submission_state(profile, sid, server._sessions[sid])
+                stored, running, current, interrupted = (state[key] for key in ("stored", "running", "current", "interrupted"))
+                if params.get("require_idle") is True and running:
+                    return server._err(rid, 4091, "This assistant started another turn before goal continuation admission")
                 if interrupted and params.get("reviewed_interruption") is not True:
                     return server._err(rid, 4094, "Review the interrupted task before starting another turn")
                 rejected = (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time())
@@ -1136,6 +1152,10 @@ class Bridge:
                                                           native_records=native_records)
         self.journal.bot_delivery.start()
 
+    def install_automation(self):
+        sibling_module("automation").install_runtime(self.server, self.native, self.open_bot, self.canonical_lock, self.submission_lock,
+                                                     self.maintenance_lock, self.maintenance_state, self.journal, self.submit)
+
 def install(path=None):
     actual_revision, patch_hash = source_state()
     from tui_gateway import server
@@ -1152,6 +1172,7 @@ def install(path=None):
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()
+    bridge.install_automation()
     return journal
 
 if __name__ == "__main__":
@@ -1163,6 +1184,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     journal = install()
     sibling_module("experience").install(web, journal, server._history_to_messages)
+    sibling_module("automation").install(web, journal)
     sibling_module("vault").install(web, journal)
     sibling_module("integrations").install(web)
     sibling_module("service_auth").install_service_auth(web, os.environ["HERMES_AGENT_INTERFACE_TOKEN"])

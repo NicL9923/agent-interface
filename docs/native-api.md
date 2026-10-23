@@ -246,6 +246,49 @@ before dispatch and reuse it after an uncertain admission. Do not replay a trial
 automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from Hermes, as
 the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
 
+## Work and learning
+
+`GET /api/bots/:id/automation` returns the shared `AutomationOverview` contract
+in `src/shared/automation.ts`. Goals, tasks, triggers and skills each report
+`supported` and an optional explanation. Clients must honor those capabilities
+and the server's `canManageTriggers` and `canManageLearningPolicy` flags.
+
+All routes below are relative to `/api/bots/:id/automation`.
+
+| Method and route | Contract |
+| --- | --- |
+| `PUT /goal` | `{title,maxTurns}` replaces the entire goal with a new paused goal, resetting progress, subgoals, completion contracts and verification gates; require explicit confirmation for an existing goal |
+| `POST /goal/resume` | `{requestId,reviewedInterruption?}` resumes through durable chat admission and returns the overview |
+| `POST /goal/pause` or `/goal/clear` | `{}`; both work during an active turn and return the overview |
+| `POST /tasks` | `TaskInput`, including a UUID `requestId`; returns a blocked `AutomationTask` |
+| `GET` or `PATCH /tasks/:taskId` | Reads a task, or edits `{title?,body?,priority?,assignee?}`; explicit `assignee: null` clears assignment, omission preserves it |
+| `POST /tasks/:taskId/actions` | `{action,reason?,reviewer?}`; action is `start`, `block`, `unblock` or `request_review` |
+| `PUT /tasks/:taskId/dependencies/:dependencyId` | `{remove}`; dependencies must share the selected owner profile |
+| `POST /triggers` | `TriggerInput`; returns a disabled subscription and its signing secret once |
+| `PUT`, `PATCH` or `DELETE /triggers/:triggerId` | All require the loaded `revision`; PUT edits routing, PATCH edits `enabled` |
+| `GET /skills/content?name=...` | Installed `SkillContent` |
+| `GET /skills/pending/:pendingId` | `SkillDiff` with the revision of the reviewed diff |
+| `POST /skills/pending/:pendingId` | `{revision,decision}`; decision is `approve` or `reject` |
+| `PUT /skills/policy` | `{approvalRequired}`; requires an integration administrator |
+
+Persist a resume UUID before sending. An `uncertain` resume requires a status
+refresh, never automatic resubmission. A rejected request remains rejected on
+retry. A new, explicitly reviewed attempt uses a fresh UUID. Send
+`reviewedInterruption: true` only after the person reviews interrupted work.
+Persist one task UUID per creation intent as well.
+Show the task overview's truncation notice when `tasks.truncated` is true. The
+overview contains at most `tasks.limit` newest visible tasks owned by the selected
+profile; older tasks remain available in Hermes.
+
+Skill approval must use `SkillDiff.revision` from the loaded detail, rather than
+the pending-list revision. Refuse approval of a truncated diff. Keep trigger
+secrets only in the creation view until the person dismisses them.
+
+Memory responses expose `refresh.state` as `next_turn`, `pending` or `applied`.
+Saved app edits reach the canonical Bot Chat at its next safe execution boundary
+without replacing its
+history or starting a message. A running turn keeps its existing prompt.
+
 ## Native notifications
 
 | Method and route | Body or response |

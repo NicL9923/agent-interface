@@ -166,7 +166,7 @@ providers:
   spike-fixture:
     base_url: http://127.0.0.1:{provider_port}/v1
     api_key: isolated-fixture
-    models: [spike-model]
+    models: [spike-model, spike-routine-model]
 terminal:
   backend: local
   cwd: {workspace}
@@ -250,7 +250,11 @@ approvals:
             gateway = start(extension=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/extension_probe.py"), "--verify-restart"], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/routine_probe.py")], cwd=REPO, env=env, check=True)
+            if args.revision not in QUALIFIED_REVISIONS:
+                # Legacy qualified sources predate the advanced dashboard fields.
+                subprocess.run([str(python), str(REPO / "scripts/spike/advanced_routine_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/experience_probe.py")], cwd=REPO, env=env, check=True)
+            subprocess.run([str(python), str(REPO / "scripts/spike/automation_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/integrations_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/service_probe.py")], cwd=REPO, env=env, check=True)
             run_computer_probes(python, env)

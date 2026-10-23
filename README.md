@@ -209,6 +209,13 @@ previews in the actual Hermes timezone, and **Try once** with durable run
 receipts. See the [household experience guide](docs/HouseholdExperience.md) for
 controls, supported reply cards, voice requirements and recovery behavior.
 
+Routine **Advanced** options include skills, model/provider pins, toolsets,
+profile scripts, script-only runs and context from other routines. Assistant
+settings > **Work** manages standing goals, native tasks and event triggers.
+**Learning** previews installed skills and reviews proposed changes. New work
+requires an explicit start. Memory edits apply to the canonical conversation at
+the next safe turn boundary, with pending/applied status and preserved history.
+
 Use **View results** beside a routine to read its saved runs, including trials.
 Routine notifications open this history directly. Results stay within the selected
 Hermes profile; a run with only a saved preview says so.

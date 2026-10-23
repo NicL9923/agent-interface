@@ -1,0 +1,49 @@
+{
+  "revision": "41dfcf2c1bd7146d4ad46aea08b7dd007900602e",
+  "checks": {
+    "actual_profile_skill_loadable": true,
+    "native_http_advanced_create_and_read": true,
+    "native_http_advanced_update_and_basic_edit_preservation": true,
+    "native_script_only_python_execution": true,
+    "native_script_stdout_delivery_callback": true,
+    "script_execution_and_delivery_zero_provider_requests": true,
+    "native_dashboard_empty_toolsets_normalizes_to_null": true,
+    "native_http_triggered_model_pin_and_exact_tool_schemas": true,
+    "native_skill_and_agent_script_in_execution_request": true,
+    "native_context_from_latest_upstream_output": true,
+    "context_from_does_not_schedule_source": true,
+    "native_script_sandbox_and_mode_validation": true,
+    "native_same_profile_context_validation": true
+  },
+  "selectedModel": "spike-routine-model",
+  "selectedProvider": "spike-fixture",
+  "executionToolSchemas": [
+    "skill_manage",
+    "skill_view",
+    "skills_list"
+  ],
+  "scriptOnlyProviderRequests": 0,
+  "sourceRuns": 2,
+  "sourceArchiveCount": 2,
+  "downstreamProviderRequests": 1,
+  "observedModels": [
+    "spike-routine-model"
+  ],
+  "advancedNativeFields": [
+    "skills",
+    "model",
+    "provider",
+    "enabled_toolsets",
+    "context_from",
+    "script",
+    "no_agent"
+  ],
+  "scriptDeliveryCallbacks": 2,
+  "scriptDeliveryJobIds": [
+    "302df26aa65b",
+    "302df26aa65b"
+  ],
+  "scriptDelivery": "Official scheduler provider and native DeliveryRouter to a deterministic adapter callback returning native SendResult. No real Discord connection.",
+  "contextContract": "Reads latest stored source output. The probe fires the source explicitly; context_from does not schedule dependencies.",
+  "botChatContract": "Native Bot Chat delivery starts a separate model turn. This zero-provider proof uses a non-agent transport callback."
+}

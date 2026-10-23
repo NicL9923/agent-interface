@@ -1,0 +1,24 @@
+{
+  "revision": "41dfcf2c1bd7146d4ad46aea08b7dd007900602e",
+  "checks": {
+    "native_goal_controls_after_prior_chat_own_lease": true,
+    "native_goal_foreign_lease_refused": true,
+    "native_profile_changes_do_not_require_chat_idleness": true,
+    "native_persistent_goal_controls": true,
+    "native_goal_resume_provider_and_durable_receipt": true,
+    "native_goal_exhausted_budget_reset": true,
+    "native_goal_pause_clear_during_provider_turn": true,
+    "native_goal_resume_no_replay": true,
+    "native_goal_cleared_replay_refused": true,
+    "native_goal_interruption_requires_explicit_review": true,
+    "native_goal_reviewed_retry_is_durably_admitted": true,
+    "native_kanban_explicit_unassignment_and_omission": true,
+    "native_kanban_durable_blocked_creation": true,
+    "native_kanban_owner_dependencies_visibility": true,
+    "native_kanban_create_idempotency": true,
+    "native_event_subscription_routine_owner": true,
+    "native_event_subscription_paused_secret_once_cas": true,
+    "native_learned_skill_diff_approve_reject": true,
+    "native_skill_policy_and_profile_scope": true
+  }
+}
