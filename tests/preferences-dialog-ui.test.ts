@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PreferencesDialog } from "../src/app/PreferencesDialog";
 import { defaultPreferences, type Bootstrap, type Preferences } from "../src/shared/types";
 import type { ComponentProps } from "react";
+import { button, mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -17,12 +18,9 @@ let container: HTMLDivElement;
 let props: ComponentProps<typeof PreferencesDialog>;
 let saved: Preferences[];
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   saved = [];
   props = {
     boot: {
@@ -48,17 +46,7 @@ beforeEach(() => {
     onClose: vi.fn(), onSignOut: vi.fn(), onComputer: vi.fn(), onIntegrations: vi.fn(), onUpgrade: vi.fn(),
   };
 });
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
 const render = () => act(async () => root.render(createElement(PreferencesDialog, props)));
-const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent?.trim() === text)!;
-const typeInto = (input: HTMLInputElement, value: string) => act(async () => {
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-});
 const choice = (name: string) => Array.from(container.querySelectorAll<HTMLLabelElement>(".bot-choice"))
   .find(item => item.querySelector(".row-label")?.textContent === name)!.querySelector("input")!;
 const title = () => container.querySelector("#settings-title")?.textContent;

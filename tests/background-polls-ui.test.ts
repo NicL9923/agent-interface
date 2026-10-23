@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { ReactElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, write } from "../src/client-api";
@@ -10,6 +9,7 @@ import { RoutineEnhancements } from "../src/components/RoutineEnhancements";
 import { TodayPanel } from "../src/components/TodayPanel";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
+import { advance, mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 let root: Root, container: HTMLDivElement, visibility: DocumentVisibilityState;
@@ -18,8 +18,7 @@ const bootstrap = { user: { id: "one", name: "One" }, preferences: defaultPrefer
 const room = { room_id: "room", name: "Weekend plans", members: [] };
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.mocked(api).mockReset(); vi.mocked(write).mockReset(); localStorage.clear();
+  vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   vi.mocked(api).mockImplementation(async (path: string) => path === "/groups" ? { supported: true, canSend: true, rooms: [room] }
@@ -27,14 +26,9 @@ beforeEach(() => {
     : path.startsWith("/groups/") ? { room, driver_status: { working: false, blocked: false, pending_actions: [] } }
     : path === "/today" ? { generatedAt: "2026-10-14T12:00:00Z", frontier: "0", hasMore: false, since: "2026-10-14T00:00:00Z", unavailableBots: [], items: [], events: [] }
     : { requestId: "run", status: "accepted" });
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => {
-  await act(async () => root.unmount()); container.remove();
-  Reflect.deleteProperty(document, "visibilityState");
-  vi.useRealTimers(); vi.unstubAllGlobals(); localStorage.clear();
-});
-async function advance(ms: number) { await act(async () => vi.advanceTimersByTimeAsync(ms)); }
+afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); });
 async function show(state: DocumentVisibilityState) {
   visibility = state;
   await act(async () => document.dispatchEvent(new Event("visibilitychange")));

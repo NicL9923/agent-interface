@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { write } from "../src/client-api";
 import { useDeviceNotifications } from "../src/components/use-device-notifications";
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", () => ({ write: vi.fn() }));
 let container: HTMLDivElement, root: Root;
@@ -27,10 +28,9 @@ const toggle = () => container.querySelector<HTMLInputElement>('[role="switch"]'
 const fakeSubscription = () => ({ endpoint, toJSON: () => ({ endpoint, keys: { auth: "key", p256dh: "key" } }), unsubscribe } as unknown as PushSubscription);
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("isSecureContext", true);
   vi.stubGlobal("PushManager", function() {});
-  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
+  stubMatchMedia();
   permission = "default"; subscription = null; registered = false;
   requestPermission = vi.fn(async () => { permission = "granted"; return permission; });
   vi.stubGlobal("Notification", { get permission() { return permission; }, requestPermission });
@@ -44,10 +44,8 @@ beforeEach(() => {
     registered = method !== "DELETE";
     return { ok: true } as T;
   });
-  localStorage.clear();
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); localStorage.clear(); vi.unstubAllGlobals(); });
 
 it("asks a new device once without requesting browser permission, including across remounts and account changes", async () => {
   await render();
@@ -57,7 +55,7 @@ it("asks a new device once without requesting browser permission, including acro
   await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!.click());
   await render("two");
   expect(container.querySelector(".notification-onboarding")).toBeNull();
-  await act(async () => { root.unmount(); root = createRoot(container); root.render(createElement(Harness)); });
+  await act(async () => { root.unmount(); root.render(createElement(Harness)); });
   expect(container.querySelector(".notification-onboarding")).toBeNull();
 });
 

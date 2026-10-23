@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
 import { useChatPresence } from "../src/app/use-chat-presence";
@@ -10,6 +9,7 @@ import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { contentHash } from "../src/app/draft-merge";
+import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -54,15 +54,9 @@ let root: Root;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("matchMedia", vi.fn(() => ({
-    matches: false,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  })));
-  localStorage.clear();
+  stubMatchMedia();
   history.replaceState(null, "", "/");
   conversation = {
     botId: "shared", messages: [], approvals: [], files: [],
@@ -75,26 +69,13 @@ beforeEach(() => {
       : null;
     return result as T;
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  localStorage.clear();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 async function render() {
   await act(async () => root.render(createElement(App)));
 }
 
-async function advance(milliseconds: number) {
-  await act(async () => vi.advanceTimersByTimeAsync(milliseconds));
-}
 /** The server reports a change, as Hermes frames or a write would. */
 async function changed() {
   await act(async () => FakeEventSource.notifyAll());
@@ -151,10 +132,7 @@ describe("conversation state", () => {
     conversation = { ...conversation, attention: [{ id: "login-request", kind: "secure", title: "Save login", detail: "Native request", secure }] };
     await render();
     const password = container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(password, "synthetic-pending-secret");
-      password.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(password, "synthetic-pending-secret");
     conversation = { ...conversation, attention: [{ ...conversation.attention![0], secure: { ...secure } }] };
     await advance(8000);
     expect(container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!.value).toBe("synthetic-pending-secret");
@@ -247,10 +225,7 @@ describe("conversation state", () => {
     expect(highlight?.getAttribute("aria-hidden")).toBe("true");
     expect(highlight?.textContent).toBe("Shared is running terminal...");
     const textarea = container.querySelector("textarea")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(textarea, "");
     const stop = container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!;
     await act(async () => stop.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
@@ -293,7 +268,6 @@ describe("conversation state", () => {
     Object.defineProperty(image(), "naturalHeight", { value: 600 });
     await act(async () => image().dispatchEvent(new Event("load")));
     await act(async () => root.unmount());
-    root = createRoot(container);
     await render();
     expect([image().getAttribute("width"), image().getAttribute("height")]).toEqual(["800", "600"]);
   });
@@ -304,10 +278,7 @@ describe("conversation state", () => {
     const settled = renders.markdown;
     expect(settled).toBeGreaterThan(0);
     const textarea = container.querySelector("textarea")!;
-    for (const text of ["H", "He", "Hey"]) await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    for (const text of ["H", "He", "Hey"]) await typeInto(textarea, text);
     expect(textarea.value).toBe("Hey");
     expect(renders.markdown).toBe(settled);
   });
@@ -367,10 +338,7 @@ describe("conversation state", () => {
   };
   const type = async (text: string) => {
     const textarea = container.querySelector("textarea")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(textarea, text);
   };
 
   it("keeps the same words typed again right after Hermes accepts them", async () => {
@@ -455,10 +423,7 @@ describe("conversation state", () => {
       await render();
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send guidance"]')!.click());
       const textarea = container.querySelector("textarea")!;
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      });
+      await typeInto(textarea, "");
       expect(container.querySelector('[aria-label="Stop response"]')).toBeNull();
       expect(container.querySelector('[aria-label="Send guidance"]')?.getAttribute("aria-busy")).toBe("true");
       const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
@@ -658,7 +623,7 @@ describe("conversation state", () => {
   });
 
   it("opens phones on home, pushes into a chat and returns with Back", async () => {
-    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    stubMatchMedia(query => query === "(max-width: 620px)");
     conversation = { ...conversation, activity: { state: "idle" } };
     await render();
     const rail = () => container.querySelector(".bot-rail")!;
@@ -679,7 +644,7 @@ describe("conversation state", () => {
   });
 
   it.each([false, true])("leaves an assistant that becomes someone else's personal one, on a phone: %s", async (phone) => {
-    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: phone && query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    stubMatchMedia(query => phone && query === "(max-width: 620px)");
     const books = { ...bootstrap.bots[0], id: "books", name: "Ranch books" };
     let hidden = false, reads = 0;
     const original = vi.mocked(api).getMockImplementation()!;
@@ -743,10 +708,7 @@ describe("conversation state", () => {
     conversation = { ...conversation, activity: { state: "working" } };
     await render();
     const textarea = container.querySelector("textarea")!;
-    const type = (text: string) => act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    const type = (text: string) => typeInto(textarea, text);
     expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();
     await type(""); expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
     await type("Try the other file"); expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();

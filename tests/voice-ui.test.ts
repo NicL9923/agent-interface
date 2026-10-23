@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { VoiceControls } from "../src/components/VoiceControls.js";
 import type { VoiceState } from "../src/shared/voice.js";
+import { mountRoot } from "./ui-harness";
 const requestApi = vi.hoisted(() => vi.fn());
 vi.mock("../src/client-api.js", () => ({ api: requestApi }));
 let container: HTMLDivElement, root: Root;
@@ -26,17 +27,16 @@ class FakeAudio {
   constructor(public url: string) { players.push(this); }
 }
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); requestApi.mockReset(); recorders.length = 0; players.length = 0;
+requestApi.mockReset(); recorders.length = 0; players.length = 0;
   stopped = vi.fn(); getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop: stopped }] }));
   Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
   vi.stubGlobal("MediaRecorder", FakeRecorder); vi.stubGlobal("Audio", FakeAudio);
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:voice-fixture") });
   Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, blob: async () => new Blob(["spoken reply"], { type: "audio/mpeg" }) })));
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
   transcript = vi.fn(); state = vi.fn();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 async function render(disabled = false) { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, reply: { id: "reply", text: "Here is your list." }, disabled }))); }
 async function click(label: string) { const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.startsWith(label))!; expect(button).toBeTruthy(); await act(async () => button.click()); }
 it("records only after a gesture, stops the microphone and adds a transcript for review", async () => {

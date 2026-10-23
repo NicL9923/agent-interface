@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { BotDetails } from "../src/app/BotDetails";
 import { defaultPreferences, type Bootstrap, type Preferences } from "../src/shared/types";
 import type { ComponentProps } from "react";
+import { mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -16,12 +17,9 @@ let container: HTMLDivElement;
 let props: ComponentProps<typeof BotDetails>;
 let saved: Preferences[];
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   saved = [];
   const bot = { id: "ranch", name: "Ranch hand", activity: "idle" as const, shared: true, model: "m", provider: "p" };
   props = {
@@ -35,11 +33,6 @@ beforeEach(() => {
     editPreferences: vi.fn(async (edit: (value: Preferences) => Preferences) => { saved.push(edit(saved.at(-1) ?? props.boot.preferences)); }),
     onSettings: vi.fn(), onClose: vi.fn(),
   };
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
 });
 const render = () => act(async () => root.render(createElement(BotDetails, props)));
 const select = () => container.querySelector<HTMLSelectElement>(".bot-details select")!;
@@ -69,10 +62,7 @@ it("moves the assistant between sections, and into a new one named here", async 
   await pick(Array.from(select().options).find(option => option.textContent === "New section…")!.value);
   const name = container.querySelector<HTMLInputElement>('[aria-label="New section name"]')!;
   expect(document.activeElement).toBe(name);
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Outdoors");
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await typeInto(name, "Outdoors");
   await act(async () => container.querySelector<HTMLFormElement>(".section-add")!.requestSubmit());
   const sections = saved.at(-1)!.sections;
   expect(sections.map(section => [section.name, section.botIds])).toEqual([["Around the house", []], ["Outdoors", ["ranch"]]]);

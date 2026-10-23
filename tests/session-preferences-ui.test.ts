@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { api, write } from "../src/client-api";
 import { useSession } from "../src/app/use-session";
 import type { Bootstrap, Preferences } from "../src/shared/types";
+import { mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
@@ -20,10 +21,8 @@ const bootstrap = (favorites: string[]) => ({
   user: { id: "one", name: "One" }, bots: [], preferences: preferences(favorites), connection: { connected: true }, csrfToken: "t",
 }) as unknown as Bootstrap;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("holds back preferences from a read that overlapped a save, then takes them from the next identical read", async () => {
   let served = bootstrap([]);

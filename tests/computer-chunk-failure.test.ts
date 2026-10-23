@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ComputerPanel } from "../src/components/ComputerPanel";
 import { Loading } from "../src/app/panels";
 import { api, write } from "../src/client-api";
+import { advance, mountRoot } from "./ui-harness";
 
 // A deploy retired these chunks, as an old tab sees it: loading the module fails with the browser's own wording.
 const gone = vi.hoisted(() => () => { throw new TypeError("Failed to fetch dynamically imported module: https://app.example/assets/rfb-OLD12345.js"); });
@@ -20,17 +21,11 @@ const computer = (available: boolean) => ({ available, running: available, brows
 beforeEach(() => {
   vi.useFakeTimers(); vi.clearAllMocks();
   vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   vi.mocked(write).mockResolvedValue({} as never);
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => {
-  await act(async () => root.unmount()); container.remove();
-  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
-});
-const settle = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 const open = () => act(async () => root.render(createElement(Loading, null, createElement(ComputerPanel, { open: true, onClose: () => {} }))));
 
 describe("retired terminal and desktop chunks", () => {
@@ -38,10 +33,10 @@ describe("retired terminal and desktop chunks", () => {
     vi.mocked(api).mockImplementation(async path => path === "/computer" ? computer(true) as never
       : { path: "/api/computer/desktop/ws?ticket=d", viewerId: "viewer", expiresAt: "future" } as never);
     await open();
-    await settle(100);
+    await advance(100);
     expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
     const attempts = requests("/computer/desktop");
-    await settle(30_000);
+    await advance(30_000);
     expect(requests("/computer/desktop")).toBe(attempts);
     expect(container.textContent).not.toContain("We'll keep trying");
   });
@@ -50,12 +45,12 @@ describe("retired terminal and desktop chunks", () => {
     vi.mocked(api).mockImplementation(async path => path === "/computer" ? computer(false) as never
       : { path: "/api/computer/terminal/ws?ticket=t", sessionId: "shell", target: "nicolas@hermes", expiresAt: "future" } as never);
     await open();
-    await settle(100);
+    await advance(100);
     await act(async () => container.querySelector<HTMLButtonElement>("#computer-tab-terminal")!.click());
-    await settle(100);
+    await advance(100);
     expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
     const attempts = requests("/computer/terminal");
-    await settle(30_000);
+    await advance(30_000);
     expect(requests("/computer/terminal")).toBe(attempts);
   });
 });

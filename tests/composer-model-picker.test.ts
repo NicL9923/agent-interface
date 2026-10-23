@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ComposerModelPicker } from "../src/components/ComposerModelPicker";
 import { ApiError, api, write } from "../src/client-api";
 import type { Bootstrap, Bot, ModelCatalog } from "../src/shared/types";
+import { click, mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
 const catalog: ModelCatalog = { provider: "house", model: "saved-model", providers: [
@@ -19,23 +20,20 @@ const bootstrap = { capabilities: { botConfiguration: { supported: true } }, pre
 let container: HTMLDivElement, root: Root;
 const onSaved = vi.fn();
 beforeEach(() => {
-  vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : path === "/bots/ranch" ? bot : catalog) as T); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : path === "/bots/ranch" ? bot : catalog) as T);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 const render = (value: Bot = bot, disabled = false) => act(async () => root.render(createElement(ComposerModelPicker, { bot: value, bootstrap, disabled, onSaved })));
 const settleFocus = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
 const openPicker = async () => { await act(async () => trigger().click()); await settleFocus(); };
 const trigger = () => container.querySelector<HTMLButtonElement>(".composer-model > button")!;
-const click = async (name: string) => {
-  const button = [...document.body.querySelectorAll("button")].find(button => button.textContent?.trim() === name);
-  expect(button, name).toBeTruthy(); await act(async () => button!.click());
-};
+// The menu renders in a portal, outside the container.
+const press = (name: string) => click(name, document.body);
 
 it("switches the model while resending the assistant's other settings unchanged", async () => {
   vi.mocked(write).mockResolvedValue({});
   await render(); await openPicker();
-  await click("New model");
+  await press("New model");
   expect(write).toHaveBeenCalledWith("/bots/ranch", { name: "Ranch hand", description: "Help", instructions: "Be kind.",
     model: "new-model", provider: "house", shared: true, enabledMcpServers: ["calendar"], confirmModel: false }, "PATCH");
   expect(onSaved).toHaveBeenCalledOnce(); expect(document.body.querySelector(".model-popover")).toBeNull();
@@ -44,9 +42,9 @@ it("switches the model while resending the assistant's other settings unchanged"
 it("asks before retrying a model Hermes wants confirmed", async () => {
   vi.mocked(write).mockRejectedValueOnce(new ApiError("This model is expensive.", 409, "MODEL_CONFIRMATION_REQUIRED", true)).mockResolvedValue({});
   await render(); await openPicker();
-  await click("New model");
+  await press("New model");
   expect(document.body.textContent).toContain("This model is expensive."); expect(onSaved).not.toHaveBeenCalled();
-  await click("Confirm this model");
+  await press("Confirm this model");
   expect(write).toHaveBeenLastCalledWith("/bots/ranch", expect.objectContaining({ model: "new-model", confirmModel: true }), "PATCH");
   expect(onSaved).toHaveBeenCalledOnce();
 });
@@ -54,7 +52,7 @@ it("asks before retrying a model Hermes wants confirmed", async () => {
 it("fetches detail before saving when roster instructions are omitted", async () => {
   await render({ ...bot, instructions: undefined });
   expect(trigger().disabled).toBe(false);
-  await openPicker(); await click("New model");
+  await openPicker(); await press("New model");
   expect(api).toHaveBeenCalledWith("/bots/ranch");
   expect(write).toHaveBeenCalledWith("/bots/ranch",expect.objectContaining({instructions:"Be kind.",enabledMcpServers:["calendar"]}),"PATCH");
 });
@@ -63,7 +61,7 @@ it("drops a late confirmation request after switching assistants", async () => {
   let reject!: (error: Error) => void;
   vi.mocked(write).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
   await render(); await openPicker();
-  await click("New model");
+  await press("New model");
   await render({ ...bot, id: "kitchen", name: "Kitchen companion" });
   await act(async () => reject(new ApiError("This model is expensive.", 409, "MODEL_CONFIRMATION_REQUIRED", true)));
   await openPicker();
@@ -78,7 +76,7 @@ it("closes when the assistant can no longer be saved safely and returns focus af
   await render(bot, true);
   expect(document.body.querySelector(".model-popover")).toBeNull();
   await render(); await openPicker();
-  await click("New model");
+  await press("New model");
   await settleFocus();
   expect(document.activeElement).toBe(trigger());
 });
@@ -96,7 +94,7 @@ it("saves conversation reasoning and restores the saved value after an unsupport
 
 it("blocks expensive-model confirmation while inference settings are saving", async () => {
   vi.mocked(write).mockRejectedValueOnce(new ApiError("Confirm this model", 409, "MODEL_CONFIRMATION_REQUIRED", true));
-  await render(); await openPicker(); await click("New model");
+  await render(); await openPicker(); await press("New model");
   let finish!: (value: unknown) => void;
   vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
   const reasoning = document.body.querySelector("select")!;

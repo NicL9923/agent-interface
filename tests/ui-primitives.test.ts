@@ -1,30 +1,23 @@
 // @vitest-environment jsdom
 import { act, createElement as h, createRef, StrictMode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { Button } from "../src/components/ui/button";
 import { Dialog } from "../src/components/ui/dialog";
 import { Input } from "../src/components/ui/input";
 import { cn } from "../src/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../src/components/ui/popover";
+import { mountRoot } from "./ui-harness";
 
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn(function (this: HTMLDialogElement) { this.open = true; }) });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn(function (this: HTMLDialogElement) {
     this.open = false;
     queueMicrotask(() => this.dispatchEvent(new Event("close")));
   }) });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  document.body.replaceChildren();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 it("requires an explicit submit type for a shared button inside a form", async () => {
@@ -65,7 +58,6 @@ it.each(["removed", "inert", "body"])("uses the supplied safe fallback when the 
   if (state === "removed") opener.remove();
   if (state === "inert") opener.setAttribute("inert", "");
   await act(async () => root.unmount());
-  root = createRoot(container);
   expect(document.activeElement).toBe(fallback);
 });
 
