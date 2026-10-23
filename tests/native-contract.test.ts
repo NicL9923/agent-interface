@@ -1,3 +1,4 @@
+import { experienceRequester, automationRequester } from "./helpers/runtime-fixtures.js";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -179,31 +180,26 @@ const runtime = {
   discoverEvents: async cursor => ({ cursor, events: [] }),
   modelOptions: async () => models,
   transcribeVoice: async () => transcript,
-  experienceRequest: async input => {
-    if (input.profile === "archive") throw offline();
-    switch (input.operation) {
-      case "search": return input.profile === "household" ? hits : [];
-      case "history": return history;
-      case "usage": return input.profile === "household" ? usage : { ...usage, botId: input.profile, sessions: 0, inputTokens: 0, outputTokens: 0, actualCost: null, estimatedCost: null, partial: true };
-      case "routine_results": return routineResults;
-      case "routine_output": return routineOutput;
-      case "memory": case "save_memory": case "delete_memory": return memory;
-      case "preview": return preview;
-      case "run": case "run_receipt": return { ...runReceipt, requestId: input.requestId };
-    }
-  },
-  automationRequest: async input => {
-    switch (input.operation) {
-      case "overview": case "goal_set": case "goal_pause": case "goal_clear": return structuredClone(profileAutomation);
-      case "goal_resume": return { ...structuredClone(profileAutomation), goals: { ...structuredClone(profileAutomation.goals), resume: { requestId: input.requestId, status: "accepted", runId: "run-goal" } } };
-      case "task_create": case "task_get": case "task_update": case "task_action": case "task_dependency": return structuredClone(automationTask);
-      case "trigger_create": return { subscription: structuredClone(eventSubscription), secret: "one-time-contract-fixture" };
-      case "trigger_update": case "trigger_toggle": return { subscription: structuredClone(eventSubscription) };
-      case "skill_content": return skillContent;
-      case "skill_diff": return skillDiff;
-      default: return { ok: true };
-    }
-  },
+  experienceRequest: experienceRequester({
+    search: input => { if (input.profile === "archive") throw offline(); return input.profile === "household" ? hits : []; },
+    history: () => history,
+    usage: input => { if (input.profile === "archive") throw offline(); return input.profile === "household" ? usage : { ...usage, botId: input.profile, sessions: 0, inputTokens: 0, outputTokens: 0, actualCost: null, estimatedCost: null, partial: true }; },
+    routine_results: () => routineResults, routine_output: () => routineOutput,
+    memory: () => memory, save_memory: () => memory, delete_memory: () => memory,
+    preview: () => preview, run: input => ({ ...runReceipt, requestId: input.requestId }),
+    run_receipt: input => ({ ...runReceipt, requestId: input.requestId }),
+  }),
+  automationRequest: automationRequester({
+    overview: () => structuredClone(profileAutomation), goal_set: () => structuredClone(profileAutomation),
+    goal_pause: () => structuredClone(profileAutomation), goal_clear: () => structuredClone(profileAutomation),
+    goal_resume: input => ({ ...structuredClone(profileAutomation), goals: { ...structuredClone(profileAutomation.goals), resume: { requestId: input.requestId, status: "accepted", runId: "run-goal" } } }),
+    task_create: () => structuredClone(automationTask), task_get: () => structuredClone(automationTask),
+    task_update: () => structuredClone(automationTask), task_action: () => structuredClone(automationTask), task_dependency: () => structuredClone(automationTask),
+    trigger_create: () => ({ subscription: structuredClone(eventSubscription), secret: "one-time-contract-fixture" }),
+    trigger_update: () => ({ subscription: structuredClone(eventSubscription) }), trigger_toggle: () => ({ subscription: structuredClone(eventSubscription) }),
+    trigger_delete: () => ({ ok: true }), skill_content: () => skillContent, skill_diff: () => skillDiff,
+    skill_decide: () => ({ ok: true }), skill_policy: () => ({ ok: true }),
+  }),
   groupRequest: async input => {
     switch (input.operation) {
       case "list": return groups;

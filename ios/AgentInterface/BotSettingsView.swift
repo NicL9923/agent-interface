@@ -89,9 +89,9 @@ struct BotSettingsView: View {
     } else if tab == "Memory" {
       if let bot { MemoryDrawer(botId: bot.id) }
     } else if tab == "Work" {
-      if let bot { HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)") }
+      if let bot { HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init)) }
     } else if tab == "Learning" {
-      if let bot { HermesLearningView(botId: bot.id).id("learning|\(store.scope ?? "")|\(bot.id)") }
+      if let bot { HermesLearningView(botId: bot.id).id("learning|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init)) }
     } else { Form {
       switch tab {
       case "Details": details

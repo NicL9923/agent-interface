@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, pollWhileVisible, write } from "../client-api";
+import { ApiError, pollWhileVisible, request } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
 import { routineTrialKey } from "../app/storage";
@@ -19,7 +19,7 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
   async function load() {
     const input = { botId, schedule }; setBusy(true); setError(""); setRequested(schedule);
     try {
-      const result = await write<RoutinePreview>("/routines/preview", input);
+      const result = await request("POST /routines/preview", { body: input });
       if (current.current.botId !== input.botId || current.current.schedule !== input.schedule) return;
       setPreview(result); onReady?.(input.schedule);
     } catch (e) { if (current.current.schedule === input.schedule) setError((e as Error).message); }
@@ -42,13 +42,13 @@ export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }
   const [error, setError] = useState("");
   const [missing, setMissing] = useState(false);
   const checking = useRef(false);
-  const path = `/routines/${encodeURIComponent(routine.id)}`;
+
   const canStart = !requestId || receipt?.status === "completed" || receipt?.status === "failed";
   async function check(id: string) {
     if (checking.current) return;
     checking.current = true;
     setBusy(true); setError("");
-    try { setReceipt(await api<RoutineRunReceipt>(`${path}/runs/${encodeURIComponent(id)}`)); setMissing(false); }
+    try { setReceipt(await request("GET /routines/:id/runs/:requestId", { params: { id: routine.id, requestId: id } })); setMissing(false); }
     catch (e) { setError((e as Error).message); setMissing(e instanceof ApiError && e.status === 404); }
     finally { checking.current = false; setBusy(false); }
   }
@@ -64,7 +64,7 @@ export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }
     try { localStorage.setItem(key, id); }
     catch { setError("This browser cannot save a run receipt. Allow local storage before trying a routine."); return; }
     setRequestId(id); setReceipt(null); setBusy(true); setError(""); setMissing(false);
-    try { setReceipt(await write<RoutineRunReceipt>(`${path}/run`, { requestId: id })); }
+    try { setReceipt(await request("POST /routines/:id/run", { params: { id: routine.id }, body: { requestId: id } })); }
     catch (e) { setError(`${(e as Error).message} Check this run's status before starting another.`); }
     finally { setBusy(false); }
   }

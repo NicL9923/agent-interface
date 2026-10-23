@@ -1,5 +1,6 @@
+import { routeUrl } from "../shared/api";
 import { useState } from "react";
-import { write } from "../client-api";
+import { request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { FormMessage } from "./ui/form-message";
@@ -13,7 +14,7 @@ import "./experience.css";
 export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string, routineId?: string) => void }) {
   // An unchanged recap revalidates as 304 and keeps its original generatedAt, so the check time is this client's.
   const [checkedAt, setCheckedAt] = useState("");
-  const today = useResource<TodayOverview>("/today", { deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
+  const today = useResource(routeUrl("GET /today", {}), { load: (_, signal) => request("GET /today", { signal }), deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
   const { data: overview, loading } = today;
   const seen = useAction();
   const error = seen.error || today.error;
@@ -22,7 +23,7 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
   const active = items.filter(item => !item.error && ["thinking", "working", "waiting"].includes(item.activity.state));
   const completed = overview?.events.filter(event => event.kind === "completed") || [];
   const caughtUp = () => overview && seen.run(async () => {
-    await write("/today/seen", { seenAt: overview.generatedAt, frontier: overview.frontier }, "PUT");
+    await request("PUT /today/seen", { body: { seenAt: overview.generatedAt, frontier: overview.frontier } });
     await today.reload();
   });
   const files = items.filter(item => item.files.length);

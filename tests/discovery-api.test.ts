@@ -1,3 +1,5 @@
+import { botFixture, capabilitiesFixture, experienceRequester, routineFixture, toolFixture } from './helpers/runtime-fixtures.js';
+import type { HistoryPage } from '../src/shared/discovery.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -12,10 +14,16 @@ async function setup() {
   const app=Fastify();apps.push(app);const store=new Store(':memory:');await app.register(cookie);const origin='https://discovery.example.test';
   await installAuth(app,store,loadConfig({NODE_ENV:'production',APP_ORIGIN:origin,APP_DATABASE:':memory:',GOOGLE_CLIENT_ID:'fixture',HOUSEHOLD_EMAILS:'one@example.test,two@example.test'}));
   app.setErrorHandler(errorHandler({ production: true }));
-  const experienceRequest=vi.fn(async(input:any)=>input.operation==='search'?[{botId:input.profile,sessionId:'history',title:'Dinners',snippet:'Plan'}]:input.operation==='history'?{botId:input.profile,sessionId:input.sessionId,messages:[{id:'reply',role:'assistant',text:'Plan'}],offset:input.offset,hasMore:false}:{botId:input.profile,days:30,actualCost:null});
-  const setRoutineEnabled=vi.fn(async()=>{});const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners'}]);
-  const runtime=fakeRuntime({listBots:async()=>[{id:'shared',name:'Shared',shared:true},{id:'private',name:'Private',shared:false,ownerId:'two'}],experienceRequest,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[{id:'browser',enabled:false},{id:'terminal',enabled:true}],capabilities:async()=>({uploads:{supported:true}}),setRoutineEnabled,saveRoutine});
-  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,setRoutineEnabled,saveRoutine};
+  const history = vi.fn((input: {profile: string; sessionId: string; offset: number}): HistoryPage => ({botId:input.profile,sessionId:input.sessionId,messages:[{id:'reply',role:'assistant',text:'Plan'}],offset:input.offset,hasMore:false}));
+  const experience = experienceRequester({
+    search: input => [{botId:input.profile,botName:'Shared',sessionId:'history',title:'Dinners',snippet:'Plan'}],
+    history,
+    usage: input => ({botId:input.profile,days:input.days,sessions:0,inputTokens:0,outputTokens:0,actualCost:null,estimatedCost:null,partial:false,notice:'Recorded usage'}),
+  });
+  const setRoutineEnabled=vi.fn(async()=>{});const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners',previewOnly:false}]);
+  const runtime=fakeRuntime({listBots:async()=>[botFixture(),botFixture({id:'private',name:'Private',shared:false,ownerId:'two'})],experienceRequest:experience,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[toolFixture({id:'browser',enabled:false}),toolFixture()],capabilities:async()=>capabilitiesFixture({uploads:{supported:true}}),setRoutineEnabled,saveRoutine});
+  const experienceRequest = vi.spyOn(runtime, 'experienceRequest');
+  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,history,setRoutineEnabled,saveRoutine};
 }
 it('searches only visible profiles and includes routine results without copying their output',async()=>{
   const s=await setup();expect((await s.app.inject('/api/search?q=dinners')).statusCode).toBe(401);
@@ -36,7 +44,7 @@ it('offers only enabled tool starters and always leaves sending to the composer'
 
 it('locates a live reply before saving and re-resolves an old saved pointer on opening',async()=>{
   const s=await setup();
-  s.experienceRequest.mockImplementation(async(input:any)=>({botId:input.profile,sessionId:input.sessionId,messages:[{id:'stable-uid',role:'assistant',text:'Late answer'}],offset:200,hasMore:false,targetMessageId:'stable-uid'}));
+  s.history.mockImplementation((input)=>({botId:input.profile,sessionId:input.sessionId,messages:[{id:'stable-uid',role:'assistant',text:'Late answer'}],offset:200,hasMore:false,targetMessageId:'stable-uid'}));
   const reply=await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:{kind:'session',botId:'shared',sessionId:'history',messageId:'old-row',title:'Saved answer'}});
   expect(reply.statusCode).toBe(200);expect(reply.json()).toMatchObject({messageId:'stable-uid',offset:200});
   expect(s.experienceRequest).toHaveBeenLastCalledWith({operation:'history',profile:'shared',sessionId:'history',messageId:'old-row',offset:0});

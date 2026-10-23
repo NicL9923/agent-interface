@@ -47,4 +47,24 @@ final class StoreRequestsTests: XCTestCase {
     XCTAssertNil(value)
     XCTAssertNil(error)
   }
+  func testViewPredicateStopsMultiStepWorkAndPreventsStartingStaleWork() async {
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = client("only")
+    var visible = true
+    var writes = 0
+    let outcome = await store.attempt(current: { visible }) { context -> Int in
+      writes += 1
+      visible = false
+      try context.checkCurrent()
+      writes += 1
+      return writes
+    }
+    XCTAssertNil(outcome)
+    XCTAssertEqual(writes, 1)
+    let stale = await store.attempt(current: { visible }) { _ in writes += 1; return writes }
+    XCTAssertNil(stale)
+    XCTAssertEqual(writes, 1, "A queued button task cannot start after its view closes")
+  }
+
 }

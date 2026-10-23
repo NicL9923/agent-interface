@@ -1,9 +1,10 @@
+import { routeUrl } from "../shared/api";
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { useId, useState } from "react";
-import { write } from "../client-api";
+import { request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { eventCalendarFile, eventGoogleCalendarUrl } from "../shared/reply-cards";
@@ -41,15 +42,16 @@ function InteractiveCard({ card, botId, messageId, userId, unavailable }: { card
   const [saved, setSaved] = useState<ReplyCardState>(emptyState);
   const [draft, setDraft] = useState<ReplyCardState>(emptyState);
   const [editing, setEditing] = useState<string | null>(null);
-  const path = botId && messageId && userId ? `/bots/${encodeURIComponent(botId)}/messages/${encodeURIComponent(messageId)}/cards/${encodeURIComponent(card.id)}/state` : undefined;
+  const params = { id: botId ?? "", messageId: messageId ?? "", cardId: card.id };
+  const path = botId && messageId && userId ? routeUrl("GET /bots/:id/messages/:messageId/cards/:cardId/state", params) : undefined;
   const accept = (state: ReplyCardState) => { setSaved(state); setDraft(state); };
-  const stored = useResource<ReplyCardState>(card.type === "event" ? null : path ?? null, { onData: accept });
+  const stored = useResource<ReplyCardState>(card.type === "event" ? null : path ?? null, { load: (_, signal) => request("GET /bots/:id/messages/:messageId/cards/:cardId/state", { params, signal }), onData: accept });
   const saving = useAction();
   function save(next: ReplyCardState) {
     if (!path || saving.busy) return;
     setDraft(next);
     void saving.run(async ({ current }) => {
-      const result = await write<ReplyCardState>(path, next, "PUT");
+      const result = await request("PUT /bots/:id/messages/:messageId/cards/:cardId/state", { params, body: next });
       if (current()) { accept(result); setEditing(null); }
     });
   }

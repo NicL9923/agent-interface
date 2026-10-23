@@ -1,3 +1,10 @@
+import type { AutomationOverview as WorkOverview, AutomationTask, AutomationRequest, TaskInput, TriggerInput, SkillContent, SkillDiff, EventSubscription } from "./automation.js";
+import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, Starter } from "./discovery.js";
+import type { ProfileMemory, RoutinePreview, RoutineRunReceipt, TodayOverview } from "./experience.js";
+import type { RoutineOutput, RoutineResult } from "./collaboration.js";
+import type { ReplyCardState } from "./reply-cards.js";
+import type { Routine } from "./types.js";
+import type { routinePresets } from "./routine-presets.js";
 import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
 import type {
@@ -53,7 +60,59 @@ export type PushTest = { ok: true; detail: string };
  * `response` and its body schema against `body`. The web client calls them through request(),
  * which infers the same types. Routes not listed here still use untyped api<T>().
  */
+export type SaveItem =
+  | { kind: "session"; botId: string; sessionId: string; messageId?: string; offset?: number; title: string }
+  | { kind: "routine"; botId: string; routineId: string; resultId: string; title: string };
+export type RoutineSave = Pick<Routine, "botId" | "name" | "prompt" | "schedule" | "enabled"> & { recipientIds: string[] }
+  & Partial<Pick<Routine, "skills" | "model" | "provider" | "enabledToolsets" | "script" | "noAgent" | "contextFrom">>;
+type WorkInput<O extends AutomationRequest["operation"]> = Omit<Extract<AutomationRequest, { operation: O }>, "operation" | "profile" | "visibleProfiles">;
+type MemorySave = { revision: string; entries: { id?: string; text: string }[] };
+
 export interface ApiRoutes {
+  "GET /today": { query: { since?: string }; response: TodayOverview };
+  "PUT /today/seen": { body: { seenAt: string; frontier: string }; response: Ok };
+  "GET /search": { query: { q: string }; response: { hits: SearchHit[]; unavailableBots: string[] } };
+  "GET /bots/:botId/history/:sessionId": { query: { offset?: number; messageId?: string }; response: HistoryPage };
+  "GET /saved": { response: SavedItem[] };
+  "POST /saved": { body: SaveItem; response: SavedItem };
+  "DELETE /saved/:id": { response: Ok };
+  "GET /automations": { query: { days?: number }; response: AutomationOverview };
+  "GET /bots/:id/starters": { response: Starter[] };
+  "GET /bots/:id/memory": { response: ProfileMemory };
+  "PUT /bots/:id/memory/:target": { body: MemorySave; response: ProfileMemory };
+  "PATCH /bots/:id/memory/:target": { body: MemorySave; response: ProfileMemory };
+  "DELETE /bots/:id/memory/:target": { body: { revision: string; entryId: string }; response: ProfileMemory };
+  "GET /routines": { response: Routine[] };
+  "POST /routines": { body: RoutineSave; response: Routine };
+  "PUT /routines/:id": { body: RoutineSave; response: Routine };
+  "DELETE /routines/:id": { response: Ok };
+  "PATCH /routines/:id/state": { body: { enabled: boolean }; response: Ok };
+  "GET /routines/templates": { response: typeof routinePresets };
+  "POST /routines/preview": { body: { botId: string; schedule: string }; response: RoutinePreview };
+  "POST /routines/:id/run": { body: { requestId: string }; response: RoutineRunReceipt };
+  "GET /routines/:id/runs/:requestId": { response: RoutineRunReceipt };
+  "GET /bots/:botId/routines/:routineId/results": { response: RoutineResult[] };
+  "GET /bots/:botId/routines/:routineId/results/:resultId": { response: RoutineOutput };
+  "GET /bots/:id/messages/:messageId/cards/:cardId/state": { response: ReplyCardState };
+  "PUT /bots/:id/messages/:messageId/cards/:cardId/state": { body: ReplyCardState; response: ReplyCardState };
+  "GET /bots/:id/automation": { response: WorkOverview };
+  "PUT /bots/:id/automation/goal": { body: WorkInput<"goal_set">; response: WorkOverview };
+  "POST /bots/:id/automation/goal/pause": { body: Record<string, never> | undefined; response: WorkOverview };
+  "POST /bots/:id/automation/goal/clear": { body: Record<string, never> | undefined; response: WorkOverview };
+  "POST /bots/:id/automation/goal/resume": { body: Omit<WorkInput<"goal_resume">, "senderId">; response: WorkOverview };
+  "POST /bots/:id/automation/tasks": { body: TaskInput; response: AutomationTask };
+  "GET /bots/:id/automation/tasks/:taskId": { response: AutomationTask };
+  "PATCH /bots/:id/automation/tasks/:taskId": { body: Omit<WorkInput<"task_update">, "taskId">; response: AutomationTask };
+  "POST /bots/:id/automation/tasks/:taskId/actions": { body: Omit<WorkInput<"task_action">, "taskId">; response: AutomationTask };
+  "PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId": { body: { remove: boolean }; response: AutomationTask };
+  "POST /bots/:id/automation/triggers": { body: TriggerInput; response: { subscription: EventSubscription; secret?: string } };
+  "PUT /bots/:id/automation/triggers/:triggerId": { body: Omit<TriggerInput, "id"> & { revision: string }; response: { subscription: EventSubscription; secret?: string } };
+  "PATCH /bots/:id/automation/triggers/:triggerId": { body: { enabled: boolean; revision: string }; response: { subscription: EventSubscription; secret?: string } };
+  "DELETE /bots/:id/automation/triggers/:triggerId": { body: { revision: string }; response: Ok };
+  "GET /bots/:id/automation/skills/content": { query: { name: string }; response: SkillContent };
+  "GET /bots/:id/automation/skills/pending/:pendingId": { response: SkillDiff };
+  "POST /bots/:id/automation/skills/pending/:pendingId": { body: { revision: string; decision: "approve" | "reject" }; response: Ok };
+  "PUT /bots/:id/automation/skills/policy": { body: { approvalRequired: boolean }; response: Ok };
   "GET /bootstrap": { query: { roster?: "lean" }; response: Bootstrap };
   "POST /connection/retry": { response: RuntimeStatus };
   "PATCH /preferences": { body: Preferences; response: Preferences };

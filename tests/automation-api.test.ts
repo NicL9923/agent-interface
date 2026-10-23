@@ -1,3 +1,5 @@
+import { automationOverviewFixture, automationRequester, automationTaskFixture, botFixture, subscriptionFixture } from './helpers/runtime-fixtures.js';
+import { fakeRuntime } from './helpers/server.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -7,7 +9,6 @@ import { installAuth, hash } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installAutomationRoutes } from '../src/server/automation.js';
-import type { Runtime } from '../src/shared/types.js';
 const origin = 'https://automation.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
@@ -17,8 +18,17 @@ async function setup() {
   const config = loadConfig({ NODE_ENV: 'production', APP_ORIGIN: origin, APP_DATABASE: ':memory:', GOOGLE_CLIENT_ID: 'fixture', HOUSEHOLD_EMAILS: 'first@example.invalid,second@example.invalid' });
   await app.register(cookie); await installAuth(app, store, config);
   app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 502).send({ error: (error as Error).message }));
-  const automationRequest = vi.fn(async () => ({ ok: true }));
-  const runtime = { automationRequest, listBots: vi.fn(async () => [{ id: 'ranch', name: 'Ranch' }, { id: 'private', name: 'Private' }]) } as unknown as Runtime;
+  const overview = vi.fn(() => automationOverviewFixture());
+  const task = vi.fn(() => automationTaskFixture());
+  const automation = automationRequester({
+    overview, goal_set: overview, goal_pause: overview, goal_resume: overview, goal_clear: overview,
+    task_create: task, task_get: task, task_update: task, task_action: task, task_dependency: task,
+    trigger_create: () => ({subscription: subscriptionFixture(), secret: 'one-time-fixture'}),
+    trigger_update: () => ({subscription: subscriptionFixture()}), trigger_toggle: () => ({subscription: subscriptionFixture()}),
+    trigger_delete: () => ({ok: true}), skill_policy: () => ({ok: true}), skill_decide: () => ({ok: true}),
+  });
+  const runtime = fakeRuntime({ automationRequest: automation, listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'})]) });
+  const automationRequest = vi.spyOn(runtime, 'automationRequest');
   store.savePresentation('private', { shared: false, ownerId: 'second' });
   let maintenance = false;
   await installAutomationRoutes(app, runtime, store, () => maintenance, req => req.headers['x-admin-fixture'] === 'yes');
@@ -29,7 +39,7 @@ async function setup() {
     return { origin, cookie: `session=${token}`, 'x-csrf-token': csrf };
   };
   app.addHook('onClose', async () => store.close());
-  return { app, runtime, automationRequest, first: login('first'), second: login('second'), maintain: () => { maintenance = true; } };
+  return { app, runtime, automationRequest, overview, first: login('first'), second: login('second'), maintain: () => { maintenance = true; } };
 }
 it('authenticates and scopes every automation request to the visible roster', async () => {
   const s = await setup();
@@ -78,8 +88,8 @@ it('requires integration administration for signing-secret mutations and bounds 
 });
 it('injects the person and trigger permission into goal overview responses', async () => {
   const s = await setup(), requestId = randomUUID();
-  const overview = { botId: 'ranch', owner: 'Hermes', goals: { supported: true, goal: null }, tasks: { supported: true, items: [] }, triggers: { supported: true, items: [], platformEnabled: false }, skills: { supported: true, installed: [], pending: [], approvalRequired: false } };
-  s.automationRequest.mockResolvedValue(overview as never);
+  const overview = { botId: 'ranch', owner: 'Hermes' as const, goals: { supported: true, goal: null }, tasks: { supported: true, items: [] }, triggers: { supported: true, items: [], platformEnabled: false }, skills: { supported: true, installed: [], pending: [], approvalRequired: false } };
+  s.overview.mockReturnValue(automationOverviewFixture(overview));
   const read = await s.app.inject({ url: '/api/bots/ranch/automation', headers: s.first });
   expect(read.json().canManageTriggers).toBe(false);
   expect(read.json().canManageLearningPolicy).toBe(false);

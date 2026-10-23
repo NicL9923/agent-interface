@@ -23,7 +23,7 @@ struct HermesTriggerSection: View {
         if control.loadingTriggerRoutines { ProgressView("Loading profile routines") }
         if let routineError = control.triggerRoutineError {
           ErrorBanner(message: routineError)
-          Button("Retry routines") { Task { await control.loadTriggerRoutines(store.api) } }.disabled(control.loadingTriggerRoutines)
+          Button("Retry routines") { Task { await control.loadTriggerRoutines(store) } }.disabled(control.loadingTriggerRoutines)
         }
         if state.items.isEmpty { Text("No event triggers yet.").foregroundStyle(.secondary) }
         ForEach(state.items) { trigger in triggerRows(trigger) }
@@ -41,9 +41,9 @@ struct HermesTriggerSection: View {
         if let deleting {
           Button("Delete trigger", role: .destructive) {
             Task {
-              _ = await control.changeOK(store.api, "/triggers/\(APIClient.component(deleting.id))",
+              _ = await control.changeOK(store, "/triggers/\(APIClient.component(deleting.id))",
                 HermesRevisionInput(revision: deleting.revision), method: "DELETE")
-              self.deleting = nil
+              if control.isCurrent(store) { self.deleting = nil }
             }
           }
         }
@@ -77,7 +77,7 @@ struct HermesTriggerSection: View {
       if canManage {
         Button(trigger.enabled ? "Disable trigger" : "Enable trigger") {
           Task {
-            let _: HermesTriggerResult? = await control.change(store.api, "/triggers/\(APIClient.component(trigger.id))",
+            let _: HermesTriggerResult? = await control.change(store, "/triggers/\(APIClient.component(trigger.id))",
               HermesTriggerToggle(enabled: !trigger.enabled, revision: trigger.revision), method: "PATCH")
           }
         }.disabled(disabled || !trigger.enabled && !state.platformEnabled)
@@ -94,6 +94,7 @@ struct HermesTriggerEditor: View {
   private var routines: [Routine] { control.triggerRoutines }
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @State private var lifetime = HermesAutomationLifetime()
   @State private var id: String
   @State private var description: String
   @State private var eventNames: String
@@ -125,7 +126,7 @@ struct HermesTriggerEditor: View {
           if control.loadingTriggerRoutines { ProgressView("Loading profile routines") }
           if let error = control.triggerRoutineError {
             ErrorBanner(message: error)
-            Button("Retry routines") { Task { await control.loadTriggerRoutines(store.api) } }
+            Button("Retry routines") { Task { await control.loadTriggerRoutines(store) } }
               .disabled(control.loadingTriggerRoutines)
           }
         }
@@ -142,6 +143,7 @@ struct HermesTriggerEditor: View {
               .disabled(disabled || control.loadingTriggerRoutines || !input.valid || !routines.contains { $0.id == routineId && $0.botId == control.botId })
           }
         }.interactiveDismissDisabled(control.busy)
+        .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
     }
   }
   private var fields: some View {
@@ -166,13 +168,14 @@ struct HermesTriggerEditor: View {
     }
   }
   private func save() {
+    let current = lifetime.current
     Task {
       let result: HermesTriggerResult?
       if let trigger {
-        result = await control.change(store.api, "/triggers/\(APIClient.component(trigger.id))",
-          HermesTriggerUpdate(input, revision: trigger.revision), method: "PUT")
+        result = await control.change(store, "/triggers/\(APIClient.component(trigger.id))",
+          HermesTriggerUpdate(input, revision: trigger.revision), method: "PUT", current: current)
       } else {
-        result = await control.change(store.api, "/triggers", input)
+        result = await control.change(store, "/triggers", input, current: current)
       }
       if result != nil { dismiss() }
     }

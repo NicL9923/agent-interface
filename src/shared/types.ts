@@ -1,5 +1,5 @@
-import type { AutomationRequest, AutomationResponse } from './automation.js';
-import type { ExperienceRequest, ExperienceResponse } from "./experience.js";
+import type { AutomationRequester } from './automation.js';
+import type { ExperienceRequester } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
 import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
@@ -380,8 +380,8 @@ export interface Runtime {
   groupRequest?(input: GroupRequest): Promise<GroupResponse>;
   transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
   synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
-  automationRequest?(input: AutomationRequest): Promise<AutomationResponse>;
-  experienceRequest?(input: ExperienceRequest): Promise<ExperienceResponse>;
+  automationRequest?: AutomationRequester;
+  experienceRequest?: ExperienceRequester;
   vaultRequest?(input: VaultRequest): Promise<VaultResponse>;
   computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
   connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
