@@ -1,5 +1,4 @@
 """The suite stops only the exact gateway Hermes recorded for its disposable home."""
-import importlib.util
 import json
 import signal
 import sys
@@ -8,10 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from support import load_source
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-spec = importlib.util.spec_from_file_location("spike_run", HERE / "run.py")
-run = importlib.util.module_from_spec(spec); spec.loader.exec_module(run)
+run = load_source("scripts/spike/run.py", "spike_run")
 
 
 class StopHomeGatewayTests(unittest.TestCase):

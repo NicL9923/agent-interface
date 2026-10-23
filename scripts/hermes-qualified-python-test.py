@@ -11,9 +11,10 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-spec = importlib.util.spec_from_file_location("qualified_python", Path(__file__).with_name("hermes-qualified-python.py"))
-qualified = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(qualified)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from support import load_source
+
+qualified = load_source("scripts/hermes-qualified-python.py", "qualified_python")
 
 
 class ManagedFingerprintTests(unittest.TestCase):

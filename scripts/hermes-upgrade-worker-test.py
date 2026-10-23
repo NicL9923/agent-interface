@@ -22,8 +22,10 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("worker", Path(__file__).with_name("hermes-upgrade-worker.py"))
-worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from support import load_source
+
+worker = load_source("scripts/hermes-upgrade-worker.py", "worker")
 
 HOOK = r'''
 import json, os, pathlib, subprocess, sys, time

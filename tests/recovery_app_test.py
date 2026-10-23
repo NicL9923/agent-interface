@@ -1,7 +1,6 @@
 """Receipt-only native recovery, using disposable files and fake service owners."""
 import datetime
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,11 +12,11 @@ import types
 import unittest
 from unittest import mock
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
-spec = importlib.util.spec_from_file_location("recover_app", ROOT / ".agents/tools/recover-app-after-native-update.py")
-recover = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(recover)
+recover = load_source(".agents/tools/recover-app-after-native-update.py", "recover_app")
 qualification = __import__("runpy").run_path(str(ROOT / "src/hermes/qualification.py"))
 
 

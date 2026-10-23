@@ -6,13 +6,14 @@ checks it with the standard library. Tool scripts get the same undefined-name ch
 """
 import ast
 import builtins
-import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import symtable
 import sys
 import unittest
+
+from support import load_source
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / ".agents/tools"
@@ -23,10 +24,7 @@ MODULE_NAMES = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__spec_
 
 
 def load(path):
-    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_source(path)
 
 
 release_app = load(TOOLS / "release-app.py")

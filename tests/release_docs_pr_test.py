@@ -1,6 +1,5 @@
 """Activation opens its docs PR from a temporary worktree, using fake gh and git on PATH."""
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -13,11 +12,11 @@ import unittest
 import unittest.mock
 from unittest import mock
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
-spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
-release_app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(release_app)
+release_app = load_source(".agents/tools/release-app.py", "release_app")
 
 NAME = "release-7fac68e4-20261013T181252Z"
 ENTRY = "docs/ledger/20261013T181252Z-app-release-7fac68e4.md"

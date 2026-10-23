@@ -2,7 +2,6 @@
 import contextlib
 import datetime as dt
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -17,9 +16,10 @@ import unittest
 from unittest.mock import patch
 import uuid
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("linux_upgrade", ROOT / "scripts/hermes-upgrade-linux.py")
-linux = importlib.util.module_from_spec(spec); spec.loader.exec_module(linux)
+linux = load_source("scripts/hermes-upgrade-linux.py", "linux_upgrade")
 
 
 class FixturePlatform(linux.Platform):

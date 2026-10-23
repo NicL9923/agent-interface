@@ -9,13 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[2] / "src/hermes"
 
 def load(name, path=None):
-    spec = importlib.util.spec_from_file_location("contract_" + name, path or ROOT / (name + ".py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_source(path or ROOT / (name + ".py"), "contract_" + name)
 
 class DashboardContract(unittest.TestCase):
     def exercise(self, failure=None, native_switch=True):

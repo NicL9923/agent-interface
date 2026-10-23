@@ -1,7 +1,6 @@
 """Release wrapper rules and host programs, against temporary directories only."""
 import datetime
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,15 +13,13 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
 from deploy_common import Fence  # noqa: E402
-spec = importlib.util.spec_from_file_location("release_app", ROOT / ".agents/tools/release-app.py")
-release_app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(release_app)
-spec = importlib.util.spec_from_file_location("qualify_app", ROOT / ".agents/tools/qualify-app-release.py")
-qualify_app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(qualify_app)
+release_app = load_source(".agents/tools/release-app.py", "release_app")
+qualify_app = load_source(".agents/tools/qualify-app-release.py", "qualify_app")
 
 FAKE_RECOVERY_HELPER = """
 import json, sys

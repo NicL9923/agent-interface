@@ -5,7 +5,6 @@ tests pin the journal reads every conversation poll makes.
 """
 import copy
 import contextlib
-import importlib.util
 import json
 import re
 import sys
@@ -17,9 +16,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("extension_journal_test", ROOT / "src/hermes/extension.py")
-extension = importlib.util.module_from_spec(spec); spec.loader.exec_module(extension)
+extension = load_source("src/hermes/extension.py", "extension_journal_test")
 
 
 def image_text(text, images):

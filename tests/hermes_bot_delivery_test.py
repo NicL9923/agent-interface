@@ -13,9 +13,10 @@ import types
 import unittest
 from pathlib import Path
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("bot_delivery_test", ROOT / "src/hermes/bot_delivery.py")
-delivery = importlib.util.module_from_spec(spec); spec.loader.exec_module(delivery)
+delivery = load_source("src/hermes/bot_delivery.py", "bot_delivery_test")
 
 KEY = "a" * 64
 OTHER = "b" * 64

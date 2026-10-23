@@ -15,12 +15,10 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
-spec = importlib.util.spec_from_file_location("computer", Path(__file__).resolve().parents[1] / "src/hermes/computer.py")
-computer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(computer)
-spec = importlib.util.spec_from_file_location("computer_host", Path(__file__).resolve().parents[1] / "src/hermes/computer_host.py")
-computer_host = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(computer_host)
+from support import load_source
+
+computer = load_source("src/hermes/computer.py", "computer")
+computer_host = load_source("src/hermes/computer_host.py", "computer_host")
 
 
 class TestLease:

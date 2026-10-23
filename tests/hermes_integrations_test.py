@@ -1,5 +1,4 @@
 """Security/ownership checks with no native dependency or live credential requirement."""
-import importlib.util
 import json
 import os
 import sys
@@ -10,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("integrations", Path(__file__).resolve().parents[1] / "src/hermes/integrations.py")
-integrations = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(integrations)
+from support import load_source
+
+integrations = load_source("src/hermes/integrations.py", "integrations")
 
 
 class IntegrationTests(unittest.TestCase):
