@@ -18,8 +18,10 @@ export function inQuietHours(settings: import('../shared/types.js').Preferences[
 }
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
-  private running = false;
-  private idleWaiters: (() => void)[] = [];
+  private jobs = new Map<"runtime" | "outbox" | "live", Promise<void>>();
+  private outboxRequested = false;
+  private stopped = false;
+  private stopping?: Promise<void>;
   private closeApns?: () => void;
   private retainedAt = 0;
   readonly createdAt = Date.now();
@@ -65,23 +67,62 @@ export class BackgroundWorker {
     }
   }
   start() {
-    this.timer = setInterval(() => void this.tick(), 5000);
+    if (this.timer || this.stopped) return;
+    this.timer = setInterval(() => { this.schedule(); }, 5000);
     this.timer.unref();
-    void this.tick();
+    this.schedule();
   }
   stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
-    const stopped = this.running
-      ? new Promise<void>((resolve) => this.idleWaiters.push(resolve))
-      : Promise.resolve();
-    return stopped.then(() => { this.closeApns?.(); });
+    return this.stopping ??= (async () => {
+      // Recovery can request another delivery pass while shutdown is draining.
+      while (this.jobs.size) await Promise.allSettled(this.jobs.values());
+      this.closeApns?.();
+    })();
   }
   async tick() {
-    if (this.running) return;
-    this.running = true;
-    try {
-      // A runtime outage must not prevent delivery of already-durable events.
+    if (this.stopped) return;
+    await Promise.all(this.schedule());
+    await this.jobs.get("outbox");
+  }
+  private schedule() {
+    const outbox = this.flushOutbox();
+    const runtime = this.runJob("runtime", async () => {
       await this.reconcileRuntime();
+      // Include newly discovered events in this tick, even if delivery took its
+      // snapshot before discovery finished. A busy outbox queues one more pass.
+      void this.flushOutbox();
+    });
+    const live = this.runJob("live", async () => {
+      try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
+    });
+    return [outbox, runtime, live];
+  }
+  private runJob(name: "runtime" | "outbox" | "live", work: () => Promise<void>, rerun?: () => boolean) {
+    const running = this.jobs.get(name);
+    if (running) return running;
+    const job = Promise.resolve().then(async () => {
+      try {
+        do { await work(); } while (rerun?.());
+      } catch (error) {
+        this.loop.failure(error);
+      } finally {
+        this.jobs.delete(name);
+      }
+    });
+    this.jobs.set(name, job);
+    return job;
+  }
+  private flushOutbox() {
+    this.outboxRequested = true;
+    return this.runJob("outbox", async () => {
+      this.outboxRequested = false;
+      await this.processOutbox();
+    }, () => this.outboxRequested);
+  }
+  private async processOutbox() {
+    try {
       this.store.enqueueKnownEvents();
       const expired = this.store.expireNotifications();
       if (expired) this.log.info({ expired }, "Expired notifications that stayed undelivered for a day");
@@ -93,15 +134,11 @@ export class BackgroundWorker {
       await this.deliver();
       // Clearing is a courtesy; its failures never hold up delivery.
       try { await this.clearRead(); } catch (error) { this.clears.failure(error); }
-      // Live Activity pushes never hold up notifications; their failures are tracked separately.
-      try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
       this.loop.success();
     } catch (error) {
       this.loop.failure(error);
     } finally {
       this.lastTickAt = Date.now();
-      this.running = false;
-      for (const resolve of this.idleWaiters.splice(0)) resolve();
     }
   }
   private async reconcileRuntime() {

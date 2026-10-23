@@ -1,5 +1,46 @@
 import SwiftUI
 
+/// Button tasks outlive SwiftUI's `.task`. Capture this predicate before starting either kind
+/// of request, so closing and reopening a sheet cannot revive an earlier response.
+@MainActor @Observable final class HermesAutomationLifetime {
+  private var visible = true
+  private var generation = UUID()
+  func appear() { visible = true }
+  func disappear() { visible = false; generation = UUID() }
+  var current: @MainActor () -> Bool {
+    let started = generation
+    return { self.visible && self.generation == started && !Task.isCancelled }
+  }
+}
+
+@MainActor @Observable final class HermesLearningLoader<Value> {
+  var value: Value?
+  var loading = false
+  var error: String?
+  var needsReload = true
+  let lifetime = HermesAutomationLifetime()
+
+  func load(
+    _ store: AppStore, control: HermesAutomationControls, suffix: String,
+    validate: @MainActor (Value) throws -> Void
+  ) async where Value: Decodable {
+    let current = lifetime.current
+    guard !loading, current(), control.isCurrent(store) else { return }
+    loading = true; error = nil; value = nil; needsReload = true
+    defer { loading = false }
+    let outcome = await control.attempt(store, current: current) { context -> Value in
+      let next: Value = try await context.api.get(control.path + suffix)
+      try validate(next)
+      return next
+    }
+    switch outcome {
+    case .success(let next)?: value = next; needsReload = false
+    case .failure(let error)?: self.error = error.localizedDescription
+    case nil: break
+    }
+  }
+}
+
 struct HermesLearningView: View {
   let botId: String
   @Environment(AppStore.self) private var store
@@ -24,7 +65,7 @@ struct HermesLearningView: View {
         }
       }
     }.householdListBackground().accessibilityIdentifier("automation.learning")
-      .task { control.appear(foreground: false); await control.refresh(store.api) }
+      .task { control.appear(foreground: false); await control.refresh(store) }
       .onDisappear { control.disappear() }
       .sheet(item: $pending) { item in HermesSkillReview(control: control, pending: item) }
       .sheet(item: $installed) { item in HermesSkillReader(control: control, skill: item) }
@@ -75,7 +116,7 @@ struct HermesLearningView: View {
     }
   }
   private func setPolicy(_ required: Bool) {
-    Task { _ = await control.changeOK(store.api, "/skills/policy", HermesPolicyInput(approvalRequired: required), method: "PUT") }
+    Task { _ = await control.changeOK(store, "/skills/policy", HermesPolicyInput(approvalRequired: required), method: "PUT") }
   }
 }
 
@@ -84,20 +125,18 @@ private struct HermesSkillReader: View {
   var skill: HermesInstalledSkill
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
-  @State private var value: HermesSkillContent?
-  @State private var loading = false
-  @State private var error: String?
+  @State private var loader = HermesLearningLoader<HermesSkillContent>()
   var body: some View {
     NavigationStack {
       Form {
         Section {
           Text(skill.name).font(.headline)
           if !skill.description.isEmpty { Text(skill.description).font(.footnote) }
-          if loading { ProgressView("Loading skill content") }
-          if let error { ErrorBanner(message: error) }
-          Button("Reload skill") { Task { await load() } }.disabled(loading)
+          if loader.loading { ProgressView("Loading skill content") }
+          if let error = loader.error { ErrorBanner(message: error) }
+          Button("Reload skill") { Task { await load() } }.disabled(loader.loading)
         }
-        if let value {
+        if let value = loader.value {
           Section("Skill content") {
             HermesAutomationDocument(text: value.content.isEmpty ? "This skill has no content." : value.content)
             if value.truncated { Text("Preview truncated. Open Hermes for the full skill.").foregroundStyle(Palette.danger) }
@@ -105,21 +144,13 @@ private struct HermesSkillReader: View {
         }
       }.householdListBackground().navigationTitle("Installed skill").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-        .task { await load() }
+        .task { loader.lifetime.appear(); await load() }
+        .onDisappear { loader.lifetime.disappear() }
     }
   }
   @MainActor private func load() async {
-    guard let api = store.api, !loading else { return }
-    loading = true; error = nil; value = nil
-    let scope = store.scope
-    defer { loading = false }
-    do {
-      let next: HermesSkillContent = try await api.get(control.path + "/skills/content?name=\(APIClient.component(skill.name))")
-      guard !Task.isCancelled, scope == store.scope else { return }
+    await loader.load(store, control: control, suffix: "/skills/content?name=\(APIClient.component(skill.name))") { next in
       guard next.name == skill.name else { throw APIError(message: "The returned skill did not match this request.", status: 502) }
-      value = next
-    } catch {
-      if !Task.isCancelled, scope == store.scope { self.error = error.localizedDescription }
     }
   }
 }
@@ -129,12 +160,9 @@ private struct HermesSkillReview: View {
   var pending: HermesPendingSkill
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
-  @State private var value: HermesSkillDiff?
-  @State private var loading = false
-  @State private var error: String?
-  @State private var needsReload = false
+  @State private var loader = HermesLearningLoader<HermesSkillDiff>()
   private var available: Bool { control.value?.skills.pending.contains { $0.id == pending.id } == true }
-  private var disabled: Bool { control.disabled || !store.connected || loading || needsReload || !available }
+  private var disabled: Bool { control.disabled || !store.connected || loader.loading || loader.needsReload || !available }
   var body: some View {
     NavigationStack {
       Form {
@@ -142,16 +170,17 @@ private struct HermesSkillReview: View {
         Section {
           Text(pending.summary.isEmpty ? pending.id : pending.summary).font(.headline)
           Text(pending.origin).font(.caption).foregroundStyle(.secondary)
-          if loading { ProgressView("Loading pending diff") }
-          if let error { ErrorBanner(message: error) }
+          if loader.loading { ProgressView("Loading pending diff") }
+          if let error = loader.error { ErrorBanner(message: error) }
           if !available { Text("This change is no longer pending. Refresh status to check the current list.").foregroundStyle(.secondary) }
-          if needsReload { Text("Reload and review the current diff before making another decision.").font(.footnote) }
-          Button("Reload diff") { Task { await load() } }.disabled(loading || control.busy || !available)
+          if loader.needsReload { Text("Reload and review the current diff before making another decision.").font(.footnote) }
+          Button("Reload diff") { Task { await load() } }.disabled(loader.loading || control.busy || !available)
         }
-        if let value { diffSection(value) }
+        if let value = loader.value { diffSection(value) }
       }.householdListBackground().navigationTitle("Review skill change").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(control.busy) } }
-        .interactiveDismissDisabled(control.busy).task { await load() }
+        .interactiveDismissDisabled(control.busy).task { loader.lifetime.appear(); await load() }
+        .onDisappear { loader.lifetime.disappear() }
     }
   }
   private func diffSection(_ value: HermesSkillDiff) -> some View {
@@ -167,24 +196,17 @@ private struct HermesSkillReview: View {
     }
   }
   @MainActor private func load() async {
-    guard let api = store.api, !loading else { return }
-    loading = true; error = nil; value = nil; needsReload = true
-    let scope = store.scope
-    defer { loading = false }
-    do {
-      let next: HermesSkillDiff = try await api.get(control.path + "/skills/pending/\(APIClient.component(pending.id))")
-      guard !Task.isCancelled, scope == store.scope else { return }
+    await loader.load(store, control: control, suffix: "/skills/pending/\(APIClient.component(pending.id))") { next in
       guard next.id == pending.id else { throw APIError(message: "The returned diff did not match this request.", status: 502) }
-      value = next; needsReload = false
-    } catch {
-      if !Task.isCancelled, scope == store.scope { self.error = error.localizedDescription }
     }
   }
   private func decide(_ choice: HermesSkillDecision.Choice) {
-    guard !disabled, let value, let input = value.decision(choice) else { return }
+    guard !disabled, let value = loader.value, let input = value.decision(choice) else { return }
+    let current = loader.lifetime.current
     Task {
-      if await control.changeOK(store.api, "/skills/pending/\(APIClient.component(value.id))", input) { dismiss() }
-      else { needsReload = true }
+      let changed = await control.changeOK(store, "/skills/pending/\(APIClient.component(value.id))", input, current: current)
+      guard current(), control.isCurrent(store) else { return }
+      if changed { dismiss() } else { loader.needsReload = true }
     }
   }
 }

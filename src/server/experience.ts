@@ -1,8 +1,9 @@
+import { apiRoute } from "./api-route.js";
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
-import type { ExperienceRequest, TodayItem, TodayOverview } from '../shared/experience.js';
+import type { ExperienceRequest, ExperienceResult, TodayItem, TodayOverview } from '../shared/experience.js';
 import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.js';
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
@@ -33,12 +34,12 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   const bot = async (botId: string) => {
     if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   };
-  const request = async (input: ExperienceRequest) => {
+  const request = async <R extends ExperienceRequest>(input: R): Promise<ExperienceResult<R["operation"]>> => {
     await bot(input.profile);
     if (!runtime.experienceRequest) throw httpError(409, 'The installed Hermes add-on needs memory and routine preview support. Update and qualify the integration.');
     return runtime.experienceRequest(input);
   };
-  app.get('/api/today', async (req, reply) => {
+  apiRoute(app, "GET /today", {}, async (req, _, reply) => {
     const userId = signedIn(req).id;
     const now = new Date();
     const query = z.object({ since: iso.optional() }).strict().parse(req.query);
@@ -89,27 +90,24 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     reply.header('ETag', contentEtag([upcoming, content]));
     return { upcoming, generatedAt: now.toISOString(), ...content } satisfies TodayOverview;
   });
-  app.put('/api/today/seen', async req => {
-    const { seenAt, frontier } = z.object({ seenAt: iso, frontier: z.string().regex(/^\d{1,16}$/) }).strict().parse(req.body);
+  apiRoute(app, "PUT /today/seen", { body: z.object({ seenAt: iso, frontier: z.string().regex(/^\d{1,16}$/) }).strict() }, async (req, { seenAt, frontier }) => {
     if (Date.parse(seenAt) > Date.now() + 60_000) throw httpError(400, 'Read time cannot be in the future');
     if (!Number.isSafeInteger(Number(frontier)) || Number(frontier) > store.latestEventFrontier()) throw httpError(400, 'The recap frontier is not a known ingestion position');
     store.markTodaySeen(signedIn(req).id, new Date(seenAt).toISOString(), Number(frontier));
     return { ok: true };
   });
-  app.get('/api/bots/:id/memory', async req => request({ operation: 'memory', profile: z.object({ id }).parse(req.params).id }));
-  for (const method of ['PUT', 'PATCH'] as const) app.route({ method, url: '/api/bots/:id/memory/:target', handler: async req => {
+  apiRoute(app, "GET /bots/:id/memory", {}, async req => request({ operation: 'memory', profile: z.object({ id }).parse(req.params).id }));
+  const memorySave = z.object({ revision, entries: z.array(z.object({ id: z.string().regex(/^[a-f0-9]{64}$/).optional(), text: z.string().trim().min(1).max(50000) }).strict()).max(100) }).strict();
+  for (const route of ["PUT /bots/:id/memory/:target", "PATCH /bots/:id/memory/:target"] as const) apiRoute(app, route, { body: memorySave }, async (req, body) => {
     const params = z.object({ id, target }).parse(req.params);
-    const body = z.object({ revision, entries: z.array(z.object({ id: z.string().regex(/^[a-f0-9]{64}$/).optional(), text: z.string().trim().min(1).max(50000) }).strict()).max(100) }).strict().parse(req.body);
     return request({ operation: 'save_memory', profile: params.id, target: params.target, ...body });
-  } });
-  app.delete('/api/bots/:id/memory/:target', async req => {
+  });
+  apiRoute(app, "DELETE /bots/:id/memory/:target", { body: z.object({ revision, entryId: z.string().regex(/^[a-f0-9]{64}$/) }).strict() }, async (req, body) => {
     const params = z.object({ id, target }).parse(req.params);
-    const body = z.object({ revision, entryId: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(req.body);
     return request({ operation: 'delete_memory', profile: params.id, target: params.target, ...body });
   });
-  app.get('/api/routines/templates', async () => routinePresets);
-  app.post('/api/routines/preview', async req => {
-    const body = z.object({ botId: id, schedule: z.string().trim().min(1).max(500) }).strict().parse(req.body);
+  apiRoute(app, "GET /routines/templates", {}, async () => routinePresets);
+  apiRoute(app, "POST /routines/preview", { body: z.object({ botId: id, schedule: z.string().trim().min(1).max(500) }).strict() }, async (req, body) => {
     return request({ operation: 'preview', profile: body.botId, schedule: body.schedule });
   });
   const routine = async (routineId: string) => {
@@ -117,9 +115,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     if (!row) throw httpError(404, 'Routine not found');
     return row;
   };
-  app.post('/api/routines/:id/run', async req => {
+  apiRoute(app, "POST /routines/:id/run", { body: z.object({ requestId: z.string().uuid() }).strict() }, async (req, { requestId }) => {
     const params = z.object({ id }).parse(req.params);
-    const { requestId } = z.object({ requestId: z.string().uuid() }).strict().parse(req.body);
     const userId = signedIn(req).id;
     const previous = store.routineTrial(requestId);
     if (previous && (previous.userId !== userId || previous.routineId !== params.id)) throw httpError(409, 'This trial request ID belongs to a different routine or person');
@@ -129,7 +126,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     if ('status' in receipt) store.recordRoutineTrialStatus(requestId, receipt.status);
     return receipt;
   });
-  app.get('/api/routines/:id/runs/:requestId', async req => {
+  apiRoute(app, "GET /routines/:id/runs/:requestId", {}, async req => {
     const params = z.object({ id, requestId: z.string().uuid() }).parse(req.params);
     const userId = signedIn(req).id;
     const row = store.routineTrial(params.requestId);
@@ -138,7 +135,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     if ('status' in receipt) store.recordRoutineTrialStatus(params.requestId, receipt.status === 'uncertain' && receipt.ownerStatus === 'unknown' ? 'settled' : receipt.status);
     return receipt;
   });
-  for (const method of ['GET', 'PUT'] as const) app.route({ method, url: '/api/bots/:id/messages/:messageId/cards/:cardId/state', handler: async req => {
+  const cardState = async (req: import('fastify').FastifyRequest, state?: import('../shared/reply-cards.js').ReplyCardState) => {
     const params = z.object({ id, messageId: id, cardId: id }).parse(req.params);
     await bot(params.id);
     const redact = await redactAgents(store, roster, signedIn(req).id);
@@ -146,13 +143,14 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const card = message && replyCardsFromText(message.text).find(card => card.id === params.cardId);
     if (!card) throw httpError(404, 'This interactive reply is no longer in the Hermes conversation');
     const userId = signedIn(req).id;
-    if (method === 'PUT') {
-      const state = z.object({ checkedIds: z.array(id).max(60), notes: z.record(id, z.string().max(2000)) }).strict().parse(req.body);
+    if (state) {
       if (!validReplyCardState(card, state)) throw httpError(400, 'The saved choices do not belong to this reply');
       store.saveCardState(userId, params.id, params.messageId, params.cardId, state);
       return state;
     }
-    const state = store.cardState(userId, params.id, params.messageId, params.cardId);
-    return validReplyCardState(card, state) ? state : { checkedIds: [], notes: {} };
-  } });
+    const saved = store.cardState(userId, params.id, params.messageId, params.cardId);
+    return validReplyCardState(card, saved) ? saved : { checkedIds: [], notes: {} };
+  };
+  apiRoute(app, "GET /bots/:id/messages/:messageId/cards/:cardId/state", {}, async req => cardState(req));
+  apiRoute(app, "PUT /bots/:id/messages/:messageId/cards/:cardId/state", { body: z.object({ checkedIds: z.array(id).max(60), notes: z.record(id, z.string().max(2000)) }).strict() }, async (req, state) => cardState(req, state));
 }

@@ -1,3 +1,4 @@
+import { botFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -8,7 +9,7 @@ import { loadConfig } from "../src/server/config.js";
 import { registerVoiceRoutes } from "../src/server/voice.js";
 import { MAX_VOICE_BYTES } from "../src/shared/voice.js";
 import { redactAgents, Roster } from "../src/server/bot-access.js";
-import type { Message } from "../src/shared/types.js";
+import type { Conversation } from "../src/shared/types.js";
 import { fakeRuntime, signIn } from "./helpers/server.js";
 import { errorHandler } from "../src/server/http-error.js";
 
@@ -25,8 +26,8 @@ async function setup() {
   app.setErrorHandler(errorHandler({ production: true }));
   const transcribeVoice = vi.fn(async () => ({ text: " Pick up milk ", provider: "fixture" }));
   const synthesizeVoice = vi.fn(async () => ({ data: Buffer.from("fixture audio"), mime: "audio/mpeg" }));
-  const conversation = vi.fn<() => Promise<{ messages: Message[] }>>(async () => ({ messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
-  const listBots = vi.fn(async () => [{ id: "ranch" }]);
+  const conversation = vi.fn<() => Promise<Conversation>>(async () => conversationFixture({ botId: "ranch", messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
+  const listBots = vi.fn(async () => [botFixture({ id: "ranch" })]);
   const runtime = fakeRuntime({ transcribeVoice, synthesizeVoice, conversation, listBots });
   const hidden = new Set<string>();
   const roster = new Roster(runtime, store);
@@ -112,7 +113,7 @@ it("refuses cached speech once its assistant becomes another member's private on
 
 it("refuses internal replies instead of sending their text to speech", async () => {
   const s=await setup();
-  s.conversation.mockResolvedValue({messages:[{id:'internal',role:'assistant',text:'Internal bot reply',origin:{kind:'agent',visibility:'activity'}}]});
+  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'internal',role:'assistant',text:'Internal bot reply',origin:{kind:'agent',visibility:'activity'}}]}));
   expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'internal'}})).statusCode).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
 });
@@ -121,14 +122,14 @@ it("rechecks message visibility before returning cached speech",async()=>{
   const s=await setup();
   const response=await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'reply'}});
   expect(response.statusCode).toBe(200);
-  s.conversation.mockResolvedValue({messages:[{id:'reply',role:'assistant',text:'Private bot output',origin:{kind:'agent',visibility:'activity'}}]});
+  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'reply',role:'assistant',text:'Private bot output',origin:{kind:'agent',visibility:'activity'}}]}));
   expect((await s.app.inject({url:response.json().url,headers:{cookie:s.first.cookie}})).statusCode).toBe(404);
 });
 
 it("redacts a private bot source before sending a shared-chat reply to speech",async()=>{
   const s=await setup();
   s.store.savePresentation('private',{shared:false,ownerId:'second'});
-  s.conversation.mockResolvedValue({messages:[{id:'private-reply',role:'assistant',text:'Private canary',origin:{kind:'agent',visibility:'conversation',handle:'private'}}]});
+  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'private-reply',role:'assistant',text:'Private canary',origin:{kind:'agent',visibility:'conversation',handle:'private'}}]}));
   expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'private-reply'}})).statusCode).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
 });

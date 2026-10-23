@@ -124,7 +124,7 @@ it("keeps task instructions and request ID through an uncertain create, without 
 it("shows a new signing secret once and creates a disabled trigger", async () => {
   vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "fence-alert", url: "https://hermes.example.test/hooks/fence-alert" }, secret: "synthetic-secret" });
   await work(); await click("New event trigger"); await input("Trigger ID", "fence-alert"); await input("Description", "Fence alerts"); await input("Event names, separated by commas", "alert, recovery"); await submit();
-  expect(write).toHaveBeenCalledWith("/bots/ranch/automation/triggers", { id: "fence-alert", description: "Fence alerts", events: ["alert", "recovery"], routineId: "routine" }, "POST");
+  expect(write).toHaveBeenCalledWith("/bots/ranch/automation/triggers", { id: "fence-alert", description: "Fence alerts", events: ["alert", "recovery"], routineId: "routine" });
   expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("synthetic-secret");
   expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   await click("I've saved it"); expect(container.querySelector('input[type="password"]')).toBeNull();
@@ -143,7 +143,7 @@ it("approves the displayed diff revision and refuses truncated approval", async 
   await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
   await click("Review change"); expect(button("Approve change").disabled).toBe(true);
   truncated = false; await click("Review change"); await click("Approve change");
-  expect(write).toHaveBeenCalledWith("/bots/ranch/automation/skills/pending/aabbccdd", { revision: "b".repeat(64), decision: "approve" }, "POST");
+  expect(write).toHaveBeenCalledWith("/bots/ranch/automation/skills/pending/aabbccdd", { revision: "b".repeat(64), decision: "approve" });
 });
 
 it("reports unsupported native capabilities without editable controls", async () => {

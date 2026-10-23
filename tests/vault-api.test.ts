@@ -1,3 +1,4 @@
+import { botFixture } from "./helpers/runtime-fixtures.js";
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -16,8 +17,8 @@ async function setup() {
   await app.register(cookie);
   await installAuth(app, store, loadConfig({ NODE_ENV:'production', APP_ORIGIN:origin, APP_DATABASE:':memory:', GOOGLE_CLIENT_ID:'fixture', HOUSEHOLD_EMAILS:'one@example.invalid' }));
   app.setErrorHandler(errorHandler({ production: true }));
-  const vaultRequest = vi.fn(async () => ({status:'ok'}));
-  await installVaultRoutes(app, fakeRuntime({listBots:async()=>[{id:'shared'}],vaultRequest}));
+  const vaultRequest = vi.fn(async () => ({status:'ok' as const}));
+  await installVaultRoutes(app, fakeRuntime({listBots:async()=>[botFixture()],vaultRequest}));
   app.addHook('onClose', async()=>store.close());
   return {app,store,vaultRequest,headers:signIn(store,origin,'one')};
 }

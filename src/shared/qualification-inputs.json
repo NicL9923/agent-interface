@@ -97,5 +97,6 @@
   "src/shared/upgrades.ts",
   "src/shared/uploads.ts",
   "src/shared/vault.ts",
-  "src/shared/voice.ts"
+  "src/shared/voice.ts",
+  "src/server/hermes-operation-contracts.ts"
 ]

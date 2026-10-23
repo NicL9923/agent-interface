@@ -1,3 +1,4 @@
+import type { ApiBody } from "../shared/api.js";
 import { installAutomationRoutes } from "./automation.js";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
@@ -249,7 +250,7 @@ export async function createApp(
     rosterListeners.add(changed);
     unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
   });
-  app.get("/api/routines", async (req) => {
+  apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");
     const userId = signedIn(req).id;
     return (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
@@ -257,13 +258,7 @@ export async function createApp(
       recipientIds: store.getRoutineRecipients(r.id),
     }));
   });
-  const saveRoutine = async (
-    req: { body: unknown; params: unknown },
-    routineId?: string,
-  ) => {
-    await requireCapability("routines");
-    if (routineId) await assertRoutineEditable(runtime, store, routineId);
-    const input = z
+  const routineSchema = z
       .object({
         botId: id,
         name: z.string().min(1).max(100),
@@ -278,8 +273,11 @@ export async function createApp(
         script: z.string().trim().max(2000).nullable().optional(),
         noAgent: z.boolean().optional(),
         contextFrom: z.array(z.string().trim().min(1).max(200)).max(100).nullable().optional(),
-      })
-      .parse(req.body);
+      });
+  const saveRoutine = async (
+    input: ApiBody<"POST /routines">,
+    routineId?: string,
+  ) => {
     const all = routineId || input.contextFrom?.some(ref => ref !== 'self') ? await runtime.routines() : [];
     const previous = routineId ? all.find(row => row.id === routineId) : undefined;
     if (routineId && (!previous || previous.botId !== input.botId)) throw httpError(404, "Routine not found");
@@ -323,9 +321,9 @@ export async function createApp(
     store.routineRecipients(routine.id, input.recipientIds);
     return { ...effective, ...routine, recipientIds: input.recipientIds };
   };
-  app.post("/api/routines", async (req) => saveRoutine(req));
-  app.put("/api/routines/:id", async (req) => saveRoutine(req, params(req).id));
-  app.delete("/api/routines/:id", async (req) => {
+  apiRoute(app, "POST /routines", { body: routineSchema, before: async () => requireCapability("routines") }, async (_, input) => saveRoutine(input));
+  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines"); await assertRoutineEditable(runtime, store, req.params.id); } }, async (req, input) => saveRoutine(input, req.params.id));
+  apiRoute(app, "DELETE /routines/:id", {}, async (req) => {
     await requireCapability("routines");
     await assertRoutineEditable(runtime, store, params(req).id);
     await runtime.deleteRoutine(params(req).id);
@@ -362,9 +360,8 @@ export async function createApp(
   }
   app.addHook("onClose", async () => {
     health.stop();
-    const stopped = worker.stop();
+    await worker.stop();
     await runtime.close();
-    await stopped;
     store.close();
   });
   return { app, store, worker, health, routes };

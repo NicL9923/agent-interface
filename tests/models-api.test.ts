@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
@@ -11,8 +12,8 @@ async function setup() {
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:",
     GOOGLE_CLIENT_ID: "fixture-client", HOUSEHOLD_EMAILS: "one@example.invalid,two@example.invalid" });
   const modelOptions = vi.fn(async () => ({ providers: [], provider: "saved-provider", model: "saved-model" }));
-  const inferenceSettings = vi.fn(async () => ({ reasoning: "high", speed: "normal" }));
-  const runtime = fakeRuntime({ inferenceSettings, capabilities: async () => ({ botConfiguration: { supported: true } }), modelOptions, close: async () => {} });
+  const inferenceSettings = vi.fn(async () => ({ reasoning: "high" as const, speed: "normal" as const }));
+  const runtime = fakeRuntime({ inferenceSettings, capabilities: async () => capabilitiesFixture({ botConfiguration: { supported: true } }), modelOptions, close: async () => {} });
   const result = await createApp(config, runtime, { background: false }); apps.push(result.app);
   return { ...result, runtime, modelOptions, inferenceSettings, one: signIn(result.store, origin, "one"), two: signIn(result.store, origin, "two") };
 }

@@ -1,3 +1,4 @@
+import { apiRoute } from "./api-route.js";
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { assertRoutineEditable } from "./experience.js";
@@ -17,12 +18,12 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     if (!runtime.experienceRequest) throw httpError(409, 'Search and usage require the current qualified Hermes integration.');
     return runtime.experienceRequest.bind(runtime);
   }
-  app.get('/api/search', async req => {
+  apiRoute(app, "GET /search", {}, async req => {
     const { q } = z.object({ q: z.string().trim().min(1).max(200) }).strict().parse(req.query);
     const bots = await visible(signedIn(req).id);
     const hits: SearchHit[] = []; const unavailableBots: string[] = [];
     for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index, index + 4).map(async bot => {
-      try { hits.push(...(await experience()({ operation: 'search', profile: bot.id, query: q }) as SearchHit[]).map(hit => ({ ...hit, botName: bot.name }))); }
+      try { hits.push(...(await experience()({ operation: 'search', profile: bot.id, query: q })).map(hit => ({ ...hit, botName: bot.name }))); }
       catch { unavailableBots.push(bot.id); }
     }));
     // Native session FTS covers conversation text. Cron documents are owned by
@@ -39,55 +40,53 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const redact = await redactAgents(store, roster, signedIn(req).id);
     return { hits: hits.map(hit => ({ ...hit, title: redact.text(hit.title), snippet: redact.text(hit.snippet) })), unavailableBots };
   });
-  app.get('/api/bots/:botId/history/:sessionId', async req => {
+  apiRoute(app, "GET /bots/:botId/history/:sessionId", {}, async req => {
     const p = z.object({ botId: id, sessionId: id }).parse(req.params);
     const { offset, messageId } = z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0), messageId: id.optional() }).strict().parse(req.query);
     await bot(signedIn(req).id, p.botId);
-    const page=await experience()({ operation: 'history', profile: p.botId, sessionId: p.sessionId, offset, ...(messageId ? {messageId} : {}) }) as HistoryPage;
+    const page=await experience()({ operation: 'history', profile: p.botId, sessionId: p.sessionId, offset, ...(messageId ? {messageId} : {}) });
     const redact = await redactAgents(store, roster, signedIn(req).id);
     return {...page,messages:page.messages.map(message=>{const senderId=(message as typeof message & {app_sender_id?:string}).app_sender_id;const user=senderId&&store.getUser(senderId);return user?{...message,origin:undefined,sender:{id:user.id,name:user.name}}:message;}).map(redact.message)};
   });
-  app.get('/api/saved', async req => {
+  apiRoute(app, "GET /saved", {}, async req => {
     const allowed = new Set((await visible(signedIn(req).id)).map(bot => bot.id));
     return store.savedItems(signedIn(req).id).filter(item => allowed.has(item.botId));
   });
-  app.post('/api/saved', async req => {
-    const body = z.discriminatedUnion('kind', [
+  apiRoute(app, "POST /saved", { body: z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('session'), botId: id, sessionId: id, messageId: id.optional(), offset: z.number().int().min(0).max(100000).optional(), title: z.string().trim().min(1).max(120) }).strict(),
       z.object({ kind: z.literal('routine'), botId: id, routineId: id, resultId: id, title: z.string().trim().min(1).max(120) }).strict(),
-    ]).parse(req.body);
+    ]) }, async (req, body) => {
     const userId = signedIn(req).id;
     await bot(userId, body.botId);
     if (body.kind === 'session') {
       const locate = body.messageId && body.offset === undefined;
-      const page = await experience()({ operation: 'history', profile: body.botId, sessionId: body.sessionId, offset: body.offset ?? 0, ...(locate ? {messageId: body.messageId} : {}) }) as HistoryPage;
+      const page = await experience()({ operation: 'history', profile: body.botId, sessionId: body.sessionId, offset: body.offset ?? 0, ...(locate ? {messageId: body.messageId} : {}) });
       if (locate) { body.offset = page.offset; body.messageId = page.targetMessageId ?? body.messageId; }
       if (body.messageId && !page.messages.some(message=>message.id===body.messageId)) throw httpError(404,'The saved reply is no longer in this history page.');
     }
     else { if (!runtime.routineOutput) throw httpError(409, 'Routine outputs unavailable'); await runtime.routineOutput(body.botId, body.routineId, body.resultId); }
     return store.saveItem(userId, body);
   });
-  app.delete('/api/saved/:id', async req => { store.deleteSavedItem(signedIn(req).id, z.object({ id }).parse(req.params).id); return { ok: true }; });
-  app.patch('/api/routines/:id/state', async req => {
+  apiRoute(app, "DELETE /saved/:id", {}, async req => { store.deleteSavedItem(signedIn(req).id, z.object({ id }).parse(req.params).id); return { ok: true }; });
+  apiRoute(app, "PATCH /routines/:id/state", { body: z.object({enabled:z.boolean()}).strict() }, async (req, { enabled }) => {
     const routineId = z.object({id}).parse(req.params).id;
-    const {enabled} = z.object({enabled:z.boolean()}).strict().parse(req.body);
     const row=(await runtime.routines()).find(row=>row.id===routineId);
     if(!row)throw httpError(404,'Routine not found');
     await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId);
     if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
     await runtime.setRoutineEnabled(row.botId,routineId,enabled);return {ok:true};
   });
-  app.get('/api/automations', async req => {
+  apiRoute(app, "GET /automations", {}, async req => {
     const { days } = z.object({ days: z.coerce.number().refine(days => [7,30,90].includes(days)).default(30) }).strict().parse(req.query);
     const bots = await visible(signedIn(req).id); const allowed = new Set(bots.map(bot => bot.id));
     const routines = (await runtime.routines()).filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.id) }));
     const usage: UsageSummary[] = []; const unavailableBots: string[] = [];
     for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index,index+4).map(async bot => {
-      try { usage.push(await experience()({ operation: 'usage', profile: bot.id, days }) as UsageSummary); } catch { unavailableBots.push(bot.id); }
+      try { usage.push(await experience()({ operation: 'usage', profile: bot.id, days })); } catch { unavailableBots.push(bot.id); }
     }));
     return { routines, usage, unavailableBots } satisfies AutomationOverview;
   });
-  app.get('/api/bots/:id/starters', async req => {
+  apiRoute(app, "GET /bots/:id/starters", {}, async req => {
     const botId = z.object({ id }).parse(req.params).id;
     if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
     const tools = await runtime.tools(botId);

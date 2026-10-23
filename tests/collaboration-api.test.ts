@@ -1,3 +1,4 @@
+import { botFixture } from "./helpers/runtime-fixtures.js";
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -24,7 +25,7 @@ async function fixture(privateOwner = 'someone-else') {
     : input.operation === 'state' ? {room: rooms.find(room => room.room_id === input.roomId)}
     : input.operation === 'log' ? {events:[],cursor:0,has_more:false,latest_seq:0} : {accepted:true});
   const routineResults = vi.fn(async () => []), routineOutput = vi.fn(async () => ({messages:[],previewOnly:false}));
-  const runtime = fakeRuntime({ groupRequest, routineResults, routineOutput, listBots:async () => [{id:'ranch',shared:true},{id:'planner',shared:true},{id:'private-bot',shared:false,ownerId:privateOwner}] });
+  const runtime = fakeRuntime({ groupRequest, routineResults, routineOutput, listBots:async () => [botFixture({id:'ranch'}),botFixture({id:'planner'}),botFixture({id:'private-bot',shared:false,ownerId:privateOwner})] });
   await installCollaborationRoutes(app,runtime,store);
   app.addHook('onClose',async () => store.close());
   return {app,groupRequest,routineResults,routineOutput,headers:signIn(store,origin,'one')};

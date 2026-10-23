@@ -1,3 +1,4 @@
+import { apiRoute } from "./api-route.js";
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -17,13 +18,13 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
   async function profile(userId: string, botId: string) {
     if (!(await bots(userId)).some(bot => bot.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   }
-  app.get('/api/bots/:botId/routines/:routineId/results', async req => {
+  apiRoute(app, "GET /bots/:botId/routines/:routineId/results", {}, async req => {
     const p = z.object({ botId: id, routineId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
     if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
     return runtime.routineResults(p.botId, p.routineId);
   });
-  app.get('/api/bots/:botId/routines/:routineId/results/:resultId', async req => {
+  apiRoute(app, "GET /bots/:botId/routines/:routineId/results/:resultId", {}, async req => {
     const p = z.object({ botId: id, routineId: id, resultId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
     if (!runtime.routineOutput) throw httpError(409, 'Routine output is unavailable on this Hermes integration.');

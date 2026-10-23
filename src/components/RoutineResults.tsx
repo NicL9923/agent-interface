@@ -1,8 +1,9 @@
+import { routeUrl } from "../shared/api";
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { NativeSelect } from "./ui/native-select";
 import { useState } from 'react';
-import { write } from '../client-api';
+import { request } from '../client-api';
 import { useAction } from '../app/use-action';
 import { useResource } from '../app/use-resource';
 import { FormMessage } from './ui/form-message';
@@ -15,11 +16,13 @@ import { useMinute } from './When';
 export function RoutineResults({ botId, routineId, userId, resultId, onClose }: { botId: string; routineId: string; userId: string; resultId?: string; onClose: () => void }) {
   useMinute();
   const [selected, setSelected] = useState(resultId || '');
-  const path = `/bots/${encodeURIComponent(botId)}/routines/${encodeURIComponent(routineId)}/results`;
-  const list = useResource<RoutineResult[]>(path, {
+  const params = { botId, routineId };
+  const path = routeUrl("GET /bots/:botId/routines/:routineId/results", params);
+  const list = useResource(path, {
+    load: (_, signal) => request("GET /bots/:botId/routines/:routineId/results", { params, signal }),
     onData: value => setSelected(current => value.some(run => run.id === current) ? current : value[0]?.id || ''),
   });
-  const output = useResource<RoutineOutput>(selected ? `${path}/${encodeURIComponent(selected)}` : null);
+  const output = useResource(selected ? routeUrl("GET /bots/:botId/routines/:routineId/results/:resultId", { ...params, resultId: selected }) : null, { load: (_, signal) => request("GET /bots/:botId/routines/:routineId/results/:resultId", { params: { ...params, resultId: selected }, signal }) });
   const save = useAction();
   const runs = list.data || [];
   const loading = list.loading;
@@ -34,7 +37,7 @@ export function RoutineResults({ botId, routineId, userId, resultId, onClose }: 
     {!loading && !runs.length && !error && <p>No saved runs yet. Run the routine or return after its next scheduled run.</p>}
     {!!runs.length && <label>Run<NativeSelect value={selected} onChange={event => setSelected(event.target.value)}>{runs.map(run => <option key={run.id} value={run.id}>{run.startedAt && formatWhen(run.startedAt) || run.title}</option>)}</NativeSelect></label>}
     {selected && !output.data && !error && <p role="status">Loading output…</p>}
-    {output.data && <div className="routine-output"><Button disabled={save.busy} onClick={()=>void save.run(()=>write("/saved",{kind:"routine",botId,routineId,resultId:selected,title:(runs.find(run=>run.id===selected)?.title||"Routine output").slice(0,120)}),{success:"Saved to your saved items."})}>Save output</Button>{output.data.previewOnly && <p className="capability-note">Hermes exposes a preview for this script run. Its full output is available in the native cron output files.</p>}
+    {output.data && <div className="routine-output"><Button disabled={save.busy} onClick={()=>void save.run(()=>request("POST /saved", { body: {kind:"routine",botId,routineId,resultId:selected,title:(runs.find(run=>run.id===selected)?.title||"Routine output").slice(0,120)} }),{success:"Saved to your saved items."})}>Save output</Button>{output.data.previewOnly && <p className="capability-note">Hermes exposes a preview for this script run. Its full output is available in the native cron output files.</p>}
       {!output.data.messages.length && <p>No assistant output was saved for this run.</p>}
       {output.data.messages.map(message => <article key={message.id}><MessageMarkdown text={message.text} />{message.files?.map(file => <a className="file-link" key={file.id} href={file.url || `/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}</article>)}
     </div>}

@@ -118,7 +118,7 @@ export function write<T>(path: string, value: unknown, method = "POST", init?: R
 type Fields<K extends ApiRoute> =
   & (keyof ApiParams<K> extends never ? { params?: undefined } : { params: ApiParams<K> })
   & (ApiBody<K> extends undefined ? { body?: undefined } : { body: ApiBody<K> })
-  & (ApiQuery<K> extends undefined ? { query?: undefined } : { query?: ApiQuery<K> });
+  & (ApiQuery<K> extends undefined ? { query?: undefined } : {} extends ApiQuery<K> ? { query?: ApiQuery<K> } : { query: ApiQuery<K> });
 export type RequestOptions<K extends ApiRoute> = Fields<K> & { signal?: AbortSignal };
 /**
  * Calls a route from the shared map, typed by its method and path: `request("GET /bots/:id/draft",
