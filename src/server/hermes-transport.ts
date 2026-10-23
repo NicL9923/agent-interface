@@ -386,7 +386,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     let response: Response;
     try {
       const headers = new Headers(init.headers);
-      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience';
+      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience' || path === '/api/agent-interface/automation';
       for (const [name, value] of Object.entries(credential ? {'Authorization': `Bearer ${options.token}`} : authHeaders())) headers.set(name, value);
       const target = credential ? '/api/agent-interface/service/' + path.slice('/api/'.length) : servicePath(path);
       response = await fetch(new URL(target, origin), {...init,
@@ -407,9 +407,19 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       await response.body?.cancel();
       throw httpError(response.status, 'Hermes could not confirm this credential operation. Refresh its status before trying again.');
     }
-    if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience'].includes(path)) {
+    if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience', '/api/agent-interface/automation'].includes(path)) {
       const detail = await response.json().catch(() => ({})) as {error?: unknown};
       throw httpError(response.status, typeof detail.error === 'string' ? detail.error.slice(0, 1000) : 'Hermes could not finish this connection operation.');
+    }
+    if (!response.ok && path.startsWith('/api/cron/jobs') && [400, 404, 409, 422].includes(response.status)) {
+      const detail = await response.json().catch(() => ({})) as {detail?: unknown; error?: unknown};
+      const message = typeof detail.detail === 'string' ? detail.detail
+        : typeof detail.error === 'string' ? detail.error
+        : 'Hermes could not save this routine. Review its settings and try again.';
+      // Native script validation includes absolute profile paths. Keep the useful
+      // reason, but don't expose the host's directory layout to clients.
+      const safeMessage = message.replace(/(^|[\s("'=:])\/[^\s"'<>]*/g, '$1[server path]');
+      throw httpError(response.status, safeMessage.slice(0, 1000));
     }
     if (!response.ok) throw new TransportError('unreachable', `Hermes HTTP ${response.status}: request failed.`);
     return response;
