@@ -144,6 +144,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/auth/logout": "none",
   "POST /api/auth/native/complete": "none",
   "POST /api/auth/native/exchange": "none",
+  "POST /api/auth/native/renew": "none",
   "POST /api/csp-report": "none",
   "GET /api/health": "none",
   "GET /api/health/ready": "none",

@@ -190,6 +190,18 @@
   gap: 8px;
 }
 .home .bot-row-top strong { flex: 1; min-width: 0; }
+.home .unread-mark {
+  flex-shrink: 0;
+  align-self: center;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.home .pinned-name .unread-mark { display: inline-block; margin-right: 5px; vertical-align: 1px; }
+.home .bot-row.unread strong,
+.home .pinned-bot.unread .pinned-name { color: var(--ink); font-weight: 700; }
+.home .bot-row.unread small:not(.bot-activity) { color: var(--ink); }
 .home .bot-row-top time {
   flex-shrink: 0;
   font-size: 11px;

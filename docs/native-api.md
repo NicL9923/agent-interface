@@ -36,7 +36,13 @@ native route and require an update.
 The browser flow expires after five minutes; its one-time handoff code expires
 after one minute. The handoff is bound to state, the PKCE challenge, and an
 HttpOnly flow cookie. The database stores hashes of flow, code, and session
-credentials. Session lifetime is seven days. Exchange credentials are never
+credentials. A session lasts seven days. While it is in use, the app renews it with
+`POST /api/auth/native/renew`, an empty JSON body and its bearer token; the response
+is `{ "expiresAt": "ISO8601" }`. Renewal extends the same token to seven days from
+now, so push and Live Activity registrations stay attached and a lost response
+cannot sign the app out. It never extends a session past 90 days after its Google
+sign-in; at that limit it returns the unchanged expiry. A gone session returns 401
+with `session_expired`. Exchange credentials are never
 accepted in query parameters; session credentials never appear in callback URLs.
 The hosted page and API auth responses use `Cache-Control: no-store`. The server
 disables request logging. Reverse proxies should avoid retaining the sign-in
@@ -90,7 +96,11 @@ one-change-per-second streaming cadence.
 `GET /api/bootstrap?roster=lean` and `GET /api/bots?roster=lean` opt in to
 roster fields only: `id`,
 `name`, `description`, `model`, `provider`, `shared`, `ownerId`, `avatar`,
-`sessionId`, `activity` and `lastMessage`. Optional configuration fields
+`sessionId`, `activity`, `lastMessage` and `unread`. `unread` is true when the
+latest message is newer than this person's last read of a chat they have opened
+before; chat presence reports record reads. Show the open chat as read, and treat a
+chat as read through its latest message after leaving it until the next roster.
+Optional configuration fields
 `instructions`, `enabledTools`, `enabledSkills` and `enabledMcpServers` load
 from `GET /api/bots/:id`. Fetch detail before initializing a settings form or
 resending configuration during a model change. Model fallback from profile

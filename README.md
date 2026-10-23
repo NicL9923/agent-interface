@@ -7,8 +7,9 @@ drafts and notification subscriptions.
 
 Household installation: [agentui.wildflowersranch.com](https://agentui.wildflowersranch.com).
 
-The web home lists every assistant with its latest message. Pin assistants to show
-them as large live avatars at the top. In a conversation, the assistant's avatar and
+The web home lists every assistant with its latest message. A dot marks a chat you
+have opened before that has a newer message than your last read, on any of your
+devices. Pin assistants to show them as large live avatars at the top. In a conversation, the assistant's avatar and
 name in the header open its details: Pin, Artifacts, Settings, "Notify me about all
 activity" and its home section. Long-press (right-click on a computer) an assistant
 on home to pin it or move it to a section. Phones open on home and push into a
@@ -19,7 +20,8 @@ then role and model.
 
 The self-hoster connects this server to Hermes once. Web users sign in to that
 installation. iOS users enter its HTTPS address, then sign in to the same
-household. The mobile app connects to this server, not directly to Hermes.
+household. The app keeps the sign-in alive while it is used, up to 90 days after
+signing in with Google. The mobile app connects to this server, not directly to Hermes.
 
 Web assistant settings load model options from the connected Hermes profile.
 The selected provider starts expanded. Search the catalog, refresh it after

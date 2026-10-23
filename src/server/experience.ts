@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
-import type { Runtime } from '../shared/types.js';
+import type { FileRef, Message, Runtime } from '../shared/types.js';
 import type { ExperienceRequest, TodayItem, TodayOverview } from '../shared/experience.js';
 import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.js';
 import { routinePresets } from '../shared/routine-presets.js';
@@ -29,7 +29,25 @@ export async function assertRoutineEditable(runtime: Runtime, store: Store, rout
     }
   }
 }
+/** Hermes may change history without a roster preview change, as another client can. A recap is read again after this long. */
+const RECAP_MS = 5 * 60_000;
+const settled = (activity: { state: string; runId?: string }) => !activity.runId && !['thinking', 'working', 'waiting', 'blocked'].includes(activity.state);
+type Recap = { latest?: Pick<Message, 'id' | 'text' | 'createdAt' | 'files'>; files: FileRef[]; eventFiles: [string, FileRef[]][] };
+const uniqueFiles = (files: FileRef[]) => [...new Map(files.map(file => [file.id, file])).values()];
+/** What Today shows from an assistant's redacted history: its latest reply and the files of unread work. */
+function summarize(messages: Message[], events: { id: string; runId?: string }[], unreadRuns: Set<string>, since: string): Recap {
+  const latest = messages.findLast(isConversationReply);
+  const eventFiles: Recap['eventFiles'] = [];
+  for (const event of events) {
+    const files = messages.filter(message => message.runId === event.runId && message.role !== 'user').flatMap(message => message.files ?? []);
+    if (files.length) eventFiles.push([event.id, uniqueFiles(files)]);
+  }
+  const files = messages.filter(message => message.createdAt && Date.parse(message.createdAt) > Date.parse(since) || message.runId && unreadRuns.has(message.runId) && message.role !== 'user').flatMap(message => message.files ?? []);
+  return { latest: latest && { id: latest.id, text: latest.text, createdAt: latest.createdAt, files: latest.files }, files: uniqueFiles(files), eventFiles };
+}
 export async function installExperienceRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
+  // Each person's latest Today recap per assistant, from its last full history read.
+  const recaps = new Map<string, { key: string; at: number; recap: Recap }>();
   const bot = async (botId: string) => {
     if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   };
@@ -53,31 +71,44 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const redact = await redactAgents(store, roster, userId);
     const page = store.eventPage(userId, query.since ? 0 : store.todayFrontier(userId), upperFrontier, bots.map(bot => bot.id), query.since || !store.todaySeen(userId) ? since : undefined);
     const eventFiles = new Map<string, typeof page.events[number]['files']>();
+    // Redaction depends on which assistants are private and every name they have had.
+    const hidden = store.privateBots().filter(row => row.ownerId !== userId).map(row => row.botId).sort();
+    const names = hidden.length ? await roster.names() : undefined;
+    const privacy = JSON.stringify(hidden.map(botId => [botId, [...names?.get(botId) ?? []].sort()]));
     const items: TodayItem[] = [];
     for (let index = 0; index < bots.length; index += 4) {
       const batch = await Promise.all(bots.slice(index, index + 4).map(async bot => {
         try {
-          const conversation = await runtime.conversation(bot.id);
-          const messages = conversation.messages.map(redact.message);
-          const latest = messages.findLast(isConversationReply);
-          const unreadRuns = new Set<string>();
-          for (const event of page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId)) {
-            unreadRuns.add(event.runId!);
-            const files = messages.filter(message => message.runId === event.runId && message.role !== 'user').flatMap(message => message.files ?? []);
-            if (files.length) eventFiles.set(event.id, [...new Map(files.map(file => [file.id, file])).values()]);
+          const events = page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId);
+          const unreadRuns = [...new Set(events.map(event => event.runId!))].sort();
+          // An unchanged roster preview means no new message, so a settled assistant's recap is
+          // reused and only its current state is read. History is read again after it changes.
+          const key = JSON.stringify([bot.sessionId, bot.lastMessage, since, unreadRuns, events.map(event => event.id), privacy]);
+          const cacheKey = `${userId}\0${bot.id}`;
+          const cached = recaps.get(cacheKey);
+          const reusable = cached?.key === key && Date.now() - cached.at < RECAP_MS ? cached.recap : undefined;
+          const state = reusable && await runtime.conversation(bot.id, { history: false });
+          let read, recap;
+          if (reusable && state && settled(state.activity)) [read, recap] = [state, reusable];
+          else {
+            read = await runtime.conversation(bot.id);
+            recap = summarize(read.messages.map(redact.message), events, new Set(unreadRuns), since);
+            if (settled(read.activity)) recaps.set(cacheKey, { key, at: Date.now(), recap });
+            else recaps.delete(cacheKey);
           }
-          const files = messages.filter(message => message.createdAt && Date.parse(message.createdAt) > Date.parse(since) || message.runId && unreadRuns.has(message.runId) && message.role !== 'user').flatMap(message => message.files ?? []);
-          return { botId: bot.id, botName: bot.name, activity: conversation.activity,
-            approvals: conversation.approvals.filter(approval => approval.status === 'pending'),
-            attention: nameRequesters(conversation.attention, userId => store.getUser(userId)?.name) ?? [],
-            ...(latest ? { latestMessage: { id: latest.id, text: redact.text(redact.message(latest).text), createdAt: latest.createdAt, files: latest.files } } : {}),
-            files: [...new Map(files.map(file => [file.id, file])).values()] };
+          for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
+          return { botId: bot.id, botName: bot.name, activity: read.activity,
+            approvals: read.approvals.filter(approval => approval.status === 'pending'),
+            attention: nameRequesters(read.attention, userId => store.getUser(userId)?.name) ?? [],
+            ...(recap.latest ? { latestMessage: { ...recap.latest, text: redact.text(recap.latest.text) } } : {}),
+            files: recap.files };
         } catch {
           return { botId: bot.id, botName: bot.name, activity: { state: 'disconnected' as const }, approvals: [], attention: [], files: [], error: 'Could not read this Hermes conversation. Open it to reconnect.' };
         }
       }));
       items.push(...batch);
     }
+    for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
     let upcoming: import("../shared/types.js").Routine[] = [];
     try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10); } catch { /* The rest of Today remains useful during a scheduler outage. */ }

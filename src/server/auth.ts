@@ -94,7 +94,7 @@ export async function installAuth(
       }
       // Browsers send violation reports without an Origin or CSRF token.
       if (route === "/api/csp-report") return;
-      if (req.nativeSessionHash && (!route.startsWith("/api/auth/") || route === "/api/auth/logout")) return;
+      if (req.nativeSessionHash && (!route.startsWith("/api/auth/") || ["/api/auth/logout", "/api/auth/native/renew"].includes(route))) return;
       if (req.headers.origin !== config.origin)
         return reply
           .code(403)

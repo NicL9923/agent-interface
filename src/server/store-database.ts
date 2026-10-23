@@ -71,6 +71,9 @@ const additions = `
   -- person last read each chat. Notifications skip what was already seen.
   CREATE TABLE IF NOT EXISTS chat_presence(user_id TEXT NOT NULL REFERENCES users(id),client_id TEXT NOT NULL,bot_id TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(user_id,client_id));
   CREATE TABLE IF NOT EXISTS chat_reads(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,read_at INTEGER NOT NULL,client_id TEXT NOT NULL,PRIMARY KEY(user_id,bot_id));
+  -- When each native session's person last signed in with Google, which caps its renewals. A
+  -- session without a row here, from before renewal, started a session lifetime before it expires.
+  CREATE TABLE IF NOT EXISTS native_session_starts(hash TEXT PRIMARY KEY REFERENCES native_sessions(hash) ON DELETE CASCADE,signed_in_at INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

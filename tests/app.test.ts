@@ -365,6 +365,30 @@ describe("authentication and household state", () => {
     }
     await app.close();
   });
+  it("marks a chat unread when its latest message is newer than this person's last read", async () => {
+    const fake = runtimeDouble();
+    const at = "2026-10-08T12:00:00.000Z";
+    fake.runtime.listBots = async () => [
+      { id: "shared", name: "Shared", model: "test", shared: true, activity: "idle", lastMessage: { text: "Reply", at } },
+      { id: "quiet", name: "Quiet", model: "test", shared: true, activity: "idle", lastMessage: { text: "Reply", at } },
+    ];
+    const { app, store } = await createApp(config(), fake.runtime, { background: false });
+    const one = await login(app), two = await login(app, "two");
+    const id = async (headers: Record<string, string>) => (await app.inject({ url: "/api/bootstrap", headers })).json().user.id as string;
+    const [first, second] = [await id(one), await id(two)];
+    store.chatPresence(first, "shared", "phone", "left", Date.parse(at) - 1);
+    store.chatPresence(second, "shared", "phone", "left", Date.parse(at) + 1);
+    for (const url of ["/api/bootstrap?roster=lean", "/api/bots"]) {
+      const unread = async (headers: Record<string, string>) => {
+        const value = (await app.inject({ url, headers })).json();
+        return Object.fromEntries((Array.isArray(value) ? value : value.bots).map((bot: { id: string; unread?: boolean }) => [bot.id, !!bot.unread]));
+      };
+      // A chat never opened stays unmarked, so a new member's home starts quiet.
+      expect(await unread(one)).toEqual({ shared: true, quiet: false });
+      expect(await unread(two)).toEqual({ shared: false, quiet: false });
+    }
+    await app.close();
+  });
   it("windows conversation history only when the web client asks", async () => {
     const fake = runtimeDouble();
     const conversation = await fake.runtime.conversation("shared");

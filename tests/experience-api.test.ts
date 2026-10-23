@@ -57,6 +57,31 @@ it('builds Today from canonical activity and attention without hiding unavailabl
   expect((await s.app.inject({ url: '/api/today', headers: s.second })).json().since).not.toBe(since);
   expect((await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: new Date(Date.now() + 86400000).toISOString(), frontier: today.frontier } })).statusCode).toBe(400);
 });
+it('reads a settled assistant\'s history again only after its roster preview changes', async () => {
+  const s = await setup();
+  let preview = { text: 'Fence is up.', at: new Date(Date.now() - 60000).toISOString() };
+  let state = 'done';
+  s.runtime.listBots = vi.fn(async () => [{ id: 'ranch', name: 'Ranch', model: 'test', shared: true, activity: 'idle' as const, lastMessage: preview }]);
+  const read = s.conversation.getMockImplementation()!;
+  s.conversation.mockImplementation(async (id: string) => ({ ...await read(id), activity: { state } }) as never);
+  const histories = () => s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined).length;
+  const today = async () => (await s.app.inject({ url: '/api/today', headers: s.first })).json();
+  expect((await today()).items[0].files[0].name).toBe('plan.pdf');
+  expect(histories()).toBe(1);
+  const again = await today();
+  expect(histories()).toBe(1);
+  expect(again.items[0]).toMatchObject({ activity: { state: 'done' }, files: [{ name: 'plan.pdf' }], latestMessage: { id: 'reply' } });
+  // Another person's recap is their own, since redaction depends on who is asking.
+  await s.app.inject({ url: '/api/today', headers: s.second });
+  expect(histories()).toBe(2);
+  preview = { text: 'Gate is fixed.', at: new Date().toISOString() };
+  await today();
+  expect(histories()).toBe(3);
+  // A running assistant's history keeps changing, so it is read every time.
+  state = 'working';
+  await today(); await today();
+  expect(histories()).toBe(5);
+});
 it('revalidates an unchanged Today as 304 although each read has a new check time', async () => {
   const s = await setup(true);
   const createdAt = new Date(Date.now() - 60_000).toISOString();

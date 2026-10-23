@@ -4,7 +4,7 @@ import type { ActivityState, Approval, AttentionRequest, Bootstrap, Bot, FileRef
 import { request as apiRequest } from "../client-api";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
-import { MessageMarkdown } from "../components/MessageMarkdown";
+import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
@@ -286,7 +286,9 @@ const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId,
               : message.createdAt && <When value={message.createdAt} />}
           </div>}
           {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
-            <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+            message.id.endsWith("-inflight")
+              ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+              : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
           ) : message.role !== "tool" && (
             <div className="message-text">{message.text}</div>
           )}

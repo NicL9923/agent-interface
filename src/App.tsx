@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot } from "./shared/types";
 import { write } from "./client-api";
 import { AvatarTrio, SignIn } from "./components/SignIn";
@@ -15,6 +15,8 @@ import { useSubmission } from "./app/use-submission";
 import { useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveBotToSection } from "./app/preferences-editing";
 import { useAppInstall, useMobile } from "./app/use-browser";
+import { latestMessageAt, useReadThrough } from "./app/unread";
+import { useStableCallback } from "./app/use-stable-callback";
 import { UpdateNotice } from "./app/UpdateNotice";
 import { Sidebar } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
@@ -58,7 +60,10 @@ export function App() {
     void session.refresh();
   });
   // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
-  useChatPresence(view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined, userId);
+  const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
+  useChatPresence(shownBotId, userId);
+  const readThrough = useReadThrough(userId, shownBotId, shownBotId
+    ? latestMessageAt(boot?.bots.find(bot => bot.id === shownBotId), conversation?.botId === shownBotId ? conversation.messages : undefined) : undefined);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
@@ -86,13 +91,13 @@ export function App() {
       ? document.querySelector<HTMLElement>(".bot-rail [aria-current='page']") ?? document.querySelector<HTMLElement>(".bot-rail .home-account")
       : document.querySelector<HTMLElement>("[aria-label='Back to assistants']"))?.focus();
   }, [railOpen, mobile]);
-  const selectBot = (id: string) => {
-    persistPosition();
+  const selectBot = useStableCallback((id: string) => {
+    persistPosition(true);
     setView("conversation");
     setBotId(id);
     setRailOpen(false);
     setError("");
-  };
+  });
   const signOut = async () => {
     try {
       await notifications.disable();
@@ -108,6 +113,22 @@ export function App() {
       setNotice((e as Error).message);
     }
   };
+  // Home is memoized, so its handlers keep one identity across renders.
+  const scrolled = useCallback(() => persistPosition(), [persistPosition]);
+  const showView = useStableCallback((next: View) => { setView(next); setRailOpen(false); });
+  const openPanel = useStableCallback((next: Panel) => setPanel(next));
+  const newBot = useStableCallback(() => setPanel({ kind: "settings", bot: "new" }));
+  const openPreferences = useStableCallback(() => setPanel({ kind: "preferences" }));
+  const togglePin = useStableCallback((bot: Bot) => void session.editPreferences(preferences => ({
+    ...preferences,
+    favorites: preferences.favorites.includes(bot.id)
+      ? preferences.favorites.filter(id => id !== bot.id)
+      : [...preferences.favorites, bot.id],
+  })));
+  const botSettings = useStableCallback((bot: Bot) => setPanel({ kind: "settings", bot }));
+  const moveToSection = useStableCallback((bot: Bot, sectionId: string | null) =>
+    void session.editPreferences(preferences => moveBotToSection(preferences, bot.id, sectionId)));
+  const newSection = useStableCallback((bot: Bot) => setPanel({ kind: "details", botId: bot.id, newSection: true }));
   if (session.auth) return <SignIn onSuccess={session.signedIn} />;
   if (!boot)
     return (
@@ -130,25 +151,15 @@ export function App() {
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;
-  const open = (next: Panel) => setPanel(next);
+  const open = openPanel;
   const detailsBot = panel?.kind === "details" ? boot.bots.find(bot => bot.id === panel.botId) : undefined;
-  const togglePin = (bot: Bot) => void session.editPreferences(preferences => ({
-    ...preferences,
-    favorites: preferences.favorites.includes(bot.id)
-      ? preferences.favorites.filter(id => id !== bot.id)
-      : [...preferences.favorites, bot.id],
-  }));
+
   return (
     <div className="app-shell">
-      <Sidebar boot={boot} botId={botId} view={view} state={state} connectionLost={connectionLost} offline={offline}
-        mobile={mobile} open={railOpen} update={update} onSelectBot={selectBot}
-        onView={next => { setView(next); setRailOpen(false); }}
-        onNewBot={() => open({ kind: "settings", bot: "new" })}
-        onSettings={() => open({ kind: "preferences" })}
-        onPin={togglePin}
-        onBotSettings={bot => open({ kind: "settings", bot })}
-        onMoveToSection={(bot, sectionId) => void session.editPreferences(preferences => moveBotToSection(preferences, bot.id, sectionId))}
-        onNewSection={bot => open({ kind: "details", botId: bot.id, newSection: true })} />
+      <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} view={view} state={state}
+        connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
+        onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
+        onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
       <main className="conversation-panel" inert={mobile && railOpen}>
         <ChatHeader view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
@@ -160,7 +171,7 @@ export function App() {
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
-            notifications={notifications} scroll={scroll} content={content} history={history} reply={reply} onScroll={persistPosition}
+            notifications={notifications} scroll={scroll} content={content} history={history} reply={reply} onScroll={scrolled}
             onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}

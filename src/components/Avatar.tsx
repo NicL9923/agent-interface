@@ -16,6 +16,8 @@ import {
   popIn,
   project,
   propMotion,
+  IDLE_FRAME_MS,
+  idleQuietAt,
   ringOffset,
   smoothstep,
   soloPlan,
@@ -353,8 +355,11 @@ export function Avatar({
       if (!animatesAt(state, t, plan) && !settling) return;
       // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
       // asking for every display refresh makes the page restyle on each one even when nothing paints.
-      if (size >= 56) frame = requestAnimationFrame(tick);
-      else wake = setTimeout(() => { frame = requestAnimationFrame(tick); }, 24);
+      // An idle avatar that is only breathing sleeps longer, until just before its next blink or glance.
+      const pause = state === "idle" && !settling && idleQuietAt(t, plan, (IDLE_FRAME_MS + 20) / 1000) ? IDLE_FRAME_MS
+        : size >= 56 ? 0 : 24;
+      if (!pause) frame = requestAnimationFrame(tick);
+      else wake = setTimeout(() => { frame = requestAnimationFrame(tick); }, pause);
     };
     frame = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(frame); clearTimeout(wake); };

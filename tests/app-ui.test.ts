@@ -29,9 +29,10 @@ vi.mock("../src/components/Avatar", async (original) => ({
   })),
 }));
 // Unmemoized on purpose, so the count shows whether the transcript re-renders.
-vi.mock("../src/components/MessageMarkdown", () => ({
-  MessageMarkdown: (props: { text: string }) => (renders.markdown++, createElement("div", { className: "message-markdown" }, props.text)),
-}));
+vi.mock("../src/components/MessageMarkdown", () => {
+  const markdown = (props: { text: string }) => (renders.markdown++, createElement("div", { className: "message-markdown" }, props.text));
+  return { MessageMarkdown: markdown, StreamingMarkdown: markdown };
+});
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
@@ -548,6 +549,24 @@ describe("conversation state", () => {
       expect(chips()).toHaveLength(0);
       expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:local-preview");
     });
+  });
+
+  it("stops marking a chat unread once it has been on screen", async () => {
+    const other = { ...bootstrap.bots[0], id: "other", name: "Other", unread: true, lastMessage: { text: "Pot roast tonight.", at: new Date(Date.now() - 1000).toISOString() } };
+    const home = { ...bootstrap, bots: [...bootstrap.bots, other] };
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bootstrap?roster=lean" ? home as T : original(path) as Promise<T>);
+    await render();
+    const marked = () => [...container.querySelectorAll(".bot-row.unread strong")].map(item => item.textContent);
+    expect(marked()).toEqual(["Other"]);
+    const rows = () => [...container.querySelectorAll<HTMLButtonElement>(".home-list .bot-row")];
+    await act(async () => rows().find(row => row.textContent?.includes("Other"))!.click());
+    await loaded();
+    expect(marked()).toEqual([]);
+    // Back in another chat, the server has not caught up yet, but the read is remembered here.
+    await act(async () => rows().find(row => !row.textContent?.includes("Other"))!.click());
+    await loaded();
+    expect(marked()).toEqual([]);
   });
 
   it("pins assistants to the top of home and shows everyone else's latest message", async () => {

@@ -14,6 +14,8 @@ import {
   blinkAt,
   expressionFor,
   faceInk,
+  IDLE_FRAME_MS,
+  idleQuietAt,
   orbitArcs,
   pitchEyes,
   project,
@@ -35,6 +37,27 @@ describe("avatar motion", () => {
   it.each<ActivityState>(["disconnected", "interrupted"])("never moves while %s", (state) => {
     expect(animatesAt(state, 0)).toBe(false);
     for (const t of samples(0, 6, 0.37)) expect(avatarPose(state, t, false)).toEqual(restingPose);
+  });
+
+  it("draws an idle avatar slowly only while it is breathing and swaying", () => {
+    const ahead = (IDLE_FRAME_MS + 20) / 1000;
+    for (const motion of [{ phase: 0, tempo: 1 }, { phase: 0.37, tempo: 1.08, boop: 0.1, gesture: { kind: "tilt" as const, side: 1, start: 6.1 } }]) {
+      let quiet = 0;
+      for (const t of samples(0, 20, 0.05)) {
+        if (!idleQuietAt(t, motion, ahead)) continue;
+        quiet++;
+        // Across the whole wait the eyes stay open, the gaze holds and nothing turns or hops.
+        const from = avatarPose("idle", t, false, undefined, motion);
+        for (const u of samples(t, t + ahead, 0.005)) {
+          const pose = avatarPose("idle", u, false, undefined, motion);
+          expect(pose.blink).toBe(1);
+          expect([pose.gazeX, pose.gazeY, pose.yaw, pose.eyeScale]).toEqual([from.gazeX, from.gazeY, from.yaw, from.eyeScale]);
+          expect(Math.abs(pose.roll - from.roll)).toBeLessThan(0.3);
+        }
+      }
+      // Most of an idle avatar's time qualifies, which is the point.
+      expect(quiet / samples(0, 20, 0.05).length).toBeGreaterThan(0.6);
+    }
   });
 
   it("holds every state still under reduced motion", () => {

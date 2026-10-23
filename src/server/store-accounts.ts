@@ -47,8 +47,26 @@ export class AccountRepository {
   sessionConfirmedAt(hash: string): number | undefined {
     return (this.db.prepare("SELECT confirmed_at FROM session_confirmations WHERE session_hash=?").get(hash) as { confirmed_at: number } | undefined)?.confirmed_at;
   }
-  nativeSession(hash: string, userId: string, expires: number) {
-    this.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(hash, userId, expires);
+  nativeSession(hash: string, userId: string, expires: number, signedInAt = Date.now()) {
+    this.database.transaction(() => {
+      this.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(hash, userId, expires);
+      this.db.prepare("INSERT INTO native_session_starts VALUES(?,?)").run(hash, signedInAt);
+    });
+  }
+  /**
+   * Extends a live native session in place to `lifetime` from now, never past `limit` after its
+   * Google sign-in. The token keeps its hash, so its push registrations stay attached.
+   * Returns the expiry it now has, or undefined when the session is gone.
+   */
+  renewNativeSession(hash: string, lifetime: number, limit: number, now = Date.now()) {
+    return this.database.transaction(() => {
+      const session = this.db.prepare("SELECT s.expires,t.signed_in_at AS signedInAt FROM native_sessions s LEFT JOIN native_session_starts t ON t.hash=s.hash WHERE s.hash=?")
+        .get(hash) as { expires: number; signedInAt: number | null } | undefined;
+      if (!session || session.expires <= now) return undefined;
+      const expires = Math.max(session.expires, Math.min(now + lifetime, (session.signedInAt ?? session.expires - lifetime) + limit));
+      if (expires !== session.expires) this.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(expires, hash);
+      return expires;
+    });
   }
   getNativeSession(hash: string) {
     const session = this.db.prepare("SELECT user_id AS userId,expires FROM native_sessions WHERE hash=?").get(hash) as
