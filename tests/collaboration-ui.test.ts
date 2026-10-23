@@ -9,7 +9,7 @@ import { RoutineResults } from '../src/components/RoutineResults';
 import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
 import { click, mountRoot } from './ui-harness';
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}));
+vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
 let root:Root, container:HTMLDivElement;
 const bootstrap = { user:{id:'one'},bots:[{id:'ranch',name:'Ranch hand'},{id:'planner',name:'Planner'}],preferences:defaultPreferences,connection:{connected:true} } as Bootstrap;
 const room={room_id:'room',name:'Weekend plans',members:[{member_id:'ranch',profile:'ranch',handle:'ranch',display_name:'Ranch hand'},{member_id:'planner',profile:'planner',handle:'planner',display_name:'Planner'}]};

@@ -7,7 +7,7 @@ import { useDeviceNotifications } from "../src/components/use-device-notificatio
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
-vi.mock("../src/client-api", () => ({ write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ write: vi.fn() }))()));
 let container: HTMLDivElement, root: Root;
 let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;

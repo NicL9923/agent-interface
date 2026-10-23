@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, cachedResponse, changeStream, pollWhileVisible, write } from "../client-api";
+import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
+import { routeUrl, type ApiQuery } from "../shared/api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import type { Inflight, Message } from "../shared/types";
@@ -8,8 +9,10 @@ import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
 /** Within this distance of the end, the reader is following the latest message. */
 const LATEST_DISTANCE = 100;
-const firstPage = (botId: string) =>
-  `/bots/${encodeURIComponent(botId)}/conversation?turns=${HISTORY_PAGE_TURNS}`;
+type PageQuery = ApiQuery<"GET /bots/:id/conversation">;
+const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
+// The cache key of the page an opened conversation reads first.
+const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id: botId }, firstQuery);
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
@@ -87,16 +90,15 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       const earlierPage = more;
       more = false;
       if (!start && !following.current) start = cachedStart;
-      const query = start
-        ? `start=${encodeURIComponent(start)}${earlierPage ? `&turns=${HISTORY_PAGE_TURNS}` : ""}`
-        : `turns=${HISTORY_PAGE_TURNS * (earlierPage ? 2 : 1)}`;
+      const fromStart = !!start;
+      const query: PageQuery = start
+        ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
+        : earlierPage ? { turns: HISTORY_PAGE_TURNS * 2 } : firstQuery;
       try {
-        const result = await api<SavedConversation>(
-          `/bots/${encodeURIComponent(botId)}/conversation?${query}`,
-        );
+        const result = await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
         // The latest page can slide past the cached message a reader scrolled to meanwhile.
-        if (!query.startsWith("start=") && !following.current && cachedStart
+        if (!fromStart && !following.current && cachedStart
           && !result.messages.some(message => message.id === cachedStart)) {
           start = cachedStart;
           again = true;
@@ -269,11 +271,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
     positionTimer.current = setTimeout(
       () =>
-        void write(
-          `/bots/${encodeURIComponent(positionBot)}/read-position`,
-          { scrollTop: top, messageId },
-          "PUT",
-        ).catch(() => {}),
+        void request("PUT /bots/:id/read-position", { params: { id: positionBot }, body: { scrollTop: top, messageId } }).catch(() => {}),
       300,
     );
   };

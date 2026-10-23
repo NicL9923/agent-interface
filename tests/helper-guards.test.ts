@@ -37,3 +37,20 @@ describe("web data loads", () => {
     expect(found).toEqual(Object.fromEntries(Object.entries(allowed).map(([path, { count }]) => [path, count])));
   });
 });
+
+describe("web calls to mapped routes", () => {
+  // A route in src/shared/api.ts is called through request(), which types its params, body and
+  // response. A hand-built path to the same route through api, write or useResource loses that.
+  // Multipart uploads and the keepalive draft save build their path with routeUrl() instead.
+  const routes = [...readFileSync("src/shared/api.ts", "utf8").matchAll(/^\s*"[A-Z]+ (\/[^"]*)":/gm)].map(([, path]) => path);
+  const pattern = (path: string) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/:[A-Za-z]+/g, "(?:\\$\\{[^}]*\\}|[^/`\"'?$]+)");
+  const call = new RegExp(String.raw`\b(?:api|write|useResource)\s*(?:<[^>]*>+)?\(\s*[\`"'](?:${[...new Set(routes)].map(pattern).join("|")})[\`"'?]`, "g");
+
+  it("go through request()", () => {
+    expect(routes.length).toBeGreaterThan(30);
+    expect("api<Bot>(`/bots/${encodeURIComponent(id)}`)".match(call)).toHaveLength(1);
+    const found = sources("src", ["src/server/", "src/shared/"]).flatMap(path =>
+      [...readFileSync(path, "utf8").matchAll(call)].map(([text]) => `${path}: ${text}`));
+    expect(found).toEqual([]);
+  });
+});

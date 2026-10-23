@@ -71,6 +71,9 @@ describe('connection recovery API',()=>{
     const result=await app.inject({method:'POST',url:'/api/connection/retry',headers,payload:{}});
     expect(result.statusCode).toBe(200);expect(result.json()).toMatchObject({connected:true});
     expect(runtime.reconnect).toHaveBeenCalledTimes(1);
+    // request() sends a route without a body as a bare POST, with no JSON content type.
+    const bare=await app.inject({method:'POST',url:'/api/connection/retry',headers});
+    expect(bare.statusCode).toBe(200);expect(runtime.reconnect).toHaveBeenCalledTimes(2);
   });
 
   it('keeps native avatar metadata authoritative after external updates and native removal',async()=>{

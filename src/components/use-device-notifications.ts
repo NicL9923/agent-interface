@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { write } from "../client-api";
+import { request } from "../client-api";
+import type { WebPushSubscription } from "../shared/api";
 import { notificationPromptKey as promptKey } from "../app/storage";
 
 let promptedInPage = false;
@@ -53,7 +54,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       }
       const subscription = await worker.pushManager.getSubscription();
       if (!current()) return;
-      const result = subscription ? await write<{ registered: boolean }>("/push/subscriptions/status", { endpoint: subscription.endpoint }) : { registered: false };
+      const result = subscription ? await request("POST /push/subscriptions/status", { body: { endpoint: subscription.endpoint } }) : { registered: false };
       if (!current()) return;
       const enabled = Notification.permission === "granted" && !!subscription && result.registered === true;
       setState({ enabled, checking: false, busy: false, canEnable: true, error: "",
@@ -112,7 +113,8 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       const subscription = existing || await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes });
       if (!existing) created = subscription;
       if (user.current !== account) { await created?.unsubscribe(); return; }
-      await write("/push/subscriptions", subscription.toJSON());
+      // The DOM types the keys as optional; a subscription made with an application server key carries both.
+      await request("POST /push/subscriptions", { body: subscription.toJSON() as WebPushSubscription });
       if (user.current === account) {
         setState({ ...initialState, checking: false, enabled: true, canEnable: true,
           message: "Notifications are enabled for your account on this device." });
@@ -141,7 +143,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       subscription = worker?.pushManager ? await worker.pushManager.getSubscription() : null;
       if (user.current !== account) return;
       if (subscription) {
-        await write("/push/subscriptions", { endpoint: subscription.endpoint }, "DELETE");
+        await request("DELETE /push/subscriptions", { body: { endpoint: subscription.endpoint } });
         removed = true;
         if (user.current === account) setState((previous) => ({ ...previous, enabled: false }));
         const unsubscribed = await subscription.unsubscribe();
@@ -153,7 +155,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       // A failed DELETE response can still have removed the server registration.
       // Recheck its owner before reporting this device as enabled.
       const confirmed = !removed && subscription && user.current === account
-        ? await write<{ registered: boolean }>("/push/subscriptions/status", { endpoint: subscription.endpoint }).catch(() => null)
+        ? await request("POST /push/subscriptions/status", { body: { endpoint: subscription.endpoint } }).catch(() => null)
         : null;
       if (user.current === account) setState((previous) => ({ ...previous,
         enabled: !removed && "Notification" in window && Notification.permission === "granted" && confirmed?.registered === true,

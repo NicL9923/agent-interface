@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
-import { api, ApiError, uploadFile, write } from "../client-api";
+import { routeUrl, type ApiResponse } from "../shared/api";
+import { ApiError, request, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
 import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
 type SetDraft = (update: (current: Draft) => Draft) => void;
-const draftPath = (botId: string) => `/bots/${encodeURIComponent(botId)}/draft`;
 // Keepalive requests in flight share a 64 KiB budget, and the browser rejects one over it. A
 // save that does not fit is sent as an ordinary request instead.
 const KEEPALIVE_BYTES = 60_000;
@@ -46,8 +46,9 @@ async function saveDraft(options: {
   if (budgeted) keepaliveBytes += bytes;
   try {
     server = savedDraft(await (budgeted
-      ? write<SavedDraft>(draftPath(botId), body, "PUT", { keepalive: true })
-      : write<SavedDraft>(draftPath(botId), body, "PUT")));
+      // request() has no keepalive option, so this one save writes to the same route by hand.
+      ? write<ApiResponse<"PUT /bots/:id/draft">>(routeUrl("PUT /bots/:id/draft", { id: botId }), body, "PUT", { keepalive: true })
+      : request("PUT /bots/:id/draft", { params: { id: botId }, body })));
   } catch (e) {
     if (!(e instanceof ApiError && e.code === "draft_conflict")) {
       // A failed or timed-out save leaves the copy unsaved: check the rule again after a backoff.
@@ -113,7 +114,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       if (loadingDraft) return;
       loadingDraft = true;
       try {
-        const saved = savedDraft(await api<SavedDraft | null>(draftPath(botId)));
+        const saved = savedDraft(await request("GET /bots/:id/draft", { params: { id: botId } }));
         if (!live) return;
         draftLoaded = true;
         setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
@@ -174,7 +175,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     const key = draftKey(uploadUser, uploadBot);
     let saved = localRead<Draft>(key);
     if (!saved) {
-      const loaded = savedDraft(await api<SavedDraft | null>(draftPath(uploadBot)));
+      const loaded = savedDraft(await request("GET /bots/:id/draft", { params: { id: uploadBot } }));
       // They may have come back while the saved draft loaded.
       await settle();
       if (!live()) return false;
@@ -191,7 +192,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     if (controller.signal.aborted || epoch !== identityEpoch.current) return;
     patch(item.id, { status: "uploading", progress: 0, error: undefined });
     try {
-      const result = await uploadFile<FileRef>(`/bots/${encodeURIComponent(item.botId)}/uploads`, item.file, {
+      // Multipart, so the mapped route is posted through uploadFile.
+      const result = await uploadFile<ApiResponse<"POST /bots/:id/uploads">>(routeUrl("POST /bots/:id/uploads", { id: item.botId }), item.file, {
         signal: controller.signal,
         onProgress: sent => patch(item.id, sent >= 1 ? { progress: 1, status: "processing" } : { progress: sent }),
       });

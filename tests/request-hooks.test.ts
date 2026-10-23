@@ -6,7 +6,7 @@ import { useAction } from "../src/app/use-action";
 import { useResource, type Resource } from "../src/app/use-resource";
 import { advance, mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn() }))(original)));
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void };
 function deferred<T>(): Deferred<T> {

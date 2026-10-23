@@ -13,11 +13,11 @@ vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: () => createElement("span", { "data-avatar": "" }),
 }));
-vi.mock("../src/client-api", async (original) => ({
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn().mockResolvedValue({}),
   write: vi.fn().mockResolvedValue({}),
-}));
+}))(original)));
 
 const bot: Bot = { instructions: "", id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" };
 const bootstrap: Bootstrap = {
@@ -109,8 +109,9 @@ describe("assistant deletion", () => {
   it("confirmed deletion sends only DELETE and never saves the form", async () => {
     await click("Delete assistant");
     await click("Yes, delete");
-    expect(api).toHaveBeenCalledExactlyOnceWith("/bots/shared", { method: "DELETE" });
-    expect(write).not.toHaveBeenCalled();
+    // The route map's DELETE reaches the mocked write; nothing else is sent.
+    expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared", {}, "DELETE");
+    expect(api).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onSaved).toHaveBeenCalledTimes(1);
   });

@@ -7,9 +7,9 @@ import { api, ApiError, write } from "../src/client-api";
 import type { UpgradeStatus } from "../src/shared/upgrades";
 import { button, mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
-}));
+}))(original)));
 let container: HTMLDivElement;
 let root: Root;
 let status: UpgradeStatus;

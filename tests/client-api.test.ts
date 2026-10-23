@@ -183,6 +183,16 @@ describe('typed route requests',()=>{
     await request('GET /bots');
     expect(fetch.mock.calls[2][0]).toBe('/api/bots');
   });
+  it('sends a route without a body as a bare POST with the CSRF token',async()=>{
+    const fetch=vi.fn().mockResolvedValue(ok({ok:true}));
+    vi.stubGlobal('fetch',fetch);
+    await request('POST /bots/:id/stop',{params:{id:'bot'}});
+    const [path,init]=fetch.mock.calls[0];
+    expect(path).toBe('/api/bots/bot/stop');
+    expect(init.method).toBe('POST');expect(init.body).toBeUndefined();
+    const headers=new Headers(init.headers);
+    expect(headers.get('Content-Type')).toBeNull();expect(headers.get('X-CSRF-Token')).toBe('current-session-csrf');
+  });
   it('shares the GET cache with api() for the same path',async()=>{
     const fetch=vi.fn().mockResolvedValue(ok({text:'saved',attachments:[],revision:1,reason:'edit',sentRevision:0}));
     vi.stubGlobal('fetch',fetch);

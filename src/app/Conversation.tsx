@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, AttentionRequest, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
-import { write } from "../client-api";
+import { request as apiRequest } from "../client-api";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
 import { MessageMarkdown } from "../components/MessageMarkdown";
@@ -322,7 +322,7 @@ function ApprovalCard({ approval, botId, supported, report }: { approval: Approv
     if (decision) return;
     setDecision(value);
     try {
-      await write(`/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`, { decision: value });
+      await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
       setSettled(true);
     } catch (error) { setDecision(null); report((error as Error).message); }
   }
@@ -420,10 +420,7 @@ function AttentionCard({
           onSubmit={(event) => {
             event.preventDefault();
             setBusy(true);
-            void write(
-              `/bots/${encodeURIComponent(botId)}/requests/${encodeURIComponent(request.id)}`,
-              { answers },
-            )
+            void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers } })
               .catch((error) => report(error.message))
               .finally(() => setBusy(false));
           }}

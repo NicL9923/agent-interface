@@ -14,7 +14,7 @@ import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
 import { click, mountRoot, typeInto } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: () => createElement("span") }));
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {

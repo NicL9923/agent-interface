@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api } from "../client-api";
+import { request as apiRequest } from "../client-api";
 import { useResource } from "../app/use-resource";
 import type { EarlierFiles } from "../shared/history";
 import type { Bot, Conversation, FileRef } from "../shared/types";
@@ -91,7 +91,7 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
     const id = ++request.current;
     const settle = (value: typeof earlier) => { if (request.current === id) setEarlier({ session, before, ...value }); };
     settle({ loading: true });
-    api<EarlierFiles>(`/bots/${encodeURIComponent(bot.id)}/files${before ? `?before=${encodeURIComponent(before)}` : ""}`)
+    apiRequest("GET /bots/:id/files", { params: { id: bot.id }, query: { before } })
       .then(value => settle({ messages: value.messages }), () => settle({ failed: true }));
   }, [open, bot.id, session, before, !!current?.earlierFiles, fetched]);
   const show = () => {

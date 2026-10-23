@@ -6,7 +6,7 @@ import { api, ApiError, write } from "../src/client-api";
 import { AutomationPanel, LearningPanel } from "../src/components/AutomationPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 let root: Root, container: HTMLDivElement;
 const bots = [{ id: "ranch", name: "Ranch", model: "fixture", shared: true, activity: "idle" as const }];
 const initial = (): AutomationOverview => ({ botId: "ranch", owner: "Hermes", canManageTriggers: true,

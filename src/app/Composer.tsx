@@ -8,7 +8,7 @@ import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
 import { ComposerModelPicker, Loading } from "./panels";
 import { Button } from "../components/ui/button";
-import { write } from "../client-api";
+import { request } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
 import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
@@ -316,7 +316,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
             title={boot.capabilities.stop.reason || "Stop response"}
             onClick={() => {
               setStopping(true);
-              void write(`/bots/${encodeURIComponent(botId)}/stop`, {})
+              void request("POST /bots/:id/stop", { params: { id: botId } })
                 .catch(error => { if (mounted.current) report(error.message); })
                 .finally(() => { if (mounted.current) setStopping(false); });
             }}>

@@ -7,7 +7,7 @@ import { ApiError, api, write } from "../src/client-api";
 import type { Bootstrap, Bot, ModelCatalog } from "../src/shared/types";
 import { click, mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 const catalog: ModelCatalog = { provider: "house", model: "saved-model", providers: [
   { id: "house", name: "House provider", authenticated: true, models: [
     { id: "saved-model", name: "Saved model", available: true },

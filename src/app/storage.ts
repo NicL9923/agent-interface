@@ -1,12 +1,7 @@
-import type { Conversation, FileRef } from "../shared/types";
-export type SavedConversation = Conversation & {
-  draft?: { text: string; attachments: FileRef[] };
-  readPosition?: { scrollTop?: number; messageId?: string };
-  /** Messages before the requested window, present only when one was requested. */
-  earlier?: number;
-  /** Files only those earlier messages carry, listed on demand. */
-  earlierFiles?: number;
-};
+import type { FileRef } from "../shared/types";
+import type { ConversationPage } from "../shared/api";
+/** A conversation page as the server answers it, with this person's draft and read position. */
+export type SavedConversation = ConversationPage;
 export type Draft = {
   text: string;
   attachments: FileRef[];

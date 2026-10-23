@@ -8,10 +8,10 @@ import type {
   Bootstrap,
   Bot,
   BotInput,
-  FileRef,
   Routine,
 } from "./shared/types";
-import { api, ApiError, write } from "./client-api";
+import { api, ApiError, request, write } from "./client-api";
+import { routeUrl, type ApiResponse } from "./shared/api";
 import { useAction } from "./app/use-action";
 import { useCatalogDraft } from "./app/use-catalog-draft";
 import { useResource } from "./app/use-resource";
@@ -166,7 +166,7 @@ function LoadedBotSettings({
     setSaving("details");
     let saved: Bot;
     try {
-      saved = await write<Bot>("/bots", { ...submitted, confirmModel: confirmed });
+      saved = await request("POST /bots", { body: { ...submitted, confirmModel: confirmed } });
       setConfirmModel(false);
     } finally { setSaving(null); }
     const chosen = avatar;
@@ -174,7 +174,7 @@ function LoadedBotSettings({
     const portraitNext = chosen.mode === "portrait" && !chosen.src;
     let failure = "";
     if (!portraitNext) {
-      try { await write(`/bots/${encodeURIComponent(saved.id)}/avatar`, chosen, "PUT"); }
+      try { await request("PUT /bots/:id/avatar", { params: { id: saved.id }, body: chosen }); }
       catch (e) { failure = (e as Error).message || "The avatar could not be saved."; }
     }
     onSaved();
@@ -187,7 +187,7 @@ function LoadedBotSettings({
   }, { onError: cause => { if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true); } });
   const saveAvatar = () => void run(async () => {
     const submitted = avatar;
-    await write(`/bots/${encodeURIComponent(existing!.id)}/avatar`, submitted, "PUT");
+    await request("PUT /bots/:id/avatar", { params: { id: existing!.id }, body: submitted });
     setBaseline((current) => ({ ...current, avatar: submitted }));
     setAvatarFailure("");
   }, "Avatar saved", "avatar");
@@ -203,11 +203,10 @@ function LoadedBotSettings({
     setPersonalConfirmed(personal);
     return run(
       async () => {
-        await write(
-          `/bots/${encodeURIComponent(existing.id)}`,
-          { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}) },
-          "PATCH",
-        );
+        await request("PATCH /bots/:id", {
+          params: { id: existing.id },
+          body: { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}) },
+        });
         setConfirmModel(false);
         setBaseline((current) => ({ ...current, form: submitted }));
       },
@@ -226,8 +225,9 @@ function LoadedBotSettings({
     await run(async () => {
       const data = new FormData();
       data.append("file", file);
-      const result = await api<FileRef>(
-        `/bots/${encodeURIComponent(existing.id)}/uploads`,
+      // Multipart, so the mapped route is posted with a form body instead of through request().
+      const result = await api<ApiResponse<"POST /bots/:id/uploads">>(
+        routeUrl("POST /bots/:id/uploads", { id: existing.id }),
         { method: "POST", body: data },
       );
       setAvatar({
@@ -520,9 +520,7 @@ function LoadedBotSettings({
                   remove={() =>
                     void run(async () => {
                       onDeleted?.(existing.id);
-                      await api(`/bots/${encodeURIComponent(existing.id)}`, {
-                        method: "DELETE",
-                      });
+                      await request("DELETE /bots/:id", { params: { id: existing.id } });
                       onClose();
                     }, "Assistant deleted")
                   }
@@ -567,10 +565,7 @@ function LoadedBotSettings({
                     disabled={busy || !prompt.trim() || !bootstrap.capabilities.portraitGeneration.supported}
                     onClick={() =>
                       void run(async () => {
-                        const result = await write<FileRef>(
-                          `/bots/${encodeURIComponent(existing.id)}/portrait`,
-                          { prompt },
-                        );
+                        const result = await request("POST /bots/:id/portrait", { params: { id: existing.id }, body: { prompt } });
                         setAvatar({
                           mode: "portrait",
                           src:
@@ -898,7 +893,7 @@ function SaveProgress({ state, label }: { state?: "saving" | "saved"; label: str
 export function BotSettings(props: Parameters<typeof LoadedBotSettings>[0]) {
   const botId = props.bot === "new" ? undefined : props.bot.id;
   const hasConfiguration = props.bot === "new" || typeof props.bot.instructions === "string";
-  const detail = useResource<Bot>(botId && !hasConfiguration ? `/bots/${encodeURIComponent(botId)}` : null, {
+  const detail = useResource<ApiResponse<"GET /bots/:id">>(botId && !hasConfiguration ? routeUrl("GET /bots/:id", { id: botId }) : null, {
     validate: value => { if (typeof value.instructions !== "string") throw new Error("Assistant settings are incomplete. Try again."); },
   });
   const ready = hasConfiguration || detail.data?.id === botId;

@@ -6,7 +6,7 @@ import { VoiceControls } from "../src/components/VoiceControls.js";
 import type { VoiceState } from "../src/shared/voice.js";
 import { mountRoot } from "./ui-harness";
 const requestApi = vi.hoisted(() => vi.fn());
-vi.mock("../src/client-api.js", () => ({ api: requestApi }));
+vi.mock("../src/client-api.js", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: requestApi }))()));
 let container: HTMLDivElement, root: Root;
 let transcript: ReturnType<typeof vi.fn<(text: string) => void>>, state: ReturnType<typeof vi.fn<(state: VoiceState) => void>>;
 let stopped: ReturnType<typeof vi.fn>, getUserMedia: ReturnType<typeof vi.fn>;
