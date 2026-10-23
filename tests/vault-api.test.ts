@@ -1,13 +1,12 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { randomBytes } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import { installAuth, hash } from '../src/server/auth.js';
+import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installVaultRoutes, nameRequesters } from '../src/server/vault.js';
-import type { Runtime } from '../src/shared/types.js';
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 const origin = 'https://vault.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
@@ -16,14 +15,11 @@ async function setup() {
   const store = new Store(':memory:');
   await app.register(cookie);
   await installAuth(app, store, loadConfig({ NODE_ENV:'production', APP_ORIGIN:origin, APP_DATABASE:':memory:', GOOGLE_CLIENT_ID:'fixture', HOUSEHOLD_EMAILS:'one@example.invalid' }));
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as {statusCode?:number}).statusCode ?? 502).send({error:(error as Error).message}));
+  app.setErrorHandler(errorHandler({ production: true }));
   const vaultRequest = vi.fn(async () => ({status:'ok'}));
-  await installVaultRoutes(app, {listBots:async()=>[{id:'shared'}],vaultRequest} as unknown as Runtime);
-  store.user({id:'one',name:'One',email:'one@example.invalid'});
-  const token=randomBytes(32).toString('hex'), csrf=randomBytes(32).toString('hex');
-  store.session(hash(token),'one',csrf,Date.now()+600000);
+  await installVaultRoutes(app, fakeRuntime({listBots:async()=>[{id:'shared'}],vaultRequest}));
   app.addHook('onClose', async()=>store.close());
-  return {app,store,vaultRequest,headers:{origin,cookie:`session=${token}`,'x-csrf-token':csrf}};
+  return {app,store,vaultRequest,headers:signIn(store,origin,'one')};
 }
 const canary='vault-synthetic-password-DoNotLog';
 const owner={epoch:'native-epoch',sessionId:'canonical-session',method:'vault.save_login'};

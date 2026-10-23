@@ -1,22 +1,21 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { randomBytes } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import { installAuth, hash } from '../src/server/auth.js';
+import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installDiscoveryRoutes } from '../src/server/discovery.js';
-import type { Runtime } from '../src/shared/types.js';
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 const apps:ReturnType<typeof Fastify>[]=[];afterEach(async()=>{for(const app of apps.splice(0))await app.close();});
 async function setup() {
   const app=Fastify();apps.push(app);const store=new Store(':memory:');await app.register(cookie);const origin='https://discovery.example.test';
   await installAuth(app,store,loadConfig({NODE_ENV:'production',APP_ORIGIN:origin,APP_DATABASE:':memory:',GOOGLE_CLIENT_ID:'fixture',HOUSEHOLD_EMAILS:'one@example.test,two@example.test'}));
-  app.setErrorHandler((error,_req,reply)=>reply.code(error instanceof z.ZodError?400:(error as {statusCode?:number}).statusCode??502).send({error:(error as Error).message}));
+  app.setErrorHandler(errorHandler({ production: true }));
   const experienceRequest=vi.fn(async(input:any)=>input.operation==='search'?[{botId:input.profile,sessionId:'history',title:'Dinners',snippet:'Plan'}]:input.operation==='history'?{botId:input.profile,sessionId:input.sessionId,messages:[{id:'reply',role:'assistant',text:'Plan'}],offset:input.offset,hasMore:false}:{botId:input.profile,days:30,actualCost:null});
   const setRoutineEnabled=vi.fn(async()=>{});const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners'}]);
-  const runtime={listBots:async()=>[{id:'shared',name:'Shared',shared:true},{id:'private',name:'Private',shared:false,ownerId:'two'}],experienceRequest,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[{id:'browser',enabled:false},{id:'terminal',enabled:true}],capabilities:async()=>({uploads:{supported:true}}),setRoutineEnabled,saveRoutine} as unknown as Runtime;
-  await installDiscoveryRoutes(app,runtime,store);store.user({id:'one',name:'One',email:'one@example.test'});const token=randomBytes(32).toString('hex');store.session(hash(token),'one','csrf',Date.now()+600000);const headers={cookie:`session=${token}`,origin,'x-csrf-token':'csrf'};app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,setRoutineEnabled,saveRoutine};
+  const runtime=fakeRuntime({listBots:async()=>[{id:'shared',name:'Shared',shared:true},{id:'private',name:'Private',shared:false,ownerId:'two'}],experienceRequest,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[{id:'browser',enabled:false},{id:'terminal',enabled:true}],capabilities:async()=>({uploads:{supported:true}}),setRoutineEnabled,saveRoutine});
+  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,setRoutineEnabled,saveRoutine};
 }
 it('searches only visible profiles and includes routine results without copying their output',async()=>{
   const s=await setup();expect((await s.app.inject('/api/search?q=dinners')).statusCode).toBe(401);

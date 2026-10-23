@@ -1,20 +1,19 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { randomBytes } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
 import { loadConfig } from '../src/server/config.js';
-import { installAuth, hash } from '../src/server/auth.js';
+import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { installCollaborationRoutes } from '../src/server/collaboration.js';
-import type { Runtime } from '../src/shared/types.js';
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.close())); });
 async function fixture(privateOwner = 'someone-else') {
   const app = Fastify(); apps.push(app); const store = new Store(':memory:');
   const origin = 'https://collaboration.invalid';
   await app.register(cookie); await installAuth(app, store, loadConfig({ NODE_ENV:'production', APP_ORIGIN:origin, GOOGLE_CLIENT_ID:'fixture', HOUSEHOLD_EMAILS:'one@example.invalid' }));
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as {statusCode?:number}).statusCode || 502).send({ error:(error as Error).message }));
+  app.setErrorHandler(errorHandler({ production: true }));
   const member = (profile: string) => ({ member_id:profile, profile, handle:profile });
   const rooms = [
     { room_id:'shared', name:'Shared discussion', members:[member('ranch'),member('planner')] },
@@ -25,11 +24,10 @@ async function fixture(privateOwner = 'someone-else') {
     : input.operation === 'state' ? {room: rooms.find(room => room.room_id === input.roomId)}
     : input.operation === 'log' ? {events:[],cursor:0,has_more:false,latest_seq:0} : {accepted:true});
   const routineResults = vi.fn(async () => []), routineOutput = vi.fn(async () => ({messages:[],previewOnly:false}));
-  const runtime = { groupRequest, routineResults, routineOutput, listBots:async () => [{id:'ranch',shared:true},{id:'planner',shared:true},{id:'private-bot',shared:false,ownerId:privateOwner}] } as unknown as Runtime;
+  const runtime = fakeRuntime({ groupRequest, routineResults, routineOutput, listBots:async () => [{id:'ranch',shared:true},{id:'planner',shared:true},{id:'private-bot',shared:false,ownerId:privateOwner}] });
   await installCollaborationRoutes(app,runtime,store);
-  store.user({id:'one',name:'One',email:'one@example.invalid'}); const token=randomBytes(32).toString('hex'),csrf=randomBytes(32).toString('hex');store.session(hash(token),'one',csrf,Date.now()+600000);
   app.addHook('onClose',async () => store.close());
-  return {app,groupRequest,routineResults,routineOutput,headers:{origin,cookie:`session=${token}`,'x-csrf-token':csrf}};
+  return {app,groupRequest,routineResults,routineOutput,headers:signIn(store,origin,'one')};
 }
 it('filters private and peer rooms and checks the full roster on every read and action', async () => {
   const s = await fixture();

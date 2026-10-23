@@ -12,6 +12,7 @@ import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, 
 import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
+import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
 function runtimeDouble() {
@@ -121,23 +122,7 @@ function runtimeDouble() {
     },
   };
 }
-async function login(
-  app: Awaited<ReturnType<typeof createApp>>["app"],
-  member = "one",
-) {
-  const result = await app.inject({
-    method: "POST",
-    url: "/api/auth/local",
-    headers: { origin },
-    payload: { member },
-  });
-  expect(result.statusCode).toBe(200);
-  return {
-    cookie: result.cookies[0].name + "=" + result.cookies[0].value,
-    "x-csrf-token": result.json().csrfToken,
-    origin,
-  };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") => localLogin(app, origin, member);
 const config = () =>
   loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
 describe("default roster detail fallback", () => {

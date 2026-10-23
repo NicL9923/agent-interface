@@ -7,6 +7,8 @@ import { loadConfig } from "../src/server/config.js";
 import { createHermesRuntime } from "../src/server/hermes.js";
 import { installVaultRoutes } from "../src/server/vault.js";
 import type { Runtime } from "../src/shared/types.js";
+import { fakeRuntime } from "./helpers/server.js";
+import { errorHandler, httpError } from "../src/server/http-error.js";
 
 // Clients treat a 401 as the end of their own sign-in, and iOS deletes its Keychain token.
 // Only a missing or expired app session may produce one, and it always says so by code.
@@ -42,19 +44,20 @@ it("never forwards an upstream 401 or 403 from the credential bridge", async () 
   const app = Fastify(); apps.push(app);
   app.decorateRequest("user", null);
   app.addHook("onRequest", async req => { req.user = { id: "member", name: "Member", email: "member@example.invalid" }; });
-  app.setErrorHandler((error, _req, reply) => reply.code((error as { statusCode?: number }).statusCode ?? 500).send({ error: (error as Error).message, code: (error as { code?: string }).code }));
+  app.setErrorHandler(errorHandler({ production: true }));
   let failure: Error = new Error();
-  await installVaultRoutes(app, { listBots: async () => [{ id: "ranch" }], vaultRequest: async () => { throw failure; } } as unknown as Runtime);
+  await installVaultRoutes(app, fakeRuntime({ listBots: async () => [{ id: "ranch" }], vaultRequest: async () => { throw failure; } }));
   for (const status of [401, 403]) {
     failure = Object.assign(new Error("native detail"), { statusCode: status });
     expect((await app.inject("/api/bots/ranch/vault")).statusCode).toBe(502);
   }
-  failure = Object.assign(new Error("Hermes rejected this server's credential."), { statusCode: 502, code: "hermes_unauthorized" });
+  // As the Hermes adapter raises it: a 5xx exposed because it tells the person what to do.
+  failure = httpError(502, "Hermes rejected this server's credential.", { code: "hermes_unauthorized", expose: true });
   expect((await app.inject("/api/bots/ranch/vault")).json()).toEqual({ error: "Hermes rejected this server's credential.", code: "hermes_unauthorized" });
 });
 
 it("marks every missing, invalid or expired session 401 as session_expired", async () => {
-  const s = await setup({ close: async () => {} } as unknown as Runtime);
+  const s = await setup(fakeRuntime({ close: async () => {} }));
   const expired = randomBytes(32).toString("base64url");
   s.store.nativeSession(hash(expired), "member", Date.now() - 1);
   for (const headers of [{}, { authorization: "Bearer not-a-token" }, { authorization: `Bearer ${expired}` }, { cookie: "session=unknown" }]) {

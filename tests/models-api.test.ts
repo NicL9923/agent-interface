@@ -1,9 +1,8 @@
-import { randomBytes } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
-import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import { defaultPreferences, type Runtime } from "../src/shared/types.js";
+import { defaultPreferences } from "../src/shared/types.js";
+import { fakeRuntime, signIn } from "./helpers/server.js";
 
 const origin = "https://app.example.invalid";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -13,15 +12,9 @@ async function setup() {
     GOOGLE_CLIENT_ID: "fixture-client", HOUSEHOLD_EMAILS: "one@example.invalid,two@example.invalid" });
   const modelOptions = vi.fn(async () => ({ providers: [], provider: "saved-provider", model: "saved-model" }));
   const inferenceSettings = vi.fn(async () => ({ reasoning: "high", speed: "normal" }));
-  const runtime = { inferenceSettings, capabilities: async () => ({ botConfiguration: { supported: true } }), modelOptions, close: async () => {} } as unknown as Runtime;
+  const runtime = fakeRuntime({ inferenceSettings, capabilities: async () => ({ botConfiguration: { supported: true } }), modelOptions, close: async () => {} });
   const result = await createApp(config, runtime, { background: false }); apps.push(result.app);
-  const login = (id: string) => {
-    result.store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
-    result.store.session(hash(token), id, csrf, Date.now() + 60000);
-    return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
-  };
-  return { ...result, runtime, modelOptions, inferenceSettings, one: login("one"), two: login("two") };
+  return { ...result, runtime, modelOptions, inferenceSettings, one: signIn(result.store, origin, "one"), two: signIn(result.store, origin, "two") };
 }
 
 it("requires sign-in for the scoped model catalog and explains unsupported Hermes installations", async () => {

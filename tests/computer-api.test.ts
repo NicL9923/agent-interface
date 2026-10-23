@@ -11,7 +11,8 @@ import { installComputerRoutes } from "../src/server/computer.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import type { Runtime } from "../src/shared/types.js";
-import { z } from "zod";
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 
 const origin = "https://app.example.invalid";
 const cleanups: (() => Promise<unknown>)[] = [];
@@ -27,8 +28,7 @@ function terminalDouble(live: string[] = []) {
 async function setup(options: {admins?: string; terminals?: ReturnType<typeof terminalDouble>} = {}) {
   const logs: Record<string, unknown>[] = [];
   const app = Fastify({logger: {level: "info", stream: {write: (line: string) => {logs.push(JSON.parse(line));}}}}), store = new Store(":memory:");
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as {statusCode?: number}).statusCode ?? 500)
-    .send({error: (error as Error).message, code: (error as {code?: string}).code}));
+  app.setErrorHandler(errorHandler({ production: true }));
   let maintenance = false;
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, GOOGLE_CLIENT_ID: "fixture",
     HOUSEHOLD_EMAILS: "one@example.invalid,two@example.invalid",
@@ -39,16 +39,10 @@ async function setup(options: {admins?: string; terminals?: ReturnType<typeof te
   const upstream = new WebSocketServer({port: 0, host: "127.0.0.1"});
   await once(upstream, "listening");
   upstream.on("connection", socket => socket.on("message", (data, binary) => socket.send(data, {binary})));
-  const runtime = {computerRequest, connectComputerDisplay: () => new WebSocket(`ws://127.0.0.1:${(upstream.address() as {port: number}).port}`)} as unknown as Runtime;
+  const runtime = fakeRuntime({computerRequest, connectComputerDisplay: () => new WebSocket(`ws://127.0.0.1:${(upstream.address() as {port: number}).port}`)});
   await app.register(cookie); await app.register(websocket); await installAuth(app, store, config);
   await installComputerRoutes(app, config, store, runtime, () => maintenance, options.terminals);
-  const login = (id: string) => {
-    store.user({id, name: id, email: `${id}@example.invalid`});
-    const token = randomBytes(32).toString("hex"), csrf = "fixture-csrf";
-    store.session(hash(token), id, csrf, Date.now() + 60000);
-    store.confirmSession(hash(token), Date.now());
-    return {origin, cookie: `session=${token}`, "x-csrf-token": csrf, "user-agent": "fixture-browser"};
-  };
+  const login = (id: string) => ({...signIn(store, origin, id, {csrf: "fixture-csrf", confirmed: true}), "user-agent": "fixture-browser"});
   cleanups.push(async () => {for (const ws of upstream.clients) ws.terminate(); await new Promise<void>(resolve => upstream.close(() => resolve())); store.close();});
   cleanups.push(() => app.close());
   return {app, store, runtime, upstream, computerRequest, logs, one: login("one"), two: login("two"), setMaintenance: (value: boolean) => {maintenance = value;}};

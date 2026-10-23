@@ -3,19 +3,20 @@ import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/server/app.js';
 import { loadConfig } from '../src/server/config.js';
 import { defaultPreferences, type Avatar, type FileRef, type Runtime } from '../src/shared/types.js';
+import { fakeRuntime } from "./helpers/server.js";
 
 const origin='http://127.0.0.1:3000';
 const capabilities=Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Awaited<ReturnType<Runtime['capabilities']>>;
 const apps:Awaited<ReturnType<typeof createApp>>['app'][]=[];
 afterEach(async()=>{await Promise.all(apps.splice(0).map(app=>app.close()));});
 async function installation(overrides:Partial<Runtime>={}){
-  const runtime={
+  const runtime=fakeRuntime({
     listBots:vi.fn(async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'},{id:'other',name:'Other',shared:true,model:'test',activity:'idle'}]),
     capabilities:vi.fn(async()=>capabilities),
     status:vi.fn(async()=>({connected:true,code:'connected'})),
     reconnect:vi.fn(async()=>({connected:true,code:'connected'})),
     close:vi.fn(async()=>{}),...overrides,
-  } as unknown as Runtime;
+  });
   const result=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
   apps.push(result.app);return {...result,runtime};
 }

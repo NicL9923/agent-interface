@@ -4,8 +4,8 @@ import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { HermesUpgrades } from "../src/server/upgrades.js";
-import type { Runtime } from "../src/shared/types.js";
 import type { IntegrationRequest } from "../src/shared/integrations.js";
+import { fakeRuntime, signIn } from "./helpers/server.js";
 
 const origin = "https://app.example.invalid";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -18,16 +18,10 @@ async function setup() {
   const integrationRequest = vi.fn(async (request: IntegrationRequest) => request.operation === "list"
     ? { profile: request.profile, connections: [], canManage: true }
     : { kind: "connected", status: "approved", message: "Fixture operation completed" });
-  const runtime = { integrationRequest, close: async () => {} } as unknown as Runtime;
+  const runtime = fakeRuntime({ integrationRequest, close: async () => {} });
   const upgrades = new HermesUpgrades(config, runtime);
   const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
-  const login = (id: string) => {
-    result.store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
-    result.store.session(hash(token), id, csrf, Date.now() + 60000);
-    return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
-  };
-  return { ...result, runtime, integrationRequest, upgrades, admin: login("admin"), member: login("member") };
+  return { ...result, runtime, integrationRequest, upgrades, admin: signIn(result.store, origin, "admin"), member: signIn(result.store, origin, "member") };
 }
 
 it("lets members inspect and check their profile, but reserves connection changes for administrators", async () => {

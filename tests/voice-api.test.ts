@@ -1,16 +1,16 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
-import { randomBytes } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { z } from "zod";
-import { installAuth, hash } from "../src/server/auth.js";
+import { installAuth } from "../src/server/auth.js";
 import { Store } from "../src/server/store.js";
 import { loadConfig } from "../src/server/config.js";
 import { registerVoiceRoutes } from "../src/server/voice.js";
 import { MAX_VOICE_BYTES } from "../src/shared/voice.js";
 import { redactAgents, Roster } from "../src/server/bot-access.js";
-import type { Message, Runtime } from "../src/shared/types.js";
+import type { Message } from "../src/shared/types.js";
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 
 const origin = "https://voice.example.invalid";
 const apps: ReturnType<typeof Fastify>[] = [];
@@ -22,23 +22,17 @@ async function setup() {
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:", GOOGLE_CLIENT_ID: "fixture", HOUSEHOLD_EMAILS: "first@example.invalid,second@example.invalid" });
   await app.register(cookie); await app.register(multipart);
   await installAuth(app, store, config);
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 502).send({ error: (error as Error).message }));
+  app.setErrorHandler(errorHandler({ production: true }));
   const transcribeVoice = vi.fn(async () => ({ text: " Pick up milk ", provider: "fixture" }));
   const synthesizeVoice = vi.fn(async () => ({ data: Buffer.from("fixture audio"), mime: "audio/mpeg" }));
   const conversation = vi.fn<() => Promise<{ messages: Message[] }>>(async () => ({ messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
   const listBots = vi.fn(async () => [{ id: "ranch" }]);
-  const runtime = { transcribeVoice, synthesizeVoice, conversation, listBots } as unknown as Runtime;
+  const runtime = fakeRuntime({ transcribeVoice, synthesizeVoice, conversation, listBots });
   const hidden = new Set<string>();
   const roster = new Roster(runtime, store);
   await registerVoiceRoutes(app, runtime, { now: () => clock, visible: botId => !hidden.has(botId), redact: async (message,userId) => (await redactAgents(store,roster,userId)).message(message) });
-  const login = (id: string) => {
-    store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
-    store.session(hash(token), id, csrf, clock + 600000);
-    return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
-  };
   app.addHook("onClose", async () => store.close());
-  return { app, store, runtime, hidden, transcribeVoice, synthesizeVoice, conversation, listBots, first: login("first"), second: login("second"), advance: (ms: number) => { clock += ms; } };
+  return { app, store, runtime, hidden, transcribeVoice, synthesizeVoice, conversation, listBots, first: signIn(store, origin, "first", { now: clock }), second: signIn(store, origin, "second", { now: clock }), advance: (ms: number) => { clock += ms; } };
 }
 function recording(mime = "audio/webm", data = Buffer.from("fixture recording")) {
   const boundary = "voice-fixture";

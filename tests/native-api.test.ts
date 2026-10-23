@@ -9,10 +9,11 @@ import { loadConfig, type Config } from "../src/server/config.js";
 import { accountMarker, apnsCollapseId, createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
-import { defaultPreferences, type Runtime, type RuntimeEvent } from "../src/shared/types.js";
+import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
+import { fakeRuntime } from "./helpers/server.js";
 
 const origin = "http://127.0.0.1:3000";
-const runtime = { status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} } as unknown as Runtime;
+const runtime = fakeRuntime({ status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} });
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
 afterEach(async () => { for (const { app } of apps.splice(0)) await app.close(); });
 async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), verifyGoogle?: NonNullable<Parameters<typeof createApp>[2]>["verifyGoogle"]) {

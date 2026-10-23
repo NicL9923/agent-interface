@@ -1,9 +1,10 @@
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../src/server/store.js';
-import { defaultPreferences, type ToolCall, type Runtime } from '../src/shared/types.js';
+import { defaultPreferences, type ToolCall } from '../src/shared/types.js';
 import { receipt } from '../src/shared/discovery.js';
 import { inQuietHours, BackgroundWorker } from '../src/server/notifications.js';
 import { loadConfig } from '../src/server/config.js';
+import { fakeRuntime } from "./helpers/server.js";
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 function setup() { const store=new Store(':memory:');stores.push(store);store.user({id:'one',name:'One',email:'one@example.test'});store.user({id:'two',name:'Two',email:'two@example.test'});return store; }
 it('stores account-specific pointers and deduplicates original references without copying answers',()=>{
@@ -25,7 +26,7 @@ it('keeps a fixed digest across retries and acknowledges each device independent
   for(const id of ['first','second'])store.recordEvents([{id,runId:'run',botId:'ranch',kind:'completed',title:id,occurredAt:new Date().toISOString()}],id);
   for(const endpoint of ['https://push.test/ok','https://push.test/retry'])store.subscribe('one',{endpoint,keys:{p256dh:'key',auth:'key'}});
   const payloads:{endpoint:string;payload:string}[]=[];
-  const runtime={capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})} as unknown as Runtime;
+  const runtime=fakeRuntime({capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async(subscription,payload)=>{payloads.push({endpoint:subscription.endpoint,payload});if(subscription.endpoint.endsWith('/retry')&&payloads.filter(item=>item.endpoint.endsWith('/retry')).length===1)throw new Error('offline');});
   await worker.tick();expect(payloads).toEqual([]);
   store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);
@@ -36,7 +37,7 @@ it('keeps a fixed digest across retries and acknowledges each device independent
 it('defers approval notifications through quiet hours without marking them delivered',async()=>{
   const store=setup();const now=new Date();const time=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);
   store.savePreferences('one',{...defaultPreferences,notifications:{timezone:'UTC',quietStart:time,quietEnd:time==='23:59'?'23:58':'23:59',batchMinutes:0}});store.participate('run','one');store.recordEvents([{id:'decision',runId:'run',botId:'ranch',kind:'approval',title:'Decision',occurredAt:now.toISOString()}],'1');store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});
-  let sends=0;const runtime={capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})} as unknown as Runtime;
+  let sends=0;const runtime=fakeRuntime({capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async()=>{sends++;});await worker.tick();expect(sends).toBe(0);expect(store.outbox()).toHaveLength(1);
   store.savePreferences('one',defaultPreferences);await worker.tick();expect(sends).toBe(1);expect(store.outbox()).toHaveLength(0);
 });
@@ -52,6 +53,6 @@ it('keeps the end of long tool output available inside a scrollable receipt',()=
 it('does not lose an accessible update when another member’s bot is revoked from its digest',async()=>{
   const store=setup();store.savePreferences('one',{...defaultPreferences,notifications:{timezone:'UTC',batchMinutes:5}});store.participate('run','one');
   store.recordEvents([{id:'public',botId:'public',runId:'run',kind:'completed',title:'Public update',occurredAt:new Date().toISOString()},{id:'private',botId:'private',runId:'run',kind:'completed',title:'Private secret title',occurredAt:new Date().toISOString()}],'1');store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);store.deliveryGroups();store.savePresentation('private',{ownerId:'two',shared:false});
-  store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});const payloads:string[]=[];const runtime={capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})} as unknown as Runtime;
+  store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});const payloads:string[]=[];const runtime=fakeRuntime({capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async(_,payload)=>{payloads.push(payload);});await worker.tick();expect(payloads).toHaveLength(1);expect(payloads[0]).toContain('Public update');expect(payloads[0]).not.toContain('Private secret title');expect(store.outbox()).toHaveLength(0);
 });

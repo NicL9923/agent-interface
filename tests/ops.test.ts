@@ -10,6 +10,7 @@ import { loadConfig } from "../src/server/config.js";
 import { FailureTracker } from "../src/server/logging.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const minute = 60_000, hour = 60 * minute;
 const origin = "http://127.0.0.1:3000";
@@ -27,14 +28,14 @@ const temporary = () => {
 };
 function runtime(overrides: Partial<Runtime> = {}) {
   let status: RuntimeStatus = { connected: true };
-  const value = {
+  const value = fakeRuntime({
     status: async () => status,
     capabilities: async () => ({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
     listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
     download: async () => ({ body: new Blob(["hello"]).stream(), name: "note.txt", mime: "text/plain" }),
     close: async () => {},
     ...overrides,
-  } as unknown as Runtime;
+  });
   return { value, set status(next: RuntimeStatus) { status = next; } };
 }
 async function setup(env: Record<string, string> = {}, options: { runtime?: Runtime; maintenance?: boolean; lines?: string[] } = {}) {
@@ -46,10 +47,7 @@ async function setup(env: Record<string, string> = {}, options: { runtime?: Runt
   apps.push(result.app);
   return result;
 }
-async function login(app: Awaited<ReturnType<typeof createApp>>["app"]) {
-  const result = await app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member: "one" } });
-  return { cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken, origin };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"]) => localLogin(app, origin);
 
 describe("health", () => {
   it("keeps the liveness response unchanged", async () => {
