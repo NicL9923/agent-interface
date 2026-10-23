@@ -26,6 +26,19 @@ it('reads a notification-selected routine history and displays the saved output'
   await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
   expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one',expect.anything());expect(container.textContent).toContain('north gate battery');
 });
+it('reports a saved routine output as a notice, not an error',async()=>{
+  vi.mocked(api).mockImplementation(async(path)=>path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
+  vi.mocked(write).mockResolvedValueOnce({});
+  await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
+  await click('Save output');
+  expect(write).toHaveBeenCalledWith('/saved',expect.objectContaining({kind:'routine',botId:'ranch',routineId:'morning',resultId:'run-one'}));
+  expect(container.querySelector('[role="status"].form-notice')?.textContent).toBe('Saved to your saved items.');
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  vi.mocked(write).mockRejectedValueOnce(new Error('Could not save.'));
+  await click('Save output');
+  expect(container.querySelector('[role="alert"].form-error')?.textContent).toBe('Could not save.');
+  expect(container.textContent).not.toContain('Saved to your saved items.');
+});
 it('restores an uncertain group send and retries the exact same saved request after refresh',async()=>{
   const pending={requestId:crypto.randomUUID(),threadId:crypto.randomUUID(),text:'Plan Saturday'};
   const key='agent-interface:group-send:one:room';localStorage.setItem(key,JSON.stringify(pending));

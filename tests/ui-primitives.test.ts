@@ -4,6 +4,7 @@ import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { Button } from "../src/components/ui/button";
 import { Dialog } from "../src/components/ui/dialog";
+import { FormMessage } from "../src/components/ui/form-message";
 import { Input } from "../src/components/ui/input";
 import { cn } from "../src/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../src/components/ui/popover";
@@ -90,4 +91,14 @@ it.each([false, true])("portals a popover into its native dialog when nested=%s"
 
 it("merges prefixed utilities while preserving existing semantic classes", () => {
   expect(cn("inline tw:z-20", "block tw:z-30")).toBe("inline block tw:z-30");
+});
+
+it("announces an error as an alert and a notice as a status, keeping layout classes", async () => {
+  await act(async () => root.render(h("div", null,
+    h(FormMessage, { tone: "error", className: "settings-footnote" }, "Broke"),
+    h(FormMessage, { tone: "notice" }, "Done"))));
+  const error = container.querySelector("p.form-error")!;
+  const notice = container.querySelector("p.form-notice")!;
+  expect([error.getAttribute("role"), error.className, error.textContent]).toEqual(["alert", "form-error settings-footnote", "Broke"]);
+  expect([notice.getAttribute("role"), notice.textContent]).toEqual(["status", "Done"]);
 });
