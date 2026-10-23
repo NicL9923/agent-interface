@@ -152,3 +152,15 @@ it("reports unsupported native capabilities without editable controls", async ()
   await work(); expect(container.textContent).toContain("Update and qualify Hermes first.");
   expect(button("New task")).toBeUndefined(); expect(button("Resume goal")).toBeUndefined(); expect(button("New event trigger")).toBeUndefined();
 });
+
+it("retires a failed status refresh once a change and its follow-up status succeed", async () => {
+  await work();
+  vi.mocked(api).mockRejectedValueOnce(new Error("Hermes is restarting."));
+  await click("Refresh status");
+  expect(container.textContent).toContain("Hermes is restarting.");
+  vi.mocked(write).mockResolvedValueOnce(initial());
+  await click("Resume goal");
+  expect(container.textContent).toContain("Saved in Hermes.");
+  expect(container.textContent).not.toContain("Hermes is restarting.");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});

@@ -99,6 +99,29 @@ describe("useResource", () => {
     expect(api).not.toHaveBeenCalled();
   });
 
+  it("ignores a reload kept from an older path, so the new path's handlers never see its result", async () => {
+    const onData = vi.fn(), errorMessage = vi.fn(() => "failed");
+    vi.mocked(api).mockResolvedValueOnce("a data").mockResolvedValueOnce("b data").mockRejectedValue(new Error("gone"));
+    await show("/a");
+    const old = latest.reload;
+    await show("/b", { onData, errorMessage });
+    onData.mockClear();
+    await act(async () => { await old(); });
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(onData).not.toHaveBeenCalled();
+    expect(errorMessage).not.toHaveBeenCalled();
+    expect(latest).toMatchObject({ data: "b data", error: "", loading: false });
+  });
+
+  it("clears a load error when a fresher copy replaces the data", async () => {
+    vi.mocked(api).mockResolvedValueOnce("first").mockRejectedValueOnce(new Error("offline"));
+    await show("/a");
+    await act(async () => { await latest.reload(); });
+    expect(latest).toMatchObject({ data: "first", error: "offline" });
+    await act(async () => latest.setData("fresher"));
+    expect(latest).toMatchObject({ data: "fresher", error: "" });
+  });
+
   it("rejects an unusable response through validate", async () => {
     vi.mocked(api).mockResolvedValueOnce("");
     await show("/a", { validate: value => { if (!value) throw new Error("Incomplete."); } });

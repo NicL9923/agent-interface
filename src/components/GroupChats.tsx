@@ -85,9 +85,13 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       if (scope.current === attemptKey) { setPending(null); setDraft(''); setThreadId(''); await room.reload(); }
     }, { onError: cause => scope.current === attemptKey ? `${(cause as Error).message} The message may have arrived. Retry the same saved message to check, without sending a duplicate.` : null });
   };
-  const act = (path: string, body: unknown) => action.run(async () => {
-    await write(`/groups/${encodeURIComponent(roomId)}/${path}`, body); await room.reload();
-  });
+  // The room may change or leave the list while this runs. Its reload is then inert, and its error is not shown on another room.
+  const act = (path: string, body: unknown) => {
+    const attemptKey = key;
+    return action.run(async () => {
+      await write(`/groups/${encodeURIComponent(roomId)}/${path}`, body); await room.reload();
+    }, { onError: cause => scope.current === attemptKey ? (cause as Error).message : null });
+  };
   const writable = catalog?.canSend && bootstrap.connection.connected;
   const messages = events.filter(event => event.kind === 'message.user' || event.kind === 'message.member');
   const newGroup = <button type="button" className="group-new" disabled={!writable || busy} aria-expanded={creating} onClick={() => setCreating(value => !value)}><Icon name="plus" size={16} />New group</button>;

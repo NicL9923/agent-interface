@@ -132,3 +132,25 @@ it('reads a room log from the start again after leaving and returning to it',asy
   expect(vi.mocked(api).mock.calls.at(-1)?.[0]).toBe('/groups/room/log?since=0');
   expect(container.querySelector('.group-message')?.textContent).toContain('Bring water');
 });
+it('keeps the newly selected room when an action from a room that left the list finishes',async()=>{
+  const other={...room,room_id:'other',name:'Fence repair'};
+  const idle={driver_status:{working:false,blocked:false,pending_actions:[]}};
+  let rooms=[room,other],removed=false,finish:((value:unknown)=>void)|undefined;
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(path==='/groups')return{supported:true,canSend:true,rooms};
+    if(path==='/groups/room'){if(removed)throw new ApiError('Not found',404);return{room,driver_status:{...idle.driver_status,working:true}};}
+    if(path==='/groups/other')return{room:other,...idle};
+    return{events:[],cursor:0,has_more:false};
+  });
+  vi.mocked(write).mockImplementation(()=>new Promise(done=>{finish=done;}));
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  await click('Stop discussion');expect(write).toHaveBeenCalledWith('/groups/room/stop',expect.anything());
+  // Another member made the room personal, so the list drops it and selects the next one.
+  rooms=[other];await act(async()=>vi.advanceTimersByTimeAsync(15000));
+  expect(container.querySelector('.group-heading h3')?.textContent).toBe('Fence repair');
+  const reads=vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length;
+  removed=true;await act(async()=>finish!({ok:true}));
+  expect(container.querySelector('.group-heading h3')?.textContent).toBe('Fence repair');
+  expect(container.textContent).not.toContain('That group chat is no longer available to you.');
+  expect(vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length).toBe(reads);
+});
