@@ -48,6 +48,42 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual(AppUpdate.evaluate($0.nativeApp, installedBuild: 11), .available(URL(string: "https://testflight.apple.com/join/CONTRACT")!))
     },
     "bot-avatar": check(AvatarConfig.self) { XCTAssertEqual($0.shape, "pebble"); XCTAssertEqual($0.accessory, "glasses") },
+    "bot-automation": check(HermesAutomationOverview.self) {
+      XCTAssertEqual($0.botId, "household"); XCTAssertEqual($0.owner, "Hermes"); XCTAssertEqual($0.canManageTriggers, true)
+      XCTAssertEqual($0.goals.goal?.status, "paused"); XCTAssertEqual($0.goals.goal?.maxTurns, 20)
+      XCTAssertEqual($0.goals.goal?.pausedReason, "Waiting for your approval.")
+      XCTAssertEqual($0.goals.resume?.status, "accepted"); XCTAssertEqual($0.goals.resume?.runId, "run-goal")
+      XCTAssertEqual($0.tasks.items.first?.dependencies, ["task-supplies"])
+      XCTAssertFalse($0.triggers.platformEnabled); XCTAssertEqual($0.triggers.items.first?.revision, String(repeating: "b", count: 64))
+      XCTAssertTrue($0.skills.approvalRequired); XCTAssertEqual($0.skills.installed.first?.name, "ranch/fences")
+      XCTAssertEqual($0.skills.pending.first?.revision, String(repeating: "c", count: 64))
+    },
+    "bot-goal-resume": check(HermesAutomationOverview.self) {
+      XCTAssertEqual($0.goals.resume?.requestId, "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6")
+      XCTAssertEqual($0.goals.resume?.status, "accepted"); XCTAssertEqual($0.canManageTriggers, true)
+    },
+    "bot-task": check(HermesTask.self) {
+      XCTAssertEqual($0.id, "task-fence"); XCTAssertEqual($0.status, "blocked"); XCTAssertEqual($0.priority, 5)
+      XCTAssertEqual($0.assignee, "garden"); XCTAssertEqual($0.owner, "household")
+      XCTAssertEqual($0.body, "Inspect the latch before opening the pasture.")
+      XCTAssertEqual($0.dependencies, ["task-supplies"]); XCTAssertEqual($0.blockedReason, "Waiting for supplies.")
+    },
+    "bot-trigger-create": check(HermesTriggerResult.self) {
+      XCTAssertEqual($0.subscription.id, "gate-event"); XCTAssertFalse($0.subscription.enabled)
+      XCTAssertEqual($0.subscription.events, ["gate.open", "gate.closed"])
+      XCTAssertEqual($0.subscription.routineId, "routine-morning"); XCTAssertTrue($0.subscription.secretSet)
+      XCTAssertEqual($0.subscription.revision, String(repeating: "b", count: 64))
+      var secret = HermesTransientSecret(); secret.receive($0)
+      XCTAssertEqual(secret.value, "one-time-contract-fixture"); XCTAssertFalse(secret.revealed)
+      secret.clear(); XCTAssertNil(secret.value)
+    },
+    "bot-skill-content": check(HermesSkillContent.self) {
+      XCTAssertEqual($0.name, "ranch/fences"); XCTAssertTrue($0.content.contains("Check the north gate.")); XCTAssertFalse($0.truncated)
+    },
+    "bot-skill-diff": check(HermesSkillDiff.self) {
+      XCTAssertEqual($0.id, "deadbeef"); XCTAssertTrue($0.diff.contains("+Check the north gate.")); XCTAssertFalse($0.truncated)
+      XCTAssertEqual($0.decision(.approve)?.revision, String(repeating: "d", count: 64))
+    },
     "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
     "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
     "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },

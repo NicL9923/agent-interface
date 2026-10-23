@@ -508,7 +508,7 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
     let response: Response;
     try {
       const headers = new Headers(init.headers);
-      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience';
+      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience' || path === '/api/agent-interface/automation';
       for (const [name, value] of Object.entries(credential ? {'Authorization': `Bearer ${options.token}`} : authHeaders())) headers.set(name, value);
       const target = credential ? '/api/agent-interface/service/' + path.slice('/api/'.length) : servicePath(path);
       response = await fetch(new URL(target, origin), {...init,
@@ -529,9 +529,17 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       await response.body?.cancel();
       throw Object.assign(new Error('Hermes could not confirm this credential operation. Refresh its status before trying again.'), { statusCode: response.status });
     }
-    if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience'].includes(path)) {
+    if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience', '/api/agent-interface/automation'].includes(path)) {
       const detail = await response.json().catch(() => ({})) as {error?:unknown};
       throw Object.assign(new Error(typeof detail.error === 'string' ? detail.error.slice(0,1000) : 'Hermes could not finish this connection operation.'), {statusCode:response.status});
+    }
+    if (!response.ok && path.startsWith('/api/cron/jobs') && [400,404,409,422].includes(response.status)) {
+      const detail = await response.json().catch(() => ({})) as {detail?:unknown;error?:unknown};
+      const message = typeof detail.detail === 'string' ? detail.detail : typeof detail.error === 'string' ? detail.error : 'Hermes could not save this routine. Review its settings and try again.';
+      // Native script validation includes absolute profile paths. Keep the useful
+      // reason, but don't expose the host's directory layout to clients.
+      const safeMessage = message.replace(/(^|[\s("'=:])\/[^\s"'<>]*/g, '$1[server path]');
+      throw Object.assign(new Error(safeMessage.slice(0,1000)), {statusCode:response.status});
     }
     if (!response.ok) throw new TransportError('unreachable', `Hermes HTTP ${response.status}: request failed.`);
     return response;
@@ -664,10 +672,16 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
   }
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
-    const body = {
+    const body: Wire = {
       name: `[bot:${input.botId}] ${input.name}`, prompt: input.prompt,
-      schedule: input.schedule, deliver: `bot-chat:${input.botId}`, context_from: ['self'],
+      schedule: input.schedule, ...(!id ? {deliver: `bot-chat:${input.botId}`, context_from: ['self']} : {}),
     };
+    // Native PUT merges updates. Omitted fields, including future native settings,
+    // must stay omitted. null/[] explicitly clear the corresponding override.
+    for (const [app, native] of [['skills','skills'], ['model','model'], ['provider','provider'],
+      ['enabledToolsets','enabled_toolsets'], ['script','script'], ['noAgent','no_agent'], ['contextFrom','context_from']] as const) {
+      if (input[app] !== undefined) body[native] = input[app];
+    }
     const path = `/api/cron/jobs${id ? `/${encodeURIComponent(id)}` : ''}`;
     let job = await (await http(path + profile, {
       method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
@@ -978,6 +992,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
       if (!data.length || data.length > 8 * 1024 * 1024) throw new Error('Hermes returned oversized speech audio.');
       return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
     },
+    async automationRequest(input) {
+      return (await http('/api/agent-interface/automation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
+    },
     async experienceRequest(input) {
       const value = await (await http('/api/agent-interface/experience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json();
       if(input.operation==='run'){discoveryFull=true;discoveryGeneration++;}
@@ -1046,6 +1063,9 @@ if (!response.ok) throw new TransportError(response.status === 401 || response.s
           all.push({id:job.id ?? job.job_id,botId:row.name,
             name:job.name.startsWith(prefix) ? job.name.slice(prefix.length) : job.name,
             prompt:job.prompt ?? '',schedule:job.schedule_display,
+            skills:job.skills ?? (job.skill ? [job.skill] : []),model:job.model ?? null,provider:job.provider ?? null,
+            enabledToolsets:job.enabled_toolsets ?? null,script:job.script ?? null,noAgent:job.no_agent === true,
+            contextFrom:typeof job.context_from === 'string' ? [job.context_from] : job.context_from ?? null,
             enabled:job.enabled !== false && job.state !== 'paused',
             nextRunAt:job.next_run_at ?? undefined,lastRunAt:job.last_run_at ?? undefined,
             lastStatus:job.last_status ?? undefined,lastError:job.last_error ?? undefined,lastDeliveryError:job.last_delivery_error ?? undefined});

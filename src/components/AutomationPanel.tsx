@@ -1,0 +1,268 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, ApiError, write } from "../client-api";
+import type { Bot, Routine } from "../shared/types";
+import type { AutomationOverview, AutomationTask, EventSubscription, SkillContent, SkillDiff, TaskInput, TriggerInput } from "../shared/automation";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { NativeSelect } from "./ui/native-select";
+import "./automation.css";
+
+function useAutomation(botId: string) {
+  const path = `/bots/${encodeURIComponent(botId)}/automation`;
+  const [value, setValue] = useState<AutomationOverview>();
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const alive = useRef(true);
+  const locked = useRef(false);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const next = await api<AutomationOverview>(path);
+      if (alive.current) { setValue(next); setError(""); setUncertain(false); }
+      return true;
+    } catch (cause) { if (alive.current) setError((cause as Error).message); return false; }
+    finally { if (alive.current) setLoading(false); }
+  }, [path]);
+  useEffect(() => { alive.current = true; void refresh(); return () => { alive.current = false; }; }, [refresh]);
+  async function change<T>(suffix: string, body: unknown, method = "POST", onRefused?: () => void): Promise<T | undefined> {
+    if (locked.current || uncertain || loading) return;
+    locked.current = true; setBusy(true); setError(""); setNotice("");
+    try {
+      const result = await write<T>(path + suffix, body, method);
+      const resume = (result as AutomationOverview | undefined)?.goals?.resume;
+      if (resume?.status === "uncertain") {
+        if (alive.current) { setUncertain(true); setError("The goal's start is uncertain. Refresh status and review the conversation before trying again."); }
+        return result;
+      }
+      if (alive.current) {
+        if (await refresh()) setNotice("Saved in Hermes.");
+        else { setUncertain(true); setError("The change was accepted, but status could not refresh. Refresh status before making another change."); }
+      }
+      if (alive.current && resume?.status === "rejected") { setNotice(""); setError(resume.message || "Hermes refused to start this goal. Review its status before resuming."); }
+      return result;
+    } catch (cause) {
+      if (alive.current) {
+        if (cause instanceof ApiError && cause.status < 500) onRefused?.();
+        const unknown = !(cause instanceof ApiError) || cause.status >= 500;
+        setUncertain(unknown || cause instanceof ApiError && cause.status === 409);
+        setError(unknown ? "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically." : (cause as Error).message);
+      }
+    } finally { locked.current = false; if (alive.current) setBusy(false); }
+  }
+  return { value, path, change, refresh, disabled: busy || loading || uncertain, loading, error, notice, uncertain };
+}
+type Controls = ReturnType<typeof useAutomation>;
+
+function Status({ control }: { control: Controls }) {
+  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span><Button disabled={control.loading} onClick={() => void control.refresh()}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
+    {control.error && <p className="form-error" role="alert">{control.error}</p>}
+    {control.notice && <p role="status">{control.notice}</p>}
+    {!control.value && control.loading && <p role="status">Loading assistant controls...</p>}</>;
+}
+
+export function AutomationPanel({ botId, bots, accountScope }: { botId: string; bots: Bot[]; accountScope?: string }) {
+  const control = useAutomation(botId);
+  return <div className="automation-panel"><h2>Goals, tasks & triggers</h2>
+    <p className="muted">Give this assistant work, track its tasks, or run a routine when an event arrives.</p>
+    <Status control={control} />
+    {control.value && <><GoalSection control={control} intentKey={accountScope ? `automation-goal-resume:${accountScope}:${botId}` : undefined} /><TaskSection control={control} bots={bots} botId={botId} /><TriggerSection control={control} botId={botId} /></>}
+  </div>;
+}
+
+function GoalSection({ control, intentKey }: { control: Controls; intentKey?: string }) {
+  const state = control.value!.goals;
+  const [title, setTitle] = useState("");
+  const [maxTurns, setMaxTurns] = useState(20);
+  const [editing, setEditing] = useState(false);
+  const [clear, setClear] = useState(false);
+  const [resumeId, setResumeId] = useState(() => {
+    try { const saved = intentKey && localStorage.getItem(intentKey); if (saved && /^[a-f0-9-]{36}$/i.test(saved)) return saved; } catch { /* In-memory retries still share one intent. */ }
+    return crypto.randomUUID();
+  });
+  const [reviewed, setReviewed] = useState(false);
+  const [reviewedNewAttempt, setReviewedNewAttempt] = useState(false);
+  const [replacementConfirmed, setReplacementConfirmed] = useState(false);
+  const freshIntent = () => { setResumeId(crypto.randomUUID()); if (intentKey) try { localStorage.removeItem(intentKey); } catch {} };
+  useEffect(() => {
+    if (state.resume?.requestId === resumeId && state.resume.status !== "uncertain") freshIntent();
+  }, [state.resume?.requestId, state.resume?.status, resumeId, intentKey]);
+  const goal = state.goal;
+  return <section className="automation-section"><h3>Standing goal</h3>
+    {!state.supported ? <p className="capability-note">{state.reason || "Goals are unavailable on this Hermes installation."}</p> : <>
+      {goal ? <div className="automation-item"><strong>{goal.title}</strong><p>{goal.status} · {goal.turnsUsed} / {goal.maxTurns} continuation turns</p>
+        {goal.pausedReason && <p>{goal.pausedReason}</p>}
+        {state.interruptionPending && <div className="automation-confirm"><p>Review the interrupted work in this assistant's conversation before resuming.</p><label className="automation-check"><input type="checkbox" checked={reviewed} onChange={event => setReviewed(event.target.checked)} />I've reviewed the interrupted work in this conversation.</label></div>}
+        <div className="actions">
+          <Button disabled={control.disabled || !["active", "paused"].includes(goal.status) || goal.status !== "active" && (state.resume?.status === "uncertain" || !!state.interruptionPending && !reviewed)} onClick={async () => {
+            const active = goal.status === "active";
+            if (!active && intentKey) try { localStorage.setItem(intentKey, resumeId); } catch {}
+            const result = await control.change<AutomationOverview>(`/goal/${active ? "pause" : "resume"}`, active ? {} : { requestId: resumeId, ...(state.interruptionPending && reviewed ? { reviewedInterruption: true } : {}) }, "POST", active ? undefined : freshIntent);
+            if (!active && result?.goals.resume?.status !== "uncertain" && result) { freshIntent(); setReviewed(false); }
+          }}>{goal.status === "active" ? "Pause goal" : "Resume goal"}</Button>
+          <Button disabled={control.disabled} onClick={() => { setTitle(goal.title); setMaxTurns(goal.maxTurns); setReplacementConfirmed(false); setEditing(true); }}>Replace goal...</Button>
+          <Button disabled={control.disabled} onClick={() => setClear(true)}>Clear goal...</Button>
+        </div>
+        {state.resume?.status === "uncertain" && <div className="automation-confirm"><p>The previous attempt may have started work. Refresh status and review this assistant's conversation before starting again.</p>
+          <label className="automation-check"><input type="checkbox" checked={reviewedNewAttempt} onChange={event => setReviewedNewAttempt(event.target.checked)} />I've reviewed the conversation and want to start a new attempt.</label>
+          <Button disabled={control.disabled || !reviewedNewAttempt || goal.status !== "paused"} onClick={async () => {
+            const requestId = crypto.randomUUID(); setResumeId(requestId);
+            if (intentKey) try { localStorage.setItem(intentKey, requestId); } catch {}
+            const result = await control.change<AutomationOverview>("/goal/resume", { requestId, reviewedInterruption: true }, "POST", freshIntent);
+            setReviewedNewAttempt(false);
+            if (result && result.goals.resume?.status !== "uncertain") { freshIntent(); setReviewed(false); }
+          }}>Start a new attempt</Button>
+        </div>}
+        {clear && <div className="automation-confirm"><p>Clear this standing goal? The conversation stays saved.</p><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change("/goal/clear", {})) setClear(false); }}>Clear goal</Button><Button onClick={() => setClear(false)}>Keep goal</Button></div>}
+      </div> : <p className="muted">No standing goal. A goal keeps working across turns until it finishes, pauses, or reaches its budget.</p>}
+      {!editing && !goal && <Button onClick={() => setEditing(true)} disabled={control.disabled}>Set a goal</Button>}
+      {editing && <form className="automation-form" onSubmit={async event => { event.preventDefault(); if (goal && !replacementConfirmed) return; if (await control.change("/goal", { title, maxTurns }, "PUT")) { setEditing(false); freshIntent(); setReviewed(false); setReviewedNewAttempt(false); } }}>
+        {goal && <div className="automation-confirm"><p>Replacing this goal resets its progress and removes its native subgoals, completion contracts and verification gates. The conversation stays saved.</p><label className="automation-check"><input type="checkbox" checked={replacementConfirmed} onChange={event => setReplacementConfirmed(event.target.checked)} />Replace the entire standing goal.</label></div>}
+        <label>Objective<textarea required maxLength={10000} rows={3} value={title} onChange={event => setTitle(event.target.value)} disabled={control.disabled} /></label>
+        <label>Continuation turn budget<Input required type="number" min={1} max={1000} value={maxTurns} onChange={event => setMaxTurns(Number(event.target.value))} disabled={control.disabled} /></label>
+        <p className="muted">Saves paused. Resume it when you're ready for the assistant to work.</p>
+        <div className="actions"><Button type="submit" className="primary" disabled={control.disabled || !title.trim() || !!goal && !replacementConfirmed}>{goal ? "Replace with paused goal" : "Save paused goal"}</Button><Button disabled={control.disabled} onClick={() => setEditing(false)}>Cancel</Button></div>
+      </form>}
+    </>}
+  </section>;
+}
+
+function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[]; botId: string }) {
+  const state = control.value!.tasks;
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState<TaskInput>({ requestId: crypto.randomUUID(), title: "", body: "", assignee: botId, priority: 0, dependencies: [] });
+  const editDraft = (change: Partial<TaskInput>) => setDraft(previous => ({ ...previous, ...change, requestId: crypto.randomUUID() }));
+  return <section className="automation-section"><h3>Task board</h3>
+    {!state.supported ? <p className="capability-note">{state.reason || "Task boards are unavailable on this Hermes installation."}</p> : <>
+      <p className="muted">Tasks belong to this assistant. Assign work to a teammate, add dependencies, and request review.</p>
+      {state.truncated && <p className="capability-note" role="status">Showing the newest {state.limit || 100} visible tasks. Older tasks remain in Hermes.</p>}
+      {!state.items.length && <p>No tasks yet.</p>}
+      {state.items.map(task => <TaskCard key={task.id} task={task} control={control} bots={bots} />)}
+      {!creating ? <Button disabled={control.disabled} onClick={() => setCreating(true)}>New task</Button> : <form className="automation-form" onSubmit={async event => {
+        event.preventDefault();
+        if (await control.change("/tasks", { ...draft, dependencies: draft.dependencies || [] })) { setCreating(false); setDraft({ requestId: crypto.randomUUID(), title: "", body: "", assignee: botId, priority: 0, dependencies: [] }); }
+      }}>
+        <label>Task title<Input required maxLength={500} value={draft.title} disabled={control.disabled} onChange={event => editDraft({ title: event.target.value })} /></label>
+        <label>Instructions<textarea rows={3} maxLength={20000} value={draft.body} disabled={control.disabled} onChange={event => editDraft({ body: event.target.value })} /></label>
+        <label>Assigned assistant<NativeSelect value={draft.assignee || ""} disabled={control.disabled} onChange={event => editDraft({ assignee: event.target.value || null })}><option value="">Unassigned</option>{bots.map(bot => <option value={bot.id} key={bot.id}>{bot.name}</option>)}</NativeSelect></label>
+        <label>Priority<Input type="number" min={-100} max={100} value={draft.priority} disabled={control.disabled} onChange={event => editDraft({ priority: Number(event.target.value) })} /></label>
+        {state.items.length > 0 && <fieldset disabled={control.disabled}><legend>Wait for these tasks</legend>{state.items.map(task => <label className="automation-check" key={task.id}><input type="checkbox" checked={draft.dependencies?.includes(task.id) || false} onChange={event => editDraft({ dependencies: event.target.checked ? [...draft.dependencies || [], task.id] : draft.dependencies?.filter(id => id !== task.id) })} />{task.title}</label>)}</fieldset>}
+        <p className="muted">Creates a blocked task. Start it explicitly when the instructions are ready.</p>
+        <div className="actions"><Button type="submit" className="primary" disabled={control.disabled || !draft.title.trim()}>Create task</Button><Button disabled={control.disabled} onClick={() => setCreating(false)}>Cancel</Button></div>
+      </form>}
+    </>}
+  </section>;
+}
+
+function TaskCard({ task, control, bots }: { task: AutomationTask; control: Controls; bots: Bot[] }) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(task.title);
+  const [body, setBody] = useState(task.body);
+  const [assignee, setAssignee] = useState(task.assignee || "");
+  const [priority, setPriority] = useState(task.priority);
+  const [reason, setReason] = useState("");
+  const [reviewer, setReviewer] = useState("");
+  const [dependency, setDependency] = useState("");
+  const path = `/tasks/${encodeURIComponent(task.id)}`;
+  const action = (name: string) => control.change(path + "/actions", { action: name, ...(reason.trim() ? { reason } : {}), ...(reviewer ? { reviewer } : {}) });
+  return <details className="automation-item"><summary><span>{task.title}</span><small>{task.status} · {bots.find(bot => bot.id === task.assignee)?.name || task.assignee || "Unassigned"}</small></summary>
+    <p className="preserve-lines">{task.body || "No additional instructions."}</p>{task.blockedReason && <p>Blocked: {task.blockedReason}</p>}
+    <p className="muted">Priority {task.priority}</p>
+    {editing ? <form className="automation-form" onSubmit={async event => { event.preventDefault(); if (await control.change(path, { title, body, priority, assignee: assignee || null }, "PATCH")) setEditing(false); }}>
+      <label>Task title<Input required value={title} maxLength={500} onChange={event => setTitle(event.target.value)} /></label>
+      <label>Instructions<textarea value={body} maxLength={20000} rows={3} onChange={event => setBody(event.target.value)} /></label>
+      <label>Assigned assistant<NativeSelect value={assignee} onChange={event => setAssignee(event.target.value)}><option value="">Unassigned</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>
+      <label>Priority<Input type="number" min={-100} max={100} value={priority} onChange={event => setPriority(Number(event.target.value))} /></label>
+      <div className="actions"><Button type="submit" disabled={control.disabled || !title.trim()}>Save task</Button><Button disabled={control.disabled} onClick={() => setEditing(false)}>Cancel</Button></div>
+    </form> : <Button disabled={control.disabled} onClick={() => { setTitle(task.title); setBody(task.body); setPriority(task.priority); setAssignee(task.assignee || ""); setEditing(true); }}>Edit task</Button>}
+    <div className="automation-form"><label>Reason or review feedback<Input value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} disabled={control.disabled} /></label>
+      <label>Reviewer<NativeSelect value={reviewer} onChange={event => setReviewer(event.target.value)} disabled={control.disabled}><option value="">Choose an assistant</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>
+      <div className="actions">
+        <Button disabled={control.disabled} onClick={() => void action("start")}>Start task</Button>
+        <Button disabled={control.disabled || !reason.trim()} onClick={() => void action("block")}>Block task</Button>
+        <Button disabled={control.disabled} onClick={() => void action("unblock")}>Unblock task</Button>
+        <Button disabled={control.disabled || !reviewer} onClick={() => void action("request_review")}>Request review</Button>
+      </div>
+      {task.status === "review" && <p className="muted">The reviewing assistant can request changes through Hermes while it owns the review.</p>}
+    </div>
+    <h4>Dependencies</h4>
+    {!task.dependencies.length && <p className="muted">None.</p>}
+    {task.dependencies.map(id => <div className="automation-dependency" key={id}><span>{control.value!.tasks.items.find(item => item.id === id)?.title || id}</span><Button disabled={control.disabled} onClick={() => void control.change(`${path}/dependencies/${encodeURIComponent(id)}`, { remove: true }, "PUT")}>Remove dependency</Button></div>)}
+    <div className="actions"><label>Wait for task<NativeSelect value={dependency} disabled={control.disabled} onChange={event => setDependency(event.target.value)}><option value="">Choose a task</option>{control.value!.tasks.items.filter(item => item.id !== task.id && !task.dependencies.includes(item.id)).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</NativeSelect></label><Button disabled={control.disabled || !dependency} onClick={async () => { if (await control.change(`${path}/dependencies/${encodeURIComponent(dependency)}`, { remove: false }, "PUT")) setDependency(""); }}>Add dependency</Button></div>
+  </details>;
+}
+
+function TriggerSection({ control, botId }: { control: Controls; botId: string }) {
+  const state = control.value!.triggers;
+  const disabled = control.disabled || control.value!.canManageTriggers === false;
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [routineError, setRoutineError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<EventSubscription>();
+  const [draft, setDraft] = useState<TriggerInput>({ id: "", description: "", events: [], routineId: "" });
+  const [events, setEvents] = useState("");
+  const [secret, setSecret] = useState<{ url: string; secret: string }>();
+  const [reveal, setReveal] = useState(false);
+  const [deleting, setDeleting] = useState("");
+  useEffect(() => { let current = true; if (state.supported) void api<Routine[]>("/routines").then(rows => { if (current) setRoutines(rows.filter(row => row.botId === botId)); }).catch(cause => { if (current) setRoutineError(cause.message); }); return () => { current = false; }; }, [botId, state.supported]);
+  return <section className="automation-section"><h3>Event triggers</h3>
+    {!state.supported ? <p className="capability-note">{state.reason || "Event triggers are unavailable on this Hermes installation."}</p> : <>
+      <p className="muted">Run an existing routine when a service sends Hermes a matching event.</p>
+      {control.value!.canManageTriggers === false && <p className="capability-note">Only an integration administrator can change event triggers.</p>}
+      {!state.platformEnabled && <p className="capability-note">The installer must enable Hermes's webhook channel before events can arrive.</p>}
+      {routineError && <p className="form-error" role="alert">Couldn't load routines: {routineError}</p>}
+      {secret && <div className="automation-secret" role="status"><h4>Save this signing secret now</h4><p>Hermes shows it once. Configure the sending service with this URL and secret.</p><label>Webhook URL<Input value={secret.url} readOnly /></label><label>Signing secret<Input type={reveal ? "text" : "password"} value={secret.secret} readOnly autoComplete="off" /></label><div className="actions"><Button onClick={() => setReveal(!reveal)}>{reveal ? "Hide secret" : "Show secret"}</Button><Button onClick={() => { setSecret(undefined); setReveal(false); }}>I've saved it</Button></div></div>}
+      {!state.items.length && <p>No event triggers yet.</p>}
+      {state.items.map(trigger => <article className="automation-item" key={trigger.id}><h4>{trigger.description || trigger.id}</h4><p>{trigger.enabled ? "Enabled" : "Disabled"} · {trigger.events.join(", ") || "All events"}</p><p>Routine: {routines.find(row => row.id === trigger.routineId)?.name || trigger.routineId}</p><code className="automation-url">{trigger.url}</code>
+        <div className="actions"><Button disabled={disabled || !state.platformEnabled && !trigger.enabled} onClick={() => void control.change(`/triggers/${encodeURIComponent(trigger.id)}`, { enabled: !trigger.enabled, revision: trigger.revision }, "PATCH")}>{trigger.enabled ? "Disable trigger" : "Enable trigger"}</Button>
+          <Button disabled={disabled} onClick={() => { setEditing(trigger); setDraft({ id: trigger.id, description: trigger.description, events: trigger.events, routineId: trigger.routineId }); setEvents(trigger.events.join(", ")); setCreating(true); }}>Edit trigger</Button><Button disabled={disabled} onClick={() => setDeleting(trigger.id)}>Delete trigger...</Button></div>
+        {deleting === trigger.id && <div className="automation-confirm"><p>Delete this trigger? Its routine stays saved.</p><Button className="danger" disabled={disabled} onClick={async () => { if (await control.change(`/triggers/${encodeURIComponent(trigger.id)}`, { revision: trigger.revision }, "DELETE")) setDeleting(""); }}>Delete trigger</Button><Button onClick={() => setDeleting("")}>Keep trigger</Button></div>}
+      </article>)}
+      {!creating ? <Button disabled={disabled || !!secret || !routines.length} onClick={() => { setEditing(undefined); setDraft({ id: "", description: "", events: [], routineId: routines[0]?.id || "" }); setEvents(""); setCreating(true); }}>New event trigger</Button> : <form className="automation-form" onSubmit={async event => {
+        event.preventDefault();
+        const payload = { ...draft, events: events.split(",").map(value => value.trim()).filter(Boolean) };
+        const result = await control.change<{ subscription?: EventSubscription; secret?: string }>(editing ? `/triggers/${encodeURIComponent(editing.id)}` : "/triggers", editing ? { description: payload.description, events: payload.events, routineId: payload.routineId, revision: editing.revision } : payload, editing ? "PUT" : "POST");
+        if (result) { if (result.secret && result.subscription) setSecret({ url: result.subscription.url, secret: result.secret }); setCreating(false); setEditing(undefined); }
+      }}>
+        <label>Trigger ID<Input required pattern="[a-z0-9][a-z0-9_-]{0,79}" maxLength={80} value={draft.id} disabled={disabled || !!editing} onChange={event => setDraft({ ...draft, id: event.target.value })} /></label>
+        <label>Description<Input maxLength={1000} value={draft.description} disabled={disabled} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+        <label>Event names, separated by commas<Input required value={events} disabled={disabled} onChange={event => setEvents(event.target.value)} placeholder="alert, recovery" /></label>
+        <label>Routine<NativeSelect required value={draft.routineId} disabled={disabled} onChange={event => setDraft({ ...draft, routineId: event.target.value })}><option value="">Choose a routine</option>{routines.map(row => <option key={row.id} value={row.id}>{row.name}{row.enabled ? "" : " (paused)"}</option>)}</NativeSelect></label>
+        <p className="muted">New triggers start disabled. The selected routine must also be enabled to run.</p>
+        <div className="actions"><Button type="submit" className="primary" disabled={disabled || !draft.id || !draft.routineId || !events.trim()}>{editing ? "Save trigger" : "Create disabled trigger"}</Button><Button disabled={disabled} onClick={() => setCreating(false)}>Cancel</Button></div>
+      </form>}
+      {!routines.length && !routineError && <p className="muted">Create a routine in this assistant's Routines settings first.</p>}
+    </>}
+  </section>;
+}
+
+export function LearningPanel({ botId }: { botId: string }) {
+  const control = useAutomation(botId);
+  const [content, setContent] = useState<SkillContent>();
+  const [diff, setDiff] = useState<SkillDiff>();
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState("");
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current++; }, []);
+  async function read<T>(path: string, accept: (value: T) => void) {
+    const request = ++generation.current; setReading(true); setReadError("");
+    try { const value = await api<T>(control.path + path); if (request === generation.current) accept(value); }
+    catch (cause) { if (request === generation.current) setReadError((cause as Error).message); }
+    finally { if (request === generation.current) setReading(false); }
+  }
+  const state = control.value?.skills;
+  return <div className="automation-panel"><h2>Skills & learning</h2><p className="muted">Inspect reusable instructions and review changes the assistant wants to save.</p><Status control={control} />
+    {readError && <p className="form-error" role="alert">{readError}</p>}
+    {state && (!state.supported ? <p className="capability-note">{state.reason || "Learning review is unavailable on this Hermes installation."}</p> : <>
+      <section className="automation-section"><h3>Skill write policy</h3><label className="automation-check"><input type="checkbox" checked={state.approvalRequired} disabled={control.disabled || control.value?.canManageLearningPolicy === false} onChange={event => void control.change("/skills/policy", { approvalRequired: event.target.checked }, "PUT")} />Require approval before skill changes are saved</label><p className="muted">When enabled, Hermes stages new skills, edits, and deletions for review.</p>{control.value?.canManageLearningPolicy === false && <p className="capability-note">Only an integration administrator can change the skill write policy.</p>}</section>
+      <section className="automation-section"><h3>Pending changes</h3>{!state.pending.length && <p className="muted">No skill changes waiting for review.</p>}
+        {state.pending.map(item => <article className="automation-item" key={item.id}><h4>{item.summary}</h4><p className="muted">{item.origin}</p><Button disabled={reading || control.disabled} onClick={() => void read<SkillDiff>(`/skills/pending/${encodeURIComponent(item.id)}`, value => { setDiff(value); setContent(undefined); })}>Review change</Button>
+          {diff?.id === item.id && <><pre className="automation-code">{diff.diff || "No textual diff."}</pre>{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={async () => { if (await control.change(`/skills/pending/${encodeURIComponent(item.id)}`, { revision: diff.revision, decision: "approve" })) setDiff(undefined); }}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(`/skills/pending/${encodeURIComponent(item.id)}`, { revision: diff.revision, decision: "reject" })) setDiff(undefined); }}>Reject change</Button></div></>}
+        </article>)}
+      </section>
+      <section className="automation-section"><h3>Installed skills</h3>{!state.installed.length && <p className="muted">No installed skills reported.</p>}{state.installed.map(item => <article className="automation-item" key={item.name}><h4>{item.name}</h4><p>{item.description}</p><Button disabled={reading || control.disabled} onClick={() => void read<SkillContent>(`/skills/content?name=${encodeURIComponent(item.name)}`, value => { setContent(value); setDiff(undefined); })}>Read skill</Button>{content?.name === item.name && <><pre className="automation-code">{content.content}</pre>{content.truncated && <p>Preview truncated. Open Hermes for the full skill.</p>}</>}</article>)}</section>
+    </>)}
+  </div>;
+}

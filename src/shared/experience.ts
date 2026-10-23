@@ -38,6 +38,7 @@ export interface ProfileMemory {
   owner: 'Hermes';
   documents: MemoryDocument[];
   notice: string;
+  refresh?: { revision: string; state: 'next_turn' | 'pending' | 'applied'; busy: boolean; message: string };
 }
 export interface RoutinePreview {
   botId: string;

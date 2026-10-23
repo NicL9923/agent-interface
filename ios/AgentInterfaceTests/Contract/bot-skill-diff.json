@@ -1,0 +1,9 @@
+{
+  "request": "GET /api/bots/household/automation/skills/pending/deadbeef",
+  "response": {
+    "id": "deadbeef",
+    "diff": "--- SKILL.md\n+++ SKILL.md\n+Check the north gate.\n",
+    "revision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "truncated": false
+  }
+}

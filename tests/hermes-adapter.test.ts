@@ -584,6 +584,40 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(requests[4].url.endsWith('/api/cron/jobs/job-one/pause?profile=shared')).toBe(true);
   });
 
+  it('round-trips advanced native routine fields and preserves omitted updates', async () => {
+    const native = {id:'abc123',name:'[bot:shared] Morning',prompt:'',schedule_display:'1h',enabled:true,
+      skills:['weather'],model:'chosen-model',provider:'chosen-provider',enabled_toolsets:[],
+      script:'reports/morning.py',no_agent:true,context_from:['self','def456'],
+      monitor_url:'https://example.invalid/check',reasoning_effort:'high',deliver:'bot-chat:shared'};
+    const requests: {method:string;body:Record<string,any>}[]=[];
+    vi.stubGlobal('fetch',vi.fn(async (_url:URL, init:RequestInit = {}) => {
+      requests.push({method:init.method ?? 'GET',body:JSON.parse(String(init.body || '{}'))});
+      return Response.json(init.method ? native : [native]);
+    }));
+    const [routine] = await runtime.routines();
+    expect(routine).toMatchObject({skills:['weather'],model:'chosen-model',provider:'chosen-provider',
+      enabledToolsets:[],script:'reports/morning.py',noAgent:true,contextFrom:['self','def456']});
+    await runtime.saveRoutine({botId:'shared',name:'Renamed',prompt:'',schedule:'1h',enabled:true},routine.id);
+    expect(requests.at(-1)?.body.updates).toEqual({name:'[bot:shared] Renamed',prompt:'',schedule:'1h'});
+    await runtime.saveRoutine({botId:'shared',name:'New',prompt:'',schedule:'1h',enabled:true,
+      skills:['weather'],model:'chosen-model',provider:'chosen-provider',enabledToolsets:['file'],
+      script:'morning.py',noAgent:true,contextFrom:['self','def456']});
+    expect(requests.at(-1)?.body).toMatchObject({skills:['weather'],model:'chosen-model',provider:'chosen-provider',
+      enabled_toolsets:['file'],script:'morning.py',no_agent:true,context_from:['self','def456'],paused:false});
+    await runtime.saveRoutine({botId:'shared',name:'Clear',prompt:'Check',schedule:'1h',enabled:true,
+      skills:[],model:null,provider:null,enabledToolsets:null,script:null,noAgent:false,contextFrom:[]},routine.id);
+    expect(requests.at(-1)?.body.updates).toMatchObject({skills:[],model:null,provider:null,
+      enabled_toolsets:null,script:null,no_agent:false,context_from:[]});
+  });
+
+  it('exposes native profile-script validation without retrying the mutation', async () => {
+    const fetch = vi.fn(async () => Response.json({detail:'script must be inside the profile scripts directory'}, {status:400}));
+    vi.stubGlobal('fetch',fetch);
+    await expect(runtime.saveRoutine({botId:'shared',name:'Script',prompt:'',schedule:'1h',enabled:false,
+      noAgent:true,script:'echo dangerous command'})).rejects.toMatchObject({statusCode:400,message:'script must be inside the profile scripts directory'});
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers disconnected transport state from an authoritative idle snapshot',async()=>{
     await runtime.conversation('shared');
     snapshot.info.running=true;
@@ -1241,6 +1275,12 @@ describe('Review regressions for shared reads and credential negotiation', () =>
 });
 
 describe('Review round two regressions', () => {
+  it('keeps routine validation reasons without exposing absolute host paths', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ detail: 'script does not exist: /home/nicolas/.hermes/profiles/shared/scripts/morning.py' }, { status: 422 })));
+    await runtime.status();
+    await expect(runtime.saveRoutine({ botId: 'shared', name: 'Morning', prompt: 'Report', schedule: '1h', enabled: false, script: 'morning.py' }))
+      .rejects.toThrow('script does not exist: [server path]');
+  });
   it('reads descriptions again after a connection changes a profile', async () => {
     await runtime.status();
     const describes = () => calls.filter(call => call.method === 'profiles.describe').length;

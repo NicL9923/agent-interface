@@ -1,3 +1,4 @@
+import type { AutomationRequest, AutomationResponse } from './automation.js';
 import type { ExperienceRequest, ExperienceResponse } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
 import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
@@ -293,6 +294,15 @@ export interface Routine {
   schedule: string;
   enabled: boolean;
   recipientIds?: string[];
+  skills?: string[];
+  model?: string | null;
+  provider?: string | null;
+  /** null inherits profile tools; [] is a native zero-tool allowlist. */
+  enabledToolsets?: string[] | null;
+  script?: string | null;
+  noAgent?: boolean;
+  /** Native job IDs in this profile, plus "self" for continuity. */
+  contextFrom?: string[] | null;
   nextRunAt?: string;
   lastRunAt?: string;
   lastStatus?: string;
@@ -363,6 +373,7 @@ export interface Runtime {
   groupRequest?(input: GroupRequest): Promise<GroupResponse>;
   transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
   synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
+  automationRequest?(input: AutomationRequest): Promise<AutomationResponse>;
   experienceRequest?(input: ExperienceRequest): Promise<ExperienceResponse>;
   vaultRequest?(input: VaultRequest): Promise<VaultResponse>;
   computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;

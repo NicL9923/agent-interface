@@ -6,6 +6,7 @@ import { resolve, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createHash, randomUUID } from 'node:crypto';
 import { tsImport } from 'tsx/esm/api';
+import { automationPreview } from './automation-preview.mjs';
 const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
@@ -235,6 +236,7 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/preview-fixture.js') { response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/javascript' }); return response.end(fixtureScript); }
   if (url.pathname.startsWith('/api/')) {
     const path = url.pathname.slice(4);
+    if (path.includes('/automation') && automationPreview(path, request.method, body, url.searchParams, value => json(response, value))) return;
     if (path === '/csp-report') {
       for (const violation of cspViolations(body)) process.stderr.write(`CSP violation: ${JSON.stringify(violation)}\n`);
       response.writeHead(204); return response.end();
