@@ -214,6 +214,48 @@ def event_body(value):
     return text[:500] or None
 
 
+class Keeper:
+    """Holds a canonical session's transport open between app requests."""
+    closed = False
+
+    def write(self, _frame):
+        return True
+
+    def close(self):
+        self.closed = True
+
+
+def history_row_floor(session):
+    # Native flushes stamp raw rows with their durable IDs. Snapshot those
+    # already-visible rows without taking another database or session lock.
+    history = list(session.get("display_history_prefix") or []) + list(session.get("history") or [])
+    ids = [row["_row_id"] for row in history if isinstance(row, dict) and type(row.get("_row_id")) is int]
+    return max(ids) if ids else None if history else 0
+
+
+def parsed_result(result):
+    if isinstance(result, str):
+        try:
+            return json.loads(result)
+        except (ValueError, TypeError):
+            pass
+    return result
+
+
+def approval_id(row):
+    # The approval's native request ID, which its event identity ends with, lets a notification decide it.
+    prefix = f"{row[3]}:approval:"
+    return row[9][len(prefix):] if row[4] == "approval" and row[3] and isinstance(row[9], str) and row[9].startswith(prefix) and len(row[9]) > len(prefix) else None
+
+
+# The run a session's newest unsettled receipt belongs to.
+OPEN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1"
+LATEST_TERMINAL = "SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1"
+LATEST_ROOT = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1"
+RUN_TERMINAL = "SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1"
+INSERT_REJECTED = "INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+
+
 # Methods a held maintenance lease still admits: status, history and discovery reads.
 MAINTENANCE_READS = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
                      "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
@@ -239,7 +281,11 @@ class Bridge:
         self.canonical = {}
         self.decorated = {}
         self.settlement = {}
+        self.discovery_lock = threading.RLock()
+        self.routine_scans = {}
         journal.canonical_session = self.canonical.get
+        journal.profile_for_session = self.profile_for
+        journal.live_profile_for_session = self.live_profile_for
 
     # Maintenance lease: a held lease fences every native admission except reads.
 
@@ -331,34 +377,40 @@ class Bridge:
         server.register_method("agent-interface.maintenance", self.maintenance)
 
 
-def install(path=None):
-    actual_revision, patch_hash = source_state()
-    from tui_gateway import server
-    from tui_gateway.transport import Transport
-    from hermes_constants import get_hermes_home, profile_name_for_home
-    sibling_module("computer").install(server)
-    journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
-    bridge = Bridge(server, journal, get_hermes_home=get_hermes_home, profile_name_for_home=profile_name_for_home,
-                    maintenance_file=os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"))
-    canonical_lock, submission_lock, maintenance_lock = bridge.canonical_lock, bridge.submission_lock, bridge.maintenance_lock
-    keepers, canonical, decorated, settlement = bridge.keepers, bridge.canonical, bridge.decorated, bridge.settlement
-    maintenance_state = bridge.maintenance_state
-    from hermes_cli.backend_retirement import retirement
-    bridge.install_maintenance(retirement)
+    # Native seams: tool detail, inline guidance, frames and turn settlement.
 
-    # Keep the canonical native projection, adding only details present in its
-    # original tool rows. The compact native view otherwise omits most outputs.
-    original_history = server._history_to_messages
-    def detailed_history(history, **kwargs):
-        messages = original_history(history, **kwargs)
+    def native(self, method, params):
+        response = self.server.handle_request({"jsonrpc": "2.0", "id": "extension-native", "method": method, "params": params})
+        if "error" in response:
+            raise RuntimeError(json.dumps(response["error"]))
+        return response["result"]
+
+    def profile_for(self, sid):
+        session = self.server._sessions.get(sid, {})
+        home = session.get("profile_home") or session.get("hermes_home")
+        # Receipt ownership is authoritative for app-started turns, including default.
+        row = self.journal.db.execute("SELECT profile FROM receipts WHERE session_id=? ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
+        return row[0] if row else self.profile_name_for_home(home or self.get_hermes_home())
+
+    def live_profile_for(self, sid):
+        session = self.server._sessions.get(sid)
+        if session is None:
+            return None
+        home = session.get("profile_home") or session.get("hermes_home")
+        return self.profile_name_for_home(home or self.get_hermes_home()) or "default"
+
+    def detailed_history(self, history, **kwargs):
+        # Keep the canonical native projection, adding only details present in its
+        # original tool rows. The compact native view otherwise omits most outputs.
+        messages = self.native_history(history, **kwargs)
         tool_rows = {}
         for row in history:
             if not isinstance(row, dict) or row.get("role") != "tool":
                 continue
             # Native compaction and hidden scaffolding must stay hidden. A model
             # can reuse a call ID later, so identity also includes native time.
-            visible = original_history([row], **kwargs)
-            projected = server.project_compaction_message_for_display(row)
+            visible = self.native_history([row], **kwargs)
+            projected = self.server.project_compaction_message_for_display(row)
             if not visible or not isinstance(projected, dict):
                 continue
             key = (visible[0].get("tool_call_id"), visible[0].get("timestamp"))
@@ -380,40 +432,10 @@ def install(path=None):
                     pass
                 message["app_tool_result"] = result
         return messages
-    server._history_to_messages = detailed_history
 
-    class Keeper:
-        closed = False
-        def write(self, _frame):
-            return True
-        def close(self):
-            self.closed = True
-
-    def native(method, params):
-        response = server.handle_request({"jsonrpc": "2.0", "id": "extension-native", "method": method, "params": params})
-        if "error" in response:
-            raise RuntimeError(json.dumps(response["error"]))
-        return response["result"]
-
-    def profile_for(sid):
-        session = server._sessions.get(sid, {})
-        home = session.get("profile_home") or session.get("hermes_home")
-        # Receipt ownership is authoritative for app-started turns, including default.
-        row = journal.db.execute("SELECT profile FROM receipts WHERE session_id=? ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-        return row[0] if row else profile_name_for_home(home or get_hermes_home())
-    journal.profile_for_session = profile_for
-    bridge.profile_for = profile_for
-    def live_profile_for(sid):
-        session = server._sessions.get(sid)
-        if session is None:
-            return None
-        home = session.get("profile_home") or session.get("hermes_home")
-        return profile_name_for_home(home or get_hermes_home()) or "default"
-    journal.live_profile_for_session = live_profile_for
-
-    def artifacts(result, session):
+    def artifacts(self, result, session):
         # Only actual native tool results can register outputs. Never scan user text.
-        root = Path(server._session_cwd(session)).resolve()
+        root = Path(self.server._session_cwd(session)).resolve()
         def strings(value):
             if isinstance(value, str):
                 yield value
@@ -437,63 +459,78 @@ def install(path=None):
                 continue
         return registered
 
-    # Add client rendering guidance at model-call time, without changing SOUL,
-    # persisted user text, receipt digests, image recovery, or steering matches.
-    inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
-    def app_prompt(sid, text, display_kind=None, author=None):
+    def app_prompt(self, sid, text, display_kind=None, author=None):
         if not isinstance(text, str) or display_kind is not None or author is not None:
             return False
         # A canonical session also accepts DMs, background work and other clients.
         # Only an unresolved app root with this exact input gets rendering guidance.
-        with journal.lock:
-            return journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 AND status IN ('uncertain','accepted') AND input_text=? LIMIT 1", (sid, text)).fetchone() is not None
+        with self.journal.lock:
+            return self.journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 AND status IN ('uncertain','accepted') AND input_text=? LIMIT 1", (sid, text)).fetchone() is not None
 
-    def with_inline_guidance(original, eligible, agent, *args, **kwargs):
+    def with_inline_guidance(self, original, eligible, agent, *args, **kwargs):
         if not eligible or agent is None:
             return original(*args, **kwargs)
         prior = getattr(agent, "ephemeral_system_prompt", None)
-        if inline_instructions not in (prior or ""):
-            agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, inline_instructions) if part)
+        if self.inline_instructions not in (prior or ""):
+            agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, self.inline_instructions) if part)
         try:
             return original(*args, **kwargs)
         finally:
             agent.ephemeral_system_prompt = prior
 
-    # Newer Hermes splits the invocation from turn setup and model changes.
-    # Older qualified revisions enter with an already-built session agent.
-    if hasattr(server, "_invoke_agent"):
-        original_invoke = server._invoke_agent
-        def invoke(sid, session, turn, *args, **kwargs):
-            text = kwargs.get("text", args[7] if len(args) > 7 else None)
-            display_kind = kwargs.get("display_kind", args[4] if len(args) > 4 else None)
-            author = kwargs.get("turn_author", args[6] if len(args) > 6 else None)
-            return with_inline_guidance(original_invoke, app_prompt(sid, text, display_kind, author), turn.agent, sid, session, turn, *args, **kwargs)
-        server._invoke_agent = invoke
-    else:
-        original_run = server._run_prompt_submit
-        def run(rid, sid, session, *args, **kwargs):
-            text = kwargs.get("text", args[0] if args else None)
-            eligible = not str(rid).startswith("__") and app_prompt(sid, text, kwargs.get("display_kind"), kwargs.get("turn_author"))
-            return with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args, **kwargs)
-        server._run_prompt_submit = run
+    def install_inline_guidance(self):
+        # Add client rendering guidance at model-call time, without changing SOUL,
+        # persisted user text, receipt digests, image recovery, or steering matches.
+        server = self.server
+        self.inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
+        # Newer Hermes splits the invocation from turn setup and model changes.
+        # Older qualified revisions enter with an already-built session agent.
+        if hasattr(server, "_invoke_agent"):
+            original_invoke = server._invoke_agent
+            def invoke(sid, session, turn, *args, **kwargs):
+                text = kwargs.get("text", args[7] if len(args) > 7 else None)
+                display_kind = kwargs.get("display_kind", args[4] if len(args) > 4 else None)
+                author = kwargs.get("turn_author", args[6] if len(args) > 6 else None)
+                return self.with_inline_guidance(original_invoke, self.app_prompt(sid, text, display_kind, author), turn.agent, sid, session, turn, *args, **kwargs)
+            server._invoke_agent = invoke
+        else:
+            original_run = server._run_prompt_submit
+            def run(rid, sid, session, *args, **kwargs):
+                text = kwargs.get("text", args[0] if args else None)
+                eligible = not str(rid).startswith("__") and self.app_prompt(sid, text, kwargs.get("display_kind"), kwargs.get("turn_author"))
+                return self.with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args, **kwargs)
+            server._run_prompt_submit = run
 
-    original_write = server.write_json
-    def history_row_floor(session):
-        # Native flushes stamp raw rows with their durable IDs. Snapshot those
-        # already-visible rows without taking another database or session lock.
-        history = list(session.get("display_history_prefix") or []) + list(session.get("history") or [])
-        ids = [row["_row_id"] for row in history if isinstance(row, dict) and type(row.get("_row_id")) is int]
-        return max(ids) if ids else None if history else 0
+    def record_live_tool(self, sid, session, kind, payload):
+        """Keep a running or finished tool call for polls until its history row appears."""
+        with self.journal.lock:
+            run = self.journal.db.execute(OPEN_RUN, (sid,)).fetchone()
+        calls = session.setdefault("app_live_tools", {})
+        tool_id = payload["tool_id"]
+        prior = calls.get(tool_id, {})
+        detail = {**prior, "id": prior.get("id") or f"{run[0] if run else session.get('app_turn_id', sid)}:{tool_id}",
+                  "name": payload.get("name") or prior.get("name") or "Tool",
+                  "status": "running" if kind == "tool.start" else "completed"}
+        if payload.get("args") is not None:
+            detail["arguments"] = json.dumps(payload["args"], ensure_ascii=False, indent=2)
+        elif isinstance(payload.get("args_text"), str):
+            detail["arguments"] = payload["args_text"]
+        if kind == "tool.start":
+            detail["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            session.setdefault("app_live_tool_row_floors", {})[tool_id] = history_row_floor(session)
+        else:
+            result = payload.get("result")
+            detail["result"] = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
+            if isinstance(result, dict) and (result.get("success") is False or result.get("ok") is False or result.get("error") or
+                                           isinstance(result.get("exit_code"), int) and not isinstance(result.get("exit_code"), bool) and result["exit_code"] != 0):
+                detail["status"] = "failed"
+                if isinstance(result.get("error"), str):
+                    detail["error"] = result["error"]
+            detail["completedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        calls[tool_id] = detail
 
-    def parsed_result(result):
-        if isinstance(result, str):
-            try:
-                return json.loads(result)
-            except (ValueError, TypeError):
-                pass
-        return result
-
-    def write(frame):
+    def write(self, frame):
+        journal, server = self.journal, self.server
         params = frame.get("params") or {}
         sid = params.get("session_id")
         kind = params.get("type")
@@ -509,31 +546,7 @@ def install(path=None):
             prior = session.get("app_exposed_reasoning", "")
             session["app_exposed_reasoning"] = prior + text if kind != "reasoning.available" or not prior.endswith(text) else prior
         if sid and kind in ("tool.start", "tool.complete") and isinstance(payload.get("tool_id"), str):
-            with journal.lock:
-                run = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-            calls = session.setdefault("app_live_tools", {})
-            tool_id = payload["tool_id"]
-            prior = calls.get(tool_id, {})
-            detail = {**prior, "id": prior.get("id") or f"{run[0] if run else session.get('app_turn_id', sid)}:{tool_id}",
-                      "name": payload.get("name") or prior.get("name") or "Tool",
-                      "status": "running" if kind == "tool.start" else "completed"}
-            if payload.get("args") is not None:
-                detail["arguments"] = json.dumps(payload["args"], ensure_ascii=False, indent=2)
-            elif isinstance(payload.get("args_text"), str):
-                detail["arguments"] = payload["args_text"]
-            if kind == "tool.start":
-                detail["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                session.setdefault("app_live_tool_row_floors", {})[tool_id] = history_row_floor(session)
-            else:
-                result = payload.get("result")
-                detail["result"] = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
-                if isinstance(result, dict) and (result.get("success") is False or result.get("ok") is False or result.get("error") or
-                                               isinstance(result.get("exit_code"), int) and not isinstance(result.get("exit_code"), bool) and result["exit_code"] != 0):
-                    detail["status"] = "failed"
-                    if isinstance(result.get("error"), str):
-                        detail["error"] = result["error"]
-                detail["completedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            calls[tool_id] = detail
+            self.record_live_tool(sid, session, kind, payload)
         event_kind = {"complete": "completed", "error": "failed", "interrupted": "interrupted"}.get(payload.get("status")) if kind == "message.complete" else None
         if frame.get("method") == "approval":
             event_kind = "approval"
@@ -547,31 +560,30 @@ def install(path=None):
         if sid and kind == "tool.complete":
             with journal.lock, journal.db:
                 session = server._sessions.get(sid, {})
-                run = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-                journal.db.execute("INSERT INTO tools(profile,stored_session,run_id,tool_id,result,artifacts,detail) VALUES(?,?,?,?,?,?,?)", (profile_for(sid), session.get("session_key", sid), run[0] if run else None, payload.get("tool_id"), json.dumps(payload.get("result")), json.dumps(artifacts(payload.get("result"), session)), json.dumps(session.get("app_live_tools", {}).get(payload.get("tool_id")))))
+                run = journal.db.execute(OPEN_RUN, (sid,)).fetchone()
+                journal.db.execute("INSERT INTO tools(profile,stored_session,run_id,tool_id,result,artifacts,detail) VALUES(?,?,?,?,?,?,?)", (self.profile_for(sid), session.get("session_key", sid), run[0] if run else None, payload.get("tool_id"), json.dumps(payload.get("result")), json.dumps(self.artifacts(payload.get("result"), session)), json.dumps(session.get("app_live_tools", {}).get(payload.get("tool_id")))))
         if sid and event_kind == "approval":
             with journal.lock:
-                row = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
+                row = journal.db.execute(OPEN_RUN, (sid,)).fetchone()
                 root = row[0] if row else None
                 identity = f"{root}:{event_kind}:{frame.get('id') if event_kind == 'approval' else ''}" if root else None
                 # Approval commands can carry credentials, so the event body stays empty; the chat shows them after sign-in.
-                journal.event(profile_for(sid), sid, event_kind, "Approval requested" if event_kind == "approval" else "Hermes " + event_kind, root, event_key=identity)
+                journal.event(self.profile_for(sid), sid, event_kind, "Approval requested" if event_kind == "approval" else "Hermes " + event_kind, root, event_key=identity)
         elif sid and event_kind:
             # A native message.complete closes one turn, before steering/goal queue drain.
             # The post-followup seam below is the task boundary.
-            settlement[sid] = event_kind
-        return original_write(frame)
-    server.write_json = write
+            self.settlement[sid] = event_kind
+        return self.native_write(frame)
 
-    original_followups = server._run_post_turn_followups
-    def followups(rid, sid, session, result, goal_followup):
+    def followups(self, rid, sid, session, result, goal_followup):
         # Inline queue drains can themselves wait for approvals. Keep admission live
         # during that execution; the unresolved-root guard fences the idle seam.
-        original_followups(rid, sid, session, result, goal_followup)
-        with submission_lock:
+        journal = self.journal
+        self.native_followups(rid, sid, session, result, goal_followup)
+        with self.submission_lock:
             if session.get("running") or session.get("queued_prompt"):
                 return
-            kind = settlement.pop(sid, None)
+            kind = self.settlement.pop(sid, None)
             if kind:
                 with journal.lock, journal.db:
                     row = journal.db.execute("SELECT COALESCE(run_id,request_id),profile FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created LIMIT 1", (sid,)).fetchone()
@@ -581,30 +593,42 @@ def install(path=None):
                         body = event_body(outcome.get("final_response") if kind == "completed" else outcome.get("error") if kind == "failed" else None)
                         journal.event(row[1], sid, kind, "Hermes " + kind, row[0], body=body, event_key=f"{row[0]}:{kind}")
                         journal.db.execute("UPDATE receipts SET terminal=1,status=CASE WHEN ? THEN 'interrupted' ELSE status END WHERE COALESCE(run_id,request_id)=? AND terminal=0", (kind == "interrupted", row[0]))
-    server._run_post_turn_followups = followups
 
-    # Disable native automatic retry narrowly for canonical sessions admitted through this app.
-    original_marker = server._record_turn_marker
-    def record_marker(session, text, **kwargs):
+    def record_marker(self, session, text, **kwargs):
         if session.get("app_manual_recovery"):
             kwargs["auto_continue"] = False
-        return original_marker(session, text, **kwargs)
-    server._record_turn_marker = record_marker
-    original_auto_continue = server._maybe_schedule_auto_continue
-    def maybe_continue(sid, session, stored_key):
-        with maintenance_lock:
-            if maintenance_state():
+        return self.native_marker(session, text, **kwargs)
+
+    def maybe_continue(self, sid, session, stored_key):
+        with self.maintenance_lock:
+            if self.maintenance_state():
                 return None
-        profile = profile_name_for_home(session.get("profile_home") or get_hermes_home())
-        with journal.lock:
-            owned = journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND stored_session=? LIMIT 1", (profile, stored_key)).fetchone()
+        profile = self.profile_name_for_home(session.get("profile_home") or self.get_hermes_home())
+        with self.journal.lock:
+            owned = self.journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND stored_session=? LIMIT 1", (profile, stored_key)).fetchone()
         if owned:
             session["app_manual_recovery"] = True
             return None
-        return original_auto_continue(sid, session, stored_key)
-    server._maybe_schedule_auto_continue = maybe_continue
+        return self.native_auto_continue(sid, session, stored_key)
 
-    def history_identity(session):
+    def install_native_seams(self):
+        server = self.server
+        self.native_history = server._history_to_messages
+        server._history_to_messages = self.detailed_history
+        self.install_inline_guidance()
+        self.native_write = server.write_json
+        server.write_json = self.write
+        self.native_followups = server._run_post_turn_followups
+        server._run_post_turn_followups = self.followups
+        # Disable native automatic retry narrowly for canonical sessions admitted through this app.
+        self.native_marker = server._record_turn_marker
+        server._record_turn_marker = self.record_marker
+        self.native_auto_continue = server._maybe_schedule_auto_continue
+        server._maybe_schedule_auto_continue = self.maybe_continue
+
+    # Canonical open: each profile's one Bot Chat, attributed from the journal.
+
+    def history_identity(self, session):
         if "history" not in session or "history_lock" not in session:
             return None
         with session["history_lock"]:
@@ -616,8 +640,8 @@ def install(path=None):
                 # Flush stamps row IDs in place without changing history_version.
                 return (id(rows), len(rows or []), tuple((id(row), row.get("_row_id")) for row in rows or [] if isinstance(row, dict)))
             memory = (session.get("session_key"), session.get("history_version"), rows_identity(prefix), rows_identity(history))
-            home = Path(session.get("profile_home") or get_hermes_home())
-        db = server._get_db() if not session.get("profile_home") and hasattr(server, "_get_db") else None
+            home = Path(session.get("profile_home") or self.get_hermes_home())
+        db = self.server._get_db() if not session.get("profile_home") and hasattr(self.server, "_get_db") else None
         db_path = Path(getattr(db, "db_path", home / "state.db"))
         def stamp(path):
             try:
@@ -630,228 +654,315 @@ def install(path=None):
         # File replacement, checkpoint and profile commentary configuration invalidate too.
         return memory, tuple(stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml"))
 
-    def open_bot(rid, params):
+    def activate(self, profile, omit, skip_cache):
+        """Activate or resume the profile's canonical session; None for an unknown profile.
+
+        Returns (value, cached, identity, mutation). ``cached`` is decorated history this
+        poll may reuse, already placed in ``value``. Callers hold canonical_lock.
+        """
+        server, journal, canonical, decorated = self.server, self.journal, self.canonical, self.decorated
+        # Retain only live canonical sessions, with a bounded household cache.
+        live_canonical = set(canonical.values()) & server._sessions.keys()
+        for old in list(decorated):
+            if old not in live_canonical:
+                del decorated[old]
+        cached = None
+        identity = None
+        mutation = None
+        if profile in canonical and canonical[profile] in server._sessions:
+            sid = canonical[profile]
+            identity = None if omit else self.history_identity(server._sessions[sid])
+            with journal.lock:
+                mutation = journal.mutation
+                entry = decorated.get(sid)
+                if not omit and not skip_cache and identity is not None and mutation is not None and entry and entry[:2] == (identity, mutation) and time.monotonic() - entry[3] < 30:
+                    cached = entry[2]
+            value = self.native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
+            # Native activation takes its own snapshot. Never combine cached history with
+            # a live payload that crossed a history or journal mutation.
+            if cached is not None and (self.history_identity(server._sessions[sid]) != identity or entry[1] != journal.mutation):
+                cached = None
+                identity = self.history_identity(server._sessions[sid])
+                value = self.native("session.activate", {"session_id": sid, "profile": profile})
+            if cached is not None:
+                value["messages"] = cached
+                value["messages_omitted"] = False
+                value["message_count"] = len(cached)
+        else:
+            roster = self.native("profiles.list", {"include_sessions": True})["profiles"]
+            bot = next((x for x in roster if x["name"] == profile), None)
+            if bot is None:
+                return None
+            saved = bot.get("canonical_session")
+            if saved:
+                value = self.native("session.resume", {"session_id": saved["resolved_id"], "profile": profile, "close_on_disconnect": False, "inline_images": False})
+            else:
+                value = self.native("session.create", {"profile": profile, "title": "Bot Chat", "hidden": True, "follow_profile_config": True, "close_on_disconnect": False})
+                try:
+                    self.native("session.title", {"session_id": value["session_id"], "profile": profile, "title": "Bot Chat"})
+                except RuntimeError:
+                    # Another official writer acquired the unique canonical title. Adopt it.
+                    roster = self.native("profiles.list", {"include_sessions": True})["profiles"]
+                    saved = next(x for x in roster if x["name"] == profile)["canonical_session"]
+                    if not saved:
+                        raise
+                    value = self.native("session.resume", {"session_id": saved["resolved_id"], "profile": profile, "close_on_disconnect": False})
+            canonical[profile] = value["session_id"]
+        return value, cached, identity, mutation
+
+    def mark_local_requests(self, value):
+        # A compute-host mirror is not locally owned. Only expose inline
+        # capture when this executor's native registry can settle the exact
+        # canonical request and register its values at its own egress guard.
+        from tui_gateway import server_requests as secure_requests
+        explicit = getattr(self.journal, "explicit_credential", lambda _request_id: None)
+        with secure_requests._lock:
+            for request in value["open_requests"]:
+                local = secure_requests._open.get(request.get("id"))
+                request["app_local_secure"] = bool(local is not None and local.sid == value["session_id"] and local.method == request.get("method"))
+                # A login the agent asked for by address, with what the card must show besides it.
+                credential = explicit(request.get("id")) if request["app_local_secure"] and request.get("method") == "vault.save_login" else None
+                if credential:
+                    request["app_credential"] = credential
+
+    def last_terminal(self, profile, sid, stored):
+        """The newest settled outcome of the session, or of its canonical owner after a cold resume."""
+        db = self.journal.db
+        terminal = db.execute(LATEST_TERMINAL, (profile, sid)).fetchone()
+        if not terminal:
+            latest = db.execute(LATEST_ROOT, (profile, stored)).fetchone()
+            terminal = db.execute(RUN_TERMINAL, (latest[0],)).fetchone() if latest else None
+        return terminal
+
+    def describe_task(self, profile, sid, session, value):
+        if session.get("running") and session.get("app_exposed_reasoning"):
+            value.setdefault("inflight", {})
+            if value["inflight"] is None:
+                value["inflight"] = {}
+            value["inflight"]["reasoning"] = session["app_exposed_reasoning"]
+        session["app_manual_recovery"] = True
+        keeper = self.keepers.setdefault(sid, Keeper())
+        self.server._attach_session_transport(session, keeper)
+        db = self.journal.db
+        value["executor_epoch"] = self.journal.epoch
+        value["canonical_stored_session_id"] = session.get("session_key")
+        interruption = db.execute("SELECT request_id,created FROM interruptions WHERE profile=? AND stored_session=?", (profile, value["canonical_stored_session_id"])).fetchone()
+        value["app_interruption"] = {"requestId": interruption[0], "runId": interruption[0], "detail": "Hermes restarted during this task. Review its results before retrying."} if interruption else None
+        current = db.execute(OPEN_RUN, (sid,)).fetchone()
+        value["app_run_id"] = current[0] if current else None
+        # Cold resume has a new runtime SID; use the canonical journal owner.
+        terminal = self.last_terminal(profile, sid, value["canonical_stored_session_id"])
+        value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
+
+    def attribute(self, profile, sid, value):
+        """Bind app receipts, files and tool details to native history rows.
+
+        Returns (messages, journal mutation after binding, whether the result is cacheable).
+        App attribution follows Hermes's durable row identity, never a rewritten body.
+        Read each journal table once per poll, not once per message. Binding only fills
+        a NULL row_id, so the unbound snapshot can only overstate candidates, and only
+        a row ID bound here needs a reread. Callers hold journal.lock, which native
+        writers also take, so none lands mid-poll.
+        """
+        journal, server = self.journal, self.server
+        stored = value["canonical_stored_session_id"]
+        messages = value.get("messages", [])
+        unbound = journal.db.execute("SELECT steering,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND row_id IS NULL", (profile, stored)).fetchall()
+        steering_texts = {text for steering, text, _ in unbound if steering}
+        image_pending = any(not steering and any(str(x.get("mime", "")).startswith("image/") for x in json.loads(raw or "[]")) for steering, _, raw in unbound)
+        attributed = {}
+        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
+            attributed.setdefault(row[0], row[1:])
+        tool_records = {}
+        for row in journal.db.execute("SELECT tool_id,run_id,result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str]))):
+            tool_records.setdefault(row[:2], []).append(row[2:])
+        rebound = set()
+        current_run = None
+        for message in messages:
+            if message.get("role") == "user":
+                current_run = None
+            if message.get("role") == "user" and message.get("row_id") is not None and message.get("text") in steering_texts:
+                # Native steering persists a correction later, without an admission row ID.
+                # Pair equal corrections in admission order within this canonical owner.
+                candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, stored, message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
+                if candidate:
+                    with journal.db:
+                        journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
+                    rebound.add(message["row_id"])
+            if message.get("role") == "user" and message.get("row_id") is not None and image_pending:
+                # Recovery for image-only turns completed before this binding hook.
+                # Match the official persisted image-ref representation within the
+                # admitted owner and time window, never arbitrary marker text.
+                candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, stored, float(message.get("timestamp") or time.time()) + 1)).fetchall()
+                for request_id, input_text, raw_attachments in candidates:
+                    images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
+                    if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
+                        with journal.lock, journal.db:
+                            journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
+                        rebound.add(message["row_id"])
+                        break
+            if message.get("row_id") is None:
+                row = None
+            elif type(message["row_id"]) is int and message["row_id"] not in rebound:
+                row = attributed.get(message["row_id"])
+            else:
+                row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
+            if row:
+                message["app_request_id"], message["app_sender_id"] = row[:2]
+                current_run = row[2]
+                message["app_attachments"] = json.loads(row[3] or "[]")
+                display_text = row[4] or ""
+                suffix = "\n".join("@file:" + json.dumps(x["path"], ensure_ascii=False) for x in message["app_attachments"] if not str(x.get("mime", "")).startswith("image/"))
+                if suffix and display_text.endswith("\n" + suffix):
+                    display_text = display_text[:-len(suffix)-1]
+                message["app_display_text"] = display_text
+            if current_run:
+                message["app_run_id"] = current_run
+            if message.get("role") == "tool":
+                if not current_run:
+                    recorded = []
+                elif type(message.get("tool_call_id")) is str:
+                    recorded = tool_records.get((message["tool_call_id"], current_run), [])
+                else:
+                    recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall()
+                tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
+                if tool:
+                    # The persisted native output remains authoritative.
+                    message["app_artifacts"] = json.loads(tool[1] or "[]")
+                    # Reused IDs within a run cannot identify one call's
+                    # timestamps or arguments. Fall back to its native row.
+                    if len(recorded) == 1 and tool[2]:
+                        detail = json.loads(tool[2])
+                        if isinstance(detail, dict) and detail.get("name") == message.get("name"):
+                            try:
+                                arguments = json.loads(detail.get("arguments", "{}"))
+                            except (ValueError, TypeError):
+                                arguments = None
+                            if arguments == (message.get("args") or {}):
+                                message["app_tool_call"] = detail
+        return messages, journal.mutation, not unbound
+
+    def unrepresented_tool_calls(self, session, messages):
+        # Standard native tools flush before completion; Codex can expose
+        # completion before its turn flush. Keep those results until their
+        # exact call appears in visible canonical history. Reused old IDs
+        # cannot suppress a new call, and uncertain boundaries keep detail.
+        calls = []
+        if not session.get("running"):
+            return calls
+        for tool_id, call in session.get("app_live_tools", {}).items():
+            represented = False
+            if call.get("status") != "running":
+                floor = session.get("app_live_tool_row_floors", {}).get(tool_id)
+                try:
+                    arguments = json.loads(call.get("arguments", "{}"))
+                except (ValueError, TypeError):
+                    arguments = None
+                for message in messages:
+                    if message.get("role") != "tool":
+                        continue
+                    if (message.get("app_tool_call") or {}).get("id") == call.get("id"):
+                        represented = True
+                        break
+                    if (type(floor) is int and type(message.get("row_id")) is int and message["row_id"] > floor
+                            and message.get("tool_call_id") == tool_id and message.get("name") == call.get("name")
+                            and arguments == (message.get("args") or {})
+                            and parsed_result(message.get("app_tool_result")) == parsed_result(call.get("result"))):
+                        represented = True
+                        break
+            if not represented:
+                calls.append(call)
+        return calls
+
+    def open_bot(self, rid, params):
+        server, journal = self.server, self.journal
         profile = params.get("profile", "default")
         # Callers that need only the session, its run state and open requests skip the
         # native history read. A first open still resumes with history.
         omit = params.get("omit_messages") is True
         window = params.get("window") if isinstance(params.get("window"), dict) and not omit else None
-        with canonical_lock:
-            # Retain only live canonical sessions, with a bounded household cache.
-            live_canonical = set(canonical.values()) & server._sessions.keys()
-            for old in list(decorated):
-                if old not in live_canonical:
-                    del decorated[old]
-            cached = None
-            identity = None
-            mutation = None
-            if profile in canonical and canonical[profile] in server._sessions:
-                sid = canonical[profile]
-                identity = None if omit else history_identity(server._sessions[sid])
-                with journal.lock:
-                    mutation = journal.mutation
-                    entry = decorated.get(sid)
-                    if not omit and not params.get("_skip_cache") and identity is not None and mutation is not None and entry and entry[:2] == (identity, mutation) and time.monotonic() - entry[3] < 30:
-                        cached = entry[2]
-                value = native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
-                # Native activation takes its own snapshot. Never combine cached history with
-                # a live payload that crossed a history or journal mutation.
-                if cached is not None and (history_identity(server._sessions[sid]) != identity or entry[1] != journal.mutation):
-                    cached = None
-                    identity = history_identity(server._sessions[sid])
-                    value = native("session.activate", {"session_id": sid, "profile": profile})
-                if cached is not None:
-                    value["messages"] = cached
-                    value["messages_omitted"] = False
-                    value["message_count"] = len(cached)
-            else:
-                roster = native("profiles.list", {"include_sessions": True})["profiles"]
-                bot = next((x for x in roster if x["name"] == profile), None)
-                if bot is None:
-                    return server._err(rid, 4040, "Unknown Hermes profile")
-                saved = bot.get("canonical_session")
-                if saved:
-                    value = native("session.resume", {"session_id": saved["resolved_id"], "profile": profile, "close_on_disconnect": False, "inline_images": False})
-                else:
-                    value = native("session.create", {"profile": profile, "title": "Bot Chat", "hidden": True, "follow_profile_config": True, "close_on_disconnect": False})
-                    try:
-                        native("session.title", {"session_id": value["session_id"], "profile": profile, "title": "Bot Chat"})
-                    except RuntimeError:
-                        # Another official writer acquired the unique canonical title. Adopt it.
-                        roster = native("profiles.list", {"include_sessions": True})["profiles"]
-                        saved = next(x for x in roster if x["name"] == profile)["canonical_session"]
-                        if not saved:
-                            raise
-                        value = native("session.resume", {"session_id": saved["resolved_id"], "profile": profile, "close_on_disconnect": False})
-                canonical[profile] = value["session_id"]
+        with self.canonical_lock:
+            activated = self.activate(profile, omit, params.get("_skip_cache"))
+            if activated is None:
+                return server._err(rid, 4040, "Unknown Hermes profile")
+            value, cached, identity, mutation = activated
             value.setdefault("open_requests", [])
-            # A compute-host mirror is not locally owned. Only expose inline
-            # capture when this executor's native registry can settle the exact
-            # canonical request and register its values at its own egress guard.
-            from tui_gateway import server_requests as secure_requests
-            explicit = getattr(journal, "explicit_credential", lambda _request_id: None)
-            with secure_requests._lock:
-                for request in value["open_requests"]:
-                    local = secure_requests._open.get(request.get("id"))
-                    request["app_local_secure"] = bool(local is not None and local.sid == value["session_id"] and local.method == request.get("method"))
-                    # A login the agent asked for by address, with what the card must show besides it.
-                    credential = explicit(request.get("id")) if request["app_local_secure"] and request.get("method") == "vault.save_login" else None
-                    if credential:
-                        request["app_credential"] = credential
+            self.mark_local_requests(value)
             sid = value["session_id"]
             session = server._sessions[sid]
-            if session.get("running") and session.get("app_exposed_reasoning"):
-                value.setdefault("inflight", {})
-                if value["inflight"] is None:
-                    value["inflight"] = {}
-                value["inflight"]["reasoning"] = session["app_exposed_reasoning"]
-            server._sessions[sid]["app_manual_recovery"] = True
-            keeper = keepers.setdefault(sid, Keeper())
-            server._attach_session_transport(server._sessions[sid], keeper)
-            value["executor_epoch"] = journal.epoch
-            value["canonical_stored_session_id"] = server._sessions[sid].get("session_key")
-            interruption = journal.db.execute("SELECT request_id,created FROM interruptions WHERE profile=? AND stored_session=?", (profile, value["canonical_stored_session_id"])).fetchone()
-            value["app_interruption"] = {"requestId": interruption[0], "runId": interruption[0], "detail": "Hermes restarted during this task. Review its results before retrying."} if interruption else None
-            current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
-            value["app_run_id"] = current[0] if current else None
-            terminal = journal.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
-            # Cold resume has a new runtime SID; use the canonical journal owner.
-            if not terminal:
-                latest = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, value["canonical_stored_session_id"])).fetchone()
-                terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
-            value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
-            # App attribution follows Hermes's durable row identity, never a rewritten body.
-            # Read each journal table once per poll, not once per message. Binding
-            # below only fills a NULL row_id, so the unbound snapshot can only
-            # overstate candidates, and only a row ID bound here needs a reread.
-            # Native writers hold the journal lock, so none lands mid-poll.
+            self.describe_task(profile, sid, session, value)
             with journal.lock:
                 if cached is None:
-                    messages = value.get("messages", [])
-                    unbound = journal.db.execute("SELECT steering,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND row_id IS NULL", (profile, value["canonical_stored_session_id"])).fetchall()
-                    steering_texts = {text for steering, text, _ in unbound if steering}
-                    image_pending = any(not steering and any(str(x.get("mime", "")).startswith("image/") for x in json.loads(raw or "[]")) for steering, _, raw in unbound)
-                    attributed = {}
-                    for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
-                        attributed.setdefault(row[0], row[1:])
-                    tool_records = {}
-                    for row in journal.db.execute("SELECT tool_id,run_id,result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str]))):
-                        tool_records.setdefault(row[:2], []).append(row[2:])
-                    rebound = set()
-                    current_run = None
-                    for message in messages:
-                        if message.get("role") == "user":
-                            current_run = None
-                        if message.get("role") == "user" and message.get("row_id") is not None and message.get("text") in steering_texts:
-                            # Native steering persists a correction later, without an admission row ID.
-                            # Pair equal corrections in admission order within this canonical owner.
-                            candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, value["canonical_stored_session_id"], message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
-                            if candidate:
-                                with journal.db:
-                                    journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
-                                rebound.add(message["row_id"])
-                        if message.get("role") == "user" and message.get("row_id") is not None and image_pending:
-                            # Recovery for image-only turns completed before this binding hook.
-                            # Match the official persisted image-ref representation within the
-                            # admitted owner and time window, never arbitrary marker text.
-                            candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, value["canonical_stored_session_id"], float(message.get("timestamp") or time.time()) + 1)).fetchall()
-                            for request_id, input_text, raw_attachments in candidates:
-                                images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
-                                if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
-                                    with journal.lock, journal.db:
-                                        journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
-                                    rebound.add(message["row_id"])
-                                    break
-                        if message.get("row_id") is None:
-                            row = None
-                        elif type(message["row_id"]) is int and message["row_id"] not in rebound:
-                            row = attributed.get(message["row_id"])
-                        else:
-                            row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
-                        if row:
-                            message["app_request_id"], message["app_sender_id"] = row[:2]
-                            current_run = row[2]
-                            message["app_attachments"] = json.loads(row[3] or "[]")
-                            display_text = row[4] or ""
-                            suffix = "\n".join("@file:" + json.dumps(x["path"], ensure_ascii=False) for x in message["app_attachments"] if not str(x.get("mime", "")).startswith("image/"))
-                            if suffix and display_text.endswith("\n" + suffix):
-                                display_text = display_text[:-len(suffix)-1]
-                            message["app_display_text"] = display_text
-                        if current_run:
-                            message["app_run_id"] = current_run
-                        if message.get("role") == "tool":
-                            if not current_run:
-                                recorded = []
-                            elif type(message.get("tool_call_id")) is str:
-                                recorded = tool_records.get((message["tool_call_id"], current_run), [])
-                            else:
-                                recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall()
-                            tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
-                            if tool:
-                                # The persisted native output remains authoritative.
-                                message["app_artifacts"] = json.loads(tool[1] or "[]")
-                                # Reused IDs within a run cannot identify one call's
-                                # timestamps or arguments. Fall back to its native row.
-                                if len(recorded) == 1 and tool[2]:
-                                    detail = json.loads(tool[2])
-                                    if isinstance(detail, dict) and detail.get("name") == message.get("name"):
-                                        try:
-                                            arguments = json.loads(detail.get("arguments", "{}"))
-                                        except (ValueError, TypeError):
-                                            arguments = None
-                                        if arguments == (message.get("args") or {}):
-                                            message["app_tool_call"] = detail
-                    bound_mutation = journal.mutation
-                    cacheable = not unbound
+                    messages, bound_mutation, cacheable = self.attribute(profile, sid, value)
             # Never acquire history_lock while holding journal.lock: native flushes
             # emit frames under history_lock and the frame hook needs journal.lock.
-            after = history_identity(session) if not omit else None
+            after = self.history_identity(session) if not omit else None
             if cached is not None and (after != identity or mutation != journal.mutation):
-                return open_bot(rid, {**params, "_skip_cache": True})
+                return self.open_bot(rid, {**params, "_skip_cache": True})
             with journal.lock:
                 if cached is None:
                     if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
                         # Full binding preserves cursor identities and earlier file context.
-                        decorated[sid] = (identity, journal.mutation, messages, time.monotonic())
-                        while len(decorated) > 32:
-                            del decorated[min(decorated, key=lambda key: decorated[key][3])]
+                        self.decorated[sid] = (identity, journal.mutation, messages, time.monotonic())
+                        while len(self.decorated) > 32:
+                            del self.decorated[min(self.decorated, key=lambda key: self.decorated[key][3])]
                     else:
-                        decorated.pop(sid, None)
-            # Standard native tools flush before completion; Codex can expose
-            # completion before its turn flush. Keep those results until their
-            # exact call appears in visible canonical history. Reused old IDs
-            # cannot suppress a new call, and uncertain boundaries keep detail.
-            value["app_tool_calls"] = []
-            if session.get("running"):
-                for tool_id, call in session.get("app_live_tools", {}).items():
-                    represented = False
-                    if call.get("status") != "running":
-                        floor = session.get("app_live_tool_row_floors", {}).get(tool_id)
-                        try:
-                            arguments = json.loads(call.get("arguments", "{}"))
-                        except (ValueError, TypeError):
-                            arguments = None
-                        for message in value.get("messages", []):
-                            if message.get("role") != "tool":
-                                continue
-                            if (message.get("app_tool_call") or {}).get("id") == call.get("id"):
-                                represented = True
-                                break
-                            if (type(floor) is int and type(message.get("row_id")) is int and message["row_id"] > floor
-                                    and message.get("tool_call_id") == tool_id and message.get("name") == call.get("name")
-                                    and arguments == (message.get("args") or {})
-                                    and parsed_result(message.get("app_tool_result")) == parsed_result(call.get("result"))):
-                                represented = True
-                                break
-                    if not represented:
-                        value["app_tool_calls"].append(call)
+                        self.decorated.pop(sid, None)
+            value["app_tool_calls"] = self.unrepresented_tool_calls(session, value.get("messages", []))
             if window is not None:
                 value["messages"], cut = history_window(value.get("messages", []), sid, window.get("start"), window.get("turns", 0))
                 if cut:
                     value["app_window"] = cut
             return server._ok(rid, value)
 
-    def submit(rid, params):
+    def open_canonical(self, profile):
+        with self.canonical_lock:
+            if self.canonical.get(profile) in self.server._sessions:
+                return self.canonical[profile]
+            response = self.open_bot("agent-interface-delivery", {"profile": profile})
+        return None if "error" in response else response["result"]["session_id"]
+
+    # Admission: one durable receipt per app request, before native execution.
+
+    def admitted(self, rid, request_id, message=None):
+        # Save the complete response in the same transaction as its final
+        # admission state. receipt() remains the mutable status projection.
+        value = self.journal.receipt(request_id)
+        value.update(app_run_id=value["runId"], admission="canonical")
+        if message is not None:
+            value["message"] = message
+        self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
+        return self.server._ok(rid, value)
+
+    def stage_images(self, sid, profile, attachments, staged):
+        """Attach image attachments natively, recording each addition in ``staged``."""
+        sessions = self.server._sessions
+        for attachment in attachments:
+            if str(attachment.get("mime", "")).startswith("image/"):
+                prior = list(sessions[sid].get("attached_images", []))
+                try:
+                    self.native("image.attach", {"session_id": sid, "profile": profile, "path": attachment["path"]})
+                finally:
+                    # Native image.attach can append before its result formatter fails.
+                    remaining = list(prior)
+                    for image in sessions[sid].get("attached_images", []):
+                        if image in remaining:
+                            remaining.remove(image)
+                        else:
+                            staged.append(image)
+
+    def unstage_images(self, sid, staged):
+        # Remove only additions from this preparation and preserve pre-existing staged images.
+        session = self.server._sessions[sid]
+        with session["history_lock"]:
+            images = list(session.get("attached_images", []))
+            for image in reversed(staged):
+                if image in images:
+                    images.pop(len(images) - 1 - images[::-1].index(image))
+            session["attached_images"] = images
+
+    def submit(self, rid, params):
+        server, journal = self.server, self.journal
         request_id = params.get("request_id")
         actor = params.get("sender_id")
         profile = params.get("profile", "default")
@@ -861,7 +972,7 @@ def install(path=None):
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 200 or not isinstance(actor, str) or not actor or not isinstance(text, str) or (not text.strip() and not attachments):
             return server._err(rid, -32602, "request_id, sender_id and non-empty text required")
         digest = hashlib.sha256(json.dumps([profile, actor, text, attachments], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        with submission_lock:
+        with self.submission_lock:
             # Replays need neither fresh canonical activation nor interruption review.
             # Keep the submission fence until admission finishes so only one call owns
             # a request ID. Do not take canonical_lock while holding journal.lock.
@@ -872,42 +983,31 @@ def install(path=None):
                         return server._err(rid, 4093, "Request ID already belongs to a different input")
                     return server._ok(rid, journal.admission_response(request_id))
             if sid is None:
-                sid = open_canonical(profile)
+                sid = self.open_canonical(profile)
             with journal.lock:
-                if sid is None or canonical.get(profile) != sid:
+                if sid is None or self.canonical.get(profile) != sid:
                     return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
                 stored = server._sessions[sid].get("session_key")
                 running = bool(server._sessions[sid].get("running"))
-                current = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1", (sid,)).fetchone()
+                current = journal.db.execute(OPEN_RUN, (sid,)).fetchone()
                 interrupted = journal.db.execute("SELECT 1 FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored)).fetchone()
-                terminal = journal.db.execute("SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (profile, sid)).fetchone()
-                if not terminal:
-                    latest = journal.db.execute("SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1", (profile, stored)).fetchone()
-                    terminal = journal.db.execute("SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1", (latest[0],)).fetchone() if latest else None
+                terminal = self.last_terminal(profile, sid, stored)
                 inflight = server._sessions[sid].get("inflight_turn") or {}
                 interrupted = bool(interrupted) or not running and not current and (bool(inflight.get("interrupted")) or bool(terminal and terminal[0] == "interrupted"))
                 if interrupted and params.get("reviewed_interruption") is not True:
                     return server._err(rid, 4094, "Review the interrupted task before starting another turn")
-                def admitted(message=None):
-                    # Save the complete response in the same transaction as its final
-                    # admission state. receipt() remains the mutable status projection.
-                    value = journal.receipt(request_id)
-                    value.update(app_run_id=value["runId"], admission="canonical")
-                    if message is not None:
-                        value["message"] = message
-                    journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
-                    return server._ok(rid, value)
+                rejected = (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time())
                 if current and not server._sessions[sid].get("running"):
                     # Native releases running before draining its followup queue. No new root
                     # may be admitted in that interval or retired with the preceding task.
                     with journal.db:
-                        journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
-                        return admitted("Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles.")
+                        journal.db.execute(INSERT_REJECTED, rejected)
+                        return self.admitted(rid, request_id, "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles.")
                 steering = bool(params.get("steer")) or bool(server._sessions.get(sid, {}).get("running"))
                 if steering and any(str(x.get("mime", "")).startswith("image/") for x in attachments):
                     with journal.db:
-                        journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time()))
-                        return admitted("Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.")
+                        journal.db.execute(INSERT_REJECTED, rejected)
+                        return self.admitted(rid, request_id, "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.")
                 run_id = current[0] if steering and current else request_id
                 # FULL-synchronous intent is durable before native execution may be admitted.
                 with journal.db:
@@ -915,57 +1015,34 @@ def install(path=None):
                 staged = []
                 try:
                     if not steering:
-                        for attachment in attachments:
-                            if str(attachment.get("mime", "")).startswith("image/"):
-                                prior = list(server._sessions[sid].get("attached_images", []))
-                                try:
-                                    attached = native("image.attach", {"session_id": sid, "profile": profile, "path": attachment["path"]})
-                                finally:
-                                    # Native image.attach can append before its result formatter fails.
-                                    remaining = list(prior)
-                                    for image in server._sessions[sid].get("attached_images", []):
-                                        if image in remaining:
-                                            remaining.remove(image)
-                                        else:
-                                            staged.append(image)
+                        self.stage_images(sid, profile, attachments, staged)
                 except Exception as exc:
-                    # No prompt invocation occurred. Remove only additions from this preparation,
-                    # preserve pre-existing staged images, and definitely reject this receipt.
-                    with server._sessions[sid]["history_lock"]:
-                        images = list(server._sessions[sid].get("attached_images", []))
-                        for image in reversed(staged):
-                            if image in images:
-                                images.pop(len(images) - 1 - images[::-1].index(image))
-                        server._sessions[sid]["attached_images"] = images
+                    # No prompt invocation occurred, so this receipt is definitely rejected.
+                    self.unstage_images(sid, staged)
                     with journal.db:
                         journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
-                        return admitted("Image preparation failed before admission: " + str(exc)[:400])
+                        return self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
                 try:
                     method = "session.steer" if steering else "prompt.submit"
-                    result = native(method, {"session_id": sid, "profile": profile, "text": text})
+                    result = self.native(method, {"session_id": sid, "profile": profile, "text": text})
                 except Exception as exc:
                     # Once native admission is invoked, failures remain conservative.
                     with journal.db:
-                        return admitted(str(exc)[:500])
+                        return self.admitted(rid, request_id, str(exc)[:500])
                 status = "rejected" if result.get("status") == "rejected" else "accepted"
                 with journal.db:
                     journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
                     if interrupted and status == "accepted":
                         journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
-                    return admitted()
+                    return self.admitted(rid, request_id)
 
-    def receipt(rid, params):
-        with journal.lock:
-            return server._ok(rid, {"receipt": journal.receipt(params.get("request_id", ""))})
+    def receipt(self, rid, params):
+        with self.journal.lock:
+            return self.server._ok(rid, {"receipt": self.journal.receipt(params.get("request_id", ""))})
 
-    discovery_lock = threading.RLock()
-    routine_scans = {}
+    # Discovery: app-visible events, including routine runs outside this gateway.
 
-    def discover(rid, params):
-        try:
-            cursor = int(params.get("cursor") or 0)
-        except (ValueError, TypeError):
-            return server._err(rid, -32602, "Invalid discovery cursor")
+    def scan_routines(self, full):
         # Runs outside this gateway still have an official durable execution ledger.
         # Discover its actual terminal attempts, with explicit routine identities.
         from hermes_cli.web_routers.cron import _owner_home_scope, _list_cron_jobs_sync
@@ -973,15 +1050,15 @@ def install(path=None):
         # Upstream supports only before_claimed_at (backwards pagination), not a
         # since filter. Observe the execution DB and WAL, not job metadata: a
         # terminal ledger write can arrive later or without a job-row change.
-        with discovery_lock:
+        with self.discovery_lock:
             now = time.monotonic()
             present = set()
-            for profile in native("profiles.list", {"include_sessions": False})["profiles"]:
+            for profile in self.native("profiles.list", {"include_sessions": False})["profiles"]:
                 name = profile["name"]
                 present.add(name)
                 with _owner_home_scope(name):
                     from cron import executions
-                    ledger = executions.EXECUTIONS_FILE or Path(get_hermes_home()).resolve() / "cron" / "executions.db"
+                    ledger = executions.EXECUTIONS_FILE or Path(self.get_hermes_home()).resolve() / "cron" / "executions.db"
                     def stamp(path):
                         try:
                             info = path.stat()
@@ -989,8 +1066,8 @@ def install(path=None):
                         except FileNotFoundError:
                             return None
                     signature = tuple(stamp(path) for path in (ledger, ledger.with_name(ledger.name + "-wal")))
-                    previous = routine_scans.get(name)
-                    if params.get("full") is not True and previous and previous[0] == signature and now - previous[1] < 60:
+                    previous = self.routine_scans.get(name)
+                    if not full and previous and previous[0] == signature and now - previous[1] < 60:
                         continue
                     for job in _list_cron_jobs_sync(name):
                         job_id = job.get("id") or job["job_id"]
@@ -1001,66 +1078,81 @@ def install(path=None):
                             execution_id = str(execution.get("execution_id") or execution.get("id") or execution.get("claimed_at"))
                             run_id = f"routine:{name}:{job_id}:{execution_id}"
                             kind = "completed" if status == "completed" else "failed" if status == "failed" else "interrupted"
-                            journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, event_key=f"{run_id}:{status}", routine_id=job_id)
+                            self.journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, event_key=f"{run_id}:{status}", routine_id=job_id)
                         # Record only after the scan succeeds, so failed reads retry next tick.
-                    routine_scans[name] = (signature, now)
-            for key in list(routine_scans):
+                    self.routine_scans[name] = (signature, now)
+            for key in list(self.routine_scans):
                 if key not in present:
-                    del routine_scans[key]
-        with journal.lock:
-            rows = journal.db.execute("SELECT id,profile,session_id,run_id,kind,title,body,occurred,routine_id,event_key FROM events WHERE id>? ORDER BY id LIMIT 250", (cursor,)).fetchall()
+                    del self.routine_scans[key]
+
+    def discover(self, rid, params):
+        server = self.server
+        try:
+            cursor = int(params.get("cursor") or 0)
+        except (ValueError, TypeError):
+            return server._err(rid, -32602, "Invalid discovery cursor")
+        self.scan_routines(params.get("full") is True)
+        with self.journal.lock:
+            rows = self.journal.db.execute("SELECT id,profile,session_id,run_id,kind,title,body,occurred,routine_id,event_key FROM events WHERE id>? ORDER BY id LIMIT 250", (cursor,)).fetchall()
         ready = []
         for row in rows:
             if row[4] == "completed" and server._sessions.get(row[2], {}).get("running"):
                 # A turn boundary can precede queued guidance/goal continuation.
                 break
             ready.append(row)
-        def approval_id(row):
-            # The approval's native request ID, which its event identity ends with, lets a notification decide it.
-            prefix = f"{row[3]}:approval:"
-            return row[9][len(prefix):] if row[4] == "approval" and row[3] and isinstance(row[9], str) and row[9].startswith(prefix) and len(row[9]) > len(prefix) else None
         events = [{"id": str(r[0]), "botId": r[1], "sessionId": r[2], "requestId": r[3], "runId": r[3], "routineId": r[8], "kind": r[4], "title": r[5], "body": r[6], "occurredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r[7])),
                    **({"approvalId": approval_id(r)} if approval_id(r) else {})} for r in ready]
         return server._ok(rid, {"cursor": str(ready[-1][0] if ready else cursor), "events": events})
 
-    from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
-    for name, handler in {"open": open_bot, "submit": submit, "receipt": receipt, "discover": discover}.items():
-        server.register_method("agent-interface." + name, handler)
+    def rpc_methods(self):
+        """The agent-interface RPCs that read or admit app work, by registered name."""
+        return {"agent-interface." + name: handler for name, handler in
+                {"open": self.open_bot, "submit": self.submit, "receipt": self.receipt, "discover": self.discover}.items()}
 
-    # Routines and bot messages arrive as turns in the canonical chat. A Hermes whose
-    # native delivery only reaches the gateway authority gets the add-on producer.
-    # The consumer always runs: after a rollback it still owes queued add-on receipts.
-    import tools.bot_live_delivery as mailbox
-    bot_delivery = sibling_module("bot_delivery")
-    bridge = bot_delivery.bridge_required(mailbox, server)
-    if bridge:
-        bot_delivery.install_producer(mailbox)
-
-    def open_canonical(profile):
-        with canonical_lock:
-            if canonical.get(profile) in server._sessions:
-                return canonical[profile]
-            response = open_bot("agent-interface-delivery", {"profile": profile})
-        return None if "error" in response else response["result"]["session_id"]
+    # Bot Chat delivery: routines and bot messages arrive as canonical chat turns.
 
     @contextlib.contextmanager
-    def delivery_admission(sid):
+    def delivery_admission(self, sid):
         # Same order as submit: no delivery starts beside an unsettled app task or maintenance.
-        with submission_lock:
-            with maintenance_lock:
-                closed = bool(maintenance_state())
-            with journal.lock:
-                unsettled = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1", (sid,)).fetchone()
+        with self.submission_lock:
+            with self.maintenance_lock:
+                closed = bool(self.maintenance_state())
+            with self.journal.lock:
+                unsettled = self.journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 LIMIT 1", (sid,)).fetchone()
             yield not closed and unsettled is None
 
-    from tools.bot_failure_reasons import classify_agent_error
-    journal.bot_delivery = bot_delivery.Consumer(server, mailbox, bot_delivery.profile_homes(get_hermes_home()),
-                                                 open_canonical, delivery_admission, classify=classify_agent_error,
-                                                 native_records=bridge)
-    journal.bot_delivery.start()
-    return journal
+    def install_delivery(self):
+        # A Hermes whose native delivery only reaches the gateway authority gets the
+        # add-on producer. The consumer always runs: after a rollback it still owes
+        # queued add-on receipts.
+        import tools.bot_live_delivery as mailbox
+        bot_delivery = sibling_module("bot_delivery")
+        native_records = bot_delivery.bridge_required(mailbox, self.server)
+        if native_records:
+            bot_delivery.install_producer(mailbox)
+        from tools.bot_failure_reasons import classify_agent_error
+        self.journal.bot_delivery = bot_delivery.Consumer(self.server, mailbox, bot_delivery.profile_homes(self.get_hermes_home()),
+                                                          self.open_canonical, self.delivery_admission, classify=classify_agent_error,
+                                                          native_records=native_records)
+        self.journal.bot_delivery.start()
 
+def install(path=None):
+    actual_revision, patch_hash = source_state()
+    from tui_gateway import server
+    from hermes_constants import get_hermes_home, profile_name_for_home
+    sibling_module("computer").install(server)
+    journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
+    bridge = Bridge(server, journal, get_hermes_home=get_hermes_home, profile_name_for_home=profile_name_for_home,
+                    maintenance_file=os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"))
+    from hermes_cli.backend_retirement import retirement
+    bridge.install_maintenance(retirement)
+    bridge.install_native_seams()
+    from agent.skill_utils import ESSENTIAL_SKILLS
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    for name, handler in bridge.rpc_methods().items():
+        server.register_method(name, handler)
+    bridge.install_delivery()
+    return journal
 
 if __name__ == "__main__":
     import hermes_cli.web_server as web
