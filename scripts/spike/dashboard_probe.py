@@ -77,7 +77,8 @@ result["checks"]["only_probe_process_stopped"] = True
 print(json.dumps(result))
 '''
 
-files = {name: base64.b64encode((REPO / "src/hermes" / name).read_bytes()).decode() for name in ("dashboard.py", "experience.py", "vault.py", "extension.py", "service_auth.py", "integrations.py", "qualification.py", "computer.py")}
+# Ship every add-on module: the add-on loads its siblings by file, so a missing one fails at startup.
+files = {path.name: base64.b64encode(path.read_bytes()).decode() for path in sorted((REPO / "src/hermes").glob("*.py"))}
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--ssh-host", required=True)
 parser.add_argument("--launcher", default="~/.local/bin/hermes")
