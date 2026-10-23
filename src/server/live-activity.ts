@@ -5,25 +5,9 @@ import { visible } from "./bot-access.js";
 import { FailureTracker, quietLog, type Log } from "./logging.js";
 import { ApnsError } from "./apns.js";
 
-/** One row of the aggregate Live Activity. docs/native-api.md is the contract the iOS app decodes. */
-export type LivePhase = "starting" | "thinking" | "working" | "waiting" | "blocked" | "done" | "failed" | "interrupted";
-export interface LiveRow {
-  botId: string;
-  name: string;
-  phase: LivePhase;
-  status: string;
-  detail?: string;
-  /** Unix epoch seconds. ActivityKit would decode a Date from the 2001 epoch. */
-  since?: number;
-  color?: string;
-}
-export interface LiveState {
-  title: string;
-  activeCount: number;
-  attentionCount: number;
-  updatedAt: number;
-  rows: LiveRow[];
-}
+import type { LivePhase, LiveRow, LiveState } from "../shared/live-activity.js";
+export type { LivePhase, LiveRow, LiveState } from "../shared/live-activity.js";
+
 export type LiveActivitySender = (target: { token: string; environment: "sandbox" | "production" }, payload: object, priority: 5 | 10) => Promise<void>;
 
 const status: Record<LivePhase, string> = {
