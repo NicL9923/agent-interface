@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError, api, write } from '../client-api';
+import { useAction } from '../app/use-action';
+import { FormMessage } from './ui/form-message';
 import type { Bootstrap } from '../shared/types';
 import type { AutomationOverview, HistoryPage, SavedItem, SearchHit } from '../shared/discovery';
 import { AgentExchange, isAgentExchange } from "./AgentExchange";
@@ -8,36 +10,33 @@ import { MessageMarkdown } from './MessageMarkdown';
 import { isActivityMessage, messageOrigin } from '../shared/message-origin';
 import { When } from './When';
 export function DiscoveryPanel({ bootstrap, onRoutine }: { bootstrap: Bootstrap; onRoutine: (botId:string,routineId:string,resultId?:string)=>void }) {
-  const generation=useRef(0);
   const [tab,setTab] = useState<'search'|'saved'|'automations'>('search');
   const [query,setQuery] = useState(''); const [hits,setHits] = useState<SearchHit[]>([]); const [saved,setSaved] = useState<SavedItem[]>([]);
   const [overview,setOverview] = useState<AutomationOverview|null>(null); const [page,setPage] = useState<HistoryPage|null>(null);
-  const [error,setError] = useState(''); const [busy,setBusy] = useState(false); const [savedMessage,setSavedMessage]=useState<string|undefined>();
-  const [notice,setNotice] = useState('');
-  async function run(work:()=>Promise<void>) { const scope=generation.current;setBusy(true);setError('');setNotice('');try {await work();}catch(e){if(scope===generation.current)setError((e as Error).message);}finally{if(scope===generation.current)setBusy(false);} }
-  function changeTab(next:typeof tab) { generation.current++;setPage(null);setError('');setNotice('');setBusy(false);setTab(next); }
+  const [savedMessage,setSavedMessage]=useState<string|undefined>();
+  const {busy,error,notice,run,setNotice,reset}=useAction();
+  function changeTab(next:typeof tab) { reset();setPage(null);setTab(next); }
   useEffect(()=> { setPage(null); void run(async()=> { if(tab==='saved') setSaved(await api('/saved')); if(tab==='automations') setOverview(await api('/automations')); }); },[tab,bootstrap.user.id]);
   async function history(botId:string,sessionId:string,offset=0,messageId?:string,searchHit=false) {
-    const scope=generation.current;
-    await run(async()=> {
+    await run(async({current})=> {
       const path=`/bots/${encodeURIComponent(botId)}/history/${encodeURIComponent(sessionId)}`;
       let value:HistoryPage;
       try { value=await api<HistoryPage>(`${path}?offset=${offset}${messageId ? `&messageId=${encodeURIComponent(messageId)}` : ""}`); }
       catch(error) {
         if(!searchHit||!messageId||!(error instanceof ApiError)||error.status!==404)throw error;
-        if(scope!==generation.current)return;
+        if(!current())return;
         value=await api<HistoryPage>(`${path}?offset=0`);messageId=undefined;
       }
-      if(scope!==generation.current)return;
+      if(!current())return;
       messageId=value.targetMessageId??messageId;
       if(messageId&&!value.messages.some(message=>message.id===messageId))throw new Error('This saved reply is unavailable. Its original history changed in Hermes.');
       setSavedMessage(messageId);setPage(value);
     });
   }
   useEffect(()=>{if(savedMessage&&page)document.getElementById(`history-${savedMessage}`)?.scrollIntoView?.({block:"center"});},[page,savedMessage]);
-  async function pin(item:Omit<SavedItem,'id'|'createdAt'>) { await run(async()=> {await write('/saved',item);setNotice('Saved. Find it in Saved items.');}); }
+  async function pin(item:Omit<SavedItem,'id'|'createdAt'>) { await run(()=>write('/saved',item),{success:'Saved. Find it in Saved items.'}); }
   return <div className="discovery-panel"><nav className="view-tabs" aria-label="Search and saved"><button aria-pressed={tab==='search'} onClick={()=>changeTab('search')}>Search</button><button aria-pressed={tab==='saved'} onClick={()=>changeTab('saved')}>Saved items</button><button aria-pressed={tab==='automations'} onClick={()=>changeTab('automations')}>Automations</button></nav>
-    {error&&<p role="alert" className="form-error">{error}</p>}{notice&&<p role="status">{notice}</p>}{busy&&<p role="status">Loading...</p>}
+    {error&&<FormMessage tone="error">{error}</FormMessage>}{notice&&<FormMessage tone="notice">{notice}</FormMessage>}{busy&&<p role="status">Loading...</p>}
     {page ? <section><button className="discovery-back" onClick={()=>setPage(null)}>‹ Back to results</button><h2>Conversation history</h2><p className="muted">Read from Hermes. This view does not change the assistant’s active conversation.</p>
       <button disabled={busy} onClick={()=>void pin({kind:'session',botId:page.botId,sessionId:page.sessionId,title:hits.find(hit=>hit.sessionId===page.sessionId)?.title.slice(0,120)||'Saved conversation'})}>Save conversation</button>
       {page.messages.map(message=><article className="history-message" id={`history-${message.id}`} key={message.id} style={savedMessage===message.id?{borderLeft:"3px solid var(--accent)",paddingLeft:12}:undefined}><small>{messageOrigin(message)?.kind === 'scheduled' ? 'Scheduled' : isActivityMessage(message) ? 'Activity' : message.role}</small>{message.role==='assistant'&&!isActivityMessage(message)&&<button disabled={busy} onClick={()=>void pin({kind:"session",botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:message.text.replace(/[#*_`]/g," ").trim().slice(0,120)||"Saved reply"})}>Save reply</button>}<>{isActivityMessage(message)?<details><summary>{messageOrigin(message)?.title || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={bootstrap.bots.find(bot=>bot.id===page.botId)?.name||"Assistant"}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}</>{message.files?.map(file=><a key={file.id} href={`/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}</article>)}

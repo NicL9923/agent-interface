@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { api, write } from "../client-api";
+import { useEffect, useState } from "react";
+import { write } from "../client-api";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
 import type { AddVaultLogin, ProfileVault, VaultSourceName } from "../shared/vault";
+import { FormMessage } from "./ui/form-message";
 import "./vault.css";
 
 function validOrigin(value: string) {
@@ -11,12 +14,6 @@ function validOrigin(value: string) {
 }
 
 export function VaultPanel({ botId }: { botId: string }) {
-  const [vault, setVault] = useState<ProfileVault | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [retry, setRetry] = useState(0);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [uncertain, setUncertain] = useState(false);
   const [adding, setAdding] = useState(false);
   const [remove, setRemove] = useState<string | null>(null);
@@ -24,35 +21,33 @@ export function VaultPanel({ botId }: { botId: string }) {
   const [password, setPassword] = useState("");
   const [master, setMaster] = useState("");
   const [form, setForm] = useState<Omit<AddVaultLogin, "password">>({ label: "", origin: "", identifier: "", identifierType: "email" });
-  const owner = useRef(botId); owner.current = botId;
-  const mounted = useRef(true);
   const path = `/bots/${encodeURIComponent(botId)}/vault`;
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => {
-    let active = true; setLoading(true); setError(""); setPassword(""); setMaster("");
-    void api<ProfileVault>(path).then(result => { if (active) { setVault(result); setUncertain(false); } })
-      .catch(() => { if (active) setError("Could not load this Hermes profile's logins. Check the connection and reload."); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [path, retry]);
+  const vaultResource = useResource<ProfileVault>(path, {
+    errorMessage: () => "Could not load this Hermes profile's logins. Check the connection and reload.",
+    onData: () => setUncertain(false),
+  });
+  const { data: vault, loading } = vaultResource;
+  const action = useAction();
+  const { busy } = action;
+  const error = action.error || vaultResource.error;
   useEffect(() => {
     const clear = () => { setPassword(""); setMaster(""); };
     const hidden = () => { if (document.visibilityState === "hidden") clear(); };
     document.addEventListener("visibilitychange", hidden); window.addEventListener("pagehide", clear);
     return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", clear); };
   }, []);
-  async function mutate(action: () => Promise<unknown>, success: string) {
-    if (busy || loading || uncertain) return;
-    const started = botId; setBusy(true); setError(""); setNotice(""); setPassword(""); setMaster("");
-    try {
-      await action();
-      if (!mounted.current || owner.current !== started) return;
-      setNotice(success); setRemove(null); setUnlock(null); setAdding(false); setRetry(value => value + 1);
-    } catch {
-      if (mounted.current && owner.current === started) {
-        setUncertain(true); setError("Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared.");
-      }
-    } finally { if (mounted.current && owner.current === started) setBusy(false); }
+  function reload() { setPassword(""); setMaster(""); void vaultResource.reload(); }
+  async function mutate(work: () => Promise<unknown>, success: string) {
+    if (loading || uncertain) return;
+    setPassword(""); setMaster("");
+    await action.run(work, {
+      success,
+      onSuccess: () => { setRemove(null); setUnlock(null); setAdding(false); void vaultResource.reload(); },
+      onError: () => {
+        setUncertain(true);
+        return "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared.";
+      },
+    });
   }
   const disabled = busy || loading || uncertain;
   return <section className="vault-panel">
@@ -63,10 +58,10 @@ export function VaultPanel({ botId }: { botId: string }) {
     <p className="muted">Manage this assistant's Hermes vault. Passwords stay out of your conversation and draft; usernames and labels are visible metadata.</p>
     {vault && <p className="capability-note"><strong>Profile: {vault.profile}.</strong> {vault.notice}</p>}
     {loading && <p role="status">Loading Hermes vault...</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && <FormMessage tone="error">{error}</FormMessage>}{action.notice && <FormMessage tone="notice">{action.notice}</FormMessage>}
     {adding && <form className="vault-form" autoComplete="off" onSubmit={event => {
       event.preventDefault();
-      if (!validOrigin(form.origin)) { setError("Enter the website address through the hostname, such as https://example.com."); return; }
+      if (!validOrigin(form.origin)) { action.setError("Enter the website address through the hostname, such as https://example.com."); return; }
       const input = { ...form, password };
       void mutate(() => write(path + "/logins", input), "Login saved in Hermes.");
     }}>
@@ -100,6 +95,6 @@ export function VaultPanel({ botId }: { botId: string }) {
           </form>}
         </div>
       </div>)}</div></>}
-    <button type="button" disabled={busy || loading} onClick={() => setRetry(value => value + 1)}>Reload logins</button>
+    <button type="button" disabled={busy || loading} onClick={reload}>Reload logins</button>
   </section>;
 }

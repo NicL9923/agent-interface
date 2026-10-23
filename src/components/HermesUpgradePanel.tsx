@@ -1,7 +1,9 @@
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, write } from "../client-api";
+import { useState } from "react";
+import { ApiError, write } from "../client-api";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
 import type { Bot } from "../shared/types";
 import type { UpgradePhase, UpgradeRevision, UpgradeStatus, UpgradeControlAction } from "../shared/upgrades";
 import "./hermes-upgrade.css";
@@ -58,115 +60,53 @@ export function HermesUpgradePanel({ open, onClose, bots, currentVersion, curren
   currentVersion?: string;
   currentRevisionDate?: string;
 }) {
-  const [status, setStatus] = useState<UpgradeStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [uncertain, setUncertain] = useState(false);
-  const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState<UpgradeControlAction | null>(null);
+  const action = useAction();
+  const { busy: submitting, setError } = action;
   // Polls and actions are separate: a click during a poll must not be dropped, and a
   // poll that started before a click must not overwrite the click's fresher status.
-  const pollBusy = useRef(false);
-  const actionBusy = useRef(false);
-  const generation = useRef(0);
-  const mounted = useRef(true);
+  const upgrade = useResource<UpgradeStatus>("/hermes/upgrade", {
+    // Polling runs while the dialog is open or work is in progress, even after it closes.
+    enabled: current => open || uncertain || !!current && runningPhases.includes(current.phase), pollMs: 3000, wake: true,
+    skip: () => navigator.onLine === false ? "You're offline. We'll check the update status when you're connected again." : undefined,
+    errorMessage: () => "Can't reach the update service. We'll keep checking its status.",
+    onData: () => { setUncertain(false); setError(""); },
+  });
+  const { data: status, loading, reload: refresh } = upgrade;
+  const error = action.error || upgrade.error;
   const active = !!status && runningPhases.includes(status.phase);
-  const poll = open || active || uncertain;
 
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-
-  const refresh = useCallback(async () => {
-    if (pollBusy.current) return;
-    if (navigator.onLine === false) {
-      setError("You're offline. We'll check the update status when you're connected again.");
-      return;
-    }
-    pollBusy.current = true;
-    setLoading(true);
-    const started = generation.current;
-    try {
-      const next = await api<UpgradeStatus>("/hermes/upgrade");
-      if (!mounted.current || generation.current !== started) return;
-      setStatus(next);
-      setError("");
-      setUncertain(false);
-    } catch {
-      if (mounted.current) setError("Can't reach the update service. We'll keep checking its status.");
-    } finally {
-      pollBusy.current = false;
-      if (mounted.current) setLoading(false);
-    }
-  }, []);
-  useEffect(() => {
-    if (!poll) return;
-    void refresh();
-    const timer = setInterval(() => void refresh(), 3000);
-    const wake = () => { if (document.visibilityState !== "hidden") void refresh(); };
-    window.addEventListener("online", wake);
-    window.addEventListener("focus", wake);
-    document.addEventListener("visibilitychange", wake);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("online", wake);
-      window.removeEventListener("focus", wake);
-      document.removeEventListener("visibilitychange", wake);
-    };
-  }, [poll, refresh]);
-
-  const act = async (install: boolean) => {
-    if (actionBusy.current || !status || uncertain || submitting || active) return;
-    if (install ? !status.canInstall || !status.candidate : !status.canCheck) return;
-    actionBusy.current = true;
-    generation.current++;
-    setSubmitting(true);
-    setError("");
-    try {
-      const next = await write<UpgradeStatus>(`/hermes/upgrade/${install ? "install" : "check"}`,
-        install ? { candidateRevision: status.candidate!.revision, requestId: crypto.randomUUID() } : {});
-      if (mounted.current) setStatus(next);
-    } catch (cause) {
-      if (!mounted.current) return;
-      if (cause instanceof ApiError && cause.status < 500) setError(cause.message);
-      else {
+  // A request that fails after it may have been sent leaves the outcome unknown.
+  const submit = (work: () => Promise<UpgradeStatus>, unconfirmed: string) => {
+    return action.run(async () => {
+      upgrade.invalidate();
+      try { upgrade.setData(await work()); }
+      finally { upgrade.invalidate(); }
+    }, {
+      onError: cause => {
+        if (cause instanceof ApiError && cause.status < 500) return cause.message;
         setUncertain(true);
-        setError("The connection dropped before we could confirm the request. Checking the update status…");
-      }
-    } finally {
-      actionBusy.current = false;
-      generation.current++;
-      if (mounted.current) setSubmitting(false);
-    }
+        return unconfirmed;
+      },
+    });
+  };
+  const act = async (install: boolean) => {
+    if (!status || uncertain || submitting || active) return;
+    if (install ? !status.canInstall || !status.candidate : !status.canCheck) return;
+    await submit(() => write<UpgradeStatus>(`/hermes/upgrade/${install ? "install" : "check"}`,
+      install ? { candidateRevision: status.candidate!.revision, requestId: crypto.randomUUID() } : {}),
+    "The connection dropped before we could confirm the request. Checking the update status…");
   };
 
-  const control = async (action: UpgradeControlAction) => {
-    if (actionBusy.current || !status?.operationId || submitting || uncertain) return;
-    const permitted = action === "retry" ? status.canRetry : action === "cancel" ? status.canCancel : status.canRestartService;
+  const control = async (control: UpgradeControlAction) => {
+    if (!status?.operationId || submitting || uncertain) return;
+    const permitted = control === "retry" ? status.canRetry : control === "cancel" ? status.canCancel : status.canRestartService;
     if (!permitted) return;
-    actionBusy.current = true;
-    generation.current++;
-    setSubmitting(true);
     setConfirmation(null);
-    setError("");
-    try {
-      const next = await write<UpgradeStatus>("/hermes/upgrade/control", {
-        action, operationId: status.operationId, requestId: crypto.randomUUID(),
-      });
-      if (mounted.current) setStatus(next);
-    } catch (cause) {
-      if (!mounted.current) return;
-      if (cause instanceof ApiError && cause.status < 500) setError(cause.message);
-      else {
-        setUncertain(true);
-        setError("The recovery request may have reached Hermes. Checking its status before you try again…");
-      }
-    } finally {
-      actionBusy.current = false;
-      generation.current++;
-      if (mounted.current) setSubmitting(false);
-    }
+    await submit(() => write<UpgradeStatus>("/hermes/upgrade/control", {
+      action: control, operationId: status.operationId, requestId: crypto.randomUUID(),
+    }), "The recovery request may have reached Hermes. Checking its status before you try again…");
   };
 
   const install = !!status?.canInstall && !!status.candidate;

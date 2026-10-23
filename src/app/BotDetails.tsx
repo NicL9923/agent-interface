@@ -12,6 +12,7 @@ import { addSection, checkSectionName, moveBotToSection, newSectionId, sectionOf
 import type { SavedConversation } from "./storage";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
+import { FormMessage } from "../components/ui/form-message";
 
 const newSectionValue = "\u0000new";
 
@@ -102,7 +103,7 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
           <Button type="submit" className="primary">Add</Button>
         </form>}
       </div>
-      {nameError && <p className="settings-footnote form-error" role="alert">{nameError}</p>}
+      {nameError && <FormMessage tone="error" className="settings-footnote">{nameError}</FormMessage>}
     </div>
   </Dialog>;
 }

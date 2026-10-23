@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
-import { api, pollWhileVisible, write } from "../client-api";
+import { useState } from "react";
+import { write } from "../client-api";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
+import { FormMessage } from "./ui/form-message";
 import { Avatar, stateLabels } from "./Avatar";
 import { When } from "./When";
 import { eventHeadline } from "../shared/event-copy";
@@ -8,38 +11,27 @@ import type { TodayOverview } from "../shared/experience";
 import "./experience.css";
 
 export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string, routineId?: string) => void }) {
-  const [overview, setOverview] = useState<TodayOverview | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [reload, setReload] = useState(0);
   // An unchanged recap revalidates as 304 and keeps its original generatedAt, so the check time is this client's.
   const [checkedAt, setCheckedAt] = useState("");
-  useEffect(() => {
-    let current = true;
-    async function refresh() {
-      try { const result = await api<TodayOverview>("/today"); if (current) { setOverview(result); setCheckedAt(new Date().toISOString()); setError(""); } }
-      catch (e) { if (current) setError((e as Error).message); }
-      finally { if (current) setLoading(false); }
-    }
-    void refresh(); const stop = pollWhileVisible(() => void refresh(), 30_000);
-    return () => { current = false; stop(); };
-  }, [bootstrap.user.id, reload]);
+  const today = useResource<TodayOverview>("/today", { deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
+  const { data: overview, loading } = today;
+  const seen = useAction();
+  const error = seen.error || today.error;
   const items = overview?.items || [];
   const attention = items.filter(item => !item.error && (item.approvals.some(approval => approval.status === "pending") || item.attention.length || ["blocked", "interrupted", "failed"].includes(item.activity.state)));
   const active = items.filter(item => !item.error && ["thinking", "working", "waiting"].includes(item.activity.state));
   const completed = overview?.events.filter(event => event.kind === "completed") || [];
-  async function caughtUp() {
-    if (!overview) return;
-    try { await write("/today/seen", { seenAt: overview.generatedAt, frontier: overview.frontier }, "PUT"); setReload(reload + 1); }
-    catch (e) { setError((e as Error).message); }
-  }
+  const caughtUp = () => overview && seen.run(async () => {
+    await write("/today/seen", { seenAt: overview.generatedAt, frontier: overview.frontier }, "PUT");
+    await today.reload();
+  });
   const files = items.filter(item => item.files.length);
   return <div className="today-panel"><div className="today-intro">
     {overview ? <div className="today-counts" aria-label="Household activity"><span><strong>{attention.length}</strong> need you</span>
       <span><strong>{active.length}</strong> at work</span><span><strong>{completed.length}</strong> {overview.hasMore ? "finished on this page" : "finished since your last visit"}</span></div>
       : <p role="status" className="muted">{loading ? "Checking your assistants..." : "Today is unavailable right now."}</p>}
-    <button type="button" disabled={loading} onClick={() => { setLoading(true); setReload(reload + 1); }}>Refresh</button></div>
-    {error && <p role="alert" className="form-error">{error} Loaded results may be out of date.</p>}
+    <button type="button" disabled={loading} onClick={() => void today.reload()}>Refresh</button></div>
+    {error && <FormMessage tone="error">{error} Loaded results may be out of date.</FormMessage>}
     {overview && <>
       <section className="today-section"><h3>Needs your attention</h3>{!attention.length && <p className="muted">No pending requests in the assistants we could check.</p>}
         {attention.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>

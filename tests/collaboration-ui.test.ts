@@ -25,7 +25,7 @@ it('renders bot envelopes, multiline and legacy deliveries while preserving attr
 it('reads a notification-selected routine history and displays the saved output',async()=>{
   vi.mocked(api).mockImplementation(async(path)=>path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
   await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
-  expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one');expect(container.textContent).toContain('north gate battery');
+  expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one',expect.anything());expect(container.textContent).toContain('north gate battery');
 });
 it('restores an uncertain group send and retries the exact same saved request after refresh',async()=>{
   const pending={requestId:crypto.randomUUID(),threadId:crypto.randomUUID(),text:'Plan Saturday'};

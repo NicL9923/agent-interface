@@ -16,6 +16,7 @@ import { addSection, checkSectionName, moveSection, newSectionId, removeSection,
 import type { Section } from "./preferences-editing";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
+import { FormMessage } from "../components/ui/form-message";
 
 type Page = { kind: "main" } | { kind: "following" } | { kind: "section"; id: string };
 type Commit = (edit: (value: Preferences) => Preferences) => void;
@@ -259,7 +260,7 @@ function SectionPage({ preferences, bots, section, commit, onDeleted }: {
         onChange={event => { setName(event.target.value); setError(""); }} />
       {changed && <Button type="submit" className="primary">Rename</Button>}
     </form>
-    {error && <p className="settings-footnote form-error" role="alert">{error}</p>}
+    {error && <FormMessage tone="error" className="settings-footnote">{error}</FormMessage>}
     <h3 className="settings-heading">Assistants in {section.name}</h3>
     <div className="settings-group" role="group" aria-label={`Assistants in ${section.name}`}>
       {bots.map(bot => {

@@ -391,7 +391,7 @@ describe("closing with unsaved edits", () => {
     await click("skills");
     vi.mocked(api).mockClear();
     await click("tools");
-    expect(api).not.toHaveBeenCalledWith("/bots/shared/tools");
+    expect(vi.mocked(api).mock.calls.map(([path]) => path)).not.toContain("/bots/shared/tools");
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
     await escape();
     expect(container.textContent).toContain("Discard your unsaved changes?");

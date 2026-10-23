@@ -1,6 +1,7 @@
 import { useId } from "react";
 import type { useDeviceNotifications } from "./use-device-notifications";
 import "./device-notifications.css";
+import { FormMessage } from "./ui/form-message";
 
 type Notifications = ReturnType<typeof useDeviceNotifications>;
 export function NotificationSettings({ notifications, title = "Notifications" }: { notifications: Notifications; title?: string }) {
@@ -17,7 +18,7 @@ export function NotificationSettings({ notifications, title = "Notifications" }:
     </div>
     <p id={descriptionId} className="muted">{notifications.message}</p>
     {notifications.busy && <p role="status">Updating notifications…</p>}
-    {notifications.error && <p className="form-error" role="alert">{notifications.error}</p>}
+    {notifications.error && <FormMessage tone="error">{notifications.error}</FormMessage>}
     {notifications.error && <button type="button" disabled={notifications.busy} onClick={() => void notifications.refresh()}>Retry checking notifications</button>}
     <p className="muted notification-device-note">This setting applies to your account on this device.</p>
   </section>;
@@ -28,7 +29,7 @@ export function NotificationOnboarding({ notifications }: { notifications: Notif
     <div><h3 id="notification-onboarding-title">Enable notifications on this device?</h3>
       <p>Get notified when work finishes or an assistant needs your attention. You can change this later in Settings &gt; Notifications.</p>
       {!notifications.canEnable && <p className="muted">{notifications.message}</p>}
-      {notifications.error && <p className="form-error" role="alert">{notifications.error}</p>}
+      {notifications.error && <FormMessage tone="error">{notifications.error}</FormMessage>}
     </div>
     <div className="actions">
       <button type="button" className="primary" disabled={!notifications.canEnable || notifications.busy} onClick={() => void notifications.enable()}>

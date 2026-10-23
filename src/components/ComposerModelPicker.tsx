@@ -7,6 +7,7 @@ import { ModelSelector } from "./ModelSelector";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
 import { NativeSelect } from "./ui/native-select";
+import { FormMessage } from "./ui/form-message";
 
 /** Advanced mode's quick model switch. Saves through the same assistant update as settings. */
 export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
@@ -99,9 +100,9 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
             <small className="muted">Applies to this conversation. Available levels and speeds depend on the model.</small>
           </> : !settingsError && <span role="status" className="muted">Loading reasoning and speed…</span>}
           {settingsBusy && <span role="status"><Icon name="spinner" className="spin" size={14} /> Saving…</span>}
-          {settingsError && <p role="alert" className="form-error">{settingsError}</p>}
+          {settingsError && <FormMessage tone="error">{settingsError}</FormMessage>}
         </div>
-        {error && <p className="form-error" role="alert">{error}</p>}
+        {error && <FormMessage tone="error">{error}</FormMessage>}
         {confirm && <div className="actions">
           <Button className="primary" disabled={busy || settingsBusy} onClick={() => void save(confirm, true)}>Confirm this model</Button>
           <Button onClick={() => { setConfirm(null); setError(""); }}>Cancel</Button>

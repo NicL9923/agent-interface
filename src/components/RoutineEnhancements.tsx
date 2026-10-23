@@ -3,6 +3,7 @@ import { api, ApiError, pollWhileVisible, write } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
 import "./experience.css";
+import { FormMessage } from "./ui/form-message";
 function runTime(instant: string, timezone: string) {
   try { return new Date(instant).toLocaleString(undefined, { timeZone: timezone }); }
   catch { return `${new Date(instant).toLocaleString(undefined, { timeZone: "UTC" })} UTC`; }
@@ -28,7 +29,7 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
     {visible && <div className="routine-preview"><strong>{preview.kind === "once" ? "Scheduled run" : "Next runs"}</strong><p>Hermes timezone: {preview.timezone}</p>
       <ol>{preview.nextRuns.map(instant => <li key={instant}>{runTime(instant, preview.timezone)}</li>)}</ol>
       <small>The assistant's Hermes profile controls this timezone.</small></div>}
-    {error && requested === schedule && <p className="form-error" role="alert">{error}</p>}
+    {error && requested === schedule && <FormMessage tone="error">{error}</FormMessage>}
   </div>;
 }
 
@@ -76,6 +77,6 @@ export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }
       : receipt.status === "completed" ? "Trial run completed."
       : receipt.status === "failed" ? "Trial run failed."
       : "The run's outcome is unknown. Review its result before starting another."}{receipt.message && ` ${receipt.message}`}</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}
+    {error && <FormMessage tone="error">{error}</FormMessage>}
   </div>;
 }
