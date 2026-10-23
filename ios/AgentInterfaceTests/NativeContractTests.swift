@@ -644,7 +644,7 @@ private final class NativeMockServer: @unchecked Sendable {
             await value.deliverAdditions()
             XCTAssertEqual(value.draft.text, "Send this\n\nAlso bring rope", source)
             XCTAssertTrue(value.additions.isEmpty, source)
-            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("draftAdditions")!), source)
+            XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.draftAdditions)!), source)
             let saved = { server.draftSaves().last?.text }
             try await until { saved() == "Send this\n\nAlso bring rope" }
             XCTAssertEqual(saved(), "Send this\n\nAlso bring rope", "It saves like any draft edit")
@@ -1503,7 +1503,7 @@ private final class NativeMockServer: @unchecked Sendable {
     func testTypingPublishesOnceAndWritesTheLocalDraftAfterAPauseOrOnLeaving() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts(); server.versionDrafts("other")
-        let stored = { UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text }
+        let stored = { UserDefaults.standard.data(forKey: value.key(.draft, "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text }
         let changes = await observedChanges(of: value) { value.updateDraft(Draft(text: "Feed the horses", attachments: [])) }
         XCTAssertEqual(changes, ["draft": 1], "Before this change each keystroke published four times")
         XCTAssertNil(stored(), "Typing waits for a pause before encoding the draft")
@@ -1642,7 +1642,7 @@ private final class NativeMockServer: @unchecked Sendable {
             server.hold(path); defer { server.release(path) }
             value.discardUnconfirmedSubmission()
             XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
-            XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+            XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.pending, "bot")!))
             XCTAssertEqual(value.draft.text, edit == "Send this and more" ? "Send this and more" : "Send this")
             try await server.waitForHeld(path)
             let saved = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == path }
@@ -1662,7 +1662,7 @@ private final class NativeMockServer: @unchecked Sendable {
         server.setOffline(true)
         value.discardUnconfirmedSubmission(botId: "other")
         XCTAssertNil(value.pendings["other"]); XCTAssertEqual(value.draft.text, "Send this", "The open assistant's draft is untouched")
-        let saved = UserDefaults.standard.data(forKey: value.key("draft", "other")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        let saved = UserDefaults.standard.data(forKey: value.key(.draft, "other")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(saved?.text, "Lost message"); XCTAssertEqual(saved?.dirty, true)
         server.setOffline(false)
         await value.select("other")
@@ -1671,7 +1671,7 @@ private final class NativeMockServer: @unchecked Sendable {
 
     func testDiscardWhileTheAssistantsDraftIsStillLoadingSurvivesTheLateRead() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
-        UserDefaults.standard.removeObject(forKey: value.key("draft", "bot")!)
+        UserDefaults.standard.removeObject(forKey: value.key(.draft, "bot")!)
         value.draft = Draft(); value.draftReady = false
         value.pending = PendingSubmission(requestId: "lost", botId: "bot", text: "Lost message", attachments: [FileRef(id: "a", name: "a.txt", mime: "text/plain")], reviewedInterruption: false)
         let path = "/api/bots/bot/draft"; server.hold(path)
@@ -1679,7 +1679,7 @@ private final class NativeMockServer: @unchecked Sendable {
         try await server.waitForHeld(path)
         value.discardUnconfirmedSubmission()
         XCTAssertNil(value.pending)
-        let stored = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        let stored = UserDefaults.standard.data(forKey: value.key(.draft, "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(stored?.text, "Lost message", "The recovered text is saved before the read returns")
         server.release(path); await reopen.value
         XCTAssertEqual(value.draft.text, "Lost message"); XCTAssertEqual(value.draft.attachments.map(\.id), ["a"])
@@ -1688,16 +1688,16 @@ private final class NativeMockServer: @unchecked Sendable {
         let sync = server.requests.last { $0.httpMethod == "PUT" && $0.url?.path == path }
         XCTAssertEqual(sync.flatMap(NativeMockServer.body).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }?.text, "Lost message", "The recovered draft is synced to the server")
         XCTAssertEqual(value.draft.dirty, false, "A successful sync clears dirty so newer web drafts can load again")
-        let synced = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        let synced = UserDefaults.standard.data(forKey: value.key(.draft, "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(synced?.dirty, false)
-        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!), "The recovery mark clears once the server has the draft")
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.recovered, "bot")!), "The recovery mark clears once the server has the draft")
     }
 
     func testALeftoverDirtyDraftSavesOnItsBaseOnceLoaded() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts(text: "Server copy", revision: 1)
         let leftover = Draft(text: "Old unsent text", attachments: [], dirty: true, baseRevision: 1)
-        UserDefaults.standard.set(try JSONEncoder().encode(leftover), forKey: value.key("draft", "bot")!)
+        UserDefaults.standard.set(try JSONEncoder().encode(leftover), forKey: value.key(.draft, "bot")!)
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Old unsent text"); XCTAssertTrue(value.draftReady)
@@ -1728,7 +1728,7 @@ private final class NativeMockServer: @unchecked Sendable {
         server.otherDevice(sends: "Old unsent text")
         // Marked unsaved, but unchanged since the revision it was loaded on.
         let stale = Draft(text: "Old unsent text", attachments: [], dirty: true, baseRevision: 1, baseHash: Draft.contentHash("Old unsent text", []))
-        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key("draft", "bot")!)
+        UserDefaults.standard.set(try JSONEncoder().encode(stale), forKey: value.key(.draft, "bot")!)
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft, Draft(text: "", attachments: [], dirty: false, baseRevision: 2, baseHash: Draft.contentHash("", [])))
@@ -1743,7 +1743,7 @@ private final class NativeMockServer: @unchecked Sendable {
         server.versionDrafts(text: "Shared plan", revision: 1)
         server.otherDevice(sends: "Shared plan")
         let offline = Draft(text: "Offline note", attachments: [], dirty: true, baseRevision: 1, baseHash: Draft.contentHash("Shared plan", []))
-        UserDefaults.standard.set(try JSONEncoder().encode(offline), forKey: value.key("draft", "bot")!)
+        UserDefaults.standard.set(try JSONEncoder().encode(offline), forKey: value.key(.draft, "bot")!)
         value.draftReady = false
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Offline note")
@@ -1758,7 +1758,7 @@ private final class NativeMockServer: @unchecked Sendable {
         value.draft = Draft(baseRevision: 0)
         value.updateDraft(Draft(text: "Pick up feed", attachments: []))
         await value.select("other")
-        let cached = { UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) } }
+        let cached = { UserDefaults.standard.data(forKey: value.key(.draft, "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) } }
         try await until { cached()?.dirty == false }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Pick up feed", baseRevision: 0)])
         XCTAssertEqual(cached()?.dirty, false); XCTAssertEqual(cached()?.baseRevision, 1)
@@ -1973,9 +1973,9 @@ private final class NativeMockServer: @unchecked Sendable {
         value.discardUnconfirmedSubmission()
         await value.select("bot")
         XCTAssertEqual(value.draft.text, "Lost message")
-        try await until { UserDefaults.standard.data(forKey: value.key("recovered", "bot")!) == nil }
+        try await until { UserDefaults.standard.data(forKey: value.key(.recovered, "bot")!) == nil }
         XCTAssertEqual(server.draftSaves(), [.init(text: "Lost message", baseRevision: 3)])
-        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("recovered", "bot")!))
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.recovered, "bot")!))
     }
 
     func testDelayedUploadDoesNotAttachToNewIdentity() async throws {
@@ -2007,7 +2007,7 @@ private final class NativeMockServer: @unchecked Sendable {
         try await server.waitForHeld(draftPath)
         XCTAssertFalse(value.draftReady)
         server.release(uploadPath); await upload.value
-        let cached = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        let cached = UserDefaults.standard.data(forKey: value.key(.draft, "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(cached?.attachments.map(\.id), ["file.signature"])
         server.release(draftPath); await returning.value
         XCTAssertEqual(value.draft.attachments.map(\.id), ["file.signature"])
@@ -2095,26 +2095,26 @@ private final class NativeMockServer: @unchecked Sendable {
         XCTAssertNil(value.pending); XCTAssertNil(value.receipt); XCTAssertTrue(value.canSend)
         await value.send()
         XCTAssertEqual(Set(value.pendings.keys), ["bot", "other"])
-        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
-        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "other")!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key(.pending, "bot")!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key(.pending, "other")!))
         server.answerSubmissions("accepted")
         await value.reconcilePending()
         XCTAssertTrue(value.pendings.isEmpty)
         XCTAssertEqual(server.requests.filter { $0.url?.path.hasPrefix("/api/submissions/") == true }.count, 2)
-        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
-        let closed = UserDefaults.standard.data(forKey: value.key("draft", "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.pending, "bot")!))
+        let closed = UserDefaults.standard.data(forKey: value.key(.draft, "bot")!).flatMap { try? JSONDecoder().decode(Draft.self, from: $0) }
         XCTAssertEqual(closed?.text, "", "The accepted message clears the closed assistant's draft")
     }
     func testASingleUnconfirmedSendSavedByAnOlderVersionMovesToItsAssistant() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let legacy = PendingSubmission(requestId: "legacy", botId: "bot", text: "Old send", attachments: [], reviewedInterruption: false)
-        UserDefaults.standard.set(try JSONEncoder().encode(legacy), forKey: value.key("pending")!)
+        UserDefaults.standard.set(try JSONEncoder().encode(legacy), forKey: value.key(.pending)!)
         await value.refreshBootstrap()
         XCTAssertEqual(value.pending?.requestId, "legacy"); XCTAssertFalse(value.canSend)
-        XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending")!))
-        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.pending)!))
+        XCTAssertNotNil(UserDefaults.standard.data(forKey: value.key(.pending, "bot")!))
         value.discardUnconfirmedSubmission()
-        XCTAssertNil(value.pending); XCTAssertNil(UserDefaults.standard.data(forKey: value.key("pending", "bot")!))
+        XCTAssertNil(value.pending); XCTAssertNil(UserDefaults.standard.data(forKey: value.key(.pending, "bot")!))
         XCTAssertTrue(value.draft.text.contains("Old send"))
     }
     func testTheDraftLoadNoticeClearsOnceALaterReadBringsTheDraft() async throws {
@@ -2607,7 +2607,7 @@ extension NativeContractTests {
         XCTAssertTrue(value.additions.isEmpty, "Neither question is left waiting")
         XCTAssertEqual(value.selectedBotId, "bot", "Each chat opens in turn, and the last one asked stays open")
         XCTAssertTrue(value.draft.text.hasSuffix("For the bot")); XCTAssertFalse(value.draft.text.contains("For the family"))
-        let family: Draft? = value.read(value.key("draft", "family"))
+        let family: Draft? = value.read(value.key(.draft, "family"))
         XCTAssertEqual(family?.text, "Milk\n\nFor the family")
         value.suspend()
     }

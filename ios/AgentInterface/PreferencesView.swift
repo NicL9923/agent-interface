@@ -227,15 +227,15 @@ struct PreferencesView: View {
     /// The web specimen's state matrix across every activity state.
     private let matrix: [(String, AvatarConfig)] = [
       ("Blob", AvatarConfig()),
-      ("Triangle", AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "visor")),
-      ("Drop", AvatarConfig(shape: "drop", color: "#97683D", accessory: "hat")),
-      ("Hex", AvatarConfig(shape: "hex", color: "#9159FE", accessory: "glasses")),
-      ("Bear", AvatarConfig(mode: "mascot", shape: nil, family: "bear", color: "#FF9800", eyes: "round")),
-      ("Fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
-      ("Sprout", AvatarConfig(mode: "mascot", shape: nil, family: "sprout", color: "#00BCA6", accessory: "hat")),
-      ("Portrait", AvatarConfig(mode: "portrait", shape: nil, origin: "uploaded")),
+      ("Triangle", AvatarConfig(shape: .triangle, color: "#FF309B", eyes: .visor)),
+      ("Drop", AvatarConfig(shape: .drop, color: "#97683D", accessory: .hat)),
+      ("Hex", AvatarConfig(shape: .hex, color: "#9159FE", accessory: .glasses)),
+      ("Bear", AvatarConfig(mode: .mascot, shape: nil, family: .bear, color: "#FF9800", eyes: .round)),
+      ("Fox", AvatarConfig(mode: .mascot, shape: nil, family: .fox, color: "#FF6700")),
+      ("Sprout", AvatarConfig(mode: .mascot, shape: nil, family: .sprout, color: "#00BCA6", accessory: .hat)),
+      ("Portrait", AvatarConfig(mode: .portrait, shape: nil, origin: "uploaded")),
     ] + AvatarConfig.families.filter { AvatarConfig.characterFamilies.contains($0.id) }.map {
-      ($0.label, AvatarConfig(mode: "mascot", shape: nil, eyes: "round").selectingFamily($0.id))
+      ($0.label, AvatarConfig(mode: .mascot, shape: nil, eyes: .round).selectingFamily($0.id))
     }
     var body: some View {
       ScrollView {
@@ -282,7 +282,7 @@ struct PreferencesView: View {
           ForEach(AvatarConfig.shapes, id: \.self) { shape in
             HStack {
               AvatarView(avatar: AvatarConfig(shape: shape), size: 64)
-              Text(shape.capitalized)
+              Text(shape.rawValue.capitalized)
               Spacer()
             }
           }

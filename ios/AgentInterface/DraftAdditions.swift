@@ -28,7 +28,7 @@ extension AppStore {
   /// Whether additions wait for this assistant: while a send for it is unsettled. A saved send counts
   /// before it is loaded, as on a relaunch whose roster has not answered yet.
   func holdsAdditions(_ botId: String) -> Bool {
-    pendings[botId] != nil || key("pending", botId).map { UserDefaults.standard.object(forKey: $0) != nil } == true
+    pendings[botId] != nil || key(.pending, botId).map { UserDefaults.standard.object(forKey: $0) != nil } == true
   }
   /// Whether text waits for this assistant's send to settle, for the composer's note.
   func holdsText(for botId: String) -> Bool { holdsAdditions(botId) && additions.contains { $0.botId == botId } }
@@ -73,9 +73,9 @@ extension AppStore {
     guard let scope else { return false }
     return hold(DraftAddition(source: .share, botId: botId, text: text, scope: scope))
   }
-  func savedAdditions() -> [DraftAddition] { read(key("draftAdditions")) ?? [] }
+  func savedAdditions() -> [DraftAddition] { read(key(.draftAdditions)) ?? [] }
   private func storeAdditions(_ value: [DraftAddition]) {
-    save(value.isEmpty ? nil : value, key("draftAdditions"))
+    save(value.isEmpty ? nil : value, key(.draftAdditions))
     if additions != value { additions = value }
   }
   /// Starts a drain once the current operation is over, or asks the running one to look again.

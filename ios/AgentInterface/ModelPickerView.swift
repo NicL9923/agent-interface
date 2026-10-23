@@ -191,7 +191,7 @@ struct ComposerModelSheet: View {
   @State private var error: String?
   @State private var confirmation: ModelChoice?
   private var bot: Bot? { store.bootstrap?.bots.first { $0.id == botId } }
-  private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports("botConfiguration") }
+  private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports(.botConfiguration) }
   var body: some View {
     NavigationStack {
       Form {

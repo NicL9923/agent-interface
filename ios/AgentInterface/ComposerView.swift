@@ -134,7 +134,7 @@ struct ComposerView: View {
     Button { modelOpen = true } label: {
       RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
     }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(!store.supports("botConfiguration") || !store.connected || store.sending)
+      .disabled(!store.supports(.botConfiguration) || !store.connected || store.sending)
   }
   private var sendButton: some View {
     let enabled = stopVisible ? !stopDisabled : store.canSend
@@ -162,8 +162,8 @@ struct ComposerView: View {
     if let reason = store.attachUnavailable(bot.id), reason != "Your draft is still loading.", reason != AppStore.attachWhileSending {
       Text(reason).font(.caption).foregroundStyle(.secondary)
     }
-    if !store.supports("chat") {
-      Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
+    if !store.supports(.chat) {
+      Text(store.reason(.chat)).font(.caption).foregroundStyle(.secondary)
     }
   }
   // An in-flight send keeps its spinning send button even if the draft is cleared meanwhile.
@@ -171,7 +171,7 @@ struct ComposerView: View {
     store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && store.draft.attachments.isEmpty
   }
-  private var stopDisabled: Bool { stopping || !store.connected || !store.supports("stop") }
+  private var stopDisabled: Bool { stopping || !store.connected || !store.supports(.stop) }
   /// The web turns voice off while the draft loads, a message is on its way, or the connection is down.
   private var voiceDisabled: Bool {
     !store.draftReady || store.pending != nil || store.sending || !store.connected
@@ -295,7 +295,7 @@ private struct ComposerNotices: View {
       VStack(alignment: .leading, spacing: 8) {
         Text("Checking whether your last message arrived…").font(.footnote)
         Button("Retry this saved message") { Task { await store.send(reviewedUncertain: true) } }
-          .font(.footnote).disabled(store.sending || !store.supports("idempotency") || !store.connected)
+          .font(.footnote).disabled(store.sending || !store.supports(.idempotency) || !store.connected)
         // A send that never resolves would otherwise block this assistant on this device.
         Button("Discard and keep my text in the draft", role: .destructive) {
           discardConfirm = true

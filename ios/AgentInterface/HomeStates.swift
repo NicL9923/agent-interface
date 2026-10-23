@@ -27,7 +27,7 @@ extension AppStore {
   /// Why a new assistant cannot be created now, or nil when it can.
   var assistantSetupBlock: String? {
     if !householdConnected { return "Assistant setup is unavailable while Hermes is disconnected." }
-    return supports("botConfiguration") ? nil : reason("botConfiguration")
+    return supports(.botConfiguration) ? nil : reason(.botConfiguration)
   }
 }
 
