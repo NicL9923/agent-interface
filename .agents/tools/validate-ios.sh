@@ -60,7 +60,7 @@ if [[ "$operation" == live ]]; then
   build_options+=('SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG LIVE_HERMES_UI_TESTS')
   test_options+=(-only-testing:AgentInterfaceUITests/LiveConnectionTests)
 fi
-# Test selection and repetition options apply when the tests run; everything else is a build option.
+# Test selection, repetition and parallelism options apply when the tests run; everything else is a build option.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -only-testing:* | -skip-testing:* | -retry-tests-on-failure | -run-tests-until-failure)
@@ -68,7 +68,9 @@ while [[ $# -gt 0 ]]; do
     -only-testing | -skip-testing | -test-iterations | -test-repetition-relaunch-enabled \
       | -only-test-configuration | -skip-test-configuration | -test-timeouts-enabled \
       | -default-test-execution-time-allowance | -maximum-test-execution-time-allowance \
-      | -collect-test-diagnostics | -parallel-testing-enabled)
+      | -collect-test-diagnostics | -parallel-testing-enabled | -parallel-testing-worker-count \
+      | -maximum-parallel-testing-workers | -maximum-concurrent-test-simulator-destinations \
+      | -maximum-concurrent-test-device-destinations)
       if [[ $# -lt 2 ]]; then echo "$1 needs a value" >&2; exit 2; fi
       test_options+=("$1" "$2"); shift 2 ;;
     *) build_options+=("$1"); shift ;;
@@ -79,6 +81,9 @@ done
 if [[ " ${test_options[*]} " != *" -collect-test-diagnostics "* ]]; then
   test_options+=(-collect-test-diagnostics never)
 fi
+
+# Quotes each argument so the summary shows values with spaces unambiguously.
+shell_words() { local words; words=$(printf '%q ' "$@"); echo "${words% }"; }
 
 # The fingerprint covers uncommitted edits. A run whose inputs changed under it tests neither state.
 inputs() { python3 .agents/tools/source-state.py ios/ .agents/tools/validate-ios.sh .agents/tools/patch-xctestrun.py; }
@@ -114,7 +119,13 @@ summary=".private/ios-${run_id}.txt"
   fi
   echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
   echo "simulator: $(xcrun simctl list devices | awk -v id="$simulator_id" '/^-- /{runtime=$2" "$3} index($0, id){sub(/ *\((Booted|Shutdown)\) *$/, ""); sub(/^ +/, ""); print $0", "runtime; exit}')"
-  echo "options: ${test_options[*]}"
+  # A different configuration or compiler setting builds a different app, so a reader judging reuse needs these.
+  echo "operation: $operation"
+  echo "project: ios/AgentInterface.xcodeproj, scheme: AgentInterface"
+  echo "destination: $destination"
+  echo "derived data: $derived_data"
+  echo "build options: $(shell_words "${build_options[@]}")"
+  echo "test options: $(shell_words "${test_options[@]}")"
   echo "exit status: $status"
   echo "result bundle: $result_path"
   xcrun xcresulttool get test-results summary --path "$result_path" --compact 2>/dev/null || echo 'No test summary in the result bundle.'
