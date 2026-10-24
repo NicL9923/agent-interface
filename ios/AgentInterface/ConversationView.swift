@@ -573,6 +573,7 @@ struct AttentionView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @State private var answers: [String: String] = [:]
+  @State private var custom: Set<String> = []
   @State private var busy = false
   private var secure: Bool { request.kind == "secure" && request.secure?.supported == true }
   var body: some View {
@@ -587,12 +588,27 @@ struct AttentionView: View {
             Text(question.prompt).font(.subheadline)
             let answer = Binding(get: { answers[question.id] ?? "" }, set: { answers[question.id] = $0 })
             if let options = question.options, !options.isEmpty {
-              Picker(question.prompt, selection: answer) {
+              let selection = Binding(get: {
+                custom.contains(question.id) ? "custom" : options.firstIndex(of: answers[question.id] ?? "").map { "option-\($0)" } ?? ""
+              }, set: { value in
+                if value == "custom" {
+                  custom.insert(question.id)
+                  answers[question.id] = ""
+                } else {
+                  custom.remove(question.id)
+                  answers[question.id] = options.indices.first { "option-\($0)" == value }.map { options[$0] } ?? ""
+                }
+              })
+              Picker(question.prompt, selection: selection) {
                 Text("Choose an answer").tag("")
-                ForEach(options, id: \.self) { Text($0).tag($0) }
-              }.pickerStyle(.menu).labelsHidden()
-            } else {
+                ForEach(options.indices, id: \.self) { index in Text(options[index]).tag("option-\(index)") }
+                Text("Write my own answer").tag("custom")
+              }.pickerStyle(.menu).labelsHidden().accessibilityIdentifier("questionChoice-\(question.id)")
+            }
+            if question.options?.isEmpty != false || custom.contains(question.id) {
               TextField(question.prompt, text: answer, axis: .vertical).textFieldStyle(.roundedBorder).labelsHidden()
+                .accessibilityLabel(question.options?.isEmpty == false ? "Your answer: \(question.prompt)" : question.prompt)
+                .accessibilityIdentifier("questionAnswer-\(question.id)")
             }
           }
         }

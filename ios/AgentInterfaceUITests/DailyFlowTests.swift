@@ -18,6 +18,25 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
+  func testQuestionAcceptsACustomAnswer() throws {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launchEnvironment["AGENT_INTERFACE_UI_QUESTION"] = "1"
+    app.launch()
+    let send = app.buttons["Send answers"]
+    XCTAssertTrue(send.waitForExistence(timeout: 10))
+    XCTAssertFalse(send.isEnabled)
+    try capture(app, "question-suggestions")
+    app.buttons["questionChoice-plan"].tapWhenReady()
+    app.buttons["Write my own answer"].tapWhenReady()
+    let input = app.descendants(matching: .any).matching(identifier: "questionAnswer-plan").firstMatch
+    input.typeWhenFocused("Handle both tomorrow")
+    XCTAssertEqual(input.label, "Your answer: Your plan")
+    try capture(app, "question-custom-answer")
+    send.tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Received plan: Handle both tomorrow"].waitForExistence(timeout: 10))
+  }
   /// Back to home, the root of the iPhone's one navigation stack.
   private func home(_ app: XCUIApplication) {
     if app.buttons["openSettings"].canTap { return }

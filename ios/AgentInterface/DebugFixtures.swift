@@ -98,6 +98,7 @@
       ]
     ]
     nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
+    nonisolated(unsafe) static var questionAnswered = false
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
     nonisolated(unsafe) static var preferences: [String: Any] = [
@@ -269,6 +270,12 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] == "1" {
+          object = ["botId": "ranch", "messages": Self.questionAnswered ? Self.messages : [],
+            "activity": ["state": Self.questionAnswered ? "idle" : "blocked"], "approvals": [], "files": [],
+            "attention": Self.questionAnswered ? [] : [["id": "fixture-question", "kind": "clarify", "title": "Which plan?", "detail": "Choose a suggestion or write your own answer.", "questions": [["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]]]]],
+            "draft": Self.draft]
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // The server's history window (src/shared/history.ts): `start` pins the oldest loaded
           // message, `turns` adds that many turns above it, and no start means the latest page.
@@ -322,6 +329,10 @@
           ["name": "onepassword", "displayName": "1Password", "enabled": false, "needsUnlock": true, "unlocked": false, "installed": false, "canToggle": false, "canUnlock": false, "canLock": false],
           ["name": "bitwarden", "displayName": "Bitwarden fixture", "enabled": Self.sourceEnabled, "needsUnlock": true, "unlocked": Self.vaultUnlocked, "installed": true, "canToggle": true, "canUnlock": Self.sourceEnabled && !Self.vaultUnlocked, "canLock": Self.vaultUnlocked]
         ]]
+      } else if path.hasSuffix("/requests/fixture-question"), method == "POST" {
+        Self.questionAnswered = true
+        Self.messages = [["id": "answer-received", "role": "assistant", "text": "Received plan: \((body["answers"] as? [String: String])?["plan"] ?? "")"]]
+        object = ["ok": true]
       } else if path.hasSuffix("/vault/logins"), method == "POST" {
         Self.vaultItems.append(["id": "added-login", "kind": "login", "label": body["label"] ?? "", "origin": body["origin"] ?? "", "createdAt": "2026-10-02T12:00:00Z", "identifier": body["identifier"] ?? "", "identifierType": body["identifierType"] ?? "username", "hasOtp": false, "backend": "local", "canRemove": true])
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT_ADD_CANCELLED"] == "1" {

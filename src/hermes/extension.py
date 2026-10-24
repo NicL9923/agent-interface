@@ -8,6 +8,7 @@ import argparse
 import contextvars
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -25,6 +26,29 @@ from pathlib import Path
 REVISION = "b9cb268deffc97946ec11645aa622a7353dd0591"
 QUALIFIED_REVISIONS = {REVISION, "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6"}
 QUALIFIED_OAUTH_PATCH = "2b8335c692f100640e375ffd338f26f6d86195a4ff91c2000e3306bcea9d671c"
+
+
+class NativeResponseError(RuntimeError):
+    """A native RPC refusal, distinct from losing its response after admission."""
+    def __init__(self, error):
+        super().__init__(json.dumps(error))
+        self.code = error.get("code")
+        self.error = error
+
+    @property
+    def refused_admission(self):
+        # Qualified native handlers return these before invoking or queueing a turn.
+        return self.code in (-32601, -32602, 4000, 4001, 4002, 4010, 4090, 409, 5035)
+
+    @property
+    def refusal_message(self):
+        if self.code == 409:
+            return "Hermes is paused for maintenance. Your draft is saved. Try again when maintenance finishes."
+        if self.code == 4090:
+            return "Hermes cannot start another task right now. Your draft is saved. Try again after its current work settles."
+        if self.code in (4001, 4010, 5035):
+            return "Hermes was starting or reconnecting and did not accept this message. Your draft is saved. Try sending it again."
+        return "Hermes could not accept this message. Your draft is saved. Reconnect and try again."
 
 
 def sibling_module(name):
@@ -407,7 +431,7 @@ class Bridge:
     def native(self, method, params):
         response = self.server.handle_request({"jsonrpc": "2.0", "id": "extension-native", "method": method, "params": params})
         if "error" in response:
-            raise RuntimeError(json.dumps(response["error"]))
+            raise NativeResponseError(response["error"])
         return response["result"]
 
     def profile_for(self, sid):
@@ -972,7 +996,9 @@ class Bridge:
 
     def unstage_images(self, sid, staged):
         # Remove only additions from this preparation and preserve pre-existing staged images.
-        session = self.server._sessions[sid]
+        session = self.server._sessions.get(sid)
+        if session is None or not staged:
+            return
         with session["history_lock"]:
             images = list(session.get("attached_images", []))
             for image in reversed(staged):
@@ -1042,7 +1068,14 @@ class Bridge:
                     method = "session.steer" if steering else "prompt.submit"
                     result = self.native(method, {"session_id": sid, "profile": profile, "text": text})
                 except Exception as exc:
-                    # Once native admission is invoked, failures remain conservative.
+                    # Known native admission refusals happen before invoking or queueing a turn.
+                    # Crashes and unrecognized errors may follow side effects, so stay uncertain.
+                    if isinstance(exc, NativeResponseError) and exc.refused_admission:
+                        self.unstage_images(sid, staged)
+                        logging.getLogger(__name__).warning("Native message admission refused with code %s", exc.code)
+                        with journal.db:
+                            journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
+                            return self.admitted(rid, request_id, exc.refusal_message)
                     with journal.db:
                         return self.admitted(rid, request_id, str(exc)[:500])
                 status = "rejected" if result.get("status") == "rejected" else "accepted"

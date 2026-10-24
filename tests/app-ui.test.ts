@@ -92,6 +92,33 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("sends a custom answer to a question with suggestions and keeps it after a failure", async () => {
+    conversation.attention = [{ id: "ask", kind: "clarify", title: "Pick a plan", detail: "Choose or write a plan.", questions: [
+      { id: "plan", prompt: "Which plan?", options: ["First", "Write my own answer"] },
+      { id: "note", prompt: "Any details?" },
+    ] }];
+    await render();
+    const select = container.querySelector<HTMLSelectElement>('.approval-card select')!;
+    const submit = container.querySelector<HTMLButtonElement>('.approval-card button')!;
+    expect(submit.disabled).toBe(true);
+    await act(async () => { select.value = "custom"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    const custom = container.querySelector<HTMLInputElement>('[aria-label="Your answer: Which plan?"]')!;
+    await typeInto(custom, "   ");
+    await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Any details?"]')!, "Keep the draft");
+    expect(submit.disabled).toBe(true);
+    await typeInto(custom, "A different plan");
+    vi.mocked(write).mockRejectedValueOnce(new Error("Try again"));
+    await act(async () => submit.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" } });
+    expect(custom.value).toBe("A different plan");
+    await act(async () => { select.value = "option-1"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(container.querySelector('[aria-label="Your answer: Which plan?"]')).toBeNull();
+    await act(async () => submit.click());
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" } });
+    await act(async () => { select.value = ""; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(submit.disabled).toBe(true);
+  });
+
   it("reopens a refused household stream at the fallback interval", async () => {
     await render();
     const stream=[...FakeEventSource.streams].find(stream=>stream.url==="/api/events")!;
