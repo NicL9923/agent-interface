@@ -10,7 +10,8 @@ import { Store } from "../src/server/store.js";
 import { defaultPreferences, type ActivityState, type Bot, type Conversation } from "../src/shared/types.js";
 
 const apns = (): NonNullable<Config["apns"]> => ({ teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" });
-type Push = { token: string; payload: { aps: { event: string; timestamp: number; "content-state": LiveState; "stale-date"?: number; "dismissal-date"?: number } }; priority: number };
+type Push = { token: string; payload: { aps: { event: string; timestamp: number; "content-state": LiveState; "stale-date"?: number; "dismissal-date"?: number;
+  "attributes-type"?: string; attributes?: { scope: string }; alert?: { title: string; body: string }; "input-push-token"?: number } }; priority: number };
 
 let clock: number, store: Store, pushes: Push[], failure: Error | undefined;
 let bots: Bot[], conversations: Record<string, Partial<Conversation["activity"]>>, live: LiveActivities;
@@ -231,6 +232,185 @@ describe("aggregate Live Activity", () => {
     register("one");
     store.deleteNativeSession("one");
     expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
+  });
+});
+
+describe("push-to-start", () => {
+  const startToken = "ef".repeat(32), scope = Buffer.from("https://wildbots.example|one").toString("base64url");
+  const registerStart = (token = startToken) => store.registerLiveActivityStart("one", "one", "one-device", token, "sandbox", scope);
+  const starts = () => pushes.filter(push => push.payload.aps.event === "start");
+  beforeEach(() => store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] }));
+
+  it("starts the activity once when work begins away from the app, then updates it once the app registers it", async () => {
+    registerStart();
+    await tick();
+    expect(pushes).toEqual([]);
+    set("kitchen", "working");
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+    expect(last()).toMatchObject({ token: startToken, priority: 10, payload: { aps: {
+      event: "start", "attributes-type": "AssistantsActivityAttributes", attributes: { scope }, "input-push-token": 1,
+      alert: { title: "Kitchen is working", body: "Working" }, "stale-date": Math.floor(clock / 1000) + 900 } } });
+    expect(rows()).toEqual(["kitchen:working"]);
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+    // The woken app registers the new activity's update token; updates go there.
+    register("one");
+    set("kitchen", "waiting");
+    await tick(5_000);
+    expect(last()).toMatchObject({ token: "one".repeat(32).slice(0, 64), payload: { aps: { event: "update" } } });
+    expect(starts()).toHaveLength(1);
+  });
+
+  it("leaves work the person dismissed off the Lock Screen until another assistant starts", async () => {
+    registerStart();
+    set("kitchen", "working");
+    register("one");
+    await tick();
+    expect(starts()).toEqual([]);
+    // Dismissing the app-started activity removes its registration.
+    store.removeLiveActivity("one", "one-device", "one".repeat(32).slice(0, 64));
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    set("garden", "thinking");
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+    expect(rows()).toEqual(["kitchen:working", "garden:thinking"]);
+  });
+
+  it("does not reopen an activity dismissed before its first update", async () => {
+    registerStart();
+    set("kitchen", "working");
+    register("one");
+    // The person dismissed it, so Apple refuses the first update and the registration is forgotten.
+    failure = new ApnsError("Gone", 410);
+    await tick();
+    expect(store.liveActivities("sandbox", clock + 3_600_000)).toHaveLength(0);
+    failure = undefined;
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(["kitchen"]);
+  });
+
+  it("does not reopen an activity the app dismissed before any pass, even through a Hermes outage", async () => {
+    registerStart();
+    set("kitchen", "working");
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    const roster = live["runtime"].listBots;
+    live["runtime"].listBots = async () => { throw new Error("Hermes is restarting"); };
+    await expect(tick(ARMED_MS)).rejects.toThrow("restarting");
+    live["runtime"].listBots = roster;
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    expect(store.liveActivityStarts("sandbox", clock)[0]).toMatchObject({ started: ["kitchen"], dismissed: false });
+    // Work that begins afterwards still starts the activity.
+    set("garden", "working");
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+  });
+
+  it("lets late cleanup of an activity the server already ended leave newer work alone", async () => {
+    registerStart();
+    const token = "one".repeat(32).slice(0, 64);
+    set("kitchen", "working");
+    register("one", [], token);
+    await tick();
+    set("kitchen", "idle");
+    await tick(ARMED_MS);
+    expect(pushes.at(-1)?.payload.aps.event).toBe("end");
+    // The app's DELETE for that ended activity arrives after new work began.
+    set("garden", "working");
+    store.dismissLiveActivity("one", "one-device", token);
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+    expect(rows()).toEqual(["garden:working"]);
+  });
+
+  it("starts again for new work after everything finished", async () => {
+    registerStart();
+    set("kitchen", "working");
+    await tick();
+    set("kitchen", "idle");
+    await tick(5_000);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([]);
+    set("kitchen", "working");
+    await tick(5_000);
+    expect(starts()).toHaveLength(2);
+  });
+
+  it("waits while the app starts its own activity after a send", async () => {
+    registerStart();
+    store.liveActivityStartedLocally("one", "one", "one-device", clock);
+    set("kitchen", "working");
+    await tick(ARMED_MS - 1000);
+    expect(starts()).toEqual([]);
+    await tick(1000);
+    expect(starts()).toHaveLength(1);
+  });
+
+  it("drops a rejected start token, backs off an outage, and goes with the native session", async () => {
+    registerStart();
+    set("kitchen", "working");
+    failure = new ApnsError("APNs outage", 503);
+    await tick();
+    expect(store.liveActivityStarts("sandbox", clock)).toHaveLength(0);
+    expect(store.liveActivityStarts("sandbox", clock + 15_000)).toHaveLength(1);
+    failure = new ApnsError("Gone", 410);
+    await tick(15_000);
+    expect(store.liveActivityStarts("sandbox", clock + 3_600_000)).toHaveLength(0);
+    failure = undefined;
+    registerStart();
+    store.deleteNativeSession("one");
+    expect(store.liveActivityStarts("sandbox", clock)).toHaveLength(0);
+  });
+
+  it("re-reads the registration after waiting on Hermes, so a takeover, the app's own start or a new activity wins", async () => {
+    registerStart();
+    set("kitchen", "working");
+    const roster = live["runtime"].listBots;
+    const during = (change: () => void) => { live["runtime"].listBots = async () => { change(); return roster(); }; };
+    // Another account signs in on this phone after an offline sign-out and takes the token over.
+    during(() => store.registerLiveActivityStart("two", "two", "two-device", startToken, "sandbox", "dHdv"));
+    await tick();
+    expect(starts()).toEqual([]);
+    store.deleteNativeSession("two");
+    registerStart();
+    during(() => store.liveActivityStartedLocally("one", "one", "one-device", clock));
+    await tick(ARMED_MS);
+    expect(starts()).toEqual([]);
+    during(() => register("one"));
+    await tick(ARMED_MS);
+    expect(starts()).toEqual([]);
+    live["runtime"].listBots = roster;
+  });
+
+  it("remembers every running assistant, not only the four rows that fit", async () => {
+    bots = ["a", "b", "c", "d", "e"].map(id => bot(id, "working"));
+    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    for (const value of bots) conversations[value.id] = { state: "working" };
+    registerStart();
+    await tick();
+    expect(starts()).toHaveLength(1);
+    expect(last().payload.aps["content-state"]).toMatchObject({ activeCount: 5 });
+    expect(store.liveActivityStarts("sandbox", clock)[0].started.sort()).toEqual(["a", "b", "c", "d", "e"]);
+    // One finishes, so the fifth moves into view. Nothing new started, so nothing returns.
+    set("a", "idle");
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+  });
+
+  it("keeps a start with a long scope inside APNs' limit", async () => {
+    const long = "A".repeat(1024);
+    store.registerLiveActivityStart("one", "one", "one-device", startToken, "sandbox", long);
+    bots = Array.from({ length: 4 }, (_, i) => bot("y".repeat(250) + i, "working", { name: "🐎".repeat(80) }));
+    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    for (const value of bots) conversations[value.id] = { state: "working", detail: "🐎".repeat(2000) };
+    await tick();
+    expect(last().payload.aps.attributes).toEqual({ scope: long });
+    expect(Buffer.byteLength(JSON.stringify(last().payload))).toBeLessThanOrEqual(4096);
+    expect(last().payload.aps["content-state"].activeCount).toBe(4);
   });
 });
 

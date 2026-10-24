@@ -87,15 +87,25 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
   });
   apiRoute(app, "GET /native/live-activity", {}, async req => {
     const session = nativeSession(req, "Live Activities require native sign-in");
-    const { deviceId } = z.object({ deviceId: z.string().uuid().optional() }).strict().parse(req.query);
+    const { deviceId, local } = z.object({ deviceId: z.string().uuid().optional(), local: z.literal("1").optional() }).strict().parse(req.query);
     const userId = signedIn(req).id;
     const context = deviceId ? store.liveActivityContext(userId, session, deviceId) : undefined;
+    // The app asks just before starting its own activity after a send; a pushed start would duplicate it.
+    if (deviceId && local) store.liveActivityStartedLocally(userId, session, deviceId, Date.now());
     return { available: !!config.apns, state: await live().state(userId, context, context?.lastState) };
   });
-  const liveActivity = z.object({ deviceId: z.string().uuid(), token: apnsToken, botIds: z.array(id).max(10).default([]) }).strict();
+  const accountScope = z.string().regex(/^[A-Za-z0-9_-]{4,1024}$/);
+  /** The app's scope names its server address and account. Another account's would label this person's activity as someone else's. */
+  const requireOwnScope = (scope: string | undefined, userId: string) => {
+    if (scope !== undefined && !Buffer.from(scope, "base64url").toString("utf8").endsWith(`|${userId}`))
+      throw httpError(400, "This Live Activity registration names a different account. Sign in again.");
+  };
+  // An app woken in the background for a pushed activity has no account loaded yet; it sends the activity's scope instead.
+  const liveActivity = z.object({ deviceId: z.string().uuid(), token: apnsToken, botIds: z.array(id).max(10).default([]), scope: accountScope.optional() }).strict();
   apiRoute(app, "PUT /native/live-activity", { ...requireNativePush, body: liveActivity }, async (req, body) => {
     const { session, apns } = nativePush(req);
     const userId = signedIn(req).id, armedAt = Date.now();
+    requireOwnScope(body.scope, userId);
     const armed = [...new Set(body.botIds)].filter(botId => visibleTo(store, botId, userId));
     // The next worker pass replays the current state; a Hermes outage must not fail a saved registration.
     store.registerLiveActivity(userId, session, body.deviceId, body.token.toLowerCase(), apns.environment, armed, armedAt);
@@ -105,7 +115,23 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
     before: async req => { nativeSession(req, "Live Activities require native sign-in"); },
     body: z.object({ deviceId: z.string().uuid(), token: apnsToken }).strict(),
   }, async (req, body) => {
-    store.removeLiveActivity(signedIn(req).id, body.deviceId, body.token.toLowerCase());
+    store.dismissLiveActivity(signedIn(req).id, body.deviceId, body.token.toLowerCase());
+    return { ok: true };
+  });
+  // iOS 18 push-to-start: the server starts the activity when work begins away from this device.
+  const liveActivityStart = z.object({ deviceId: z.string().uuid(), token: apnsToken, scope: accountScope }).strict();
+  apiRoute(app, "PUT /native/live-activity/start", { ...requireNativePush, body: liveActivityStart }, async (req, body) => {
+    const { session, apns } = nativePush(req);
+    const userId = signedIn(req).id;
+    requireOwnScope(body.scope, userId);
+    store.registerLiveActivityStart(userId, session, body.deviceId, body.token.toLowerCase(), apns.environment, body.scope);
+    return { ok: true };
+  });
+  apiRoute(app, "DELETE /native/live-activity/start", {
+    before: async req => { nativeSession(req, "Live Activities require native sign-in"); },
+    body: z.object({ deviceId: z.string().uuid() }).strict(),
+  }, async (req, body) => {
+    store.removeLiveActivityStart(signedIn(req).id, body.deviceId);
     return { ok: true };
   });
   apiRoute(app, "POST /native/push/test", { ...requireNativePush, body: z.object({ botId: id }).strict() }, async (req, { botId }) => {

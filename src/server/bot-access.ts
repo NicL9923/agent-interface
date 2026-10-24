@@ -213,6 +213,9 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/native/live-activity": "list",
   "PUT /api/native/live-activity": "list",
   "DELETE /api/native/live-activity": "none",
+  // A push-to-start token names no assistant; the worker builds rows with the same visibility as updates.
+  "PUT /api/native/live-activity/start": "none",
+  "DELETE /api/native/live-activity/start": "none",
   // Audio this person asked for moments ago, from an assistant they could see.
   "GET /api/voice/audio/:audioId": "none",
 };
