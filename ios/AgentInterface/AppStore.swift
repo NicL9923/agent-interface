@@ -26,6 +26,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
   /// Assistants in Spotlight, kept in step with the snapshot. Unit tests leave the system index alone.
   @ObservationIgnored var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
+  /// Assistant pictures for notifications in the App Group. Unit tests leave the App Group alone.
+  @ObservationIgnored var senderAvatars: SenderAvatars? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? SenderAvatars(root: NotificationSenders.root) : nil
   /// Text from Siri, a notification's Reply or the Share inbox waiting for its draft; see `DraftAdditions.swift`.
   var additions: [DraftAddition] = []
   @ObservationIgnored var earlyAdditions: [DraftAddition] = []
@@ -64,6 +66,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   var routineResult: RoutineResultDestination?
   var todayRequest: UUID?
+  /// A voice message to start in this assistant's chat, from the Talk to assistant control.
+  var listenRequest: ListenRequest?
   var draft = Draft()
   var draftReady = false { didSet { if draftReady && !oldValue { scheduleAdditions() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.

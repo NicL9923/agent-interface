@@ -26,6 +26,8 @@ import UserNotifications
           if phase == .active {
             MinuteClock.shared.tick()
             Task {
+              // A control that ran in the widget extension left its link for the app.
+              if let link = IntentLinks.takePending() { await NotificationController.shared.open(link.url, at: link.at) }
               await store.resume()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
@@ -42,6 +44,7 @@ import UserNotifications
         // the new one starts from its own state.
         .onChange(of: store.scope) { old, new in
           store.deviceNotifications = DeviceNotificationState()
+          store.listenRequest = nil
           Task {
             if old != nil { await LiveActivityController.shared.endAll(unregister: false) }
             if new != nil {
@@ -70,6 +73,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     UNUserNotificationCenter.current().delegate = self
     // Before any notification can be shown, so its actions are always there.
     UNUserNotificationCenter.current().setNotificationCategories(NotificationActions.categories)
+    // A launch in the background for an activity the server started registers it before any window exists.
+    LiveActivityController.shared.watchSystem()
+    // Controls and other intents that run in the app open their link here.
+    IntentLinks.handler = { await NotificationController.shared.open($0) }
     return true
   }
   func application(
@@ -130,6 +137,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   var token: String?
   var pendingBotId: String?
   var pendingRoutineId: String?
+  /// The pending chat should start a voice message once open, as the Talk to assistant control asks.
+  var pendingListen = false
+  /// When the last link asking to listen arrived. A link that waited for sign-in is not fresh.
+  var listenLinkAt: Date?
   var pendingURL: String?
   /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
   var pendingReplies: [NotificationReply] = []
@@ -381,8 +392,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       }
       pendingBotId = Self.botId(from: pendingURL, origin: origin)
       pendingRoutineId = nil
+      pendingListen = false
       if pendingBotId != nil, let url = URL(string: pendingURL, relativeTo: origin), let components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
         pendingRoutineId = components.queryItems?.first { $0.name == "routine" }?.value
+        pendingListen = components.queryItems?.contains { $0.name == "listen" && $0.value == "1" } == true
       }
       self.pendingURL = nil
     }
@@ -390,9 +403,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       store.bootstrap?.bots.contains(where: { $0.id == botId }) == true
     else { return }
     pendingBotId = nil
+    // Taken before opening the chat waits, so an account change meanwhile cannot inherit the request.
+    let listen = pendingListen ? store.scope.map { ListenRequest(botId: botId, scope: $0, at: listenLinkAt ?? .distantPast) } : nil
+    pendingListen = false
     await store.select(botId)
     if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
     pendingRoutineId = nil
+    if let listen, listen.scope == store.scope { store.listenRequest = listen }
   }
 }
 

@@ -109,8 +109,10 @@ struct WildBotsShortcuts: AppShortcutsProvider {
 
 extension NotificationController {
   /// Opens a widget, notification or Shortcuts link, the one way every outside entry reaches a chat.
-  func open(_ url: URL) async {
+  /// `at` is when the link was asked for, which a link handed over from the widget extension keeps.
+  func open(_ url: URL, at: Date = Date()) async {
     guard let path = DeepLink.relativePath(for: url) else { return }
+    if path.hasSuffix("&listen=1") { listenLinkAt = at }
     pendingURL = path
     await openPendingConversation()
   }

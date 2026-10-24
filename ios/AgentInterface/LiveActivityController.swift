@@ -10,6 +10,13 @@ struct LiveActivityRegistration: Encodable {
   var deviceId: String
   var token: String
   var botIds: [String]
+  /// Sent only from a background launch, before the account has loaded; the server checks it is this sign-in's.
+  var scope: String?
+}
+struct LiveActivityStartRegistration: Encodable {
+  var deviceId: String
+  var token: String
+  var scope: String
 }
 
 /// Starts, feeds and ends the one aggregate Live Activity. Everything here is best effort: a
@@ -39,6 +46,11 @@ struct LiveActivityRegistration: Encodable {
   private var registeredToken: String?
   private var observed: Set<String> = []
   private var foregroundTask: Task<Void, Never>?
+  private var watchingSystem = false
+  /// The device's push-to-start token, which lets the server start the activity when work begins
+  /// somewhere else, and the account it was last registered for.
+  private var startToken: String?
+  private var registeredStart: (scope: String, token: String)?
   /// How often a foreground app refreshes its own activity instead of waiting for a push.
   static let foregroundInterval: Duration = .seconds(15)
   static let staleAfter: TimeInterval = 15 * 60
@@ -64,12 +76,38 @@ struct LiveActivityRegistration: Encodable {
     ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))
   }
 
+  /// From launch, including a background launch for an activity the server started: adopts every
+  /// activity iOS creates and follows the push-to-start token. Push-to-start needs iOS 18, which
+  /// wakes the app with the new activity's update token.
+  func watchSystem() {
+    guard !watchingSystem else { return }
+    watchingSystem = true
+    Task { [weak self] in
+      for await activity in Live.activityUpdates {
+        guard let self else { return }
+        self.observe(activity)
+        await self.register(activity)
+      }
+    }
+    if #available(iOS 18.0, *) {
+      Task { [weak self] in
+        for await data in Live.pushToStartTokenUpdates {
+          guard let self else { return }
+          self.startToken = data.map { String(format: "%02x", $0) }.joined()
+          await self.registerStartToken()
+        }
+      }
+    }
+  }
+
   /// After a send the server accepted: show the assistant as starting right away.
   func sent(to botId: String) async {
     guard let store, let api = store.api, let scope = store.scope, enabled, systemAllowed else { return }
     unregisteredSends[botId] = Date()
     let token = api.token
-    guard let status: LiveActivityStatus = try? await api.get(statePath(scope: scope)),
+    // A server that can start activities by push holds off while this app starts its own.
+    let path = statePath(scope: scope) + (registeredStart?.scope == scope ? "&local=1" : "")
+    guard let status: LiveActivityStatus = try? await api.get(path),
       token == api.token, scope == store.scope, status.available
     else { return }
     await show(seeded(status.state), scope: scope)
@@ -80,7 +118,7 @@ struct LiveActivityRegistration: Encodable {
   func foreground() async {
     guard let store, let api = store.api, let scope = store.scope else { return }
     guard enabled, systemAllowed else {
-      if !enabled { await endAll(unregister: false) }
+      if !enabled { await endAll(unregister: false) } else { await unregisterStartToken() }
       return
     }
     let token = api.token
@@ -88,6 +126,7 @@ struct LiveActivityRegistration: Encodable {
       token == api.token, scope == store.scope
     else { return }
     guard status.available else { await endAll(unregister: false); return }
+    await registerStartToken()
     let state = seeded(status.state)
     if state.activeCount > 0 {
       await show(state, scope: scope)
@@ -105,6 +144,8 @@ struct LiveActivityRegistration: Encodable {
   func endAll(unregister: Bool) async {
     background()
     unregisteredSends = [:]
+    // The server drops the old account's start token with its session, or when the next account registers it.
+    registeredStart = nil
     let activities = Live.activities
     let token = registeredToken
     registeredActivityId = nil
@@ -197,17 +238,31 @@ struct LiveActivityRegistration: Encodable {
       }
     }
   }
+  /// The sign-in that registers an activity of `scope`. Woken in the background for an activity
+  /// the server started, the store has no account yet, so the saved Keychain sign-in registers it
+  /// and names the activity's scope for the server to check.
+  private func client(for scope: String) -> (api: APIClient, background: Bool)? {
+    if let store, let current = store.scope {
+      guard current == scope, let api = store.api, api.token != nil else { return nil }
+      return (api, false)
+    }
+    return backgroundClient().map { ($0, true) }
+  }
+  /// The same saved sign-in a notification action uses after a background launch.
+  var backgroundClient: @MainActor () -> APIClient? = { NotificationController.shared.actionClient() }
   private func register(_ activity: Live, token: Data? = nil) async {
-    guard let data = token ?? activity.pushToken, let store, let api = store.api, api.token != nil,
-      store.scope == activity.attributes.scope, enabled,
+    let scope = activity.attributes.scope
+    guard let data = token ?? activity.pushToken, let client = client(for: scope),
       activity.activityState == .active || activity.activityState == .stale
     else { return }
-    let botIds = unregisteredBotIds
+    let (api, background) = client
+    let botIds = background ? [] : unregisteredBotIds
     let body = LiveActivityRegistration(
-      deviceId: Self.deviceId(for: activity.attributes.scope), token: data.map { String(format: "%02x", $0) }.joined(), botIds: botIds)
+      deviceId: Self.deviceId(for: scope), token: data.map { String(format: "%02x", $0) }.joined(), botIds: botIds,
+      scope: background ? scope : nil)
     do {
       let _: EmptyResponse = try await api.write("/native/live-activity", body, method: "PUT")
-      guard store.scope == activity.attributes.scope, enabled,
+      guard store?.scope == nil || store?.scope == scope,
         activity.activityState == .active || activity.activityState == .stale
       else {
         let _: EmptyResponse? = try? await api.write(
@@ -217,6 +272,31 @@ struct LiveActivityRegistration: Encodable {
       registeredActivityId = activity.id
       registeredToken = body.token
       for botId in botIds { unregisteredSends[botId] = nil }
+    } catch let error as APIError where background && error.status == 400 {
+      // The server started this activity for an account other than the one signed in here now.
+      await activity.end(nil, dismissalPolicy: .immediate)
     } catch {}
+  }
+  /// Lets the server start this device's activity. Sent once per launch, account and token, so a
+  /// server that lost the token learns it again the next time the app opens.
+  private func registerStartToken() async {
+    guard #available(iOS 18.0, *) else { return }
+    // The stream may not repeat a token it already gave an earlier launch; ActivityKit keeps the current one.
+    if startToken == nil, let current = Live.pushToStartToken { startToken = current.map { String(format: "%02x", $0) }.joined() }
+    guard let token = startToken, let store, let api = store.api, api.token != nil, let scope = store.scope, systemAllowed
+    else { return }
+    if let registeredStart, registeredStart.scope == scope, registeredStart.token == token { return }
+    let body = LiveActivityStartRegistration(deviceId: Self.deviceId(for: scope), token: token, scope: scope)
+    do {
+      let _: EmptyResponse = try await api.write("/native/live-activity/start", body, method: "PUT")
+      if store.scope == scope, startToken == token { registeredStart = (scope, token) }
+    } catch {}
+  }
+  /// Live Activities turned off in iOS Settings: the server stops trying to start them here.
+  private func unregisterStartToken() async {
+    guard let registered = registeredStart, let store, let api = store.api, api.token != nil, store.scope == registered.scope else { return }
+    registeredStart = nil
+    let _: EmptyResponse? = try? await api.write(
+      "/native/live-activity/start", ["deviceId": Self.deviceId(for: registered.scope)], method: "DELETE")
   }
 }

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 
 export const bundleId = 'dev.agentinterface.ios';
 export const appGroup = 'group.dev.agentinterface.shared';
-export const targets = ['AgentInterface', 'AgentInterfaceShare', 'AgentInterfaceWidgets'];
+export const targets = ['AgentInterface', 'AgentInterfaceShare', 'AgentInterfaceWidgets', 'AgentInterfaceNotifications'];
 export const identifiers = targets.map((name, i) => ({ name, identifier: bundleId + (i ? `.${name}` : '') }));
 export const configPath = `${homedir()}/.config/wildbots/apple/config.json`;
 export function configuration() {

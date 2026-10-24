@@ -7,6 +7,23 @@ import WidgetKit
   var body: some Widget {
     AssistantsWidget()
     AssistantsLiveActivity()
+    if #available(iOS 18.0, *) { TalkToAssistantControl() }
+  }
+}
+
+/// Control Center, Lock Screen and Action button: talk to a chosen assistant.
+@available(iOS 18.0, *)
+struct TalkToAssistantControl: ControlWidget {
+  var body: some ControlWidgetConfiguration {
+    AppIntentControlConfiguration(kind: "TalkToAssistant", intent: ChooseTalkAssistantIntent.self) { configuration in
+      // An assistant that left the household opens the app's home instead.
+      ControlWidgetButton(action: TalkToAssistantIntent(target: configuration.assistant ?? AssistantEntity(id: "", name: "WildBots"))) {
+        Label(configuration.assistant.map { "Talk to \($0.name)" } ?? "Talk to assistant", systemImage: "waveform")
+      }
+    }
+    .displayName("Talk to assistant")
+    .description("Opens an assistant and starts a voice message.")
+    .promptsForUserConfiguration()
   }
 }
 
