@@ -157,6 +157,9 @@ struct Bot: Codable, Identifiable, Equatable {
   var sessionId: String?
   var activity: ActivityState
   var lastMessage: LastMessage?
+  /// Whether this person has read the chat before and `lastMessage` is newer than that read.
+  /// Older servers omit it. `AppStore.unread(_:)` applies the chats read on this device since.
+  var unread: Bool? = nil
 }
 /// The newest message in an assistant's canonical conversation, for list and widget previews.
 struct LastMessage: Codable, Equatable {
@@ -999,6 +1002,23 @@ struct TokenExchange: Codable {
   var token: String
   var expiresAt: String?
   var user: Member
+}
+/// `POST /api/auth/native/renew`: the same token, valid until this new expiry.
+struct TokenRenewal: Codable {
+  var expiresAt: String
+}
+/// When to ask the server to extend this device's sign-in. The server renews the same token in
+/// place, because push registrations hang off it, and stops at 90 days after the Google sign-in.
+enum SignInRenewal {
+  /// Renewal starts once fewer than two days of the seven-day sign-in remain.
+  static let window: TimeInterval = 2 * 24 * 3600
+  /// A failed or capped renewal is asked again at most this often.
+  static let retry: TimeInterval = 3600
+  static func due(expiresAt: Date?, lastAttempt: Date?, now: Date) -> Bool {
+    guard let expiresAt, expiresAt > now, expiresAt.timeIntervalSince(now) < window else { return false }
+    // A clock set back past the last attempt counts as time passed, so renewal cannot stall.
+    return lastAttempt.map { now.timeIntervalSince($0) >= retry || now < $0 } ?? true
+  }
 }
 struct EmptyResponse: Codable { var ok: Bool? }
 struct PushConfig: Codable {

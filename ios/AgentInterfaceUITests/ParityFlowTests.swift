@@ -46,6 +46,18 @@ import UIKit
     waitForExpectations(timeout: 10)
     close.tap()
   }
+  func testAnUnreadReplyIsMarkedUntilItsChatIsOpened() {
+    let app = launch(home: true)
+    let row = app.buttons["bot.personal"]
+    XCTAssertTrue(row.waitForExistence(timeout: 15))
+    XCTAssertTrue(row.wait(until: "value == %@", "Unread"), "VoiceOver hears the unread reply")
+    XCTAssertNotEqual(app.buttons["bot.ranch"].value as? String, "Unread")
+    row.tapWhenReady()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
+    home(app)
+    // The fixture keeps saying unread; the chat read here stays read until a newer reply.
+    XCTAssertTrue(row.wait(until: "value != %@", "Unread"))
+  }
   func testSwipingARowPinsItAndCommandShortcutsOpenAndFind() throws {
     let app = launch(home: true)
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))

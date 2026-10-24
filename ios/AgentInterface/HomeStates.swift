@@ -31,6 +31,27 @@ extension AppStore {
   }
 }
 
+/// Chats this person read on this device, each with the latest message it had then. The server's
+/// `unread` catches up on a later bootstrap; until that chat's latest message changes, it reads as
+/// read here.
+struct UnreadChats: Equatable {
+  private(set) var user: String?
+  /// Bot ID to the `lastMessage.at` it had when read here, empty when it had none.
+  private var seen: [String: String] = [:]
+  mutating func read(_ bot: Bot) { seen[bot.id] = bot.lastMessage?.at ?? "" }
+  /// Forgets chats that left the roster or whose latest message moved on, and all of them when
+  /// another account signs in.
+  mutating func keep(_ bots: [Bot], user: String?) {
+    guard user == self.user else { self = UnreadChats(user: user); return }
+    var latest: [String: String] = [:]
+    for bot in bots { latest[bot.id] = bot.lastMessage?.at ?? "" }
+    seen = seen.filter { latest[$0.key] == $0.value }
+  }
+  func unread(_ bot: Bot, open: String?) -> Bool {
+    bot.unread == true && bot.id != open && seen[bot.id] != (bot.lastMessage?.at ?? "")
+  }
+}
+
 /// One shared minute tick for every time label on a screen, instead of a timeline per row.
 @MainActor @Observable final class MinuteClock {
   static let shared = MinuteClock()

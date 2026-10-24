@@ -40,8 +40,10 @@ enum ReplyCards {
   }
   /// Splits a reply into prose, cards and, when `inlineUi` allows it, inline UI. Without it a
   /// wildbots-html fence stays a code block, as the web shows it outside assistant replies.
-  /// Messages render on every update, so results are reused like MarkdownCache's blocks.
-  static func parse(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
+  /// Messages render on every update, so results are reused like MarkdownCache's blocks. A reply
+  /// still streaming changes with every patch, so it is not `cached`.
+  static func parse(_ text: String, inlineUi: Bool = true, cached: Bool = true) -> [ReplyContentPart] {
+    guard cached else { return parseFresh(text, inlineUi: inlineUi) }
     let key = ((inlineUi ? "1" : "0") + text) as NSString
     if let cached = parsed.object(forKey: key) { return cached.parts }
     let parts = parseFresh(text, inlineUi: inlineUi)
@@ -169,8 +171,9 @@ struct ReplyContentView: View {
   var message: Message
   var body: some View {
     if message.isReply {
-      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant")) { part in
-        if let markdown = part.markdown { MarkdownView(text: markdown) }
+      let streaming = message.id.hasSuffix("-inflight")
+      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant", cached: !streaming)) { part in
+        if let markdown = part.markdown { MarkdownView(text: markdown, streaming: streaming) }
         if let inline = part.inline { InlineUiView(document: inline) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
       }

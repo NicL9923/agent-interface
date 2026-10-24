@@ -33,14 +33,42 @@ struct MarkdownTable: Equatable {
 
 enum Markdown {
   static func parse(_ source: String) -> [MarkdownBlock] {
-    let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-      .components(separatedBy: "\n").map(expandTabs)
-    return blocks(lines[...])
+    blocks(normalizedLines(source)[...])
+  }
+  static func normalizedLines(_ source: String) -> [String] {
+    unifiedNewlines(source).components(separatedBy: "\n").map(expandTabs)
+  }
+  static func unifiedNewlines(_ source: String) -> String {
+    // Bytes, not characters: "\r\n" is one Character, which a search for "\r" would miss.
+    guard source.utf8.contains(13) else { return source }
+    return source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+  }
+
+  /// Parses the unsettled end of a streamed reply, `source` with unified newlines, and finds where
+  /// the next parse of a longer copy can start instead. That is the last block at the margin that
+  /// follows a blank line, does not start with a list marker and is not the still-growing last
+  /// line. No block before it reads past that line, whose start can no longer change, and an
+  /// unclosed fence or HTML block swallows it, so it never counts as a block start. Returns the
+  /// blocks and, for that cut, the UTF-8 length of the text before it and the blocks it holds.
+  static func parseTail(_ source: String) -> (blocks: [MarkdownBlock], settledBytes: Int, settledBlocks: Int) {
+    let raw = source.components(separatedBy: "\n")
+    let lines = raw.map(expandTabs)
+    var cut: (line: Int, blocks: Int)?
+    let result = blocks(lines[...]) { index, count in
+      guard index > 0, index < lines.count - 1, isBlank(lines[index - 1]), indent(lines[index]) == 0,
+        listMarker(lines[index]) == nil
+      else { return }
+      cut = (index, count)
+    }
+    guard let cut else { return (result, 0, 0) }
+    return (result, raw[..<cut.line].reduce(0) { $0 + $1.utf8.count + 1 }, cut.blocks)
   }
 
   // MARK: Blocks
 
-  static func blocks(_ lines: ArraySlice<String>) -> [MarkdownBlock] {
+  /// `blockStart` hears each top-level line where a block starts with nothing pending, and how
+  /// many blocks came before it.
+  static func blocks(_ lines: ArraySlice<String>, blockStart: ((Int, Int) -> Void)? = nil) -> [MarkdownBlock] {
     var result: [MarkdownBlock] = []
     var paragraph: [String] = []
     var index = lines.startIndex
@@ -51,6 +79,7 @@ enum Markdown {
     while index < lines.endIndex {
       let line = lines[index]
       if isBlank(line) { flush(); index += 1; continue }
+      if paragraph.isEmpty { blockStart?(index - lines.startIndex, result.count) }
       let spaces = indent(line)
       if spaces >= 4 {
         // Indented text continues a paragraph; otherwise it is an indented code block.

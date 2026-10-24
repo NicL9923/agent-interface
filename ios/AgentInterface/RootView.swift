@@ -194,7 +194,7 @@ struct ConnectionView: View {
           Spacer(minLength: 32).frame(maxHeight: 48)
           VStack(spacing: 14) {
             if store.api == nil { connectForm } else { signInActions }
-            if let error = store.error { ErrorBanner(message: error, dismiss: { store.error = nil }) }
+            if let error = store.error { ErrorBanner(message: error, dismiss: { store.dismissError() }) }
           }
           Spacer(minLength: 32)
           Text("Your self-hoster keeps provider keys and the Hermes connection on the server, not on this device.")
@@ -435,6 +435,7 @@ struct BotListView: View {
   private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
   private func pinnedTile(_ bot: Bot) -> some View {
     let activity = state(bot)
+    let unread = store.unread(bot)
     return Button { open(bot) } label: {
       VStack(spacing: 8) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
@@ -443,12 +444,15 @@ struct BotListView: View {
             Image(systemName: "pin.fill").font(.system(size: pinBadge)).padding(5)
               .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
           }
-        Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-          .lineLimit(2).multilineTextAlignment(.center)
+        HStack(spacing: 5) {
+          if unread { UnreadDot() }
+          Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
+            .lineLimit(2).multilineTextAlignment(.center)
+        }
         if activity != .idle && activity != .done { ActivityLabel(state: activity) }
       }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
         .contentShape(RoundedRectangle(cornerRadius: 16))
-    }.buttonStyle(.plain)
+    }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
@@ -456,24 +460,29 @@ struct BotListView: View {
   }
   private func row(_ bot: Bot) -> some View {
     let activity = state(bot)
+    let unread = store.unread(bot)
     return Button { open(bot) } label: {
       HStack(spacing: 12) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
           size: 52, name: bot.name, forceReducedMotion: true)
         VStack(alignment: .leading, spacing: 5) {
           HStack(alignment: .firstTextBaseline) {
-            Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+            HStack(spacing: 6) {
+              if unread { UnreadDot() }
+              Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary).lineLimit(1)
+            }
             Spacer(minLength: 8)
             if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
           }
           if activity != .idle && activity != .done { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
-              .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+              .font(unread ? .subheadline.weight(.medium) : .subheadline)
+              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(1)
           }
         }
       }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
-    }.buttonStyle(.plain)
+    }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
@@ -490,6 +499,12 @@ struct BotListView: View {
       HomeSectionPicker(botId: bot.id) { sectionFor = bot }
     }.disabled(!canPin)
     Button("Assistant settings", systemImage: "gearshape") { edit(bot) }
+  }
+}
+/// A chat with a reply this person has not read yet. VoiceOver hears "Unread" from its row instead.
+private struct UnreadDot: View {
+  var body: some View {
+    Circle().fill(Palette.accent).frame(width: 8, height: 8).accessibilityHidden(true)
   }
 }
 private struct HomeLinkStyle: ButtonStyle {

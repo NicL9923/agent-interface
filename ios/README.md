@@ -21,7 +21,9 @@ On iPhone, home is the root of one navigation stack: Today, Group chats and Sear
 Home opens with your avatar for **Settings**, Search, and New assistant.
 Pin assistants from their card or by long-pressing an assistant, which also offers
 **Move to section**. Pins appear as large animated avatars above the household
-links; the remaining list shows each assistant's latest message and date. Settings
+links; the remaining list shows each assistant's latest message and date. A chat with
+a reply you have not read gets a dot and a bolder row, and VoiceOver reads it as
+unread. Opening it clears the mark at once, before the server catches up. Settings
 saves changes as you make them.
 
 New assistant is two short steps: name and look, with the full avatar editor and a
@@ -94,7 +96,10 @@ still adds a line.
 The server must return `nativeAuthVersion: 1` from `/api/auth/config`. The
 [native API contract](../docs/native-api.md) describes PKCE sign-in, bearer
 sessions, revocation, and Apple push registration. Native tokens are stored in
-Keychain and scoped to the normalized server origin. Drafts, pending admission
+Keychain and scoped to the normalized server origin. A sign-in lasts seven days; while
+the app is in use with fewer than two left, it renews the same token, at most hourly,
+up to 90 days after the Google sign-in. Sign-in keeps an ephemeral browser session on
+purpose, so a shared iPad never hands one member's Google sign-in to the next. Drafts, pending admission
 IDs, and read positions are scoped to the server and signed-in household member.
 
 ## Build and test
