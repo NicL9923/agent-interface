@@ -157,9 +157,11 @@ export interface ApiRoutes {
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };
   "DELETE /native/push/device": { body: { deviceId: string }; response: Ok };
-  "GET /native/live-activity": { query: { deviceId?: string }; response: { available: boolean; state: LiveState } };
-  "PUT /native/live-activity": { body: { deviceId: string; token: string; botIds?: string[] }; response: Ok };
+  "GET /native/live-activity": { query: { deviceId?: string; local?: "1" }; response: { available: boolean; state: LiveState } };
+  "PUT /native/live-activity": { body: { deviceId: string; token: string; botIds?: string[]; scope?: string }; response: Ok };
   "DELETE /native/live-activity": { body: { deviceId: string; token: string }; response: Ok };
+  "PUT /native/live-activity/start": { body: { deviceId: string; token: string; scope: string }; response: Ok };
+  "DELETE /native/live-activity/start": { body: { deviceId: string }; response: Ok };
   "POST /native/push/test": { body: { botId: string }; response: PushTest };
 }
 export type ApiRoute = keyof ApiRoutes;

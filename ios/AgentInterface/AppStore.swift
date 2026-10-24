@@ -20,12 +20,16 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
     guard next != scope else { return }
     scope = next
+    // Only a loaded account replaces it; launching, before the account loads, leaves it alone.
+    if let next { UserDefaults.standard.set(next, forKey: DeviceDefaults.signedInScope) }
     additions = savedAdditions()
   }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
   @ObservationIgnored var widgetSnapshotURL: URL? = WidgetSnapshotStore.defaultURL
   /// Assistants in Spotlight, kept in step with the snapshot. Unit tests leave the system index alone.
   @ObservationIgnored var spotlight: AssistantSpotlight? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? .system : nil
+  /// Assistant pictures for notifications in the App Group. Unit tests leave the App Group alone.
+  @ObservationIgnored var senderAvatars: SenderAvatars? = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? SenderAvatars(root: NotificationSenders.root) : nil
   /// Text from Siri, a notification's Reply or the Share inbox waiting for its draft; see `DraftAdditions.swift`.
   var additions: [DraftAddition] = []
   @ObservationIgnored var earlyAdditions: [DraftAddition] = []
@@ -64,6 +68,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   var routineResult: RoutineResultDestination?
   var todayRequest: UUID?
+  /// A voice message to start in this assistant's chat, from the Talk to assistant control.
+  var listenRequest: ListenRequest?
   var draft = Draft()
   var draftReady = false { didSet { if draftReady && !oldValue { scheduleAdditions() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
@@ -1579,6 +1585,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       }
       clearOfflineLibrary()
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
+      UserDefaults.standard.removeObject(forKey: DeviceDefaults.signedInScope)
       api.token = nil
       api.csrf = nil
       if !revoked {

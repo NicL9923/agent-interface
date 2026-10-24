@@ -12,7 +12,7 @@ import { EventRepository } from "./store-events.js";
 import { RetentionRepository } from "./store-retention.js";
 
 export { schemaVersion } from "./store-database.js";
-export type { LiveActivityRegistration } from "./store-devices.js";
+export type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
 export type { RejectionReason } from "./store-submissions.js";
 export { maxDeliveryAttempts, presenceTtl, type ChatPresence } from "./store-notifications.js";
 
@@ -87,10 +87,20 @@ export class Store {
   registerLiveActivity(...args: Parameters<DeviceRepository["registerLiveActivity"]>) { return this.devices.registerLiveActivity(...args); }
   liveActivityContext(...args: Parameters<DeviceRepository["liveActivityContext"]>) { return this.devices.liveActivityContext(...args); }
   removeLiveActivity(...args: Parameters<DeviceRepository["removeLiveActivity"]>) { return this.devices.removeLiveActivity(...args); }
+  dismissLiveActivity(...args: Parameters<DeviceRepository["dismissLiveActivity"]>) { return this.devices.dismissLiveActivity(...args); }
   liveActivities(...args: Parameters<DeviceRepository["liveActivities"]>) { return this.devices.liveActivities(...args); }
   liveActivityObserved(...args: Parameters<DeviceRepository["liveActivityObserved"]>) { return this.devices.liveActivityObserved(...args); }
   liveActivitySent(...args: Parameters<DeviceRepository["liveActivitySent"]>) { return this.devices.liveActivitySent(...args); }
   liveActivityFailed(...args: Parameters<DeviceRepository["liveActivityFailed"]>) { return this.devices.liveActivityFailed(...args); }
+  liveActivityDevices(...args: Parameters<DeviceRepository["liveActivityDevices"]>) { return this.devices.liveActivityDevices(...args); }
+  registerLiveActivityStart(...args: Parameters<DeviceRepository["registerLiveActivityStart"]>) { return this.devices.registerLiveActivityStart(...args); }
+  removeLiveActivityStart(...args: Parameters<DeviceRepository["removeLiveActivityStart"]>) { return this.devices.removeLiveActivityStart(...args); }
+  liveActivityStart(...args: Parameters<DeviceRepository["liveActivityStart"]>) { return this.devices.liveActivityStart(...args); }
+  liveActivityStarts(...args: Parameters<DeviceRepository["liveActivityStarts"]>) { return this.devices.liveActivityStarts(...args); }
+  liveActivityStartedLocally(...args: Parameters<DeviceRepository["liveActivityStartedLocally"]>) { return this.devices.liveActivityStartedLocally(...args); }
+  liveActivityStartCovered(...args: Parameters<DeviceRepository["liveActivityStartCovered"]>) { return this.devices.liveActivityStartCovered(...args); }
+  liveActivityStartFailed(...args: Parameters<DeviceRepository["liveActivityStartFailed"]>) { return this.devices.liveActivityStartFailed(...args); }
+  removeLiveActivityStartToken(...args: Parameters<DeviceRepository["removeLiveActivityStartToken"]>) { return this.devices.removeLiveActivityStartToken(...args); }
   // personal
   preferences(...args: Parameters<PersonalRepository["preferences"]>) { return this.personalState.preferences(...args); }
   savePreferences(...args: Parameters<PersonalRepository["savePreferences"]>) { return this.personalState.savePreferences(...args); }

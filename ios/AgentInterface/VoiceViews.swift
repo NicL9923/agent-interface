@@ -1,4 +1,5 @@
 import AVFoundation
+import Speech
 import SwiftUI
 
 enum VoiceState: Equatable {
@@ -58,6 +59,8 @@ enum VoiceState: Equatable {
   @ObservationIgnored var api: APIClient?
   @ObservationIgnored var botId = ""
   @ObservationIgnored var onTranscript: (String) -> Void = { _ in }
+  /// On-device speech-to-text, tried before the app server. Nil sends every recording to the server.
+  @ObservationIgnored var localTranscriber: LocalTranscriber? = .system
   @ObservationIgnored private var recorder: AVAudioRecorder?
   @ObservationIgnored private var file: URL?
   @ObservationIgnored private var player: AVAudioPlayer?
@@ -234,6 +237,12 @@ enum VoiceState: Equatable {
   }
   func transcribe(_ audio: Data) {
     guard let api else { return }
+    #if DEBUG
+      // The fixture clip is not audio; tests exercise the server path with it.
+      let local = Self.fixtureRecording ? nil : localTranscriber
+    #else
+      let local = localTranscriber
+    #endif
     generation += 1
     let run = generation
     let botId = botId
@@ -248,13 +257,17 @@ enum VoiceState: Equatable {
         }
       }
       do {
-        let result = try await api.transcribe(botId: botId, audio: audio)
+        // This device first: nothing leaves it, and it works without a connection. A device or
+        // language without an installed model, or an empty result, goes to the app server.
+        var text = await local?.transcribe(audio) ?? ""
+        guard generation == run else { return }
+        if text.isEmpty { text = try await api.transcribe(botId: botId, audio: audio).text }
         guard generation == run else { return }
         recording = nil
-        if result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
           notice = "No speech detected. Try recording again."
         } else {
-          onTranscript(result.text)
+          onTranscript(text)
           notice = "Added to your draft. Review it before sending."
         }
       } catch {
@@ -467,4 +480,64 @@ extension APIClient {
 private struct Sent<Value: AnyObject>: @unchecked Sendable {
   let value: Value
   init(_ value: Value) { self.value = value }
+}
+
+/// Speech-to-text on this device with Apple's SpeechAnalyzer, on iOS 26 and later. It answers nil
+/// when this device or language has no installed model, and then asks iOS to fetch the model for
+/// next time, so the app server transcribes meanwhile. Apple's model needs no extra permission
+/// beyond the microphone.
+struct LocalTranscriber: Sendable {
+  var transcribe: @Sendable (Data) async -> String?
+  static let system = LocalTranscriber { audio in
+    guard #available(iOS 26.0, *) else { return nil }
+    return await SpeechAnalyzerTranscription.text(of: audio, locale: .current)
+  }
+}
+
+@available(iOS 26.0, *)
+enum SpeechAnalyzerTranscription {
+  static func text(of audio: Data, locale: Locale) async -> String? {
+    guard SpeechTranscriber.isAvailable, let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { return nil }
+    let transcriber = SpeechTranscriber(locale: supported, preset: .transcription)
+    switch await AssetInventory.status(forModules: [transcriber]) {
+    case .installed: break
+    case .supported:
+      Task.detached(priority: .background) {
+        let module = SpeechTranscriber(locale: supported, preset: .transcription)
+        try? await AssetInventory.assetInstallationRequest(supporting: [module])?.downloadAndInstall()
+      }
+      return nil
+    default: return nil
+    }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("transcribe-\(UUID().uuidString).m4a")
+    defer { try? FileManager.default.removeItem(at: url) }
+    do {
+      try audio.write(to: url, options: [.atomic, .completeFileProtection])
+      let file = try AVAudioFile(forReading: url)
+      let analyzer = SpeechAnalyzer(modules: [transcriber])
+      async let text = transcriber.results.reduce(into: "") { text, result in
+        if result.isFinal { text += String(result.text.characters) }
+      }
+      if let end = try await analyzer.analyzeSequence(from: file) {
+        try await analyzer.finalizeAndFinish(through: end)
+      } else {
+        await analyzer.cancelAndFinishNow()
+      }
+      return try await text.trimmingCharacters(in: .whitespacesAndNewlines)
+    } catch {
+      return nil
+    }
+  }
+}
+
+/// A request to start recording in one chat as soon as its composer can, such as after the draft
+/// loads. One that waits longer than `patience` lapses, so a later visit never starts the microphone.
+struct ListenRequest: Equatable {
+  var botId: String
+  /// The account the link was opened for. Another sign-in never records from it.
+  var scope: String
+  /// When the link arrived, not when the chat finished opening.
+  var at: Date
+  static let patience: TimeInterval = 30
+  func fresh(at now: Date = Date()) -> Bool { now.timeIntervalSince(at) < Self.patience }
 }

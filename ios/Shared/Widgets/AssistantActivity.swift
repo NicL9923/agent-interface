@@ -126,15 +126,16 @@ struct AssistantActivityState: Codable, Hashable {
 /// links notifications carry, so one path handles both.
 enum DeepLink {
   static let today = URL(string: "agentinterface://open?view=today")!
-  static func bot(_ id: String) -> URL {
+  /// `listen` also starts a voice message once the chat is open.
+  static func bot(_ id: String, listen: Bool = false) -> URL {
     var components = URLComponents()
     components.scheme = "agentinterface"
     components.host = "open"
-    components.queryItems = [URLQueryItem(name: "bot", value: id)]
+    components.queryItems = [URLQueryItem(name: "bot", value: id)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
     return components.url ?? today
   }
-  /// `agentinterface://open?bot=ID` becomes `/?bot=ID`. Anything else, including the sign-in
-  /// callback `agentinterface://auth/callback`, is not a navigation link.
+  /// `agentinterface://open?bot=ID` becomes `/?bot=ID`, keeping `listen=1`. Anything else, including
+  /// the sign-in callback `agentinterface://auth/callback`, is not a navigation link.
   static func relativePath(for url: URL) -> String? {
     guard url.scheme?.lowercased() == "agentinterface", url.host?.lowercased() == "open",
       url.path.isEmpty || url.path == "/",
@@ -143,7 +144,8 @@ enum DeepLink {
     var components = URLComponents()
     components.path = "/"
     if let bot = items.first(where: { $0.name == "bot" })?.value, !bot.isEmpty {
-      components.queryItems = [URLQueryItem(name: "bot", value: bot)]
+      let listen = items.contains { $0.name == "listen" && $0.value == "1" }
+      components.queryItems = [URLQueryItem(name: "bot", value: bot)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
     } else if items.first(where: { $0.name == "view" })?.value == "today" {
       components.queryItems = [URLQueryItem(name: "view", value: "today")]
     } else {
