@@ -145,6 +145,10 @@ it("registers one Live Activity token per device and owner, seeds just-sent assi
     .toMatchObject({ title: "Bot is starting", activeCount: 1, rows: [{ botId: "bot", phase: "starting", status: "Starting" }] });
   expect(store.liveActivities("sandbox")).toMatchObject([{ userId: "local-one", armed: ["bot", "missing"] }]);
   expect((await register(two.token)).statusCode).toBe(409);
+  // A background registration names the activity's account, which must be the signed-in one.
+  const scope = (userId: string) => Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
+  expect((await register(one.token, { scope: scope("local-two") })).statusCode).toBe(400);
+  expect((await register(one.token, { botIds: ["bot"], scope: scope("local-one") })).statusCode).toBe(200);
   const read = await app.inject({ url: "/api/native/live-activity", headers: headers(one.token) });
   expect(read.json()).toMatchObject({ available: true, state: { activeCount: 0, rows: [] } });
   const deviceRead = `/api/native/live-activity?deviceId=${deviceId}`;
@@ -168,6 +172,32 @@ it("registers one Live Activity token per device and owner, seeds just-sent assi
   expect(store.liveActivities("sandbox")).toMatchObject([{ token: replacement }]);
   expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token: replacement.toUpperCase() } })).statusCode).toBe(200);
   expect(store.liveActivities("sandbox")).toHaveLength(0);
+});
+
+it("registers a push-to-start token only for the signed-in account and lets the app claim its own start", async () => {
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const { app, store } = await setup(config);
+  const one = await connectNative(app), two = await connectNative(app, "two");
+  const deviceId = randomUUID(), token = "ab".repeat(32);
+  const headers = (bearer: string) => ({ authorization: `Bearer ${bearer}` });
+  const scope = (userId: string) => Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
+  const register = (bearer: string, payload: object) => app.inject({ method: "PUT", url: "/api/native/live-activity/start", headers: headers(bearer), payload });
+  // A scope naming another account would label this person's activity as someone else's.
+  expect((await register(one.token, { deviceId, token, scope: scope("local-two") })).statusCode).toBe(400);
+  expect((await register(one.token, { deviceId, token, scope: "not base64url!" })).statusCode).toBe(400);
+  expect((await register(one.token, { deviceId, token, scope: scope("local-one") })).statusCode).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toMatchObject([{ userId: "local-one", deviceId, token, scope: scope("local-one"), started: [], localAt: 0 }]);
+  // The app's own start after a send holds pushed starts off this device.
+  await app.inject({ url: `/api/native/live-activity?deviceId=${deviceId}&local=1`, headers: headers(one.token) });
+  expect(store.liveActivityStarts("sandbox")[0].localAt).toBeGreaterThan(0);
+  // The same device signed in as someone else, after an offline sign-out, takes the token over.
+  const other = randomUUID();
+  expect((await register(two.token, { deviceId: other, token: token.toUpperCase(), scope: scope("local-two") })).statusCode).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toMatchObject([{ userId: "local-two", deviceId: other, token }]);
+  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity/start", headers: headers(one.token), payload: { deviceId: other } })).statusCode).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toHaveLength(1);
+  await app.inject({ method: "POST", url: "/api/auth/logout", headers: headers(two.token) });
+  expect(store.liveActivityStarts("sandbox")).toHaveLength(0);
 });
 
 it("reports absent APNs settings explicitly and rejects incomplete signing configuration", async () => {
@@ -324,7 +354,7 @@ it("shares durable participant/routine notifications across web/APNs without ret
 it("groups iOS notifications per assistant and adds actions only where they make sense", () => {
   const base = { title: "Kitchen", body: "Done", url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" };
   const reply = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed" })));
-  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "thread-id": "kitchen", category: "REPLY" },
+  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
     url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" });
   const approval = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })));
   expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive" });
@@ -335,13 +365,17 @@ it("groups iOS notifications per assistant and adds actions only where they make
   for (const kind of ["failed", "interrupted", "security", undefined]) {
     const value = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind })));
     expect([value.aps.category, value.aps["interruption-level"], value.aps["thread-id"]]).toEqual([undefined, undefined, "kitchen"]);
+    // Every assistant's notification names it and the account, so the extension can show it as the sender.
+    expect([value.aps["mutable-content"], value.botId, value.account]).toEqual([1, "kitchen", "0123456789abcdef"]);
   }
   // Routine results open their results sheet, not a chat to reply in; digests and host alerts have no assistant.
   expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }))).aps.category).toBeUndefined();
   const digest = JSON.parse(apnsPayload(JSON.stringify({ title: "2 assistant updates", body: "A · B", url: "/?view=today", tag: "batch", account: "0123456789abcdef" })));
   expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default" });
-  // Without the account marker an action could be taken by whoever is signed in, so there is none.
-  expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" }))).aps.category).toBeUndefined();
+  // Without the account marker an action could be taken by whoever is signed in, so there is none,
+  // and the extension cannot tell whose avatar to show.
+  const anonymous = JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" })));
+  expect([anonymous.aps.category, anonymous.aps["mutable-content"], anonymous.botId]).toEqual([undefined, undefined, undefined]);
   // An oversized ID is never truncated into a different assistant or approval; that notification just has no actions.
   const longId = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "a".repeat(300) })));
   expect([longId.aps.category, longId.approvalId]).toEqual([undefined, undefined]);

@@ -46,7 +46,7 @@ export function apnsPayload(payload: string) {
   const url = Buffer.byteLength(JSON.stringify(value.url)) <= 2402 ? value.url : undefined;
   const alert = { title: fit(value.title, 160), body: fit(value.body, 1000) }, tag = fit(value.tag, 160);
   const botId = short(value.botId) ? value.botId : undefined, account = short(value.account) ? value.account : undefined;
-  // Approval requests break through Focus once the app has the time-sensitive entitlement; iOS ignores this until then.
+  // Approval requests break through Focus; the app carries the Time Sensitive Notifications entitlement.
   const urgent = value.kind === "approval" ? { "interruption-level": "time-sensitive" } : {};
   // Actions the app registers: APPROVAL decides from the notification, REPLY starts a reviewed draft. Routine results,
   // digests and alerts without an assistant get none. Older app builds ignore categories they never registered.
@@ -54,9 +54,13 @@ export function apnsPayload(payload: string) {
   const actions = !botId || !account || routine ? undefined
     : value.kind === "approval" && short(value.approvalId) ? { category: "APPROVAL", fields: { botId, approvalId: value.approvalId, account } }
     : value.kind === "completed" ? { category: "REPLY", fields: { botId, account } } : undefined;
+  // The app's notification service extension shows the assistant as the sender, with its avatar,
+  // when it knows which assistant and account this is. It reads both from the App Group only.
+  const sender = botId && account ? { botId, account } : undefined;
   const build = (thread: boolean, act: boolean) => JSON.stringify({
-    aps: { alert, sound: "default", ...(thread && botId ? { "thread-id": botId } : {}), ...urgent, ...(act && actions ? { category: actions.category } : {}) },
-    url, tag, ...(act && actions ? actions.fields : {}) });
+    aps: { alert, sound: "default", ...(thread && botId ? { "thread-id": botId } : {}), ...(thread && sender ? { "mutable-content": 1 } : {}),
+      ...urgent, ...(act && actions ? { category: actions.category } : {}) },
+    url, tag, ...(thread && sender ? sender : {}), ...(act && actions ? actions.fields : {}) });
   // Grouping and actions are extras: drop them before the alert itself would exceed the limit.
   return [build(true, true), build(true, false)].find(body => Buffer.byteLength(body) <= 4000) ?? build(false, false);
 }

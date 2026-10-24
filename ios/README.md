@@ -52,8 +52,11 @@ Assistant settings include **Memory** for inspecting and
 editing the actual Hermes profile documents, plus routine recipes, timezone and
 next-run previews, and a single-tap **Try once** action.
 
-The conversation microphone records up to two minutes. An interrupted recording stays on this device for explicit transcription or discarding, including after reopening the app. Stopping normally transcribes on the app
-server when you stop, and adds the text to the draft for review, as on the web. The composer's
+The conversation microphone records up to two minutes. An interrupted recording stays on this device for explicit transcription or discarding, including after reopening the app. Stopping normally transcribes the recording
+and adds the text to the draft for review, as on the web. On iOS 26 and later, when Apple's speech model for
+the device language is installed, the iPhone transcribes it and the audio never leaves the device; otherwise,
+or when that finds no speech, the app server transcribes it. The first recording in a language asks iOS to
+download its model for next time. The composer's
 **Listen to reply** plays the latest reply through the server's configured Hermes speech and has an explicit Stop control. The paperclip
 attaches photos, a new camera photo or files; you can also paste or drop images, and a hardware keyboard's Return sends. An empty conversation offers an editable role discussion. In Advanced presentation, the composer's
 model picker searches the profile's model catalog, saves model favorites, and controls
@@ -67,9 +70,16 @@ working and recent conversations from a snapshot the app writes to the shared Ap
 Group; it never holds a sign-in token and asks you to open the app once the
 snapshot is 30 minutes old. One aggregate Live Activity shows working and waiting
 assistants on the Lock Screen and in the Dynamic Island. It starts in the foreground
-after you send, follows server pushes, and respects the device's Live Activities setting in iOS Settings. When the server publishes a newer build, a banner and **Settings >
+after you send, follows server pushes, and respects the device's Live Activities setting in iOS Settings.
+On iOS 18 and later the server also starts it when work begins away from the phone, such as a routine or a
+message sent from the web. Dismissing it keeps that work off the Lock Screen until a new run starts. When the server publishes a newer build, a banner and **Settings >
 About** offer an Update button. Widget and Live Activity taps open
 `agentinterface://open?bot=ID`, handled like a notification link.
+
+Notifications show the assistant as the sender, with its avatar, like a person in Messages, so a Focus can
+allow WildBots. A notification service extension adds the avatar from pictures the app keeps in the App
+Group for the signed-in account; it never holds a sign-in token, and portrait avatars show initials.
+Approval requests are Time Sensitive and break through Focus unless you turn that off in iOS Settings.
 
 Edit the Assistants widget to choose which assistants it shows. With none chosen it
 follows who needs you first, as before. Each row opens its chat. Neither the widget
@@ -77,6 +87,8 @@ nor the app's Siri and Shortcuts actions ever hold the sign-in token: they read 
 same App Group snapshot, so their assistants are per account and disappear on
 sign-out. **Open assistant**, **Ask assistant** and **Open Today** appear in the
 Shortcuts app with phrases that name WildBots, such as "Ask Kitchen in WildBots".
+On iOS 18 and later, the **Talk to assistant** control for Control Center, the Lock Screen and the Action
+button opens a chosen assistant and starts a voice message (`agentinterface://open?bot=ID&listen=1`).
 Ask puts your text in that assistant's draft, opens the chat, and never sends. If a
 send to that assistant is still unsettled, the text waits, as text from a
 notification's Reply and the Share inbox does, and it lapses after five minutes. Waiting
@@ -245,14 +257,18 @@ credentials from `~/.config/wildbots/apple/config.json`: `teamId`, `keyId`,
 `issuerId`, `keyFile`, `signingP12`, `signingPassword`, and the two `testerEmails`. The existing team
 distribution certificate can sign this app too. Keys and passwords stay outside Git.
 
-One-time setup uses `setup` to register `dev.agentinterface.ios` and its share and
-widget identifiers. In the Apple Developer website, register
-`group.dev.agentinterface.shared` and assign it to all three identifiers. Create
+One-time setup uses `setup` to register `dev.agentinterface.ios` and its share,
+widget and notification service identifiers. In the Apple Developer website, register
+`group.dev.agentinterface.shared` and assign it to all four identifiers. Also turn on
+**Time Sensitive Notifications** and **Communication Notifications** for
+`dev.agentinterface.ios`; the App Store Connect API cannot enable either. Apple then
+invalidates the main app's old profile, and `prepare` creates a new one. Create
 the app record in App Store Connect with the main bundle ID and SKU
 `wildbots-ios`. This household uses **WildBots Household**, App Store Connect ID
 `6823644380`. These website steps need an authenticated Apple session.
-`prepare` creates or downloads the three App Store profiles and checks their group
-membership and production APNs entitlement. It stops if the portal setup is incomplete.
+`prepare` creates or downloads the four App Store profiles and checks their group
+membership, the main app's production APNs entitlement and its two notification
+capabilities. It stops if the portal setup is incomplete.
 
 After review and a clean commit, publish an explicit version and increasing build:
 
@@ -262,8 +278,8 @@ node .agents/tools/publish-ios.mjs upload 1.0 1
 node .agents/tools/publish-ios.mjs distribute 1.0 1
 ```
 
-The archive command uses the same version and build for all three bundles and
-checks the exported IPA's signatures, profiles, App Group and push entitlements.
+The archive command uses the same version and build for all four bundles and
+checks the exported IPA's signatures, profiles, App Group, push and notification entitlements.
 Artifacts and private logs stay under `/Volumes/DevSSD/scratch/wildbots-testflight`.
 An uncertain upload requires inspection, never an automatic second upload.
 `distribute` may need to run later while Apple processes the build. It attaches

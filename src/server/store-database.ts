@@ -67,6 +67,11 @@ const additions = `
   -- Draft revisions: a draft without a row here is at revision 0.
   -- One aggregate Live Activity push token per native installation, removed with its session.
   CREATE TABLE IF NOT EXISTS live_activities(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL REFERENCES native_sessions(hash) ON DELETE CASCADE,token TEXT NOT NULL,environment TEXT NOT NULL,armed TEXT NOT NULL,armed_at INTEGER NOT NULL,last_state TEXT,sent_state TEXT,sent_at INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,UNIQUE(token,environment));
+  -- One push-to-start token per native installation and account, removed with its session.
+  -- started holds the assistants an activity on that device already covered, so a dismissed
+  -- activity does not come back for the same work; dismissed means the app dismissed one before the
+  -- worker recorded what it covered; local_at is the app's own start after a send.
+  CREATE TABLE IF NOT EXISTS live_activity_starts(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL REFERENCES native_sessions(hash) ON DELETE CASCADE,token TEXT NOT NULL,environment TEXT NOT NULL,scope TEXT NOT NULL,started TEXT NOT NULL DEFAULT '[]',dismissed INTEGER NOT NULL DEFAULT 0,local_at INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,UNIQUE(token,environment));
   -- Which chat each signed-in client is reading now, refreshed by heartbeats, and when each
   -- person last read each chat. Notifications skip what was already seen.
   CREATE TABLE IF NOT EXISTS chat_presence(user_id TEXT NOT NULL REFERENCES users(id),client_id TEXT NOT NULL,bot_id TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(user_id,client_id));

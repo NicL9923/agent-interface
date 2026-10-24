@@ -39,6 +39,8 @@ struct ComposerView: View {
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
         discardConfirm: $discardConfirm, modelOpen: $modelOpen))
       .onAppear { configureVoice() }
+      .onChange(of: store.listenRequest, initial: true) { startRequestedRecording() }
+      .onChange(of: voiceDisabled) { startRequestedRecording() }
       .stopShortcut(bot: bot, canStop: stopVisible && !stopDisabled, stop: stop)
       // A recording belongs to one account's assistant; a new identity or server starts afresh.
       .onChange(of: store.voiceRecordingURL(botId: bot.id)) { _, _ in voice.cancel(); configureVoice() }
@@ -175,6 +177,15 @@ struct ComposerView: View {
   /// The web turns voice off while the draft loads, a message is on its way, or the connection is down.
   private var voiceDisabled: Bool {
     !store.draftReady || store.pending != nil || store.sending || !store.connected
+  }
+  /// The Talk to assistant control opened this chat to record. A kept recording waits for review
+  /// instead, and a request that cannot start soon lapses.
+  private func startRequestedRecording() {
+    guard let request = store.listenRequest, request.botId == bot.id else { return }
+    guard request.fresh(), request.scope == store.scope, voice.recording == nil, voice.state == .idle else { store.listenRequest = nil; return }
+    guard !voiceDisabled else { return }
+    store.listenRequest = nil
+    Task { await voice.startRecording() }
   }
   private func send() {
     // The message shows in the transcript at once, so the transcript follows it now. The box keeps

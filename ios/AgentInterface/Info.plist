@@ -63,6 +63,10 @@
 	<string>Record a voice message for transcription on your app server. Review the transcript before sending.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your self-hosted WildBots app server.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -346,19 +346,29 @@ host alerts, have none. The request sets `apns-collapse-id` to the `tag` when it
 Tags name one notification, so the collapse ID only replaces a repeated delivery
 of the same one. Clearing still matches the payload's `tag`.
 
-Approval requests set `aps.interruption-level` to `time-sensitive`. iOS honors it
-only when the app is signed with the Time Sensitive Notifications entitlement,
-and ignores it otherwise.
+Approval requests set `aps.interruption-level` to `time-sensitive`, so they break
+through Focus. The app is signed with the Time Sensitive Notifications entitlement
+from build 15; iOS ignores the level for earlier builds.
 
-Actionable alerts also name their account with `account`, the first 16 hex
-characters of SHA-256 of `wildbots-account:` and the user ID, and their
-assistant with `botId`:
+Every alert about an assistant names its account with `account`, the first 16 hex
+characters of SHA-256 of `wildbots-account:` and the user ID, and the assistant
+with `botId`, and sets `aps.mutable-content` to 1. The app's notification service
+extension then shows the assistant as the sender, with its avatar, like a person
+in Messages. People can then allow WildBots through a Focus. The extension reads
+only the avatar pictures the app keeps in the App Group per account and never
+holds a sign-in token. It waits for iOS to record the message donation before
+showing the notification. A portrait avatar shows the assistant's initials. A
+notification for an account not signed in on the device stays as sent, and
+signing out deletes that account's pictures and donated messages. Digests and
+host alerts have no assistant and stay as sent. `botId`, `account` and
+`mutable-content` are dropped before the alert itself would exceed APNs' limit.
 
 | Notification | `aps.category` | Extra fields |
 | --- | --- | --- |
 | Approval request from an add-on that reports its ID | `APPROVAL` | `botId`, `approvalId`, `account` |
 | Finished reply in a one-to-one chat | `REPLY` | `botId`, `account` |
-| Everything else, including routine results, digests and failures | none | none |
+| Routine results, failures and other assistant alerts | none | `botId`, `account` |
+| Digests and host alerts | none | none |
 
 `APPROVAL` offers Review and Decline, and both need the phone unlocked. The
 payload leaves out what the approval would run, because it can contain
@@ -428,9 +438,11 @@ the same rule as notifications. A private assistant appears only for its owner.
 
 | Method and route | Body or response |
 | --- | --- |
-| `GET /api/native/live-activity?deviceId=UUID` | `{ "available": true, "state": ACTIVITY_STATE }`; `available` is false when APNs is not configured. The optional installation UUID restores this native session's starting grace and observed rows. |
-| `PUT /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN", "botIds": ["kitchen"] }`; returns `{ "ok": true }`, and the next push within about five seconds replays the current state |
-| `DELETE /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN" }`; removes only that activity token, so late cleanup cannot remove a replacement |
+| `GET /api/native/live-activity?deviceId=UUID` | `{ "available": true, "state": ACTIVITY_STATE }`; `available` is false when APNs is not configured. The optional installation UUID restores this native session's starting grace and observed rows. `&local=1` says the app is about to start its own activity after a send, which holds pushed starts off this device for two minutes. |
+| `PUT /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN", "botIds": ["kitchen"] }`; returns `{ "ok": true }`, and the next push within about five seconds replays the current state. An app launched in the background for a pushed activity adds `"scope": SCOPE`; the server answers 400 when it names another account. |
+| `DELETE /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN" }`; removes only that activity token, so late cleanup cannot remove a replacement. The app sends it when the activity is dismissed or ends. When that activity was still registered, the assistants running at the worker's next pass are not started again by push, even after a Hermes outage. |
+| `PUT /api/native/live-activity/start` | `{ "deviceId": "UUID", "token": "HEX_PUSH_TO_START_TOKEN", "scope": SCOPE }`; returns `{ "ok": true }`. Answers 400 when the scope names another account. |
+| `DELETE /api/native/live-activity/start` | `{ "deviceId": "UUID" }`; stops pushed starts on this device |
 
 `ACTIVITY_STATE` is both the response body field and the APNs `content-state`:
 
@@ -487,6 +499,29 @@ The background worker pushes with `apns-push-type: liveactivity` and topic
   are shortened and excess previews or rows are omitted without changing aggregate counts.
 - A 410 or `BadDeviceToken`, `DeviceTokenNotForTopic` or `Unregistered` response removes
   the registration. Sign-out removes it with the native session.
+
+### Starting by push
+
+On iOS 18 and later the app registers the device's push-to-start token with its
+`SCOPE`: the base64url of the server address the app uses, `|`, and the user ID,
+the same value it stores in the activity's attributes. The server checks the
+scope names the signed-in person. A token belongs to the device, so registering
+it for another account, as after an offline sign-out, takes it over. Sign-out
+removes it with the native session.
+
+When a device has no registered activity and the person's aggregate gains a
+running assistant, the worker sends `event: "start"` at priority 10 with
+`attributes-type: "AssistantsActivityAttributes"`, `attributes: { "scope": SCOPE }`,
+the current state, a `stale-date` and `input-push-token: 1`. iOS requires an
+`alert` to start an activity; it carries the title and the first row's status,
+never approval details, and no sound. iOS then wakes the app with the new
+activity's update token, which the app registers as above, and updates follow.
+This covers work that starts away from the phone, such as a routine or a message
+sent from the web. The server remembers which runs an activity on that device already
+showed: dismissing an activity keeps those runs off the Lock Screen, and a new run,
+even of the same assistant, starts it again. The record drops each run once it
+finishes.
+Rejected tokens are forgotten and failures back off as for updates.
 
 The app starts the activity in the foreground after sending a message, or on foreground
 when the state has active rows. It shows a `starting` seed row for the assistant it sent

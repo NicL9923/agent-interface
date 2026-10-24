@@ -1,5 +1,6 @@
 import SwiftUI
 import XCTest
+import os
 
 @testable import AgentInterface
 
@@ -188,6 +189,57 @@ import XCTest
     await store.deliverAdditions()
     XCTAssertEqual(store.draft.text, "Milk\n\nEggs too", "Only the signed-in account's question lands")
     XCTAssertTrue(store.additions.isEmpty)
+    store.suspend()
+  }
+
+  func testTalkLinkRecordsOnlyWhileFreshAndForItsAccount() async throws {
+    let store = try askStore()
+    let controller = NotificationController()
+    await controller.open(DeepLink.bot("kitchen", listen: true))
+    XCTAssertNotNil(controller.listenLinkAt, "Without a store the link waits")
+    // It waited for sign-in longer than a person would expect the microphone to start.
+    controller.listenLinkAt = Date().addingTimeInterval(-ListenRequest.patience)
+    controller.store = store
+    await controller.openPendingConversation()
+    XCTAssertEqual(store.listenRequest?.botId, "kitchen")
+    XCTAssertEqual(store.listenRequest?.scope, store.scope)
+    XCTAssertEqual(store.listenRequest?.fresh(), false, "A link that waited does not start the microphone")
+    store.listenRequest = nil
+    await controller.open(DeepLink.bot("kitchen", listen: true))
+    XCTAssertEqual(store.listenRequest?.fresh(), true)
+    // A link the widget extension handed over keeps the time the control was used.
+    store.listenRequest = nil
+    await controller.open(DeepLink.bot("kitchen", listen: true), at: Date().addingTimeInterval(-ListenRequest.patience))
+    XCTAssertEqual(store.listenRequest?.fresh(), false)
+    // An ordinary link to the same chat never records.
+    store.listenRequest = nil
+    await controller.open(DeepLink.bot("kitchen"))
+    XCTAssertNil(store.listenRequest)
+    store.suspend()
+  }
+
+  func testTalkLinkNeverRecordsForAnAccountThatSignedInWhileTheChatOpened() async throws {
+    let gate = DispatchSemaphore(value: 0), holding = OSAllocatedUnfairLock(initialState: false)
+    let server = FakeServer { _ in
+      if holding.withLock({ $0 }) { _ = gate.wait(timeout: .now() + 10) }
+      return .init(body: "{}")
+    }
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = server.api()
+    store.bootstrap = try askBootstrap()
+    let controller = NotificationController()
+    controller.store = store
+    let before = server.requests.count
+    holding.withLock { $0 = true }
+    let opening = Task { await controller.open(DeepLink.bot("kitchen", listen: true)) }
+    try await until { server.requests.count > before }
+    var other = try askBootstrap(); other.user.id = "two"
+    store.bootstrap = other
+    holding.withLock { $0 = false }
+    for _ in 0..<20 { gate.signal() }
+    await opening.value
+    XCTAssertNil(store.listenRequest, "The request belonged to the account that asked for it")
     store.suspend()
   }
 

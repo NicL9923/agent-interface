@@ -92,6 +92,18 @@ import XCTest
     composer.wait(until: "value == %@", "Fixture transcript: check the north gate.")
     XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
   }
+  /// The Talk to assistant control's link: the chat opens from home and a voice message starts.
+  func testTalkLinkOpensTheChatAndStartsRecording() throws {
+    let app = launch()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app)
+    XCTAssertFalse(app.textViews["messageComposer"].exists)
+    app.open(DeepLinkFixture.talk("ranch"))
+    let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+    XCTAssertTrue(stop.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.textViews["messageComposer"].exists)
+    stop.tap()
+    XCTAssertTrue(app.staticTexts["Added to your draft. Review it before sending."].waitForExistence(timeout: 5))
+  }
   func testSearchOpensTheMatchingReply() throws {
     let app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app); app.buttons["openDiscovery"].tap()
@@ -114,4 +126,9 @@ import XCTest
     XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].waitForExistence(timeout: 10), app.debugDescription)
   }
 
+}
+
+/// The link the Talk to assistant control opens, spelled out because UI tests cannot import the app.
+enum DeepLinkFixture {
+  static func talk(_ botId: String) -> URL { URL(string: "agentinterface://open?bot=\(botId)&listen=1")! }
 }
