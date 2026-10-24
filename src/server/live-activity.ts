@@ -110,7 +110,10 @@ export class LiveActivities {
     // The app dismissed its activity before any pass recorded what it showed: whatever runs now
     // was on it, or began within a pass of it, so it stays off the Lock Screen.
     if (start.dismissed) {
-      this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
+      // A working assistant whose conversation cannot be read may have been on it; it is covered by
+      // name until its run can be read, when the next pass names it or drops it.
+      const unknown = [...unread].filter(botId => !active.some(run => run.botId === botId) && !start.started.some(old => old.botId === botId));
+      this.store.liveActivityStartCovered(start.deviceId, start.token, [...remember(start.started, active, unread), ...unknown.map(botId => ({ botId }))]);
       return;
     }
     // Coverage lasts only while that run does: an assistant's next run is new work, even when it
@@ -145,7 +148,7 @@ export class LiveActivities {
       this.store.liveActivityStartFailed(start.deviceId, start.token, now);
       throw error;
     }
-    this.store.liveActivityStartCovered(start.deviceId, start.token, active);
+    this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
   }
 
   private async deliver(registration: LiveActivityRegistration, state: LiveState) {

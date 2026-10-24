@@ -401,6 +401,50 @@ describe("push-to-start", () => {
     expect(starts()).toEqual([]);
   });
 
+  it("keeps an unreadable covered run through a start for another assistant", async () => {
+    registerStart();
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["garden"] });
+    store.participate("run-1", "one");
+    set("kitchen", "working", { runId: "run-1" });
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    await tick();
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (botId, options) => {
+      if (botId === "kitchen") throw new Error("Hermes could not read the conversation");
+      return read(botId, options);
+    };
+    set("garden", "working", { runId: "run-g" });
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+    expect(covered()).toEqual(["garden", "kitchen"]);
+    // Kitchen's conversation reads again: its run was covered all along, so nothing starts.
+    live["runtime"].conversation = read;
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+  });
+
+  it("covers a run dismissed while its conversation could not be read once it can be", async () => {
+    registerStart();
+    store.savePreferences("one", { ...defaultPreferences, followBots: [] });
+    store.participate("run-1", "one");
+    set("kitchen", "working", { runId: "run-1" });
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (botId, options) => {
+      if (botId === "kitchen") throw new Error("Hermes could not read the conversation");
+      return read(botId, options);
+    };
+    await tick();
+    live["runtime"].conversation = read;
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
+  });
+
   it("treats a run Hermes names after it was covered as the same work", async () => {
     registerStart();
     set("kitchen", "working");
