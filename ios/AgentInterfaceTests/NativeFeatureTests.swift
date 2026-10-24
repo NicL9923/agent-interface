@@ -1,4 +1,5 @@
 import UserNotifications
+import os
 import XCTest
 
 @testable import AgentInterface
@@ -85,6 +86,26 @@ import XCTest
       }
       XCTAssertTrue(unchanged, "\(info)")
     }
+  }
+
+  func testADonationFinishingAfterSignOutIsDeletedAndTheNotificationStaysAsSent() async throws {
+    let root = temporaryDirectory()
+    let account = NotificationActions.accountMarker("one")
+    let folder = try XCTUnwrap(NotificationSenders.directory(account: account, root: root))
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let content = UNMutableNotificationContent()
+    content.title = "Kitchen"
+    content.userInfo = ["url": "/?bot=kitchen", "botId": "kitchen", "account": account]
+    let sent = ObjectIdentifier(content), forgotten = OSAllocatedUnfairLock(initialState: [String]())
+    let unchanged = await withCheckedContinuation { done in
+      NotificationSenders.decorate(content, root: root, donate: { _, finished in
+        // The app signs this account out while iOS records the donation.
+        try? FileManager.default.removeItem(at: folder)
+        finished(nil)
+      }, forget: { account in forgotten.withLock { $0.append(account) } }) { done.resume(returning: ObjectIdentifier($0) == sent) }
+    }
+    XCTAssertTrue(unchanged)
+    XCTAssertEqual(forgotten.withLock { $0 }, [account])
   }
 
   func testTalkLinksCarryListenIntoTheChatPath() throws {

@@ -31,7 +31,10 @@ enum NotificationSenders {
   /// here (its folder is gone), stays as sent. Donations are grouped by account so signing out
   /// can delete them.
   static func decorate(
-    _ content: UNNotificationContent, root: URL? = root, completion: @escaping @Sendable (UNNotificationContent) -> Void
+    _ content: UNNotificationContent, root: URL? = root,
+    donate: (INInteraction, @escaping @Sendable (Error?) -> Void) -> Void = { $0.donate(completion: $1) },
+    forget: @escaping @Sendable (String) -> Void = { forget(account: $0) },
+    completion: @escaping @Sendable (UNNotificationContent) -> Void
   ) {
     let info = content.userInfo
     guard let botId = info["botId"] as? String, let account = info["account"] as? String, !botId.isEmpty,
@@ -50,7 +53,12 @@ enum NotificationSenders {
     let interaction = INInteraction(intent: intent, response: nil)
     interaction.direction = .incoming
     interaction.groupIdentifier = account
-    interaction.donate { error in
+    donate(interaction) { error in
+      // Signing out can remove the account while the donation is recorded. Then the donation goes too.
+      guard FileManager.default.fileExists(atPath: folder.path) else {
+        forget(account)
+        return completion(content)
+      }
       completion(error == nil ? (try? content.updating(from: intent)) ?? content : content)
     }
   }
