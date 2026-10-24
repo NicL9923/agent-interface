@@ -360,6 +360,26 @@ describe("push-to-start", () => {
     expect(starts()).toHaveLength(1);
   });
 
+  it("keeps a covered run's name through a conversation Hermes cannot read, so the next run still starts", async () => {
+    registerStart();
+    set("kitchen", "working", { runId: "run-1" });
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    await tick();
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (botId, options) => {
+      if (botId === "kitchen") throw new Error("Hermes could not read the conversation");
+      return read(botId, options);
+    };
+    await tick(5_000);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
+    live["runtime"].conversation = read;
+    set("kitchen", "working", { runId: "run-2" });
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+  });
+
   it("treats a run Hermes names after it was covered as the same work", async () => {
     registerStart();
     set("kitchen", "working");

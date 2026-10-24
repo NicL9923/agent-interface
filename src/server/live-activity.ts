@@ -77,7 +77,7 @@ export class LiveActivities {
         // Remember what this activity covers before delivery, which forgets a dismissed one, so
         // dismissing it keeps that work off the Lock Screen.
         const start = startFor.get(registration.deviceId);
-        if (start) this.store.liveActivityStartCovered(start.deviceId, start.token, active);
+        if (start) this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active));
         await this.deliver(registration, state);
       } catch (error) {
         this.push.failure(error);
@@ -110,12 +110,12 @@ export class LiveActivities {
     // The app dismissed its activity before any pass recorded what it showed: whatever runs now
     // was on it, or began within a pass of it, so it stays off the Lock Screen.
     if (start.dismissed) {
-      this.store.liveActivityStartCovered(start.deviceId, start.token, active);
+      this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active));
       return;
     }
     // Coverage lasts only while that run does: an assistant's next run is new work, even when it
     // began between two passes. A run first seen before Hermes named it takes its name now.
-    const covered = active.filter(run => start.started.some(old => sameRun(old, run)));
+    const covered = remember(start.started, active).filter(run => start.started.some(old => sameRun(old, run)));
     if (JSON.stringify(covered) !== JSON.stringify(start.started)) this.store.liveActivityStartCovered(start.deviceId, start.token, covered);
     if (!active.length) return;
     const now = this.now();
@@ -260,6 +260,15 @@ function shed(state: LiveState, limit: number) {
   }
   return state;
 }
+/**
+ * The running entries, each keeping the run ID an earlier pass knew when Hermes did not report one
+ * this time, as when its conversation could not be read. Losing it would let the coverage match
+ * the assistant's next run.
+ */
+const remember = (previous: CoveredRun[], active: CoveredRun[]) => active.map(run => {
+  const runId = run.runId ?? previous.find(old => old.botId === run.botId && old.runId)?.runId;
+  return runId ? { botId: run.botId, runId } : { botId: run.botId };
+});
 /** The same run, or the same assistant while either side did not know the run yet. */
 const sameRun = (a: CoveredRun, b: CoveredRun) => a.botId === b.botId && (a.runId === b.runId || !a.runId || !b.runId);
 /** Apple refused the token itself, or the payload can never fit: retrying cannot help. */
