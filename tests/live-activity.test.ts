@@ -328,6 +328,23 @@ describe("push-to-start", () => {
     expect(rows()).toEqual(["garden:working"]);
   });
 
+  it("starts again when a covered assistant finishes and begins a new run while another keeps working", async () => {
+    registerStart();
+    set("kitchen", "working"); set("garden", "working");
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    await tick();
+    expect(store.liveActivityStarts("sandbox", clock)[0].started.sort()).toEqual(["garden", "kitchen"]);
+    set("kitchen", "idle");
+    await tick(5_000);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(["garden"]);
+    expect(starts()).toEqual([]);
+    set("kitchen", "working");
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+  });
+
   it("starts again for new work after everything finished", async () => {
     registerStart();
     set("kitchen", "working");

@@ -140,10 +140,13 @@ import XCTest
     XCTAssertNil(IntentLinks.takePending(from: location), "In the app the link opens at once instead of waiting")
   }
 
-  func testAPushedActivityThatLandsBesideTheAppsOwnIsTheDuplicate() {
-    XCTAssertTrue(LiveActivityController.isDuplicate(scope: "one", among: [(id: "local", scope: "one")]))
-    XCTAssertFalse(LiveActivityController.isDuplicate(scope: "one", among: []), "The first activity is kept")
-    XCTAssertFalse(LiveActivityController.isDuplicate(scope: "one", among: [(id: "old", scope: "two")]),
+  func testAPushedActivityEndsBesideTheAppsOwnOrForAnotherAccount() {
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: [(id: "local", scope: "one")]))
+    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: []), "The first activity is kept")
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "two", among: []), "A start that arrived after sign-out goes")
+    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: nil, among: []),
+      "In a background launch the account is not loaded yet; the server checks the registration")
+    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: [(id: "old", scope: "two")]),
       "Another account's leftover is ended by the foreground check, not by keeping this one out")
   }
 

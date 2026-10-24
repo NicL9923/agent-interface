@@ -110,16 +110,16 @@ export class LiveActivities {
     // The app dismissed its activity before any pass recorded what it showed: whatever runs now
     // was on it, or began within a pass of it, so it stays off the Lock Screen.
     if (start.dismissed) {
-      this.store.liveActivityStartCovered(start.deviceId, start.token, [...new Set([...start.started, ...active])]);
+      this.store.liveActivityStartCovered(start.deviceId, start.token, active);
       return;
     }
+    // Coverage lasts only while that run does: an assistant that finished and starts again is new work.
+    const covered = start.started.filter(botId => active.includes(botId));
+    if (covered.length !== start.started.length) this.store.liveActivityStartCovered(start.deviceId, start.token, covered);
+    if (!active.length) return;
     const now = this.now();
-    if (!active.length) {
-      if (start.started.length) this.store.liveActivityStartCovered(start.deviceId, start.token, []);
-      return;
-    }
     // The app starts its own activity right after a send; a pushed one would be a duplicate.
-    if (now - start.localAt < ARMED_MS || active.every(botId => start.started.includes(botId))) return;
+    if (now - start.localAt < ARMED_MS || active.every(botId => covered.includes(botId))) return;
     const hero = state.rows.find(row => !terminal(row.phase));
     const aps = {
       timestamp: seconds(now), event: "start", "content-state": state, "stale-date": seconds(now) + STALE_S,
@@ -144,7 +144,7 @@ export class LiveActivities {
       this.store.liveActivityStartFailed(start.deviceId, start.token, now);
       throw error;
     }
-    this.store.liveActivityStartCovered(start.deviceId, start.token, [...new Set([...start.started, ...active])]);
+    this.store.liveActivityStartCovered(start.deviceId, start.token, active);
   }
 
   private async deliver(registration: LiveActivityRegistration, state: LiveState) {

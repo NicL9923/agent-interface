@@ -85,9 +85,12 @@ struct LiveActivityStartRegistration: Encodable {
     Task { [weak self] in
       for await activity in Live.activityUpdates {
         guard let self else { return }
-        // A pushed start can land just after the app started its own; the newcomer goes.
+        // A pushed start can land just after the app started its own, or for an account that has
+        // since signed out here; either goes at once.
         let others = self.running.filter { $0.id != activity.id }.map { (id: $0.id, scope: $0.attributes.scope) }
-        if Self.isDuplicate(scope: activity.attributes.scope, among: others) {
+        // Nobody signed in here, as after an offline sign-out the server never heard about, ends it too.
+        let signedOut = self.store?.scope == nil && self.backgroundClient() == nil
+        if signedOut || Self.shouldEnd(scope: activity.attributes.scope, signedIn: self.store?.scope, among: others) {
           await activity.end(nil, dismissalPolicy: .immediate)
           continue
         }
@@ -106,9 +109,11 @@ struct LiveActivityStartRegistration: Encodable {
     }
   }
 
-  /// One activity per account on a device: a new one is a duplicate when the account already has one.
-  nonisolated static func isDuplicate(scope: String, among running: [(id: String, scope: String)]) -> Bool {
-    running.contains { $0.scope == scope }
+  /// One activity per device, for the signed-in account: a new one ends when another account is
+  /// signed in, or when this account already has one. Before the account loads, the server checks it.
+  nonisolated static func shouldEnd(scope: String, signedIn: String?, among running: [(id: String, scope: String)]) -> Bool {
+    if let signedIn, signedIn != scope { return true }
+    return running.contains { $0.scope == scope }
   }
 
   /// After a send the server accepted: show the assistant as starting right away.
@@ -137,7 +142,6 @@ struct LiveActivityStartRegistration: Encodable {
       token == api.token, scope == store.scope
     else { return }
     guard status.available else { await endAll(unregister: false); return }
-    await registerStartToken()
     let state = seeded(status.state)
     if state.activeCount > 0 {
       await show(state, scope: scope)
@@ -146,6 +150,8 @@ struct LiveActivityStartRegistration: Encodable {
       // Finished while the app was away and the end push did not arrive.
       await activity.end(ActivityContent(state: status.state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(5 * 60)))
     }
+    // Last, so its request never sits between checking the account and using its state.
+    await registerStartToken()
   }
   func background() {
     foregroundTask?.cancel()
