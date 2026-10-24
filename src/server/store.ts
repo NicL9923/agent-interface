@@ -12,7 +12,7 @@ import { EventRepository } from "./store-events.js";
 import { RetentionRepository } from "./store-retention.js";
 
 export { schemaVersion } from "./store-database.js";
-export type { LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
+export type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
 export type { RejectionReason } from "./store-submissions.js";
 export { maxDeliveryAttempts, presenceTtl, type ChatPresence } from "./store-notifications.js";
 

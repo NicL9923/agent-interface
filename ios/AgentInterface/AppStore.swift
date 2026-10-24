@@ -20,6 +20,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
     guard next != scope else { return }
     scope = next
+    // Only a loaded account replaces it; launching, before the account loads, leaves it alone.
+    if let next { UserDefaults.standard.set(next, forKey: DeviceDefaults.signedInScope) }
     additions = savedAdditions()
   }
   /// The App Group snapshot widgets read. Tests point it elsewhere or turn it off.
@@ -1583,6 +1585,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       }
       clearOfflineLibrary()
       try? SecureToken.save(nil, host: api.baseURL.absoluteString)
+      UserDefaults.standard.removeObject(forKey: DeviceDefaults.signedInScope)
       api.token = nil
       api.csrf = nil
       if !revoked {

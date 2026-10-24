@@ -88,9 +88,7 @@ struct LiveActivityStartRegistration: Encodable {
         // A pushed start can land just after the app started its own, or for an account that has
         // since signed out here; either goes at once.
         let others = self.running.filter { $0.id != activity.id }.map { (id: $0.id, scope: $0.attributes.scope) }
-        // Nobody signed in here, as after an offline sign-out the server never heard about, ends it too.
-        let signedOut = self.store?.scope == nil && self.backgroundClient() == nil
-        if signedOut || Self.shouldEnd(scope: activity.attributes.scope, signedIn: self.store?.scope, among: others) {
+        if Self.shouldEnd(scope: activity.attributes.scope, signedIn: self.signedInScope(), among: others) {
           await activity.end(nil, dismissalPolicy: .immediate)
           continue
         }
@@ -109,12 +107,19 @@ struct LiveActivityStartRegistration: Encodable {
     }
   }
 
-  /// One activity per device, for the signed-in account: a new one ends when another account is
-  /// signed in, or when this account already has one. Before the account loads, the server checks it.
+  /// One activity per device, for the signed-in account: a new one ends when nobody or another
+  /// account is signed in, or when this account already has one.
   nonisolated static func shouldEnd(scope: String, signedIn: String?, among running: [(id: String, scope: String)]) -> Bool {
-    if let signedIn, signedIn != scope { return true }
-    return running.contains { $0.scope == scope }
+    signedIn != scope || running.contains { $0.scope == scope }
   }
+  /// The loaded account, or before it loads, the account the saved sign-in belongs to. Nil when
+  /// nobody is signed in, as after an offline sign-out the server never heard about.
+  private func signedInScope() -> String? {
+    if let scope = store?.scope { return scope }
+    guard backgroundClient() != nil else { return nil }
+    return savedScope()
+  }
+  var savedScope: () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
 
   /// After a send the server accepted: show the assistant as starting right away.
   func sent(to botId: String) async {
@@ -133,6 +138,10 @@ struct LiveActivityStartRegistration: Encodable {
   /// state, re-register the token, and keep refreshing while the app stays open.
   func foreground() async {
     guard let store, let api = store.api, let scope = store.scope else { return }
+    // Before any request, which can fail: another account's activity never stays on this Lock Screen.
+    for activity in running where activity.attributes.scope != scope {
+      Task { await activity.end(nil, dismissalPolicy: .immediate) }
+    }
     guard enabled, systemAllowed else {
       if !enabled { await endAll(unregister: false) } else { await unregisterStartToken() }
       return
@@ -263,6 +272,7 @@ struct LiveActivityStartRegistration: Encodable {
       guard current == scope, let api = store.api, api.token != nil else { return nil }
       return (api, false)
     }
+    guard savedScope() == scope else { return nil }
     return backgroundClient().map { ($0, true) }
   }
   /// The same saved sign-in a notification action uses after a background launch.

@@ -144,8 +144,8 @@ import XCTest
     XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: [(id: "local", scope: "one")]))
     XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: []), "The first activity is kept")
     XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: "two", among: []), "A start that arrived after sign-out goes")
-    XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: nil, among: []),
-      "In a background launch the account is not loaded yet; the server checks the registration")
+    XCTAssertTrue(LiveActivityController.shouldEnd(scope: "one", signedIn: nil, among: []),
+      "Nobody signed in here, as after an offline sign-out")
     XCTAssertFalse(LiveActivityController.shouldEnd(scope: "one", signedIn: "one", among: [(id: "old", scope: "two")]),
       "Another account's leftover is ended by the foreground check, not by keeping this one out")
   }

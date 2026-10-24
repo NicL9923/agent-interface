@@ -70,7 +70,7 @@ snapshot is 30 minutes old. One aggregate Live Activity shows working and waitin
 assistants on the Lock Screen and in the Dynamic Island. It starts in the foreground
 after you send, follows server pushes, and respects the device's Live Activities setting in iOS Settings.
 On iOS 18 and later the server also starts it when work begins away from the phone, such as a routine or a
-message sent from the web. Dismissing it keeps that work off the Lock Screen until another assistant starts. When the server publishes a newer build, a banner and **Settings >
+message sent from the web. Dismissing it keeps that work off the Lock Screen until a new run starts. When the server publishes a newer build, a banner and **Settings >
 About** offer an Update button. Widget and Live Activity taps open
 `agentinterface://open?bot=ID`, handled like a notification link.
 

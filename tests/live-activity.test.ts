@@ -239,6 +239,7 @@ describe("push-to-start", () => {
   const startToken = "ef".repeat(32), scope = Buffer.from("https://wildbots.example|one").toString("base64url");
   const registerStart = (token = startToken) => store.registerLiveActivityStart("one", "one", "one-device", token, "sandbox", scope);
   const starts = () => pushes.filter(push => push.payload.aps.event === "start");
+  const covered = () => store.liveActivityStarts("sandbox", clock)[0].started.map(run => run.botId).sort();
   beforeEach(() => store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] }));
 
   it("starts the activity once when work begins away from the app, then updates it once the app registers it", async () => {
@@ -289,7 +290,7 @@ describe("push-to-start", () => {
     failure = undefined;
     await tick(5_000);
     expect(starts()).toEqual([]);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(["kitchen"]);
+    expect(covered()).toEqual(["kitchen"]);
   });
 
   it("does not reopen an activity the app dismissed before any pass, even through a Hermes outage", async () => {
@@ -304,7 +305,8 @@ describe("push-to-start", () => {
     live["runtime"].listBots = roster;
     await tick(5_000);
     expect(starts()).toEqual([]);
-    expect(store.liveActivityStarts("sandbox", clock)[0]).toMatchObject({ started: ["kitchen"], dismissed: false });
+    expect(covered()).toEqual(["kitchen"]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].dismissed).toBe(false);
     // Work that begins afterwards still starts the activity.
     set("garden", "working");
     await tick(5_000);
@@ -335,14 +337,40 @@ describe("push-to-start", () => {
     register("one", [], token);
     store.dismissLiveActivity("one", "one-device", token);
     await tick();
-    expect(store.liveActivityStarts("sandbox", clock)[0].started.sort()).toEqual(["garden", "kitchen"]);
+    expect(covered()).toEqual(["garden", "kitchen"]);
     set("kitchen", "idle");
     await tick(5_000);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(["garden"]);
+    expect(covered()).toEqual(["garden"]);
     expect(starts()).toEqual([]);
     set("kitchen", "working");
     await tick(5_000);
     expect(starts()).toHaveLength(1);
+  });
+
+  it("starts again when a covered assistant begins another run between two passes", async () => {
+    registerStart();
+    set("kitchen", "working", { runId: "run-1" }); set("garden", "working", { runId: "run-g" });
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    await tick();
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(expect.arrayContaining([{ botId: "kitchen", runId: "run-1" }]));
+    set("kitchen", "working", { runId: "run-2" });
+    await tick(5_000);
+    expect(starts()).toHaveLength(1);
+  });
+
+  it("treats a run Hermes names after it was covered as the same work", async () => {
+    registerStart();
+    set("kitchen", "working");
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    await tick();
+    set("kitchen", "working", { runId: "run-1" });
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
   });
 
   it("starts again for new work after everything finished", async () => {
@@ -351,7 +379,7 @@ describe("push-to-start", () => {
     await tick();
     set("kitchen", "idle");
     await tick(5_000);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([]);
+    expect(covered()).toEqual([]);
     set("kitchen", "working");
     await tick(5_000);
     expect(starts()).toHaveLength(2);
@@ -411,7 +439,7 @@ describe("push-to-start", () => {
     await tick();
     expect(starts()).toHaveLength(1);
     expect(last().payload.aps["content-state"]).toMatchObject({ activeCount: 5 });
-    expect(store.liveActivityStarts("sandbox", clock)[0].started.sort()).toEqual(["a", "b", "c", "d", "e"]);
+    expect(covered()).toEqual(["a", "b", "c", "d", "e"]);
     // One finishes, so the fifth moves into view. Nothing new started, so nothing returns.
     set("a", "idle");
     await tick(5_000);

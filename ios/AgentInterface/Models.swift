@@ -1026,6 +1026,9 @@ enum ServerDate {
 enum DeviceDefaults {
   static let host = "connection.host"
   static let pushDeviceId = "push.deviceId"
+  /// The account last signed in here, kept until sign-out, so a background launch can tell whose a
+  /// pushed Live Activity is before the account loads.
+  static let signedInScope = "connection.signedInScope"
   /// When the sign-in to `server` expires.
   static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
 }

@@ -1,6 +1,6 @@
 import type { ActivityState, Bot, Conversation, Runtime } from "../shared/types.js";
 import { allowedIdentity, type Config } from "./config.js";
-import type { LiveActivityRegistration, LiveActivityStartRegistration, Store } from "./store.js";
+import type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration, Store } from "./store.js";
 import { visible } from "./bot-access.js";
 import { FailureTracker, quietLog, type Log } from "./logging.js";
 import { ApnsError } from "./apns.js";
@@ -101,7 +101,7 @@ export class LiveActivities {
    * as a routine or a message sent from the web. Work an earlier activity already showed, including
    * one the person dismissed, does not start another; only a newly running assistant does.
    */
-  private async begin(listed: LiveActivityStartRegistration, state: LiveState, active: string[]) {
+  private async begin(listed: LiveActivityStartRegistration, state: LiveState, active: CoveredRun[]) {
     // Building the state waited on Hermes. Meanwhile another account may have taken the token over,
     // the session may have ended, the app may have started or registered its own activity.
     const start = this.store.liveActivityStart(listed.deviceId);
@@ -113,13 +113,14 @@ export class LiveActivities {
       this.store.liveActivityStartCovered(start.deviceId, start.token, active);
       return;
     }
-    // Coverage lasts only while that run does: an assistant that finished and starts again is new work.
-    const covered = start.started.filter(botId => active.includes(botId));
-    if (covered.length !== start.started.length) this.store.liveActivityStartCovered(start.deviceId, start.token, covered);
+    // Coverage lasts only while that run does: an assistant's next run is new work, even when it
+    // began between two passes. A run first seen before Hermes named it takes its name now.
+    const covered = active.filter(run => start.started.some(old => sameRun(old, run)));
+    if (JSON.stringify(covered) !== JSON.stringify(start.started)) this.store.liveActivityStartCovered(start.deviceId, start.token, covered);
     if (!active.length) return;
     const now = this.now();
     // The app starts its own activity right after a send; a pushed one would be a duplicate.
-    if (now - start.localAt < ARMED_MS || active.every(botId => covered.includes(botId))) return;
+    if (now - start.localAt < ARMED_MS || covered.length === active.length) return;
     const hero = state.rows.find(row => !terminal(row.phase));
     const aps = {
       timestamp: seconds(now), event: "start", "content-state": state, "stale-date": seconds(now) + STALE_S,
@@ -191,7 +192,7 @@ export class LiveActivities {
   private async build(
     userId: string, roster: Bot[], conversations: Map<string, Promise<Conversation | undefined>>,
     armed?: Pick<LiveActivityRegistration, "armed" | "armedAt">, previous?: LiveState,
-  ): Promise<{ state: LiveState; active: string[] }> {
+  ): Promise<{ state: LiveState; active: CoveredRun[] }> {
     const now = this.now();
     const follows = new Set(this.store.preferences(userId).followBots);
     const arming = armed && now - armed.armedAt < ARMED_MS ? new Set(armed.armed) : new Set<string>();
@@ -202,6 +203,7 @@ export class LiveActivities {
       return conversations.get(botId)!;
     };
     const rows: LiveRow[] = [];
+    const runs = new Map<string, string>();
     for (const bot of roster) {
       // Keep canonical IDs intact. An oversized ID cannot fit into a usable ActivityKit row.
       if (Buffer.byteLength(bot.id) > 256) continue;
@@ -217,6 +219,7 @@ export class LiveActivities {
           || (!!current?.activity.runId && this.store.participants(current.activity.runId).includes(userId));
         if (mine && activeStates.has(state)) {
           const phase = state as LivePhase;
+          if (current?.activity.runId) runs.set(bot.id, current.activity.runId);
           row = { botId: bot.id, name: bot.name, phase, status: status[phase], detail: fit(current?.activity.detail, 80),
             since: before?.phase === phase && before.since ? before.since : seconds(now) };
         } else if (mine && before && !terminal(before.phase) && before.phase !== "starting" || arming.has(bot.id) && finishedSince(bot, armed!.armedAt)) {
@@ -241,7 +244,7 @@ export class LiveActivities {
     const state: LiveState = { title: fit(title(rows, active.length, waiting.length), 80) ?? "Assistant activity", activeCount: active.length, attentionCount: waiting.length,
       updatedAt: seconds(now), rows: rows.slice(0, MAX_ROWS) };
     // Reserve room for the APNs envelope.
-    return { state: shed(state, 3500), active: active.map(row => row.botId) };
+    return { state: shed(state, 3500), active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }) };
   }
 }
 
@@ -257,6 +260,8 @@ function shed(state: LiveState, limit: number) {
   }
   return state;
 }
+/** The same run, or the same assistant while either side did not know the run yet. */
+const sameRun = (a: CoveredRun, b: CoveredRun) => a.botId === b.botId && (a.runId === b.runId || !a.runId || !b.runId);
 /** Apple refused the token itself, or the payload can never fit: retrying cannot help. */
 const rejected = (apns: ApnsError) => apns.apnsStatus === 410 || apns.apnsStatus === 413
   || (apns.apnsStatus === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"].includes(apns.reason ?? ""));

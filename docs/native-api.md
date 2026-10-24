@@ -507,9 +507,10 @@ the current state, a `stale-date` and `input-push-token: 1`. iOS requires an
 never approval details, and no sound. iOS then wakes the app with the new
 activity's update token, which the app registers as above, and updates follow.
 This covers work that starts away from the phone, such as a routine or a message
-sent from the web. The server remembers which assistants an activity on that
-device already showed: dismissing an activity keeps that work off the Lock Screen
-until another assistant starts, and the record clears once nothing is running.
+sent from the web. The server remembers which runs an activity on that device already
+showed: dismissing an activity keeps those runs off the Lock Screen, and a new run,
+even of the same assistant, starts it again. The record drops each run once it
+finishes.
 Rejected tokens are forgotten and failures back off as for updates.
 
 The app starts the activity in the foreground after sending a message, or on foreground

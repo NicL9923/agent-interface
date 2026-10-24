@@ -19,6 +19,9 @@ export interface LiveActivityRegistration {
   failures: number;
 }
 
+/** One assistant's run an activity showed. A run Hermes had not named yet has no `runId`. */
+export interface CoveredRun { botId: string; runId?: string }
+
 /** A device that can be asked to start its Live Activity by push (iOS 18 and later). */
 export interface LiveActivityStartRegistration {
   deviceId: string;
@@ -27,8 +30,8 @@ export interface LiveActivityStartRegistration {
   environment: "sandbox" | "production";
   /** The app's account scope, echoed in the activity's attributes so the app can tell whose it is. */
   scope: string;
-  /** Assistants an activity on this device already showed. Only new work starts another. */
-  started: string[];
+  /** Runs an activity on this device already showed. Only new work starts another. */
+  started: CoveredRun[];
   /** The app dismissed an activity here before the worker recorded what it showed. */
   dismissed: boolean;
   /** When the app last started its own activity after a send. */
@@ -167,7 +170,7 @@ export class DeviceRepository {
     this.db.prepare("UPDATE live_activity_starts SET local_at=? WHERE user_id=? AND session_hash=? AND device_id=?").run(now, userId, sessionHash, deviceId);
   }
   /** Records the assistants the device's activity shows now, or `[]` once nothing is running. */
-  liveActivityStartCovered(deviceId: string, token: string, started: string[]) {
+  liveActivityStartCovered(deviceId: string, token: string, started: CoveredRun[]) {
     this.db.prepare("UPDATE live_activity_starts SET started=?,dismissed=0,failures=0,retry_at=0 WHERE device_id=? AND token=?").run(JSON.stringify(started), deviceId, token);
   }
   liveActivityStartFailed(deviceId: string, token: string, now: number) {
