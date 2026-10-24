@@ -178,6 +178,61 @@ class HistoryWindowTests(unittest.TestCase):
 
 
 class OpenTests(unittest.TestCase):
+    def test_native_refusals_settle_but_unknown_errors_never_allow_replay(self):
+        params = {"profile": "default", "request_id": "refused", "sender_id": "member", "text": "Hello"}
+        for code, status in [(-32602, "rejected"), (-32601, "rejected"), (4010, "rejected"), (4001, "rejected"), (4090, "rejected"), (-32603, "uncertain"), (5000, "uncertain")]:
+            with self.subTest(code=code), FakeGateway([]) as hermes:
+                hermes.open()
+                hermes.native_calls.clear()
+                hermes.server.handle_request = Mock(return_value=hermes.server._err("native", code, "Native refused input"))
+                submit = hermes.methods["agent-interface.submit"]
+                original = submit("send", params)["result"]
+                self.assertEqual(original["status"], status)
+                if status == "rejected":
+                    self.assertNotIn("Native refused input", original["message"])
+                    self.assertIn("Your draft is saved", original["message"])
+                self.assertEqual(hermes.journal.receipt("refused")["status"], status)
+                self.assertEqual(submit("retry", params)["result"], original)
+                self.assertEqual(hermes.server.handle_request.call_count, 1)
+                terminal = hermes.journal.db.execute("SELECT terminal FROM receipts WHERE request_id='refused'").fetchone()[0]
+                self.assertEqual(terminal, int(status == "rejected"))
+
+    def test_refusal_unstages_images_and_does_not_block_the_next_send(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            session = hermes.server._sessions["sid"]
+            session.update(history_lock=threading.Lock(), attached_images=["prior.png"])
+            def refuse(request):
+                if request["method"] == "image.attach":
+                    session["attached_images"].append("new.png")
+                    return hermes.server._ok(request["id"], {})
+                return hermes.server._err(request["id"], 4090, "No slot available")
+            hermes.server.handle_request = Mock(side_effect=refuse)
+            params = {"profile": "default", "request_id": "image", "sender_id": "member", "text": "Hello"}
+            submit = hermes.methods["agent-interface.submit"]
+            result = submit("send", {**params, "attachments": [{"path": "/new.png", "mime": "image/png"}]})["result"]
+            self.assertEqual(result["status"], "rejected")
+            self.assertEqual(session["attached_images"], ["prior.png"])
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "accepted"}))
+            self.assertEqual(submit("next", {**params, "request_id": "next"})["result"]["status"], "accepted")
+            self.assertEqual(hermes.server.handle_request.call_count, 1)
+
+    def test_image_refusal_still_settles_if_native_closed_the_session(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            session = hermes.server._sessions["sid"]
+            session.update(history_lock=threading.Lock(), attached_images=[])
+            def closed(request):
+                if request["method"] == "image.attach":
+                    session["attached_images"].append("new.png")
+                    return hermes.server._ok(request["id"], {})
+                hermes.server._sessions.pop("sid")
+                return hermes.server._err(request["id"], 4001, "Session not found")
+            hermes.server.handle_request = Mock(side_effect=closed)
+            result = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "closed", "sender_id": "member", "text": "Hello", "attachments": [{"path": "/new.png", "mime": "image/png"}]})["result"]
+            self.assertEqual(result["status"], "rejected")
+            self.assertEqual(hermes.journal.receipt("closed")["status"], "rejected")
+
     def test_submit_resolves_canonical_and_preserves_interruption_guard(self):
         with FakeGateway([]) as hermes:
             hermes.open()
@@ -231,6 +286,7 @@ class OpenTests(unittest.TestCase):
             "running-image": ("rejected", "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles."),
             "image-preparation": ("rejected", "Image preparation failed before admission: Synthetic image failure"),
             "native": ("uncertain", "Synthetic native failure"),
+            "native-refusal": ("rejected", "Hermes was starting or reconnecting and did not accept this message. Your draft is saved. Try sending it again."),
         }
         for mode, (status, message) in failures.items():
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -258,9 +314,12 @@ class OpenTests(unittest.TestCase):
                         native.side_effect = fail_image
                     elif mode == "native":
                         native.side_effect = RuntimeError("Synthetic native failure")
+                    elif mode == "native-refusal":
+                        session["running"] = True
+                        native.return_value = server._err("native", 4010, "Agent does not support steer")
                     original = submit("send", params)["result"]
                     self.assertEqual((original["status"], original["message"]), (status, message))
-                    self.assertEqual(native.call_count, int(mode in ("image-preparation", "native")))
+                    self.assertEqual(native.call_count, int(mode in ("image-preparation", "native", "native-refusal")))
                     if mode == "image-preparation":
                         self.assertEqual(session["attached_images"], ["prior.png"])
                     native.reset_mock()

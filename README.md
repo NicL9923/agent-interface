@@ -172,6 +172,8 @@ online or into view. Manual reconnect checks immediately. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
+Known native admission refusals return the message to its draft. Crashes and
+unrecognized native errors keep the saved request ID for receipt checks.
 
 ## Household experience
 
@@ -179,6 +181,8 @@ The app opens **Today** unless you choose an assistant start page or follow a no
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
 send. **Listen to reply** reads the latest reply with Hermes speech on web and iOS.
+
+Hermes questions on web and iOS accept a suggested answer or **Write my own answer**.
 
 **Search & saved** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
 

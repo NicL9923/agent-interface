@@ -407,6 +407,7 @@ function AttentionCard({
   report: (s: string) => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   return (
     <article className="approval-card">
@@ -433,22 +434,29 @@ function AttentionCard({
               {question.options?.length ? (
                 <select
                   required
-                  value={answers[question.id] || ""}
-                  onChange={(event) =>
+                  aria-label={question.prompt}
+                  value={custom[question.id] ? "custom" : answers[question.id] ? `option-${question.options.indexOf(answers[question.id])}` : ""}
+                  onChange={(event) => {
+                    const own = event.target.value === "custom";
+                    setCustom({ ...custom, [question.id]: own });
                     setAnswers({
                       ...answers,
-                      [question.id]: event.target.value,
-                    })
-                  }
+                      [question.id]: event.target.value.startsWith("option-") ? question.options![Number(event.target.value.slice(7))] ?? "" : "",
+                    });
+                  }}
                 >
                   <option value="">Choose an answer</option>
-                  {question.options.map((option) => (
-                    <option key={option}>{option}</option>
+                  {question.options.map((option, index) => (
+                    <option key={index} value={`option-${index}`}>{option}</option>
                   ))}
+                  <option value="custom">Write my own answer</option>
                 </select>
-              ) : (
+              ) : null}
+              {(!question.options?.length || custom[question.id]) && (
                 <input
                   required
+                  aria-label={question.options?.length ? `Your answer: ${question.prompt}` : question.prompt}
+                  maxLength={10000}
                   value={answers[question.id] || ""}
                   onChange={(event) =>
                     setAnswers({
@@ -460,7 +468,7 @@ function AttentionCard({
               )}
             </label>
           ))}
-          <button className="primary" disabled={busy}>
+          <button className="primary" disabled={busy || request.questions?.some(question => !answers[question.id]?.trim())}>
             Send answers
           </button>
         </form>
