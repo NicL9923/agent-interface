@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MessageMarkdown } from "../src/components/MessageMarkdown";
+import { MessageMarkdown, StreamingMarkdown, streamingBlocks } from "../src/components/MessageMarkdown";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 let container: HTMLDivElement;
@@ -159,5 +159,37 @@ describe("assistant Markdown", () => {
     await act(async () => finish());
     expect(button.disabled).toBe(false);
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Code copied.");
+  });
+});
+
+describe("streaming Markdown", () => {
+  const renderAs = async (component: typeof MessageMarkdown, text: string) => {
+    await act(async () => root.render(createElement(component, { text })));
+    // Newlines between blocks are insignificant in the transcript's normal white-space.
+    return container.innerHTML.replace(/>\n</g, "><");
+  };
+
+  it("splits only at blank lines that start a new block outside code fences", () => {
+    expect(streamingBlocks("# Plan\n\nFirst part.\n\n```sh\necho one\n\necho two\n```\n\nDone")).toEqual(
+      ["# Plan", "First part.", "```sh\necho one\n\necho two\n```", "Done"]);
+    // An indented line continues the list item above it, so it stays with it.
+    expect(streamingBlocks("1. Feed\n\n   the horses\n\nNext")).toEqual(["1. Feed\n\n   the horses", "Next"]);
+    expect(streamingBlocks("Still typing\n\n")).toEqual(["Still typing\n\n"]);
+    expect(streamingBlocks("Open fence\n\n```\ncode\n\nmore")).toEqual(["Open fence", "```\ncode\n\nmore"]);
+  });
+
+  it("parses the whole reply when a rule spans it", () => {
+    for (const text of ["Cards\n\n```agent-ui\n{}\n```", "See [docs][1].\n\n[1]: https://example.test",
+      "Note[^1]\n\n[^1]: Footnote", "<!--\n\nhidden\n-->"]) expect(streamingBlocks(text)).toBeNull();
+  });
+
+  it("renders a growing reply the same as the saved reply", async () => {
+    for (const text of [
+      "## Supper\n\nBeans, **cornbread** and greens.\n\n> Soak the beans tonight.\n\n```txt\nsoak\n\nsimmer\n```\n\n| Day | Meal |\n| --- | --- |\n| Sat | Chili |",
+      // Loose lists continue across blank lines, so their numbering and spacing hold.
+      "Steps:\n\n1. Soak\n\n1. Rinse\n\n1. Simmer\n\nEnjoy.",
+      "- Beans\n\n- Cornbread\n\n* Greens",
+      "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
+    ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
 });

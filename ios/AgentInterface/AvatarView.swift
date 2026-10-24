@@ -205,21 +205,60 @@ enum AvatarMotion {
     return state == .failed && !settling
   }
 
+  /// How long an idle avatar waits between frames while only its slow loops move.
+  static let idleFrame = 0.083
+  static let blinkPeriod = 4.6
+  static let blinkLength = 0.16
+  static let wanderSpan = 2.8
+  /// Whether an idle avatar only breathes and sways from t until t + ahead seconds. Those loops
+  /// move well under a pixel a frame, so they can be drawn about twelve times a second. A blink, a
+  /// shift of gaze, a gesture or an arrival's pop needs every frame. Only how often the pose is
+  /// drawn depends on this, never the pose itself. Mirrors the web's `idleQuietAt`.
+  static func idleQuietAt(_ t: Double, _ plan: Plan, ahead: Double) -> Bool {
+    func overlaps(_ start: Double, _ length: Double, _ from: Double, _ to: Double) -> Bool {
+      start < to && start + length > from
+    }
+    let from = motionClock(t, plan), to = motionClock(t + ahead, plan)
+    var k = floor(from / blinkPeriod) - 1
+    while k <= floor(to / blinkPeriod) {
+      let at = k * blinkPeriod + 1.4 + hash(k) * 2.4
+      for start in hash(k + 7) > 0.72 ? [at, at + 0.28] : [at] where overlaps(start, blinkLength, from, to) {
+        return false
+      }
+      k += 1
+    }
+    // The eyes blend to a new target over 0.24 s and the head follows 0.18 s later.
+    var n = floor(from / wanderSpan)
+    while n <= floor(to / wanderSpan) {
+      if overlaps(n * wanderSpan, 0.42, from, to) { return false }
+      n += 1
+    }
+    for gesture in [plan.gesture, plan.previous].compactMap({ $0 })
+    where overlaps(gesture.start, gesture.kind.length, t, t + ahead) {
+      return false
+    }
+    return plan.boop.map { !overlaps($0, 0.8, t, t + ahead) } ?? true
+  }
+  /// Seconds between drawn frames: `idleFrame` while an idle avatar stays quiet until its next
+  /// frame, otherwise full rate, at most 30 frames a second for small avatars and in Low Power Mode.
+  static func frameInterval(size: Double, lowPower: Bool, quiet: Bool) -> Double {
+    quiet ? idleFrame : size >= 56 && !lowPower ? 1.0 / 60 : 1.0 / 30
+  }
+
   static func blinkAt(_ t: Double) -> Double {
-    let period = 4.6
     var openness = 1.0
-    let base = floor(t / period)
+    let base = floor(t / blinkPeriod)
     for k in [base - 1, base] {
-      let at = k * period + 1.4 + hash(k) * 2.4
+      let at = k * blinkPeriod + 1.4 + hash(k) * 2.4
       for start in hash(k + 7) > 0.72 ? [at, at + 0.28] : [at] {
         let d = t - start
-        if d >= 0 && d < 0.16 { openness = min(openness, 1 - sin(Double.pi * d / 0.16) * 0.92) }
+        if d >= 0 && d < blinkLength { openness = min(openness, 1 - sin(Double.pi * d / blinkLength) * 0.92) }
       }
     }
     return openness
   }
 
-  static func wander(_ t: Double, span: Double = 2.8) -> (x: Double, y: Double) {
+  static func wander(_ t: Double, span: Double = wanderSpan) -> (x: Double, y: Double) {
     func target(_ segment: Double) -> (Double, Double) {
       hash(segment + 13) < 0.35 ? (0, 0) : (hash(segment) * 2 - 1, (hash(segment + 31) * 2 - 1) * 0.5)
     }
@@ -1500,6 +1539,21 @@ struct AvatarArtwork {
   }
 }
 
+/// Low Power Mode, which caps every avatar at 30 frames a second.
+@MainActor @Observable final class LowPowerMode {
+  static let shared = LowPowerMode()
+  private(set) var enabled = ProcessInfo.processInfo.isLowPowerModeEnabled
+  @ObservationIgnored private var observer: (any NSObjectProtocol)?
+  private init() {
+    // Posted on any thread; the value is read again on the main actor.
+    observer = NotificationCenter.default.addObserver(
+      forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
+    ) { _ in
+      Task { @MainActor in LowPowerMode.shared.enabled = ProcessInfo.processInfo.isLowPowerModeEnabled }
+    }
+  }
+}
+
 struct AvatarView: View {
   var avatar: AvatarConfig
   var state: ActivityState
@@ -1519,6 +1573,9 @@ struct AvatarView: View {
   @State private var colorAt = Date.distantPast
   @State private var visible = true
   @State private var settling = true
+  /// Whether this idle avatar drew its last frame with nothing but slow loops ahead of it.
+  @State private var idleQuiet = false
+  private let power = LowPowerMode.shared
   @State private var changes = 0
   @State private var propSince = Date()
   /// Stands in for a name, so unnamed avatars each count as their own bot.
@@ -1625,16 +1682,19 @@ struct AvatarView: View {
     let paused = AvatarMotion.timelinePaused(
       state, reduceMotion: reduceMotion, visible: visible, active: scenePhase == .active,
       settling: settling)
-    return TimelineView(
-      .animation(minimumInterval: size >= 56 ? 1 / 60 : 1 / 30, paused: paused)
-    ) { timeline in
+    let interval = AvatarMotion.frameInterval(
+      size: Double(size), lowPower: power.enabled, quiet: idleQuiet && state == .idle && !settling)
+    return TimelineView(.animation(minimumInterval: interval, paused: paused)) { timeline in
       let date = paused ? Date() : timeline.date
       let isStill = still(state)
+      let current = cue(snapshot, still: isStill, at: date)
+      let frame = AvatarMotion.frame(
+        snapshot, at: date, still: isStill, prop: heldProp, propSince: propSince, cue: current)
+      // Judged over the wait for the next slow frame, with room for that frame to run late.
+      let quiet = state == .idle && !settling
+        && current.map { AvatarMotion.idleQuietAt(frame.t, $0.plan, ahead: AvatarMotion.idleFrame + 0.02) } == true
       let artwork = AvatarArtwork(
-        avatar: avatar, state: state,
-        frame: AvatarMotion.frame(
-          snapshot, at: date, still: isStill, prop: heldProp, propSince: propSince,
-          cue: cue(snapshot, still: isStill, at: date)),
+        avatar: avatar, state: state, frame: frame,
         still: isStill, body: bodyPath(at: date), bodyColor: bodyColor(at: date),
         size: Double(size))
       // Motion can reach past the 116-unit box (trails, hops), as the web SVG overflows.
@@ -1647,6 +1707,7 @@ struct AvatarView: View {
         artwork.draw(ctx)
       }
       .frame(width: size + pad * 2, height: size + pad * 2).padding(-pad)
+      .onChange(of: quiet, initial: true) { _, value in idleQuiet = value }
     }
   }
 

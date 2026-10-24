@@ -86,7 +86,7 @@ extension Data {
 }
 
 @MainActor final class APIClient {
-  private static let log = Logger(subsystem: "dev.agentinterface.ios", category: "api")
+  nonisolated private static let log = Logger(subsystem: "dev.agentinterface.ios", category: "api")
   /// Paths kept for conditional GETs. Polling uses a handful; the bound covers browsing.
   static let conditionalCacheLimit = 64
   private struct Validated { var etag: String; var data: Data }
@@ -258,31 +258,32 @@ extension Data {
     }
     return bytes.lines
   }
-  func get<T: Decodable>(_ path: String) async throws -> T {
-    try Self.decode(await data(path: "/api" + path), from: "/api" + path)
+  func get<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
+    let body = try await data(path: "/api" + path)
+    return try await Self.decoded(body, from: "/api" + path)
   }
   /// A poll read that skips decoding when the response is the body the caller last applied, named
   /// by its ETag, whether it came back as a 304 or in full. The value is nil then; otherwise it
   /// comes with the ETag to pass next time. A server without ETags always decodes.
-  func changed<T: Decodable>(_ path: String, since applied: String?) async throws -> (value: T?, etag: String?) {
+  func changed<T: Decodable & SendableMetatype>(_ path: String, since applied: String?) async throws -> (value: T?, etag: String?) {
     let response = try await exchange(
       path: "/api" + path, method: "GET", body: nil, contentType: nil, authenticated: true, conditional: true)
     if let applied, response.etag == applied { return (nil, applied) }
-    return (try Self.decode(response.data, from: "/api" + path), response.etag)
+    return (try await Self.decoded(response.data, from: "/api" + path), response.etag)
   }
-  func publicGet<T: Decodable>(_ path: String) async throws -> T {
-    try Self.decode(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
+  func publicGet<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
+    try await Self.decoded(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
   }
-  func publicWrite<T: Decodable, V: Encodable>(_ path: String, _ value: V) async throws -> T {
-    try Self.decode(
+  func publicWrite<T: Decodable & SendableMetatype, V: Encodable>(_ path: String, _ value: V) async throws -> T {
+    try await Self.decoded(
       await data(
         path: "/api" + path, method: "POST", body: JSONEncoder().encode(value),
         contentType: "application/json", authenticated: false), from: "/api" + path)
   }
-  func write<T: Decodable, V: Encodable>(_ path: String, _ value: V, method: String = "POST")
+  func write<T: Decodable & SendableMetatype, V: Encodable>(_ path: String, _ value: V, method: String = "POST")
     async throws -> T
   {
-    try Self.decode(
+    try await Self.decoded(
       await data(
         path: "/api" + path, method: method, body: JSONEncoder().encode(value),
         contentType: "application/json"), from: "/api" + path)
@@ -290,9 +291,17 @@ extension Data {
   func delete(_ path: String) async throws {
     _ = try await data(path: "/api" + path, method: "DELETE")
   }
+  /// `decode` away from the main actor. A long conversation, or a streamed reply patch four times
+  /// a second, is large enough to cost frames there.
+  static func decoded<T: Decodable & SendableMetatype>(_ data: Data, from path: String) async throws -> T {
+    try await offMain { try decode(data, from: path) }
+  }
+  @concurrent nonisolated private static func offMain<R>(_ work: sending () throws -> sending R) async throws -> sending R {
+    try work()
+  }
   /// Decodes a server response. The person sees a friendly message; the log and `detail`
   /// keep the coding path that failed, so a contract break is diagnosable.
-  static func decode<T: Decodable>(_ data: Data, from path: String) throws -> T {
+  nonisolated static func decode<T: Decodable>(_ data: Data, from path: String) throws -> T {
     do { return try JSONDecoder().decode(T.self, from: data) } catch {
       let detail = decodingDetail(error)
       let route = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
@@ -306,7 +315,7 @@ extension Data {
     }
   }
   /// The failing JSON location and reason, without any response values.
-  static func decodingDetail(_ error: Error) -> String {
+  nonisolated static func decodingDetail(_ error: Error) -> String {
     func path(_ keys: [CodingKey]) -> String {
       let joined = keys.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }.joined()
       let trimmed = joined.hasPrefix(".") ? String(joined.dropFirst()) : joined
@@ -355,7 +364,7 @@ extension Data {
       throw APIError(message: "The server returned an invalid response.", status: 502)
     }
     guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }
-    return try Self.decode(result, from: path)
+    return try await Self.decoded(result, from: path)
   }
 }
 

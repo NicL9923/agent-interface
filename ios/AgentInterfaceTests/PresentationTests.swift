@@ -278,6 +278,33 @@ final class AvatarMotionTests: XCTestCase {
       XCTAssertTrue(paused(state, settling: true), "\(state) never ticks")
     }
   }
+  func testIdleDrawsSlowlyOnlyWhileJustItsSlowLoopsMove() {
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: false, quiet: true), M.idleFrame)
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: false, quiet: false), 1.0 / 60)
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: true, quiet: false), 1.0 / 30, "Low Power Mode caps at 30")
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: true, quiet: true), M.idleFrame)
+    XCTAssertEqual(M.frameInterval(size: 40, lowPower: false, quiet: false), 1.0 / 30)
+    // Over every quiet wait, the pose moves less than a frame at full rate could show.
+    let plan = M.Plan(gesture: M.Gesture(kind: .hop, side: 1, start: 7), boop: 0.1, phase: 0.37, tempo: 1.08)
+    var quietSteps = 0, busySteps = 0
+    for step in 0..<2000 {
+      let t = Double(step) * 0.01
+      guard M.idleQuietAt(t, plan, ahead: M.idleFrame + 0.02) else { busySteps += 1; continue }
+      quietSteps += 1
+      let start = M.pose(.idle, t, reduce: false, plan: plan)
+      for u in stride(from: t, through: t + M.idleFrame, by: 0.004) {
+        let pose = M.pose(.idle, u, reduce: false, plan: plan)
+        XCTAssertEqual(pose.blink, 1, "t=\(u)")
+        XCTAssertEqual(pose.gazeX, start.gazeX, accuracy: 0.005, "t=\(u)")
+        XCTAssertEqual(pose.gazeY, start.gazeY, accuracy: 0.005, "t=\(u)")
+        XCTAssertEqual(pose.roll, start.roll, accuracy: 0.2, "t=\(u)")
+        XCTAssertEqual(pose.lift, start.lift, accuracy: 0.2, "t=\(u)")
+        XCTAssertEqual(pose.scaleY, start.scaleY, accuracy: 0.003, "t=\(u)")
+      }
+    }
+    XCTAssertGreaterThan(quietSteps, busySteps, "Most of the time an idle avatar draws slowly")
+    XCTAssertGreaterThan(busySteps, 200, "Blinks, glances, the hop and the arrival draw at full rate")
+  }
   /// A plan granting one gesture, as the conductor would.
   private func plan(_ kind: M.GestureKind, _ start: Double) -> M.Plan {
     M.Plan(gesture: M.Gesture(kind: kind, side: 1, start: start))

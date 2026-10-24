@@ -23,6 +23,8 @@ extension AppStore {
       "earlierFileCache": \.earlierFileCache, "loadingEarlierFiles": \.loadingEarlierFiles,
       "earlierFilesFailure": \.earlierFilesFailure, "loadingEarlier": \.loadingEarlier,
       "conversationScreens": \.conversationScreens, "chatCovers": \.chatCovers,
+      "connectionError": \.connectionError, "activity": \.activity, "latestReply": \.latestReply,
+      "readHere": \.readHere,
     ]
   }
   /// The names of the stored properties the Observation macro tracks, read from the backing storage it generates.

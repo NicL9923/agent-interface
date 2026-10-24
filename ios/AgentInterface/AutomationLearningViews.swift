@@ -23,7 +23,7 @@ import SwiftUI
   func load(
     _ store: AppStore, control: HermesAutomationControls, suffix: String,
     validate: @MainActor (Value) throws -> Void
-  ) async where Value: Decodable {
+  ) async where Value: Decodable & SendableMetatype {
     let current = lifetime.current
     guard !loading, current(), control.isCurrent(store) else { return }
     loading = true; error = nil; value = nil; needsReload = true

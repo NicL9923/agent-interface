@@ -36,6 +36,8 @@ struct OfflineLibrary: Codable {
     }
     return value
   }
+  /// `read` away from the main actor, so a launch with a full library keeps its first frames.
+  @concurrent static func load(_ url: URL) async -> OfflineLibrary? { read(url) }
   static func conversation(_ value: Conversation) -> Conversation {
     var copy = value
     copy.messages = Array(value.messages.filter {

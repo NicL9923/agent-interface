@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AvatarConductor } from "../src/components/avatar-conductor";
-import { avatarPose, expressionFor, gestureLength, motionSeed, pitchEyes, ringOffset, soloPlan, tickMarks } from "../src/components/avatar-motion";
+import { avatarPose, expressionFor, gestureLength, IDLE_FRAME_MS, idleQuietAt, motionSeed, pitchEyes, ringOffset, soloPlan, tickMarks } from "../src/components/avatar-motion";
 import type { AvatarProp, GestureKind, MotionPlan } from "../src/components/avatar-motion";
 import type { ActivityState } from "../src/shared/types";
 
@@ -88,11 +88,17 @@ function samples() {
     express("thinking", t, offset("tumble", 5.5));
     express("done", t, offset("twirl", 1.2));
   }
+  // When an idle avatar may draw slowly, over the wait until its next frame. Every 0.05 s for 12 s
+  // crosses blinks, double blinks, gaze shifts, a gesture and an arrival.
+  const ahead = round((IDLE_FRAME_MS + 20) / 1000);
+  const quiet = [soloPlan, offset("tilt", 6.1)].map(plan => ({ plan, ahead,
+    quiet: Array.from({ length: 240 }, (_, step) => idleQuietAt(round(step * 0.05), plan, ahead) ? 1 : 0).join("") }));
   return {
     seeds: Object.fromEntries(names.map((name) => [name, motionSeed(name)])),
     rings: Object.fromEntries(names.map((name) => [name, rounded(ringOffset(name))])),
     poses,
     expressions,
+    quiet,
     pitch: [0, 0.8, Math.PI / 2, 2.6, Math.PI, 4.4, 5.9].map((pitch) => ({ pitch: round(pitch), ...rounded(pitchEyes(pitch)) })),
     ticks: [[0, 1, 5], [0.4, 1, 5], [1, -1, 12], [1.2, 1, 2]].map(([level, side, top]) => ({ level, side, top, paths: tickMarks(level, side, top) })),
     scenario,

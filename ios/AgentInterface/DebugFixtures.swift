@@ -144,6 +144,8 @@
     nonisolated(unsafe) static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
     nonisolated(unsafe) static var inference: [String: Any] = ["reasoning": "medium", "speed": "normal"]
     nonisolated(unsafe) static var ranchModel = (provider: "openrouter", model: "configured-model")
+    /// Fixed, so opening the unread chat reads it until a newer reply arrives.
+    static let personalReplyAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-600))
     static var bots: [[String: Any]] {
       [
         [
@@ -162,7 +164,8 @@
         ],
         [
           "id": "personal", "name": "My assistant", "model": "configured-model", "shared": false,
-          "ownerId": "native-test", "activity": "idle",
+          "ownerId": "native-test", "activity": "idle", "unread": true,
+          "lastMessage": ["text": "Your library books are due Friday.", "at": personalReplyAt],
         ],
       ] + createdBots
     }

@@ -45,7 +45,7 @@ struct PreferencesView: View {
         }.task { await watchComputer() }
         if let error = store.error {
           Section {
-            ErrorBanner(message: error, dismiss: { store.error = nil })
+            ErrorBanner(message: error, dismiss: { store.dismissError() })
           }
         }
         if saveFailed { Section { Button("Retry saving settings") { enqueueSave() } } }

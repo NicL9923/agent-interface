@@ -26,7 +26,7 @@ beforeEach(() => {
         { id: "garden", name: "Garden planner", activity: "thinking" },
       ],
     } as Bootstrap,
-    botId: "ranch", view: "conversation", state: "working",
+    botId: "ranch", readThrough: {}, view: "conversation", state: "working",
     connectionLost: false, offline: false, mobile: false, open: true, update: null,
     onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(),
     onSettings: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
@@ -70,6 +70,30 @@ it("replaces stale working indicators during connection loss and restores them o
   props = { ...props, connectionLost: false, offline: false };
   await render();
   expect(statuses()).toEqual(["Working", "Thinking"]);
+});
+
+it("marks unread chats until they are on screen or read through their latest message", async () => {
+  const at = "2026-10-23T15:00:00.000Z";
+  props = { ...props, boot: { ...props.boot, preferences: { ...props.boot.preferences, favorites: ["garden"] }, bots: [
+    { id: "ranch", name: "Ranch hand", activity: "idle", model: "test", shared: true, unread: true, lastMessage: { text: "Gate is fixed.", at } },
+    { id: "garden", name: "Garden planner", activity: "idle", model: "test", shared: true, unread: true, lastMessage: { text: "Frost tonight.", at } },
+    { id: "kitchen", name: "Kitchen", activity: "idle", model: "test", shared: true, lastMessage: { text: "Soup.", at } },
+  ] } };
+  await render();
+  const marked = () => [...container.querySelectorAll(".unread")].map(node => node.querySelector(".pinned-name, strong")!.textContent);
+  expect(marked()).toEqual(["UnreadGarden planner", "Ranch hand"]);
+  expect(container.querySelector(".bot-row.unread")!.textContent).toContain("Unread");
+  props = { ...props, shownBotId: "ranch" };
+  await render();
+  expect(marked()).toEqual(["UnreadGarden planner"]);
+  // Leaving after reading keeps it read until the server's next roster knows.
+  props = { ...props, shownBotId: undefined, readThrough: { ranch: at } };
+  await render();
+  expect(marked()).toEqual(["UnreadGarden planner"]);
+  props = { ...props, boot: { ...props.boot, bots: props.boot.bots.map(bot => bot.id === "ranch"
+    ? { ...bot, lastMessage: { text: "Cattle are out.", at: "2026-10-23T15:05:00.000Z" } } : bot) } };
+  await render();
+  expect(marked()).toEqual(["UnreadGarden planner", "Ranch hand"]);
 });
 
 const menuItems = () => [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')];

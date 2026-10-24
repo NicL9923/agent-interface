@@ -9,6 +9,12 @@ import { httpError } from "./http-error.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
 import type { Store } from "./store.js";
 
+/** Marks a row unread when its latest message is newer than this person's last read of the chat. */
+function withUnread(bot: Bot, readAt: number | undefined): Bot {
+  const at = Date.parse(bot.lastMessage?.at ?? "");
+  return readAt !== undefined && Number.isFinite(at) && at > readAt ? { ...bot, unread: true } : bot;
+}
+
 /** Roster rows as each person sees them, shared by the bot routes, bootstrap and the roster stream. */
 export class BotDirectory {
   // Retain writable configuration across failed detail reads, like the runtime's roster fallback.
@@ -31,14 +37,16 @@ export class BotDirectory {
   async rosterFor(userId: string, bots: Bot[], nativeAvatar: boolean, lean: boolean) {
     const ids = new Set(bots.map(bot => bot.id));
     for (const id of this.details.keys()) if (!ids.has(id)) this.details.delete(id);
-    const rows = bots.map(bot => this.decorate(bot, nativeAvatar)).filter(bot => visible(bot, userId));
+    const reads = this.store.chatReads(userId);
+    const rows = bots.map(bot => this.decorate(bot, nativeAvatar)).filter(bot => visible(bot, userId))
+      .map(bot => withUnread(bot, reads.get(bot.id)));
     if (lean) return this.lean(rows);
     // Build 5 and cached bundles initialize writable settings from these rows.
     // Missing configuration is unsafe for those clients, so full remains the default.
     const detailed = await Promise.all(rows.map(async bot => {
       if (!this.runtime.botDetail) return bot;
       try {
-        return this.decorate(this.remember(await this.runtime.botDetail(bot.id)), nativeAvatar);
+        return withUnread(this.decorate(this.remember(await this.runtime.botDetail(bot.id)), nativeAvatar), reads.get(bot.id));
       } catch (error) {
         if (error instanceof Error && error.message === "Unknown Hermes bot.") {
           this.details.delete(bot.id);

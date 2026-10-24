@@ -129,20 +129,43 @@ export function animatesAt(state: ActivityState, t: number, plan: MotionPlan = s
   return true;
 }
 
+/** How long an idle avatar waits between frames while only its slow loops move. */
+export const IDLE_FRAME_MS = 83;
+const BLINK_PERIOD = 4.6, BLINK_LENGTH = 0.16, WANDER_SPAN = 2.8;
+/**
+ * Whether an idle avatar only breathes and sways from t until t + ahead seconds. Those loops move
+ * well under a pixel a frame, so they can be drawn about twelve times a second. A blink, a shift
+ * of gaze, a gesture or an arrival's pop needs every frame. The pose at any moment is unchanged;
+ * only how often it is drawn.
+ */
+export function idleQuietAt(t: number, plan: MotionPlan, ahead: number) {
+  const overlaps = (start: number, length: number, from: number, to: number) => start < to && start + length > from;
+  const [from, to] = [motionClock(t, plan), motionClock(t + ahead, plan)];
+  for (let k = Math.floor(from / BLINK_PERIOD) - 1; k <= Math.floor(to / BLINK_PERIOD); k++) {
+    const at = k * BLINK_PERIOD + 1.4 + hash(k) * 2.4;
+    if ((hash(k + 7) > 0.72 ? [at, at + 0.28] : [at]).some(start => overlaps(start, BLINK_LENGTH, from, to))) return false;
+  }
+  // The eyes blend to a new target over 0.24 s and the head follows 0.18 s later.
+  for (let n = Math.floor(from / WANDER_SPAN); n <= Math.floor(to / WANDER_SPAN); n++)
+    if (overlaps(n * WANDER_SPAN, 0.42, from, to)) return false;
+  for (const gesture of [plan.gesture, plan.previous])
+    if (gesture && overlaps(gesture.start, gestureLength[gesture.kind], t, t + ahead)) return false;
+  return plan.boop === undefined || !overlaps(plan.boop, 0.8, t, t + ahead);
+}
+
 export function blinkAt(t: number) {
-  const period = 4.6;
   let openness = 1;
-  for (const k of [Math.floor(t / period) - 1, Math.floor(t / period)]) {
-    const at = k * period + 1.4 + hash(k) * 2.4;
+  for (const k of [Math.floor(t / BLINK_PERIOD) - 1, Math.floor(t / BLINK_PERIOD)]) {
+    const at = k * BLINK_PERIOD + 1.4 + hash(k) * 2.4;
     for (const start of hash(k + 7) > 0.72 ? [at, at + 0.28] : [at]) {
       const d = t - start;
-      if (d >= 0 && d < 0.16) openness = Math.min(openness, 1 - Math.sin((Math.PI * d) / 0.16) * 0.92);
+      if (d >= 0 && d < BLINK_LENGTH) openness = Math.min(openness, 1 - Math.sin((Math.PI * d) / BLINK_LENGTH) * 0.92);
     }
   }
   return openness;
 }
 
-function wander(t: number, span = 2.8) {
+function wander(t: number, span = WANDER_SPAN) {
   const target = (segment: number) => hash(segment + 13) < 0.35
     ? [0, 0]
     : [hash(segment) * 2 - 1, (hash(segment + 31) * 2 - 1) * 0.5];

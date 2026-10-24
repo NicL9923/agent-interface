@@ -160,6 +160,11 @@ export interface Bot {
   activity: ActivityState;
   /** Latest canonical message preview from Hermes's roster, for the home list. */
   lastMessage?: { text: string; at?: string };
+  /**
+   * The latest message arrived after this person last read a chat they have opened before.
+   * A chat they have never opened is not marked, so a new member's home starts quiet.
+   */
+  unread?: boolean;
 }
 /** The Hermes profile ID a new assistant gets from its name. */
 export const botIdFor = (name: string) => name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");

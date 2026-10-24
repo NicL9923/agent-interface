@@ -177,9 +177,13 @@ struct FilePreview: UIViewControllerRepresentable {
 /// text, never an embedded web view.
 struct MarkdownView: View {
   let text: String
+  /// A reply still arriving: parsed from its last settled block and kept out of the shared caches.
+  var streaming = false
   @Environment(AppStore.self) private var store: AppStore?
   var body: some View {
-    MarkdownBlocksView(blocks: MarkdownCache.shared.blocks(text))
+    let parsed = streaming
+      ? MarkdownCache.shared.streamingBlocks(text) : (blocks: MarkdownCache.shared.blocks(text), settled: Int.max)
+    MarkdownBlocksView(blocks: parsed.blocks, settled: parsed.settled)
       .frame(maxWidth: .infinity, alignment: .leading)
       .environment(\.openURL, OpenURLAction(handler: open))
   }
@@ -202,23 +206,36 @@ struct MarkdownBlocksView: View {
   var blocks: [MarkdownBlock]
   var listDepth = 0
   var spacing: CGFloat = 12
+  /// Blocks from this index on may still change, as at the end of a streamed reply.
+  var settled = Int.max
+  @Environment(\.markdownSettled) private var inheritedSettled
   var body: some View {
     VStack(alignment: .leading, spacing: spacing) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+      ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
         MarkdownBlockView(block: block, listDepth: listDepth)
+          .environment(\.markdownSettled, inheritedSettled && index < settled)
       }
     }
+  }
+}
+private struct MarkdownSettledKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+  /// Whether the Markdown below can no longer change, so its converted text is worth caching.
+  var markdownSettled: Bool {
+    get { self[MarkdownSettledKey.self] }
+    set { self[MarkdownSettledKey.self] = newValue }
   }
 }
 struct MarkdownBlockView: View {
   var block: MarkdownBlock
   var listDepth: Int
+  @Environment(\.markdownSettled) private var settled
   var body: some View {
     switch block {
     case .paragraph(let text):
-      Text(Markdown.attributed(text)).textSelection(.enabled).lineSpacing(4)
+      Text(MarkdownCache.shared.attributed(text, keep: settled)).textSelection(.enabled).lineSpacing(4)
     case .heading(let level, let text):
-      Text(Markdown.attributed(text)).font(Self.headingFont(level)).textSelection(.enabled)
+      Text(MarkdownCache.shared.attributed(text, keep: settled)).font(Self.headingFont(level)).textSelection(.enabled)
         .padding(.top, 4).accessibilityAddTraits(.isHeader)
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
@@ -274,19 +291,20 @@ struct MarkdownListView: View {
 }
 struct MarkdownTableView: View {
   var table: MarkdownTable
+  @Environment(\.markdownSettled) private var settled
   var body: some View {
     ScrollView(.horizontal) {
       Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
         GridRow {
           ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
-            Text(Markdown.attributed(cell)).font(.headline).textSelection(.enabled)
+            Text(MarkdownCache.shared.attributed(cell, keep: settled)).font(.headline).textSelection(.enabled)
               .gridColumnAlignment(Self.alignment(table.alignments[column]))
           }
         }
         ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
           GridRow {
             ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-              Text(Markdown.attributed(cell)).textSelection(.enabled)
+              Text(MarkdownCache.shared.attributed(cell, keep: settled)).textSelection(.enabled)
             }
           }
         }

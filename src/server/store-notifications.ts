@@ -82,6 +82,11 @@ export class NotificationRepository {
           .run(userId, botId, now, clientId);
     });
   }
+  /** When this person last read each chat, in milliseconds, for the home list's unread marks. */
+  chatReads(userId: string): Map<string, number> {
+    const rows = this.db.prepare("SELECT bot_id,read_at FROM chat_reads WHERE user_id=?").all(userId) as { bot_id: string; read_at: number }[];
+    return new Map(rows.map(row => [row.bot_id, row.read_at]));
+  }
   /**
    * Whether the recipient has a notification's chat open now, or read it after the event.
    * Security alerts and routine results are not part of a chat, so they never count as seen.

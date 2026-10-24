@@ -104,7 +104,7 @@ struct ComposerView: View {
     HStack(alignment: .center, spacing: 8) {
       attachMenu
       if store.bootstrap?.preferences.presentation == "advanced" { modelButton }
-      VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : latestReply, disabled: voiceDisabled)
+      VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : store.latestReply, disabled: voiceDisabled)
       Spacer(minLength: 0)
       if focused { hideKeyboardButton }
       sendButton
@@ -177,13 +177,6 @@ struct ComposerView: View {
   /// The web turns voice off while the draft loads, a message is on its way, or the connection is down.
   private var voiceDisabled: Bool {
     !store.draftReady || store.pending != nil || store.sending || !store.connected
-  }
-  /// The newest reply in the conversation, the one the web's Listen to reply reads.
-  private var latestReply: Message? {
-    store.conversation?.messages.last {
-      $0.role == "assistant" && !$0.isInternalActivity
-        && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty)
-    }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
   }
   /// The Talk to assistant control opened this chat to record. A kept recording waits for review
   /// instead, and a request that cannot start soon lapses.

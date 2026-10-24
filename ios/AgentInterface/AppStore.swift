@@ -11,7 +11,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var host = UserDefaults.standard.string(forKey: DeviceDefaults.host) ?? ""
   var api: APIClient? { didSet { updateScope() } }
   var bootstrap: Bootstrap? {
-    didSet { updateScope(); appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); scheduleAdditions() }
+    didSet {
+      updateScope(); appliedBootstrapTag = nil; publishWidgetSnapshot(); updateEcho(); scheduleAdditions()
+      updateActivity(); noteRead([followedBotId])
+    }
   }
   /// The signed-in account on this server, kept apart from `bootstrap` so views keyed by the
   /// account, such as every image in the transcript, render again only when it changes.
@@ -46,7 +49,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var conversation: Conversation? {
     didSet {
       appliedConversationTag = nil
-      if conversation != oldValue { cachedArtifacts = nil; updateEcho(conversationChanged: true) }
+      if conversation != oldValue {
+        cachedArtifacts = nil; updateEcho(conversationChanged: true); updateActivity(); updateLatestReply()
+      }
     }
   }
   /// The ETags of the bootstrap and conversation bodies last applied. A poll answering with the
@@ -64,7 +69,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// When the earliest accepted echo whose run never showed runs out of patience.
   @ObservationIgnored private var echoDeadline: Date?
   var selectedBotId: String? {
-    didSet { cachedArtifacts = nil; followChanged(from: followed(oldValue)) }
+    didSet { cachedArtifacts = nil; updateActivity(); followChanged(from: followed(oldValue)) }
   }
   var routineResult: RoutineResultDestination?
   var todayRequest: UUID?
@@ -87,7 +92,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     get { selectedBotId.flatMap { receipts[$0] } }
     set { if let id = selectedBotId { receipts[id] = newValue } }
   }
-  var error: String?
+  var error: String? { didSet { if connectionError != nil { connectionError = nil } } }
+  /// Which poll the current `error` came from, or nil for a failed action such as a send. A later
+  /// successful read of the same kind clears it, and a chat leaves it to its connection card.
+  private(set) var connectionError: PollRead?
+  enum PollRead: Equatable, Sendable { case roster, chat, submissions }
+  /// Poll errors dismissed during an outage stay dismissed until their own read works again.
+  @ObservationIgnored private var dismissedPolls: Set<PollRead> = []
   /// A short message for home, such as an assistant that is no longer available.
   var notice: String?
   /// The assistant this person just lost access to, so views showing it close.
@@ -108,11 +119,15 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     uploads.store = self
     upgrade.store = self
   }
-  var appUnavailable = false
+  var appUnavailable = false { didSet { updateActivity() } }
   var interruptionReviewed = false
   var authConfig: AuthConfig?
   var restoring = false
-  var sessionExpired = false
+  var sessionExpired = false { didSet { updateActivity() } }
+  /// When this device last asked to renew its sign-in, so a failing renewal retries hourly.
+  @ObservationIgnored private var renewalAttemptedAt: Date?
+  /// The wall clock sign-in expiry is measured on. Tests substitute one they set by hand.
+  @ObservationIgnored var date: () -> Date = { Date() }
   var conversationRequest: UUID?
   var preferencesSaving = false
   var preferencesSaveFailed = false
@@ -172,7 +187,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   @ObservationIgnored private var conversationCapturedAt: [String: Date] = [:]
   @ObservationIgnored private var recentChats: [String] = []
-  private(set) var cachedChats: Set<String> = []
+  private(set) var cachedChats: Set<String> = [] { didSet { updateActivity() } }
   private var offlineURL: URL? {
     guard let api, let token = api.token else { return nil }
     return OfflineLibrary.url(origin: api.baseURL.absoluteString, token: token, root: offlineLibraryRoot)
@@ -236,10 +251,35 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired
       && !cachedChats.contains(selectedBotId ?? "")
   }
-  var activity: ActivityState {
-    connected ? conversation?.activity.state ?? bot?.activity ?? .idle : .disconnected
+  /// The open assistant's activity as shown. Stored, so a streamed reply patch that leaves it
+  /// unchanged renders nothing that reads it, such as the composer and the iPad home rows.
+  private(set) var activity: ActivityState = .disconnected
+  private func updateActivity() {
+    let next = connected ? conversation?.activity.state ?? bot?.activity ?? .idle : .disconnected
+    if next != activity { activity = next }
   }
   var active: Bool { activity.active }
+  /// The newest reply in the conversation, the one the web's Listen to reply reads. Stored for the
+  /// same reason as `activity`; while a reply streams the composer does not read it.
+  private(set) var latestReply: Message?
+  private func updateLatestReply() {
+    let next = conversation?.messages.last {
+      $0.role == "assistant" && !$0.isInternalActivity
+        && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty)
+    }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    if next != latestReply { latestReply = next }
+  }
+  /// Chats read on this device since the roster last said otherwise; see `UnreadChats`.
+  private(set) var readHere = UnreadChats()
+  /// Whether home shows this assistant's chat as unread. The chat on screen never is.
+  func unread(_ bot: Bot) -> Bool { readHere.unread(bot, open: followedBotId) }
+  /// The chat on screen, and one just left, count as read here until their latest message changes.
+  private func noteRead(_ ids: [String?]) {
+    var next = readHere
+    next.keep(bootstrap?.bots ?? [], user: bootstrap?.user.id)
+    for case let id? in ids { if let bot = bootstrap?.bots.first(where: { $0.id == id }) { next.read(bot) } }
+    if next != readHere { readHere = next }
+  }
   var canSend: Bool {
     draftReady && connected && !sending && !uploads.uploading && !uploads.items.contains { $0.botId == selectedBotId } && pending == nil
       && draft.text.utf16.count <= Self.maxMessageLength
@@ -287,9 +327,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       error = nil
       if api?.token != nil {
         if bootstrap == nil, let api, let url = offlineURL,
-          let snapshot = OfflineLibrary.read(url),
           let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
-          let expires = ServerDate.parse(expiry), expires > Date() {
+          let expires = ServerDate.parse(expiry), expires > Date(),
+          let snapshot = await OfflineLibrary.load(url), bootstrap == nil, self.api === api {
           bootstrap = snapshot.bootstrap
           // Sends still unsettled come back before any draft is ready, so nothing joins a sent copy.
           loadPendings(snapshot.bootstrap.bots)
@@ -394,6 +434,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           }
         }
         session.presentationContextProvider = self
+        // On purpose: household iPads are shared, and a persistent browser session would hand the
+        // next member this member's Google sign-in. Renewal keeps active members signed in instead.
         session.prefersEphemeralWebBrowserSession = true
         authSession = session
         if !session.start() {
@@ -408,6 +450,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       try SecureToken.save(result.token, host: api.baseURL.absoluteString)
       api.token = result.token
       sessionExpired = false
+      renewalAttemptedAt = nil
       UserDefaults.standard.set(
         result.expiresAt, forKey: DeviceDefaults.expiry(api.baseURL))
       await refreshBootstrap()
@@ -415,6 +458,31 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     } catch {
       guard generation == authGeneration else { return }
       if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin { report(error) }
+    }
+  }
+  /// Extends this device's sign-in in place while it is in use, so an active member never meets the
+  /// weekly sign-in again. The poll loop asks, which covers launch, the foreground and every pass;
+  /// `SignInRenewal` keeps it to once an hour. A failure stays quiet and retries later, and a 401
+  /// means the session is gone, so it signs out as an expired session does.
+  func renewSignInIfDue() async {
+    guard let api, let token = api.token, !sessionExpired else { return }
+    let key = DeviceDefaults.expiry(api.baseURL)
+    let expiry = UserDefaults.standard.string(forKey: key).flatMap { ServerDate.parse($0) }
+    guard SignInRenewal.due(expiresAt: expiry, lastAttempt: renewalAttemptedAt, now: date()) else { return }
+    renewalAttemptedAt = date()
+    let currentGeneration = generation
+    do {
+      let renewed: TokenRenewal = try await api.write("/auth/native/renew", [String: String]())
+      guard generation == currentGeneration, self.api === api, api.token == token,
+        ServerDate.parse(renewed.expiresAt) != nil
+      else { return }
+      UserDefaults.standard.set(renewed.expiresAt, forKey: key)
+    } catch {
+      guard generation == currentGeneration, self.api === api, api.token == token,
+        var failure = error as? APIError, failure.status == 401
+      else { return }
+      failure.code = APIError.sessionExpiredCode
+      report(failure)
     }
   }
   func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -433,6 +501,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
   func pollOnce() async -> Bool {
+    let currentGeneration = generation
+    await renewSignInIfDue()
+    // Signing out, switching accounts or suspending during renewal ends this pass before it
+    // starts any stream for a session that is gone.
+    guard !Task.isCancelled, generation == currentGeneration, api?.token != nil else { return false }
     if let api,
       let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
@@ -533,15 +606,19 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
             self.streamHeardAt = self.now()
             if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("data:") {
-              if event == "inflight", let data = String(line.dropFirst(5)).data(using: .utf8),
-                 let patch = try? JSONDecoder().decode(Inflight.self, from: data), self.selectedBotId == patch.botId {
-                self.latestInflight = patch
-                if let current = self.conversation {
-                  let value = patch.applying(to: current)
-                  self.conversation = value
-                  self.conversationCache[patch.botId] = value
+              if event == "inflight" {
+                // Each patch carries the whole reply so far, so it decodes away from the main actor.
+                if let data = String(line.dropFirst(5)).data(using: .utf8),
+                  let patch: Inflight = try? await APIClient.decoded(data, from: "/api/bots/events"),
+                  !Task.isCancelled, self.selectedBotId == patch.botId {
+                  self.latestInflight = patch
+                  if let current = self.conversation {
+                    let value = patch.applying(to: current)
+                    self.conversation = value
+                    self.conversationCache[patch.botId] = value
+                  }
                 }
-              } else if event != "inflight" && line != "data: ping" {
+              } else if line != "data: ping" {
                 self.latestInflight = nil
                 // The conversation changed, so an unconfirmed send there is worth asking about now.
                 if let pending = self.pendings[id] { self.submissionChecks[pending.requestId] = nil }
@@ -596,6 +673,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       let response: (value: Bootstrap?, etag: String?) = try await api.changed("/bootstrap?roster=lean", since: appliedBootstrapTag)
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       appliedBootstrapRead = bootstrapRead
+      pollSucceeded(.roster)
       // The body applied last time, unchanged: nothing to decode, merge or publish to views.
       guard var value = response.value ?? bootstrap else { return }
       var applied = false
@@ -669,7 +747,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       guard generation == currentGeneration, bootstrapRead > appliedBootstrapRead else { return }
       failures += 1
       appUnavailable = true
-      report(error)
+      reportPoll(error, .roster)
     }
   }
   /// Another member made the open assistant personal, or it was deleted: return home and stop asking for it.
@@ -753,6 +831,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       else { return }
       appliedConversationRead = read
       conversationRefreshedAt = now()
+      pollSucceeded(.chat)
       // Echoes settle against each current read, changed or not.
       defer { if !echoes.isEmpty { updateEcho() } }
       // The conversation applied last time, unchanged: nothing to decode, merge or render.
@@ -771,7 +850,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       } else {
         appUnavailable = true
         failures += 1
-        report(error)
+        reportPoll(error, .chat)
       }
     }
   }
@@ -1126,11 +1205,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           "/submissions/\(APIClient.component(pending.requestId))")
         guard currentGeneration == generation, !sending else { return }
         checkedSubmission(pending.requestId)
+        pollSucceeded(.submissions)
         await handleReceipt(value, botId: pending.botId)
       } catch {
         guard currentGeneration == generation else { return }
         checkedSubmission(pending.requestId)
-        report(error)
+        reportPoll(error, .submissions)
         return
       }
     }
@@ -1422,6 +1502,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     followChanged(from: before)
   }
   private func followChanged(from before: String?) {
+    noteRead([before, followedBotId])
     guard followedBotId != before, pollTask != nil else { updateEcho(); return }
     watchConversation()
     // Back on screen without opening it again, after nothing was read while it was away. Like
@@ -1622,6 +1703,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     uploads.notice = []
     appUnavailable = false
     sessionExpired = false
+    dismissedPolls = []
+    renewalAttemptedAt = nil
     upgrade.reset(); computerStatus = nil
     resetPreferenceSaves()
     return true
@@ -1640,6 +1723,23 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     api = nil
     authConfig = nil
     return true
+  }
+  /// A failed poll. One the person dismissed, or the same failure again, leaves the banner as it is.
+  private func reportPoll(_ failure: Error, _ read: PollRead) {
+    if failure is CancellationError { return }
+    let expired = (failure as? APIError)?.isSessionExpired ?? false
+    if !expired, dismissedPolls.contains(read) || connectionError == read && error == failure.localizedDescription { return }
+    report(failure)
+    if error != nil, !sessionExpired { connectionError = read }
+  }
+  private func pollSucceeded(_ read: PollRead) {
+    dismissedPolls.remove(read)
+    if connectionError == read { error = nil }
+  }
+  /// The error banner's close button. A poll error stays closed until its read works again.
+  func dismissError() {
+    if let connectionError { dismissedPolls.insert(connectionError) }
+    error = nil
   }
   func report(_ error: Error) {
     if error is CancellationError { return }

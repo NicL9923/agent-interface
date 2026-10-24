@@ -48,6 +48,11 @@ const transcriptSize=()=>{
 };
 const googleScript=()=>document.head.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]')!;
 
+// The transcript measures its position on the next frame, as a browser paints after scrolling.
+const scrolled = (transcript: Element) => act(async () => {
+  transcript.dispatchEvent(new Event('scroll'));
+  vi.advanceTimersToNextFrame();
+});
 describe('setup and recovery interface',()=>{
   it('opens at the latest message even when another device saved an earlier position',async()=>{
     conversation.messages.push({id:'later-answer',role:'assistant',text:'Later answer'});
@@ -72,10 +77,11 @@ describe('setup and recovery interface',()=>{
         ?{...conversation,messages:[...turn(0),...turn(1)],earlier:0}:{...conversation,messages:turn(1),earlier:2}) as T;
     });
     const size=transcriptSize();
-    // The prompt being read sits 50px below the top until two earlier messages arrive above it.
+    // Messages stack in order 250px apart. The prompt being read sits 50px below the top until
+    // two earlier messages arrive above it.
     const rects=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
-      const top=this.classList.contains('transcript')?100:(this as HTMLElement).dataset.messageId==='p1'
-        ?(document.querySelector('[data-message-id="p0"]')?650:150):0;
+      const order=[...document.querySelectorAll('[data-message-id]')].indexOf(this);
+      const top=this.classList.contains('transcript')?100:order<0?0:150+250*order;
       return {top,bottom:top+100} as DOMRect;
     });
     try{
@@ -83,7 +89,7 @@ describe('setup and recovery interface',()=>{
       expect(paths.slice(0,2)).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p1']);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       const earlier=[...container.querySelectorAll('button')].find(button=>button.textContent==='Show earlier messages')!;
       await act(async()=>earlier.click());
       expect(paths).toContain('/bots/shared/conversation?start=p1&turns=20');
@@ -112,7 +118,7 @@ describe('setup and recovery interface',()=>{
       expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       await act(async()=>respond());
       expect(paths).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p0']);
       expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
@@ -133,7 +139,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();await advance(20);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       readingTop=400;
       await act(async()=>resized.forEach(callback=>callback()));
       expect(transcript.scrollTop).toBe(550);
@@ -147,7 +153,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();await advance(20);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       conversation={...conversation,messages:[conversation.messages[0],{id:'live',role:'assistant',text:'Pot roast tonight'}]};
       await changed();
       expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
@@ -160,7 +166,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();await advance(20);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       expect(container.querySelector('.jump-latest')!.textContent).toBe('Jump to latest');
       conversation={...conversation,messages:[...conversation.messages,{id:'fresh',role:'assistant',text:'Fresh reply'}]};
       await changed();
@@ -186,7 +192,7 @@ describe('setup and recovery interface',()=>{
     transcript.getBoundingClientRect=()=>({top:100,bottom:400} as DOMRect);
     container.querySelector<HTMLElement>('[data-message-id="answer-one"]')!.getBoundingClientRect=()=>({top:80,bottom:220} as DOMRect);
     container.querySelector<HTMLElement>('[data-message-id="latest-answer"]')!.getBoundingClientRect=()=>({top:1800,bottom:1900} as DOMRect);
-    await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+    await scrolled(transcript);
     await advance(310);
     expect(write).toHaveBeenCalledWith('/bots/shared/read-position',{scrollTop:300,messageId:'answer-one'},'PUT');
   });

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { Button } from "../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuRadioGroup, ContextMenuRadioItem, ContextMenuSeparator, ContextMenuSubmenu, ContextMenuSubmenuContent, ContextMenuSubmenuTrigger, ContextMenuTrigger } from "../components/ui/context-menu";
@@ -11,14 +11,21 @@ import type { View } from "./view";
 import type { AppUpdate } from "./use-browser";
 import { UpdateNotice } from "./UpdateNotice";
 import { sectionOf } from "./preferences-editing";
+import { isUnread, type ReadThrough } from "./unread";
 import "./home.css";
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase() || "?";
 
-/** Home: pinned assistants up top, then everyone else with their latest message. */
-export function Sidebar({ boot, botId, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings, onMoveToSection, onNewSection }: {
+/**
+ * Home: pinned assistants up top, then everyone else with their latest message.
+ * Memoized so typing and streamed replies do not redraw every row and live avatar.
+ */
+export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings, onMoveToSection, onNewSection }: {
   boot: Bootstrap;
   botId: string;
+  /** The chat on screen now, which is never marked unread. */
+  shownBotId?: string;
+  readThrough: ReadThrough;
   view: View;
   state: ActivityState;
   connectionLost: boolean;
@@ -43,17 +50,19 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
   const rest = unpinned.filter(bot => !prefs.sections.some(section => section.botIds.includes(bot.id)));
   const activity = (bot: Bot): ActivityState => connectionLost ? "disconnected" : bot.id === botId ? state : bot.activity;
   const current = (bot: Bot) => bot.id === botId && view === "conversation";
+  const unread = (bot: Bot) => isUnread(bot, shownBotId, readThrough);
   const row = (bot: Bot) => {
     const botState = activity(bot);
     const working = !connectionLost && botState !== "idle" && botState !== "done";
     return <li key={bot.id}>
       <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
         onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
-        <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
+        <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
           onClick={() => onSelectBot(bot.id)}>
           <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion />
           <span className="bot-row-text">
             <span className="bot-row-top"><strong>{bot.name}</strong>
+              {unread(bot) && <UnreadMark />}
               {bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}</span>
             <small className={working ? `bot-activity state-${botState}` : undefined}>
               {working ? stateLabels[botState] : bot.lastMessage?.text || (bot.shared ? "Shared assistant" : "Personal assistant")}
@@ -89,7 +98,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
             return <li key={bot.id}>
               <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
                 onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
-                <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}`} aria-current={current(bot) ? "page" : undefined}
+                <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
                   onClick={() => onSelectBot(bot.id)}>
                   <span className="pinned-avatar">
                     {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
@@ -97,7 +106,7 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
                     <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                   </span>
                   <span className="pinned-copy">
-                    <span className="pinned-name">{bot.name}</span>
+                    <span className="pinned-name">{unread(bot) && <UnreadMark />}{bot.name}</span>
                     <small className={`pinned-activity${showActivity ? ` bot-activity state-${botState}` : ""}`}>
                       {showActivity ? stateLabels[botState] : null}
                     </small>
@@ -129,6 +138,11 @@ export function Sidebar({ boot, botId, view, state, connectionLost, offline, mob
       </div>
     </aside>
   );
+});
+
+/** A dot for sight and a word for screen readers, which read it with the row's name. */
+function UnreadMark() {
+  return <span className="unread-mark"><span className="sr-only">Unread</span></span>;
 }
 
 // Owns the minute clock, so only the dates re-render as time passes.

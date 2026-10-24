@@ -86,15 +86,20 @@ struct ConversationView: View {
     .onChange(of: findQuery) { _, _ in findIndex = 0; find(0) }
     .findShortcut(botId: bot.id, open: openFind)
   }
+  private var cardShown: Bool {
+    !(store.offlineSavedAt != nil && store.householdConnected && !reachability.offline)
+      && store.connectionLost(offline: reachability.offline) && store.bootstrap != nil
+  }
   @ViewBuilder private var banners: some View {
     // Home is live but this chat is still the copy saved on the device: say so, with its age,
     // until it reloads; Hermes itself is reachable, so the reconnect card would mislead.
     if let date = store.offlineSavedAt, store.householdConnected, !reachability.offline {
       Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reloading this chat…")
         .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("chatSavedCopy")
-    } else if store.connectionLost(offline: reachability.offline) && store.bootstrap != nil { connectionCard }
-    if let error = store.error {
-      ErrorBanner(message: error, dismiss: { store.error = nil }).padding(.horizontal).padding(.bottom, 8)
+    } else if cardShown { connectionCard }
+    // The connection card already says a poll failed; its error would only repeat it.
+    if let error = store.error, store.connectionError == nil || !cardShown {
+      ErrorBanner(message: error, dismiss: { store.dismissError() }).padding(.horizontal).padding(.bottom, 8)
     }
     if store.sessionExpired {
       Button("Sign in again. Your draft is saved.") { Task { await store.signIn() } }.buttonStyle(.bordered).padding(8)

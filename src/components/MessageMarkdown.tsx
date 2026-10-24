@@ -109,19 +109,66 @@ const components: Components = {
   },
 };
 
+type MessageMarkdownProps = {
+  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;
+};
+
 // Memoized because the composer re-renders the app on every keystroke, and
 // re-parsing every reply in a long transcript made typing lag.
-export const MessageMarkdown = memo(function MessageMarkdown({ text, botId, messageId, userId, unavailable, inlineUi = false }: {
-  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;
-}) {
+export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkdownProps) {
+  return <div className="message-markdown"><MarkdownBlocks {...props} /></div>;
+});
+
+/** One parsed piece of a reply, without its container, so several can share one. */
+const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, userId, unavailable, inlineUi = false }: MessageMarkdownProps) {
   const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
   return (
     <ReplyContext.Provider value={context}>
-    <div className="message-markdown">
       <Markdown skipHtml remarkPlugins={[remarkGfm]} components={components}>
         {text}
       </Markdown>
-    </div>
     </ReplyContext.Provider>
   );
+});
+
+const fence = /^ {0,3}(`{3,}|~{3,})/;
+const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+/**
+ * Splits a reply that is still arriving into blocks that are finished and the one still growing,
+ * so each update parses only the last. Splits fall on blank lines outside code fences that are
+ * followed by a line at the margin, which starts a new block, unless that line is a list item,
+ * which may continue a loose list above it. Returns null when a rule
+ * spans the whole reply: reply cards and inline pages are judged together, reference links and
+ * footnotes resolve anywhere, and HTML comments or raw blocks may contain blank lines.
+ */
+export function streamingBlocks(text: string): string[] | null {
+  if (/^ {0,3}(`{3,}|~{3,})\s*(agent-ui|wildbots-html)\b/m.test(text) || /^ {0,3}\[[^\]]+\]:/m.test(text)
+    || text.includes("[^") || text.includes("<!--") || /^ {0,3}<(pre|script|style|textarea)\b/im.test(text)) return null;
+  const lines = text.split("\n"), blocks: string[] = [];
+  let start = 0, open: string | undefined;
+  for (let index = 0; index < lines.length; index++) {
+    const marker = fence.exec(lines[index])?.[1];
+    if (marker) {
+      if (!open) open = marker;
+      else if (marker[0] === open[0] && marker.length >= open.length && !lines[index].trim().slice(marker.length).trim()) open = undefined;
+      continue;
+    }
+    const next = lines[index + 1];
+    if (open || lines[index].trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
+    blocks.push(lines.slice(start, index).join("\n"));
+    start = index + 1;
+  }
+  blocks.push(lines.slice(start).join("\n"));
+  return blocks;
+}
+
+/**
+ * A reply that is still arriving. Finished blocks keep their parsed output while the last one
+ * grows, so a long reply no longer re-parses from the top several times a second. The saved
+ * reply replaces this and is parsed whole.
+ */
+export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
+  const blocks = useMemo(() => streamingBlocks(props.text), [props.text]);
+  if (!blocks) return <MessageMarkdown {...props} />;
+  return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });

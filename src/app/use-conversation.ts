@@ -13,6 +13,20 @@ type PageQuery = ApiQuery<"GET /bots/:id/conversation">;
 const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
 // The cache key of the page an opened conversation reads first.
 const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id: botId }, firstQuery);
+/**
+ * The first transcript message whose bottom is below `y`. Messages are laid out in document
+ * order, so a binary search measures a handful of them instead of every one on each scroll.
+ */
+export function firstMessageBelow(container: HTMLElement, y: number) {
+  const items = container.querySelectorAll<HTMLElement>("[data-message-id]");
+  let low = 0, high = items.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (items[middle].getBoundingClientRect().bottom > y) high = middle;
+    else low = middle + 1;
+  }
+  return items[low];
+}
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
@@ -191,8 +205,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     anchor.current = null;
     if (!element || following.current) return;
     const top = element.getBoundingClientRect().top;
-    const target = [...element.querySelectorAll<HTMLElement>("[data-message-id]")]
-      .find(item => item.getBoundingClientRect().bottom > top);
+    const target = firstMessageBelow(element, top);
     if (target) anchor.current = { id: target.dataset.messageId!, offset: target.getBoundingClientRect().top - top };
   };
   // Placement runs before paint, so an opened, grown or extended transcript never flickers.
@@ -250,7 +263,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     } else element.scrollTop = element.scrollHeight;
   }, []);
   const loadEarlier = useCallback(() => requestEarlier.current(), []);
-  const persistPosition = () => {
+  const measurePosition = () => {
     // Switching assistants empties the shared transcript, and the browser reports that
     // clamp to the top as a scroll. Only the loaded conversation's own scrolling counts.
     if (!userId || !botId || !scroll.current || !restored.current || conversation?.botId !== botId) return;
@@ -265,9 +278,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     } else holdPlace();
     if (positionTimer.current) clearTimeout(positionTimer.current);
     const positionBot = botId;
-    const viewportTop = scroll.current.getBoundingClientRect().top;
-    const visibleMessage = [...scroll.current.querySelectorAll<HTMLElement>('[data-message-id]')]
-      .find(element => element.getBoundingClientRect().bottom > viewportTop + 8);
+    const visibleMessage = latest ? undefined : firstMessageBelow(scroll.current, scroll.current.getBoundingClientRect().top + 8);
     const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
     positionTimer.current = setTimeout(
       () =>
@@ -275,6 +286,18 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       300,
     );
   };
+  // Scrolling reports many events per frame. Placement is measured once per frame, with the
+  // latest render's state, and at once before switching assistants.
+  const measure = useRef(measurePosition);
+  measure.current = measurePosition;
+  const frame = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  const persistPosition = useCallback((immediately = false) => {
+    cancelAnimationFrame(frame.current);
+    frame.current = 0;
+    if (immediately) measure.current();
+    else frame.current = requestAnimationFrame(() => { frame.current = 0; measure.current(); });
+  }, []);
   const history = {
     earlier: (conversation?.earlier ?? 0) > 0,
     complete: conversation?.earlier === 0,

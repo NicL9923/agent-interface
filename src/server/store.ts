@@ -75,6 +75,7 @@ export class Store {
   nativeSession(...args: Parameters<AccountRepository["nativeSession"]>) { return this.accounts.nativeSession(...args); }
   getNativeSession(...args: Parameters<AccountRepository["getNativeSession"]>) { return this.accounts.getNativeSession(...args); }
   deleteNativeSession(...args: Parameters<AccountRepository["deleteNativeSession"]>) { return this.accounts.deleteNativeSession(...args); }
+  renewNativeSession(...args: Parameters<AccountRepository["renewNativeSession"]>) { return this.accounts.renewNativeSession(...args); }
   pruneNativeAuth(...args: Parameters<AccountRepository["pruneNativeAuth"]>) { return this.accounts.pruneNativeAuth(...args); }
   nativeFlow(...args: Parameters<AccountRepository["nativeFlow"]>) { return this.accounts.nativeFlow(...args); }
   getNativeFlow(...args: Parameters<AccountRepository["getNativeFlow"]>) { return this.accounts.getNativeFlow(...args); }
@@ -150,6 +151,7 @@ export class Store {
   enqueue(...args: Parameters<NotificationRepository["enqueue"]>) { return this.notifications.enqueue(...args); }
   chatPresence(...args: Parameters<NotificationRepository["chatPresence"]>) { return this.notifications.chatPresence(...args); }
   seenInChat(...args: Parameters<NotificationRepository["seenInChat"]>) { return this.notifications.seenInChat(...args); }
+  chatReads(...args: Parameters<NotificationRepository["chatReads"]>) { return this.notifications.chatReads(...args); }
   readOnDevices(...args: Parameters<NotificationRepository["readOnDevices"]>) { return this.notifications.readOnDevices(...args); }
   markCleared(...args: Parameters<NotificationRepository["markCleared"]>) { return this.notifications.markCleared(...args); }
   subscribe(...args: Parameters<NotificationRepository["subscribe"]>) { return this.notifications.subscribe(...args); }

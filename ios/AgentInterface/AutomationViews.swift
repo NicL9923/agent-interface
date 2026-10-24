@@ -112,7 +112,7 @@ import SwiftUI
     return false
   }
   /// Exactly one send. A failed or cancelled response can hide a successful native write.
-  func change<T: Decodable, V: Encodable>(
+  func change<T: Decodable & SendableMetatype, V: Encodable>(
     _ store: AppStore, _ suffix: String, _ input: V, method: String = "POST",
     current: @escaping @MainActor () -> Bool = { true }
   ) async -> T? {

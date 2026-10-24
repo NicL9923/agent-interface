@@ -230,6 +230,41 @@ it("authorizes native reads and downloads, rejects malformed bearer fallback, an
   expect((await app.inject({ url: "/api/bots", headers: { cookie } })).statusCode).toBe(200);
 });
 
+it("renews a native session in place, keeping its push registrations, until 90 days after sign-in", async () => {
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const { app, store } = await setup(config);
+  const { token } = await connectNative(app);
+  const headers = { authorization: `Bearer ${token}` };
+  const renew = (extra: Record<string, string> = {}) => app.inject({ method: "POST", url: "/api/auth/native/renew", headers: { ...headers, ...extra }, payload: {} });
+  store.registerNativeDevice("local-one", hash(token), randomUUID(), "ab".repeat(32), "sandbox");
+  const day = 86400000;
+  // Six days in, one day remains; renewal restores a full week from now.
+  store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
+  store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(Date.now() - 6 * day, hash(token));
+  const renewed = await renew();
+  expect(renewed.statusCode).toBe(200);
+  expect(Math.abs(Date.parse(renewed.json().expiresAt) - (Date.now() + 7 * day))).toBeLessThan(5000);
+  expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(200);
+  expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(1);
+  // Near the 90-day limit, renewal stops at the limit instead of granting another week.
+  const start = Date.now() - 88 * day;
+  store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(start, hash(token));
+  store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
+  expect(Date.parse((await renew()).json().expiresAt)).toBe(start + 90 * day);
+  // A session from the previous release has no recorded start. Its start is inferred once and
+  // kept, so renewing it every six days still ends 90 days after it began.
+  const legacy = "legacy-session", began = Date.now();
+  store.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(legacy, "local-one", began + 7 * day);
+  let last: number | undefined;
+  for (let at = began + 6 * day; at < began + 120 * day; at += 6 * day)
+    last = store.renewNativeSession(legacy, 7 * day, 90 * day, at) ?? last;
+  expect(last).toBe(began + 90 * day);
+  // A browser-origin request never renews a native token, and a gone session cannot be renewed.
+  expect((await renew({ origin })).statusCode).toBe(403);
+  store.deleteNativeSession(hash(token));
+  expect((await renew()).statusCode).toBe(401);
+});
+
 it("signs cached ES256 APNs provider requests and bounds multibyte payloads", async () => {
   const dir = mkdtempSync(join(tmpdir(), "apns-test-"));
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });

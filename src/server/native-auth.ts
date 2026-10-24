@@ -8,6 +8,10 @@ import type { User } from "../shared/types.js";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const random = () => randomBytes(32).toString("base64url");
 const callback = "agentinterface://auth/callback";
+/** How long a native sign-in lasts without use. The app renews it while it is in use. */
+export const NATIVE_SESSION_MS = 7 * 86400000;
+/** Renewal never extends a session past this long after its Google sign-in. */
+export const NATIVE_SIGN_IN_LIMIT_MS = 90 * 86400000;
 const state = z.string().regex(/^[A-Za-z0-9_-]{32,128}$/);
 const verifier = z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/);
 const startInput = z.object({ state, code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/), code_challenge_method: z.literal("S256") }).strict();
@@ -110,8 +114,16 @@ if (!settings.clientId && !document.getElementById('one')) {
     const userId = store.consumeNativeCode(hash(body.code), body.state, challenge);
     const user = userId ? store.getUser(userId) : undefined;
     if (!user || !allowedIdentity(config, user)) return reply.code(401).send({ error: "Connection code is invalid or expired", code: "session_expired" });
-    const token = random(), expires = Date.now() + 7 * 86400000;
+    const token = random(), expires = Date.now() + NATIVE_SESSION_MS;
     store.nativeSession(hash(token), user.id, expires);
     return { token, expiresAt: new Date(expires).toISOString(), user };
+  });
+  // The same token lasts longer, rather than a new one, so a lost response can never sign the app
+  // out and the device's push registrations, which belong to the session, stay in place.
+  app.post("/api/auth/native/renew", async (req, reply) => {
+    const expires = req.nativeSessionHash
+      ? store.renewNativeSession(req.nativeSessionHash, NATIVE_SESSION_MS, NATIVE_SIGN_IN_LIMIT_MS) : undefined;
+    if (!expires) return reply.code(401).send({ error: "Sign in again to keep using this server.", code: "session_expired" });
+    return { expiresAt: new Date(expires).toISOString() };
   });
 }

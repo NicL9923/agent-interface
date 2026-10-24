@@ -89,8 +89,15 @@ final class AvatarMotionParityTests: XCTestCase {
       var avatar: Int
       var cue: Cue
     }
+    struct QuietSample: Decodable {
+      var plan: PlanSample
+      var ahead: Double
+      /// `idleQuietAt` every 0.05 s from 0, as 1 for quiet and 0 for not.
+      var quiet: String
+    }
     var seeds: [String: Double]
     var rings: [String: Ring]
+    var quiet: [QuietSample]
     var poses: [PoseSample]
     var expressions: [ExpressionSample]
     var pitch: [PitchSample]
@@ -187,6 +194,22 @@ final class AvatarMotionParityTests: XCTestCase {
       assertMatch(
         fields(M.expression(for: try state(sample.state), at: sample.t, plan: try plan(sample.plan))),
         sample.expression, "\(sample.state) t=\(sample.t) gesture=\(sample.plan.gesture?.kind ?? "-")")
+    }
+  }
+
+  /// The idle cadence must slow down at the same moments on both clients, so blinks, gaze shifts,
+  /// gestures and arrivals always get every frame.
+  func testIdleQuietSpansMatchTheWeb() throws {
+    let samples = try samples().quiet
+    XCTAssertEqual(samples.count, 2)
+    for sample in samples {
+      let plan = try plan(sample.plan)
+      let actual = (0..<sample.quiet.count).map { step in
+        M.idleQuietAt((Double(step) * 0.05 * 1e6).rounded() / 1e6, plan, ahead: sample.ahead) ? "1" : "0"
+      }.joined()
+      XCTAssertEqual(actual, sample.quiet, "gesture \(sample.plan.gesture?.kind ?? "-")")
+      // Both kinds of span occur, so a model that is always quiet or never quiet fails.
+      XCTAssertTrue(sample.quiet.contains("0") && sample.quiet.contains("1"))
     }
   }
 
