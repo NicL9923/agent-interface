@@ -158,7 +158,53 @@ import XCTest
     XCTAssertNil(value.api?.token)
   }
 
+  func testAPassStoppedDuringRenewalStartsNoStream() async throws {
+    // Suspending or signing out cancels the poll task while its renewal is still on the way.
+    final class Pass: @unchecked Sendable { var task: Task<Bool, Never>? }
+    let pass = Pass()
+    let renewed = ISO8601DateFormatter().string(from: Date().addingTimeInterval(7 * 24 * 3600))
+    let server = FakeServer { request in
+      guard request.url?.path == "/api/auth/native/renew" else { return .init(body: Self.json(["ok": true])) }
+      DispatchQueue.main.sync { pass.task?.cancel() }
+      return .init(body: Self.json(["expiresAt": renewed]))
+    }
+    let value = store(server)
+    defer { clean(server, value) }
+    UserDefaults.standard.set(
+      ISO8601DateFormatter().string(from: Date().addingTimeInterval(24 * 3600)), forKey: DeviceDefaults.expiry(server.origin))
+    pass.task = Task { await value.pollOnce() }
+    let continues = await pass.task!.value
+    XCTAssertFalse(continues, "Before this the pass went on to open streams after it was stopped")
+    XCTAssertFalse(value.sessionExpired)
+    XCTAssertFalse(server.requests.contains { $0.url?.path == "/api/events" })
+  }
+
   // MARK: Poll errors
+
+  func testDismissedRosterAndChatErrorsEachStayDismissedUntilTheirOwnReadWorks() async throws {
+    let routes = Routes()
+    routes[path: "/api/bootstrap"] = .init(status: 503, body: Self.json(["error": "Synthetic roster outage"]))
+    routes[path: "/api/bots/bot/conversation"] = .init(status: 503, body: Self.json(["error": "Synthetic chat outage"]))
+    let server = FakeServer { routes[path: $0.url!.path] ?? .init() }
+    let value = store(server)
+    defer { clean(server, value) }
+    value.bootstrap = try decode(Self.bootstrap(bots: [Self.bot(unread: nil, at: nil)]))
+    value.selectedBotId = "bot"
+    value.draft = Draft(text: "", attachments: [], dirty: false); value.draftReady = true
+    await value.refreshBootstrap()
+    value.dismissError()
+    await value.refreshConversation()
+    XCTAssertEqual(value.error, "Synthetic chat outage")
+    value.dismissError()
+    await value.refreshBootstrap()
+    XCTAssertNil(value.error, "Before this dismissing the chat error forgot the roster dismissal")
+    await value.refreshConversation()
+    XCTAssertNil(value.error)
+    routes[path: "/api/bots/bot/conversation"] = .init(body: Self.conversation())
+    await value.refreshConversation()
+    await value.refreshBootstrap()
+    XCTAssertNil(value.error, "The roster stays dismissed until the roster itself works")
+  }
 
   func testAPollErrorClearsWhenThatReadWorksAgainAndStaysDismissed() async throws {
     let routes = Routes()

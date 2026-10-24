@@ -91,8 +91,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// successful read of the same kind clears it, and a chat leaves it to its connection card.
   private(set) var connectionError: PollRead?
   enum PollRead: Equatable, Sendable { case roster, chat, submissions }
-  /// A poll error dismissed during an outage stays dismissed until that read works again.
-  @ObservationIgnored private var dismissedPoll: PollRead?
+  /// Poll errors dismissed during an outage stay dismissed until their own read works again.
+  @ObservationIgnored private var dismissedPolls: Set<PollRead> = []
   /// A short message for home, such as an assistant that is no longer available.
   var notice: String?
   /// The assistant this person just lost access to, so views showing it close.
@@ -495,7 +495,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   /// One pass of the poll loop. Returns false once the sign-in is expiring, which ends polling.
   func pollOnce() async -> Bool {
+    let currentGeneration = generation
     await renewSignInIfDue()
+    // Signing out, switching accounts or suspending during renewal ends this pass before it
+    // starts any stream for a session that is gone.
+    guard !Task.isCancelled, generation == currentGeneration, api?.token != nil else { return false }
     if let api,
       let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
@@ -1692,7 +1696,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     uploads.notice = []
     appUnavailable = false
     sessionExpired = false
-    dismissedPoll = nil
+    dismissedPolls = []
     renewalAttemptedAt = nil
     upgrade.reset(); computerStatus = nil
     resetPreferenceSaves()
@@ -1717,17 +1721,17 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private func reportPoll(_ failure: Error, _ read: PollRead) {
     if failure is CancellationError { return }
     let expired = (failure as? APIError)?.isSessionExpired ?? false
-    if !expired, dismissedPoll == read || connectionError == read && error == failure.localizedDescription { return }
+    if !expired, dismissedPolls.contains(read) || connectionError == read && error == failure.localizedDescription { return }
     report(failure)
     if error != nil, !sessionExpired { connectionError = read }
   }
   private func pollSucceeded(_ read: PollRead) {
-    if dismissedPoll == read { dismissedPoll = nil }
+    dismissedPolls.remove(read)
     if connectionError == read { error = nil }
   }
   /// The error banner's close button. A poll error stays closed until its read works again.
   func dismissError() {
-    dismissedPoll = connectionError
+    if let connectionError { dismissedPolls.insert(connectionError) }
     error = nil
   }
   func report(_ error: Error) {
