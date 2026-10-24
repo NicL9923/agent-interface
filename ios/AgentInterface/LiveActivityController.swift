@@ -85,6 +85,12 @@ struct LiveActivityStartRegistration: Encodable {
     Task { [weak self] in
       for await activity in Live.activityUpdates {
         guard let self else { return }
+        // A pushed start can land just after the app started its own; the newcomer goes.
+        let others = self.running.filter { $0.id != activity.id }.map { (id: $0.id, scope: $0.attributes.scope) }
+        if Self.isDuplicate(scope: activity.attributes.scope, among: others) {
+          await activity.end(nil, dismissalPolicy: .immediate)
+          continue
+        }
         self.observe(activity)
         await self.register(activity)
       }
@@ -98,6 +104,11 @@ struct LiveActivityStartRegistration: Encodable {
         }
       }
     }
+  }
+
+  /// One activity per account on a device: a new one is a duplicate when the account already has one.
+  nonisolated static func isDuplicate(scope: String, among running: [(id: String, scope: String)]) -> Bool {
+    running.contains { $0.scope == scope }
   }
 
   /// After a send the server accepted: show the assistant as starting right away.

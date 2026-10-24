@@ -119,6 +119,13 @@ import XCTest
     XCTAssertNil(IntentLinks.takePending(from: location), "In the app the link opens at once instead of waiting")
   }
 
+  func testAPushedActivityThatLandsBesideTheAppsOwnIsTheDuplicate() {
+    XCTAssertTrue(LiveActivityController.isDuplicate(scope: "one", among: [(id: "local", scope: "one")]))
+    XCTAssertFalse(LiveActivityController.isDuplicate(scope: "one", among: []), "The first activity is kept")
+    XCTAssertFalse(LiveActivityController.isDuplicate(scope: "one", among: [(id: "old", scope: "two")]),
+      "Another account's leftover is ended by the foreground check, not by keeping this one out")
+  }
+
   func testOnDeviceTranscriptionComesFirstAndTheServerCoversWhatItCannot() async throws {
     let server = FakeServer { _ in .init(body: #"{"text":"Check the pasture gate","provider":"fixture"}"#) }
     let voice = VoiceController()
