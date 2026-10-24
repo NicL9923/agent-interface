@@ -73,11 +73,11 @@ export class LiveActivities {
     const startFor = new Map(starts.map(start => [start.deviceId, start]));
     for (const registration of registrations) {
       try {
-        const { state, active } = await this.build(registration.userId, roster, conversations, registration, registration.lastState);
+        const { state, active, unread } = await this.build(registration.userId, roster, conversations, registration, registration.lastState);
         // Remember what this activity covers before delivery, which forgets a dismissed one, so
         // dismissing it keeps that work off the Lock Screen.
         const start = startFor.get(registration.deviceId);
-        if (start) this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active));
+        if (start) this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
         await this.deliver(registration, state);
       } catch (error) {
         this.push.failure(error);
@@ -88,8 +88,8 @@ export class LiveActivities {
     for (const start of starts) {
       try {
         if (running.has(start.deviceId)) continue;
-        const { state, active } = await this.build(start.userId, roster, conversations);
-        await this.begin(start, state, active);
+        const { state, active, unread } = await this.build(start.userId, roster, conversations);
+        await this.begin(start, state, active, unread);
       } catch (error) {
         this.push.failure(error);
       }
@@ -101,7 +101,7 @@ export class LiveActivities {
    * as a routine or a message sent from the web. Work an earlier activity already showed, including
    * one the person dismissed, does not start another; only a newly running assistant does.
    */
-  private async begin(listed: LiveActivityStartRegistration, state: LiveState, active: CoveredRun[]) {
+  private async begin(listed: LiveActivityStartRegistration, state: LiveState, active: CoveredRun[], unread: Set<string>) {
     // Building the state waited on Hermes. Meanwhile another account may have taken the token over,
     // the session may have ended, the app may have started or registered its own activity.
     const start = this.store.liveActivityStart(listed.deviceId);
@@ -110,17 +110,17 @@ export class LiveActivities {
     // The app dismissed its activity before any pass recorded what it showed: whatever runs now
     // was on it, or began within a pass of it, so it stays off the Lock Screen.
     if (start.dismissed) {
-      this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active));
+      this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
       return;
     }
     // Coverage lasts only while that run does: an assistant's next run is new work, even when it
     // began between two passes. A run first seen before Hermes named it takes its name now.
-    const covered = remember(start.started, active).filter(run => start.started.some(old => sameRun(old, run)));
+    const covered = remember(start.started, active, unread).filter(run => start.started.some(old => sameRun(old, run)));
     if (JSON.stringify(covered) !== JSON.stringify(start.started)) this.store.liveActivityStartCovered(start.deviceId, start.token, covered);
     if (!active.length) return;
     const now = this.now();
     // The app starts its own activity right after a send; a pushed one would be a duplicate.
-    if (now - start.localAt < ARMED_MS || covered.length === active.length) return;
+    if (now - start.localAt < ARMED_MS || active.every(run => covered.some(old => sameRun(old, run)))) return;
     const hero = state.rows.find(row => !terminal(row.phase));
     const aps = {
       timestamp: seconds(now), event: "start", "content-state": state, "stale-date": seconds(now) + STALE_S,
@@ -192,7 +192,7 @@ export class LiveActivities {
   private async build(
     userId: string, roster: Bot[], conversations: Map<string, Promise<Conversation | undefined>>,
     armed?: Pick<LiveActivityRegistration, "armed" | "armedAt">, previous?: LiveState,
-  ): Promise<{ state: LiveState; active: CoveredRun[] }> {
+  ): Promise<{ state: LiveState; active: CoveredRun[]; unread: Set<string> }> {
     const now = this.now();
     const follows = new Set(this.store.preferences(userId).followBots);
     const arming = armed && now - armed.armedAt < ARMED_MS ? new Set(armed.armed) : new Set<string>();
@@ -204,6 +204,8 @@ export class LiveActivities {
     };
     const rows: LiveRow[] = [];
     const runs = new Map<string, string>();
+    // Working assistants whose conversation could not be read, so whether they are this person's is unknown.
+    const unread = new Set<string>();
     for (const bot of roster) {
       // Keep canonical IDs intact. An oversized ID cannot fit into a usable ActivityKit row.
       if (Buffer.byteLength(bot.id) > 256) continue;
@@ -214,6 +216,7 @@ export class LiveActivities {
       let row: LiveRow | undefined;
       if (candidate) {
         const current = await conversation(bot.id);
+        if (!current && activeStates.has(bot.activity)) unread.add(bot.id);
         const state = current?.activity.state ?? bot.activity;
         const mine = arming.has(bot.id) || follows.has(bot.id) || !!before
           || (!!current?.activity.runId && this.store.participants(current.activity.runId).includes(userId));
@@ -244,7 +247,7 @@ export class LiveActivities {
     const state: LiveState = { title: fit(title(rows, active.length, waiting.length), 80) ?? "Assistant activity", activeCount: active.length, attentionCount: waiting.length,
       updatedAt: seconds(now), rows: rows.slice(0, MAX_ROWS) };
     // Reserve room for the APNs envelope.
-    return { state: shed(state, 3500), active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }) };
+    return { state: shed(state, 3500), active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }), unread };
   }
 }
 
@@ -262,13 +265,16 @@ function shed(state: LiveState, limit: number) {
 }
 /**
  * The running entries, each keeping the run ID an earlier pass knew when Hermes did not report one
- * this time, as when its conversation could not be read. Losing it would let the coverage match
- * the assistant's next run.
+ * this time, plus earlier entries for working assistants whose conversation could not be read.
+ * Losing either would let a dismissed run come back, or let coverage match the next run.
  */
-const remember = (previous: CoveredRun[], active: CoveredRun[]) => active.map(run => {
-  const runId = run.runId ?? previous.find(old => old.botId === run.botId && old.runId)?.runId;
-  return runId ? { botId: run.botId, runId } : { botId: run.botId };
-});
+const remember = (previous: CoveredRun[], active: CoveredRun[], unread: Set<string>) => [
+  ...active.map(run => {
+    const runId = run.runId ?? previous.find(old => old.botId === run.botId && old.runId)?.runId;
+    return runId ? { botId: run.botId, runId } : { botId: run.botId };
+  }),
+  ...previous.filter(old => unread.has(old.botId) && !active.some(run => run.botId === old.botId)),
+];
 /** The same run, or the same assistant while either side did not know the run yet. */
 const sameRun = (a: CoveredRun, b: CoveredRun) => a.botId === b.botId && (a.runId === b.runId || !a.runId || !b.runId);
 /** Apple refused the token itself, or the payload can never fit: retrying cannot help. */
