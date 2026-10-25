@@ -54,9 +54,8 @@ import XCTest
 
   func testDockCountsWaitingDecisionsAndOffersReview() throws {
     let app = launch(["QUESTION"])
-    let dock = app.descendants(matching: .any)["dockDecisions"]
-    XCTAssertTrue(dock.waitForExistence(timeout: 15), app.debugDescription)
-    XCTAssertTrue(app.staticTexts["1 decision waiting"].exists)
+    XCTAssertTrue(app.staticTexts["1 decision waiting"].waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.descendants(matching: .any)["statusDock"].exists, "It sits in the dock above the composer")
     try capture("02-dock-decisions")
     app.buttons["reviewDecisions"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Which plan?"].waitForExistence(timeout: 5))

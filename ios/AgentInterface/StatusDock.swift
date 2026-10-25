@@ -109,7 +109,7 @@ struct StatusDock: View {
         Button("Review") { store.attentionScrollRequest = UUID() }.font(.footnote.weight(.semibold))
           .buttonStyle(.bordered).controlSize(.small).accessibilityIdentifier("reviewDecisions")
           .accessibilityHint("Scrolls to the first one in the conversation")
-      }.modifier(DockCard()).accessibilityElement(children: .contain).accessibilityIdentifier("dockDecisions")
+      }.modifier(DockCard())
     case .heldText:
       Text("Text from a notification, Siri or the Share sheet joins this draft once your last message settles.")
         .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
