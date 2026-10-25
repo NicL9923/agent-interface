@@ -479,9 +479,9 @@ approval, a question or a secure request, each counted once. The notification be
 delivered counts too: an approval as a decision, other news as unread in a chat
 they have opened before. An approval the person was notified about keeps counting,
 even while the roster shows the assistant idle, until someone decides it in the
-app, its own run finishes, fails or is interrupted, or Hermes's open requests no
-longer hold it. Another run on the same assistant, such as a routine, does not
-settle it. The server compares open requests whenever it reads the conversation
+app, its own run finishes, fails or is interrupted, or the open requests of the
+Hermes session that raised it no longer hold it. Another run or session on the same
+assistant, such as a routine, does not settle it. The server compares open requests whenever it reads the conversation
 and, a few assistants at a time, about once a minute in the background, and
 credits nobody with a decision made outside the app. Approvals count for a day at
 most. `src/shared/unread.ts` holds the rule, which iOS mirrors in `UnreadChats`. The read-elsewhere clear push carries the new count as `badge`

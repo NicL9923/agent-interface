@@ -321,6 +321,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     return {
       botId,
       sessionId: value.canonical_stored_session_id ?? value.stored_session_id ?? value.info?.stored_session_id ?? sid,
+      requestSessionId: sid,
       messages: cut ? shown.slice(cut.context) : shown,
       ...(cut ? {window: {earlier: cut.earlier, context: shown.slice(0, cut.context)}} : {}),
       activity: {state: value.app_interruption ? 'interrupted' : attention.length ? 'blocked' : activity, detail, runId},

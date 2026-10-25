@@ -207,7 +207,7 @@ export class BackgroundWorker {
           // A read that outlives the pass or the worker is never applied.
           const conversation = await Promise.race([this.runtime.conversation(botId, { history: false }), outOfTime, this.halted]);
           if (!conversation) return;
-          this.store.reconcileApprovals(botId, conversation.approvals.map(approval => approval.id), readAt);
+          this.store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
         } catch { /* Unreadable now; it stays counted and is checked again later. */ }
       }
     } finally { clearTimeout(timer); }

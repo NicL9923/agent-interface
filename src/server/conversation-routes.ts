@@ -26,7 +26,7 @@ const sharedReadMargin = 60000;
 export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
   const readAt = Date.now();
   const conversation = await runtime.conversation(botId, { history: false });
-  store.reconcileApprovals(botId, conversation.approvals.map(approval => approval.id), readAt);
+  store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
   const approval = conversation.approvals.find((a) => a.id === approvalId);
   if (
     !approval ||
@@ -63,10 +63,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     }).parse(req.query);
     const windowed = window.start !== undefined || window.turns !== undefined;
     const readAt = Date.now();
-    const { window: cut, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
+    const { window: cut, requestSessionId, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
     // Hermes's open requests settle approvals answered outside the app. A history read can be
     // shared for a few seconds, so only approvals notified well before it count.
-    store.reconcileApprovals(req.params.id, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
+    store.reconcileApprovals(req.params.id, requestSessionId, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
     // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);

@@ -123,8 +123,9 @@ it("counts every known unresolved approval in alerts and clears, until it is dec
   } finally { await worker.stop(); store.close(); }
 });
 
-const approvalEvent = (id: string, botId: string, approvalId: string, runId?: string) =>
-  ({ id, botId, kind: "approval" as const, approvalId, ...(runId ? { runId } : {}), title: "Approval requested", occurredAt: new Date().toISOString() });
+// Raised in the assistant's live chat session unless another is named.
+const approvalEvent = (id: string, botId: string, approvalId: string, runId?: string, sessionId = "live") =>
+  ({ id, botId, sessionId, kind: "approval" as const, approvalId, ...(runId ? { runId } : {}), title: "Approval requested", occurredAt: new Date().toISOString() });
 // Records events as discovered this many minutes ago.
 function recordedAgo(store: Store, minutes: number, events: Parameters<Store["recordEvents"]>[0]) {
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - minutes * 60000);
@@ -175,7 +176,7 @@ it("settles approvals by run outcomes a rolled-back release recorded", () => {
 
 it("drops approvals Hermes no longer holds open when the app reads the conversation, crediting nobody", async () => {
   const approvals = [approvalFixture({ id: "open" })];
-  const conversation = vi.fn(async (botId: string) => conversationFixture({ botId, approvals }));
+  const conversation = vi.fn(async (botId: string) => conversationFixture({ botId, approvals, requestSessionId: "live" }));
   const runtime = fakeRuntime({ listBots: async () => [botFixture({ id: "barn" })], capabilities: async () => capabilitiesFixture(), conversation, close: async () => {} });
   const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
   try {
@@ -197,12 +198,41 @@ it("drops approvals Hermes no longer holds open when the app reads the conversat
   } finally { await app.close(); }
 });
 
+it("settles an approval from another session only by that session's own requests, a decision or its own run, never by the chat's", async () => {
+  let read = conversationFixture({ botId: "barn", requestSessionId: "live", approvals: [] });
+  const runtime = fakeRuntime({ listBots: async () => [botFixture({ id: "barn" })], capabilities: async () => capabilitiesFixture({ approvals: { supported: true } }),
+    conversation: async () => read, approve: async () => {}, close: async () => {} });
+  const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+  try {
+    const headers = await localLogin(app, "http://127.0.0.1:3000");
+    store.savePreferences("local-one", { ...defaultPreferences, followBots: ["barn"] });
+    // A routine's session asked twice, and the chat's own session once; Hermes's chat holds none open.
+    recordedAgo(store, 5, [approvalEvent("ask-1", "barn", "routine-1", "routine-run", "routine"),
+      approvalEvent("ask-2", "barn", "routine-2", "routine-run-2", "routine"), approvalEvent("ask-3", "barn", "chat", "chat-run")]);
+    const resolved = () => (storeDb(store).prepare("SELECT approval_id FROM approval_resolutions ORDER BY approval_id").all() as { approval_id: string }[]).map(row => row.approval_id);
+    const page = (await app.inject({ url: "/api/bots/barn/conversation?turns=20", headers })).json();
+    expect(page).not.toHaveProperty("requestSessionId");
+    expect(resolved()).toEqual(["chat"]);
+    expect(store.pendingDecisions("local-one")).toEqual(new Set(["barn"]));
+    // Deciding through the app reads the chat's requests too, which still say nothing about the routine's.
+    expect((await app.inject({ method: "POST", url: "/api/bots/barn/approvals/routine-1", headers, payload: { decision: "approved" } })).statusCode).toBe(409);
+    expect(resolved()).toEqual(["chat"]);
+    // A read of the routine's own session that lacks one settles it.
+    read = conversationFixture({ botId: "barn", requestSessionId: "routine", approvals: [approvalFixture({ id: "routine-2" })] });
+    await app.inject({ url: "/api/bots/barn/conversation?turns=20", headers });
+    expect(resolved()).toEqual(["chat", "routine-1"]);
+    // The other ends with its own run.
+    store.recordEvents([{ id: "done", botId: "barn", runId: "routine-run-2", kind: "completed", title: "Done", occurredAt: new Date().toISOString() }], "9");
+    expect(store.pendingDecisions("local-one").size).toBe(0);
+  } finally { await app.close(); }
+});
+
 it("checks a few assistants' counted approvals against Hermes in the background, with fresh reads", async () => {
   const store = people();
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
   const botIds = Array.from({ length: 7 }, (_, index) => `bot-${index}`);
   store.savePreferences("one", { ...defaultPreferences, followBots: botIds });
-  const conversation = vi.fn(async (botId: string, _options?: object) => conversationFixture({ botId, approvals: botId === "bot-0" ? [approvalFixture({ id: "bot-0" })] : [] }));
+  const conversation = vi.fn(async (botId: string, _options?: object) => conversationFixture({ botId, requestSessionId: "live", approvals: botId === "bot-0" ? [approvalFixture({ id: "bot-0" })] : [] }));
   const runtime = fakeRuntime({ listBots: async () => botIds.map(id => botFixture({ id })), conversation,
     capabilities: async () => capabilitiesFixture({ durableEvents: { supported: false } }) });
   const worker = new BackgroundWorker(store, runtime, config);
