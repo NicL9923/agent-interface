@@ -32,7 +32,7 @@ export type BotSaveRequest = BotInput & {
 };
 export interface ReadPosition { messageId?: string; scrollTop?: number }
 /** A conversation read, with this person's draft and read position. */
-export type ConversationPage = Omit<Conversation, "window"> & {
+export type ConversationPage = Omit<Conversation, "window" | "requestSessionId"> & {
   /** With a history window: visible messages before it, and files only those messages carry. */
   earlier?: number;
   earlierFiles?: number;
