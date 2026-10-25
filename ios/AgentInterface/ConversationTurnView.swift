@@ -298,18 +298,27 @@ struct TranscriptDisclosureStyle: DisclosureGroupStyle {
   }
 }
 
+extension Message {
+  /// A person's message, as the web's `isHumanMessage` reads it: a user row whose origin is absent
+  /// or explicitly `human`, never activity. Retry and prompt recall both use it.
+  var isHumanMessage: Bool {
+    guard role == "user", !isInternalActivity else { return false }
+    let kind = presentationOrigin?.kind
+    return kind == nil || kind == "human"
+  }
+}
+
 /// Whether the latest turn offers Retry (contract C1): its run failed, and the person's latest
 /// message has no reply text after it. Activity rows and empty assistant rows do not count as a reply.
 enum RetryTurn {
   static func target(_ conversation: Conversation) -> Message? {
-    guard conversation.activity.state == .failed,
-      let index = conversation.messages.lastIndex(where: { $0.role == "user" && $0.presentationOrigin == nil })
-    else { return nil }
+    guard conversation.activity.state == .failed, let index = conversation.messages.lastIndex(where: \.isHumanMessage) else { return nil }
     let replied = conversation.messages[(index + 1)...].contains {
       $0.role == "assistant" && !$0.isInternalActivity && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     let message = conversation.messages[index]
-    guard !replied, !message.text.isEmpty || !(message.files ?? []).isEmpty else { return nil }
+    // Only a saved message can be retried; a live row never counts.
+    guard !replied, !message.id.hasSuffix("-inflight"), !message.text.isEmpty || !(message.files ?? []).isEmpty else { return nil }
     return message
   }
   /// The request ID for retrying one failed turn, the same on every device as the web's

@@ -39,8 +39,7 @@ struct PromptRecall: Equatable {
   /// household members in a shared chat, scheduled or agent handoffs and activity are left out.
   static func ownMessages(_ messages: [Message], userId: String?) -> [String] {
     var result: [String] = []
-    for message in messages.reversed() where message.role == "user" && !message.isInternalActivity && !message.isAgentExchange
-      && message.presentationOrigin == nil && (message.sender == nil || message.sender?.id == userId)
+    for message in messages.reversed() where message.isHumanMessage && (message.sender == nil || message.sender?.id == userId)
     {
       let text = message.text
       guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, result.last != text else { continue }

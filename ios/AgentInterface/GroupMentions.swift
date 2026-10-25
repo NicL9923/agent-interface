@@ -68,10 +68,12 @@ struct MentionSuggestions: View {
 struct GroupNotice: Decodable, Equatable {
   var roomId: String
   var latestSeq: Int
-  /// Whether this notice means the open room has events past the loaded cursor.
-  static func news(_ notice: GroupNotice?, room: String, cursor: Int) -> Bool {
+  /// Whether this notice means the open room changed. The server announces new events and driver
+  /// status changes alike, such as a decision becoming pending, sometimes at the sequence already
+  /// loaded, and suppresses unchanged snapshots itself, so any valid notice for the room reloads it.
+  static func news(_ notice: GroupNotice?, room: String) -> Bool {
     guard let notice else { return false }
-    return notice.roomId == room && notice.latestSeq > cursor
+    return notice.roomId == room && notice.latestSeq >= 0
   }
   /// Reads the notice from one event's name and data line.
   static func parse(event: String, data: String) -> GroupNotice? {
@@ -81,15 +83,14 @@ struct GroupNotice: Decodable, Equatable {
 }
 
 extension View {
-  /// Follows the room's notices on the app event stream while the app is active. Each notice of
-  /// new events calls `changed`. A slow poll elsewhere covers a stream that fails unnoticed.
-  func watchingGroup(_ roomId: String, cursor: @escaping () -> Int, changed: @escaping () async -> Void) -> some View {
-    modifier(GroupWatch(roomId: roomId, cursor: cursor, changed: changed))
+  /// Follows the room's notices on the app event stream while the app is active. Each notice for
+  /// the room, of new events or a status change, calls `changed`. A slow poll elsewhere covers a stream that fails unnoticed.
+  func watchingGroup(_ roomId: String, changed: @escaping () async -> Void) -> some View {
+    modifier(GroupWatch(roomId: roomId, changed: changed))
   }
 }
 private struct GroupWatch: ViewModifier {
   var roomId: String
-  var cursor: () -> Int
   var changed: () async -> Void
   @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
@@ -109,7 +110,7 @@ private struct GroupWatch: ViewModifier {
             if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("data:") {
               let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-              if GroupNotice.news(GroupNotice.parse(event: event, data: data), room: roomId, cursor: cursor()) { await changed() }
+              if GroupNotice.news(GroupNotice.parse(event: event, data: data), room: roomId) { await changed() }
               event = ""
             }
           }
@@ -120,5 +121,21 @@ private struct GroupWatch: ViewModifier {
         try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
       }
     }
+  }
+}
+
+/// Runs refreshes one at a time. One asked for while another runs is folded into a single run after
+/// it, so the stream, the fallback poll and actions never overlap and the latest snapshot lands last.
+@MainActor final class SerialRefresh {
+  private var running = false
+  private var again = false
+  func run(_ work: () async -> Void) async {
+    if running { again = true; return }
+    running = true
+    defer { running = false }
+    repeat {
+      again = false
+      await work()
+    } while again
   }
 }

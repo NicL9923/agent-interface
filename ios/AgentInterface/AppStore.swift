@@ -1595,22 +1595,36 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// C2). With a message, the conversation loads from that message when it is not loaded yet,
   /// `GET /bots/:id/conversation?start=`, and the view scrolls to it and highlights it briefly.
   /// Earlier history then pages in as usual. Without one, the chat opens at its latest message.
+  /// Each call is one operation: a later open, a find step to a loaded message, another account or
+  /// another assistant makes it obsolete, and an obsolete one changes neither window nor focus.
   func openConversation(botId: String, atMessage messageId: String?) async {
+    openRequests += 1
+    let request = openRequests, account = scope
+    let current = { [weak self] in self?.openRequests == request && self?.scope == account && self?.selectedBotId == botId }
     if selectedBotId != botId || conversation?.botId != botId { await select(botId) } else { conversationRequest = UUID() }
-    guard let messageId, selectedBotId == botId else { return }
+    guard let messageId, current() else { return }
     if conversation?.messages.contains(where: { $0.id == messageId }) != true {
       // The window now starts at the message; polls keep it, and pages add history above it.
       historyStarts[botId] = messageId
       windowGeneration += 1
       await refreshConversation()
+      guard current() else { return }
     }
-    guard selectedBotId == botId else { return }
     guard conversation?.messages.contains(where: { $0.id == messageId }) == true else {
       // The message is gone or the read failed: keep the window that did load, at its latest message.
       historyStarts[botId] = conversation?.messages.first?.id
       return
     }
     focusedMessage = MessageFocus(botId: botId, messageId: messageId)
+  }
+  @ObservationIgnored private var openRequests = 0
+  /// Makes any open-at-message still loading obsolete, as find moving to a loaded message does. A
+  /// window it asked for is dropped, and polls keep the window that is loaded.
+  func cancelOpeningAtMessage() {
+    openRequests += 1
+    guard let id = selectedBotId, let first = conversation?.messages.first?.id, historyStarts[id] != first else { return }
+    historyStarts[id] = first
+    windowGeneration += 1
   }
 
   func reconnect() async {
@@ -1906,11 +1920,30 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   /// A failed read keeps the last known status, like the web panel, which only notes it can't reach the computer.
   func refreshComputer() async {
-    guard let api, api.token != nil, !sessionExpired else { return }
-    let currentGeneration = generation
-    guard let value: ComputerStatus = try? await api.get("/computer"), currentGeneration == generation else { return }
+    guard let api, api.token != nil, !sessionExpired, computerWrites == 0 else { return }
+    let currentGeneration = generation, writes = computerEpoch
+    guard let value: ComputerStatus = try? await api.get("/computer"), currentGeneration == generation,
+      writes == computerEpoch
+    else { return }
     computerStatus = value
   }
+  /// Takes over or hands back the shared desktop for a viewer. Status reads are ordered against it:
+  /// one started before or during it is dropped, so an older read never undoes it. `publish` says,
+  /// once it answers, whether its status still belongs in the store, as for the screen that asked.
+  func controlComputer(_ action: String, viewerId: String, publish: @escaping @MainActor () -> Bool = { true }) async
+    -> Result<ComputerStatus, Error>?
+  {
+    computerEpoch += 1
+    computerWrites += 1
+    defer { computerWrites -= 1; computerEpoch += 1 }
+    let result = await attempt { context -> ComputerStatus in
+      try await context.api.write("/computer/control", ["action": action, "viewerId": viewerId])
+    }
+    if case .success(let next)? = result, publish() { computerStatus = next }
+    return result
+  }
+  @ObservationIgnored private var computerEpoch = 0
+  @ObservationIgnored private var computerWrites = 0
   /// Returns false when the server could not be reached to revoke the session. The caller
   /// then asks before repeating with `localOnly`, which still lets the person leave.
   @discardableResult func changeConnection(localOnly: Bool = false) async -> Bool {

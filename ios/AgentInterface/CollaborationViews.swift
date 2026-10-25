@@ -297,6 +297,9 @@ struct GroupConversationView: View {
   @State private var applied: String?
   /// Cleared once an older server refuses a log read that asks for the room state too.
   @State private var combined = true
+  /// Loads run one at a time; a reset for another account or room makes one still running stale.
+  @State private var loads = SerialRefresh()
+  @State private var loadGeneration = 0
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
   private var status: String {
@@ -346,6 +349,7 @@ struct GroupConversationView: View {
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
+      loadGeneration += 1
       state = nil; events = []; cursor = 0; more = false; applied = nil
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
@@ -353,7 +357,7 @@ struct GroupConversationView: View {
     }
     // The server announces new events on the app event stream; this slow poll only covers a
     // stream that failed unnoticed, and the room's state.
-    .watchingGroup(room.id, cursor: { cursor }) { if !missing { await load() } }
+    .watchingGroup(room.id) { if !missing { await load() } }
     .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: Self.fallbackInterval) { if !missing { await load() } }
   }
   private var composer: some View {
@@ -415,10 +419,13 @@ struct GroupConversationView: View {
     /// `downgraded` when this server cannot send the room state with the log.
     case separate(GroupState, GroupPage, downgraded: Bool)
   }
+  /// Reloads the room. The stream, the fallback poll and actions all ask; their loads run one at a
+  /// time, so a slow response never lands over a newer snapshot.
+  private func load() async { await loads.run { await loadOnce() } }
   /// One request a poll: the log brings the room state along, so the server reads it from Hermes once.
-  private func load() async {
-    let since = cursor, tag = applied, wantsCombined = combined
-    let fetched: Fetched? = await store.run(error: $error) { context in
+  private func loadOnce() async {
+    let since = cursor, tag = applied, wantsCombined = combined, generation = loadGeneration
+    let fetched: Fetched? = await store.run(error: $error, current: { generation == loadGeneration }) { context in
       var downgraded = false
       do {
         if wantsCombined {
@@ -435,6 +442,8 @@ struct GroupConversationView: View {
         return .separate(value, page, downgraded: downgraded)
       } catch let failure as APIError where failure.status == 404 { return .gone }
     }
+    // The room was reset for another account or room meanwhile: this snapshot is for the old one.
+    guard generation == loadGeneration else { return }
     switch fetched {
     case nil: return
     case .unchanged?: if error != nil { error = nil }

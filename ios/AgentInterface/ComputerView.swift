@@ -27,11 +27,11 @@ enum DesktopLink {
   private static func encode(_ value: String) -> String {
     value.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()")) ?? ""
   }
-  /// Whether a ticket can still be used to connect. It is used once, shortly after it is issued,
-  /// so a page that has not connected by then needs a fresh one.
-  static func usable(_ ticket: DesktopTicket, now: Date) -> Bool {
-    guard let expires = ServerDate.parse(ticket.expiresAt) else { return false }
-    return expires.timeIntervalSince(now) > 1
+  /// How long a page may take to connect with a ticket: until the ticket expires, and at least a
+  /// second. A page that has not connected by then needs a fresh ticket. Nil for an unreadable expiry.
+  static func connectWait(_ ticket: DesktopTicket, now: Date) -> Duration? {
+    guard let expires = ServerDate.parse(ticket.expiresAt) else { return nil }
+    return .milliseconds(Int((max(1, expires.timeIntervalSince(now)) * 1000).rounded()))
   }
   /// How long to wait before reconnecting after a drop, growing with each failed attempt, or nil
   /// once it is time to stop and offer Reconnect.
@@ -41,11 +41,20 @@ enum DesktopLink {
   }
   /// The viewer may load only the app server's viewer page. Links on the desktop open nothing.
   static func allows(_ url: URL, base: URL) -> Bool {
-    guard url.scheme == base.scheme, url.host == base.host, url.port == base.port else { return url.scheme == "about" }
+    // A blank page is the only page from elsewhere, as a web view starts on it.
+    guard url.scheme == base.scheme, url.host == base.host, url.port == base.port else { return url.absoluteString == "about:blank" }
     #if DEBUG
       if base.host?.hasSuffix(".native-fixture.invalid") == true { return true }
     #endif
     return url.path == "/native/computer"
+  }
+  /// Whether a bridge message comes from the viewer page itself: the app server's origin, its
+  /// default port written as 0 as WebKit does, and a page the viewer may load.
+  static func trusts(scheme: String, host: String, port: Int, page: URL?, base: URL) -> Bool {
+    guard scheme == base.scheme, host == base.host, (port == 0 ? nil : port) == base.port, let page,
+      page.scheme != "about"
+    else { return false }
+    return allows(page, base: base)
   }
   /// Whether this person holds the desktop, so the viewer accepts their input.
   static func controlling(_ status: ComputerStatus?) -> Bool {
@@ -69,8 +78,7 @@ struct ComputerView: View {
   @State private var viewerId: String?
   @State private var phase: Phase = .opening
   @State private var attempt = 0
-  @State private var submitting = false
-  @State private var controlling = false
+  @State private var desktop = DesktopControl()
   @State private var error: String?
   /// Bumped for each attachment, so a late answer for an earlier one changes nothing.
   @State private var epoch = 0
@@ -78,7 +86,7 @@ struct ComputerView: View {
   var body: some View {
     VStack(spacing: 0) {
       toolbar
-      if let message = error ?? status?.reason { notice(message) }
+      if let message = error ?? desktop.error ?? status?.reason { notice(message) }
       screen.frame(maxWidth: .infinity, maxHeight: .infinity)
       footer
     }.background(Palette.surface(scheme))
@@ -86,9 +94,12 @@ struct ComputerView: View {
       .task { await watchStatus() }
       .task(id: store.scope) { await attach() }
       // Losing control elsewhere takes input away here at once, before the server fences it.
-      .onChange(of: DesktopLink.controlling(status)) { _, mine in if !mine { controlling = false } }
+      .onChange(of: DesktopLink.controlling(status)) { _, _ in desktop.statusChanged(status) }
+      .onAppear { desktop.returned() }
       .onDisappear {
-        if controlling { Task { await control("release") } }
+        // After a takeover still on its way, whatever this viewer holds goes back to the assistants.
+        let viewer = viewerId, store = store, desktop = desktop
+        Task { await desktop.leave(store, viewerId: viewer) }
         // A reconnect still waiting must not fetch tickets for a screen that is gone.
         epoch += 1
       }
@@ -100,19 +111,20 @@ struct ComputerView: View {
           Circle().fill(phase == .connected ? Palette.accent : Palette.muted).frame(width: 8, height: 8).accessibilityHidden(true)
           Text(ownerLabel).font(.subheadline.weight(.semibold))
         }
-        Text(controlling ? "Assistants are paused while you use the desktop." : "Take over to use the mouse and keyboard.")
+        Text(desktop.held ? "Assistants are paused while you use the desktop." : "Take over to use the mouse and keyboard.")
           .font(.caption).foregroundStyle(.secondary)
       }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
         .accessibilityIdentifier("computerStatus")
-      Button(submitting ? "Updating…" : controlling ? "Hand back" : "Take over") {
-        Task { await control(controlling ? "release" : "take") }
-      }.buttonStyle(.borderedProminent).tint(controlling ? Palette.muted : Palette.accent)
-        .disabled(submitting || phase != .connected || viewerId == nil || !controlling && !DesktopLink.canTake(status))
+      Button(desktop.submitting ? "Updating…" : desktop.held ? "Hand back" : "Take over") {
+        guard let viewerId else { return }
+        Task { if desktop.held { await desktop.release(store, viewerId: viewerId) } else { await desktop.take(store, viewerId: viewerId) } }
+      }.buttonStyle(.borderedProminent).tint(desktop.held ? Palette.muted : Palette.accent)
+        .disabled(desktop.submitting || viewerId == nil || !desktop.held && (phase != .connected || !DesktopLink.canTake(status)))
         .accessibilityIdentifier("computerControl")
     }.padding(12)
   }
   private var ownerLabel: String {
-    if controlling { return "You have control" }
+    if desktop.held { return "You have control" }
     return status.map(\.detail) ?? "Connecting to the computer"
   }
   private func notice(_ message: String) -> some View {
@@ -123,8 +135,8 @@ struct ComputerView: View {
     ZStack {
       Color.black.opacity(scheme == .dark ? 0.4 : 0.06)
       if let api = store.api, let ticket {
-        DesktopWebView(base: api.baseURL, path: ticket.path, control: controlling, event: received)
-          .accessibilityLabel(controlling ? "Shared desktop. You have control." : "Shared desktop. Watching.")
+        DesktopWebView(base: api.baseURL, path: ticket.path, control: input, event: received)
+          .accessibilityLabel(input ? "Shared desktop. You have control." : "Shared desktop. Watching.")
           .accessibilityIdentifier("computerScreen")
       }
       if phase != .connected {
@@ -140,6 +152,9 @@ struct ComputerView: View {
       }
     }
   }
+  /// The viewer takes input only while this viewer holds the desktop, no control change is on its
+  /// way, and the page is connected; a dropped connection watches until it reconnects.
+  private var input: Bool { desktop.held && !desktop.submitting && phase == .connected }
   private var phaseLabel: String {
     switch phase {
     case .opening: "Opening desktop"
@@ -174,7 +189,6 @@ struct ComputerView: View {
     let current = epoch
     if fresh { attempt = 0 }
     phase = attempt == 0 ? .opening : .reconnecting
-    controlling = false
     let body = viewerId.map { ["viewerId": $0] } ?? [:]
     switch await store.attempt(current: { epoch == current }, { context -> DesktopTicket in
       try await context.api.write("/computer/desktop", body)
@@ -190,15 +204,14 @@ struct ComputerView: View {
   }
   /// A ticket the page has not used before it expires is spent; get another.
   private func connectDeadline(_ value: DesktopTicket, epoch current: Int) async {
-    guard let expires = ServerDate.parse(value.expiresAt) else { return }
+    guard let wait = DesktopLink.connectWait(value, now: Date()) else { return }
     // Timer: waits out the ticket's 30-second life before checking it connected.
-    try? await Task.sleep(for: .seconds(max(1, expires.timeIntervalSinceNow)))
+    try? await Task.sleep(for: wait)
     guard !Task.isCancelled, epoch == current, phase != .connected else { return }
     dropped("The desktop did not connect in time.", epoch: current)
   }
   private func dropped(_ reason: String, epoch current: Int) {
     guard epoch == current else { return }
-    controlling = false
     guard let delay = DesktopLink.retryDelay(attempt: attempt) else {
       phase = .failed(reason + " Reconnect, or open the computer in Safari.")
       return
@@ -221,25 +234,67 @@ struct ComputerView: View {
       dropped(reason ?? "Desktop disconnected. Reconnecting in watch mode.", epoch: epoch)
     }
   }
-  /// Take over or hand back. Input stops first; a takeover is never replayed after a failure.
-  private func control(_ action: String) async {
-    guard !submitting, let viewerId else { return }
-    let current = epoch
+}
+
+/// The desktop's control from one screen's side. `held` follows the server: a takeover that it
+/// confirmed for this viewer sets it, and a hand back or the server's status saying this person no
+/// longer holds the desktop clears it. A dropped connection does not, since watching locally proves
+/// nothing about the server's lease. Leaving waits for a takeover still on its way, then hands back
+/// whatever this viewer holds, so assistants are never left paused by a screen that is gone.
+@MainActor @Observable final class DesktopControl {
+  private(set) var held = false
+  private(set) var submitting = false
+  private(set) var error: String?
+  @ObservationIgnored private var pendingTake: Task<Result<ComputerStatus, Error>?, Never>?
+  @ObservationIgnored private(set) var left = false
+  /// Take over. Input stays off until the server confirms it; a takeover is never replayed after a failure.
+  func take(_ store: AppStore, viewerId: String) async {
+    guard !submitting, !left else { return }
     submitting = true
-    controlling = false
-    defer { submitting = false }
-    switch await store.attempt({ context -> ComputerStatus in
-      try await context.api.write("/computer/control", ["action": action, "viewerId": viewerId])
-    }) {
-    case .success(let next)?:
-      store.computerStatus = next
-      guard epoch == current else { return }
-      controlling = action == "take" && DesktopLink.controlling(next)
-      AccessibilityNotification.Announcement(controlling ? "You have control of the desktop." : "You are watching the desktop.").post()
-    case .failure(let failure)?:
-      if epoch == current { error = failure.localizedDescription + " You are watching. Try Take over again." }
+    error = nil
+    let task = Task { [weak self] () -> Result<ComputerStatus, Error>? in
+      let result = await store.controlComputer("take", viewerId: viewerId) { self?.left == false }
+      // Recorded here, before anyone waiting on the takeover resumes, so leaving sees it.
+      if case .success(let next)? = result { self?.held = DesktopLink.controlling(next) }
+      return result
+    }
+    pendingTake = task
+    let result = await task.value
+    pendingTake = nil
+    submitting = false
+    guard !left else { return }
+    switch result {
+    case .success?: AccessibilityNotification.Announcement(held ? "You have control of the desktop." : "You are watching the desktop.").post()
+    case .failure(let failure)?: error = failure.localizedDescription + " You are watching. Try Take over again."
     case nil: break
     }
+  }
+  /// Hand back. Input stops at once; the desktop stays this viewer's until the server confirms.
+  func release(_ store: AppStore, viewerId: String) async {
+    guard !submitting, !left else { return }
+    submitting = true
+    error = nil
+    defer { submitting = false }
+    switch await store.controlComputer("release", viewerId: viewerId, publish: { [weak self] in self?.left == false }) {
+    case .success?:
+      held = false
+      AccessibilityNotification.Announcement("You are watching the desktop.").post()
+    case .failure(let failure)?: error = failure.localizedDescription
+    case nil: break
+    }
+  }
+  /// The server's status changed: losing control elsewhere ends it here at once.
+  func statusChanged(_ status: ComputerStatus?) {
+    if held && !DesktopLink.controlling(status) { held = false }
+  }
+  func returned() { left = false }
+  /// The screen is gone. After any takeover still on its way, hands back what this viewer holds,
+  /// with the viewer identity captured when it left.
+  func leave(_ store: AppStore, viewerId: String?) async {
+    left = true
+    if let pendingTake { _ = await pendingTake.value }
+    guard held, let viewerId else { return }
+    if case .success? = await store.controlComputer("release", viewerId: viewerId) { held = false }
   }
 }
 
@@ -323,7 +378,11 @@ struct DesktopWebView: UIViewRepresentable {
       return DesktopLink.allows(url, base: parent.base) ? .allow : .cancel
     }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-      guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+      let origin = message.frameInfo.securityOrigin
+      guard message.frameInfo.isMainFrame,
+        DesktopLink.trusts(scheme: origin.protocol, host: origin.host, port: origin.port, page: message.webView?.url, base: parent.base),
+        let body = message.body as? [String: Any], let type = body["type"] as? String
+      else { return }
       let reason = body["reason"] as? String
       switch type {
       case "connected": parent.event(.connected)
