@@ -1,7 +1,7 @@
 .message-markdown {
   min-width: 0;
   max-width: 100%;
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -111,14 +111,14 @@
 .markdown-code-language {
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
 .markdown-code-header button {
   flex-shrink: 0;
   min-height: 36px;
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .message-markdown pre {
   margin: 0;
@@ -130,13 +130,13 @@
   line-height: 1.6;
 }
 .message-markdown pre code {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .markdown-copy-status {
   display: block;
   padding: 0 16px 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 .markdown-copy-status:empty {
@@ -175,7 +175,7 @@
 }
 @media (max-width: 620px) {
   .message-markdown {
-    font-size: 16px;
+    font-size: 1rem;
   }
   .message-markdown pre {
     padding: 12px;
@@ -190,12 +190,12 @@
   align-items: center;
   gap: 4px 8px;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .markdown-table-actions button {
   min-height: 32px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .markdown-table-actions .markdown-copy-status {
   padding: 0;

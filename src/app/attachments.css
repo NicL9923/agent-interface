@@ -11,10 +11,10 @@ button.attachment-thumb { cursor: zoom-in; }
 .attachment-thumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .attachment-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attachment-badge { display: grid; justify-items: center; gap: 2px; }
-.attachment-badge small { font-size: 9px; font-weight: 600; letter-spacing: .04em; }
-.attachment-label { display: grid; gap: 3px; min-width: 0; font-size: 12px; }
+.attachment-badge small { font-size: 0.5625rem; font-weight: 600; letter-spacing: .04em; }
+.attachment-label { display: grid; gap: 3px; min-width: 0; font-size: 0.75rem; }
 .attachment-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attachment-label small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.attachment-label small { color: var(--muted); font-size: 0.6875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .attachment-progress { position: absolute; inset: 0; display: grid; place-items: center; color: var(--accent);
   background: color-mix(in srgb, var(--surface) 62%, transparent); }
 .attachment-progress circle { fill: none; stroke-width: 3.5; }
@@ -24,18 +24,18 @@ button.attachment-thumb { cursor: zoom-in; }
 .attachment-queued img, .attachment-uploading img, .attachment-processing img { filter: saturate(.6); }
 .attachment-failed { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
 .attachment-failed .attachment-label small { color: var(--danger); }
-.attachment-retry { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 5px 9px; font-size: 11px; border-radius: 8px; }
+.attachment-retry { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 5px 9px; font-size: 0.6875rem; border-radius: 8px; }
 .attachment-image .attachment-retry { position: absolute; left: 50%; bottom: -12px; transform: translateX(-50%); background: var(--raised); padding: 3px 8px; }
 .attachment-remove { position: absolute; top: -7px; right: -7px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
   border: 2px solid var(--raised); border-radius: 50%; background: var(--ink); color: var(--surface); box-shadow: 0 1px 4px #0002; }
 .attachment-remove:hover { background: var(--danger); }
 /* A finger needs a bigger target than the drawn circle. */
 .attachment-remove::after { content: ""; position: absolute; inset: -9px; }
-.attachment-error { display: flex; align-items: flex-start; gap: 6px; margin: 16px 0 0; font-size: 12px; line-height: 1.45; color: var(--danger); overflow-wrap: anywhere; }
+.attachment-error { display: flex; align-items: flex-start; gap: 6px; margin: 16px 0 0; font-size: 0.75rem; line-height: 1.45; color: var(--danger); overflow-wrap: anywhere; }
 .attachment-error .icon { flex-shrink: 0; margin-top: 2px; }
 .attachment-error strong { font-weight: 600; }
 .attachment-notice { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 9px 6px 9px 12px; border-radius: 10px;
-  background: color-mix(in srgb, var(--danger) 9%, var(--raised)); color: var(--danger); font-size: 12px; line-height: 1.45; }
+  background: color-mix(in srgb, var(--danger) 9%, var(--raised)); color: var(--danger); font-size: 0.75rem; line-height: 1.45; }
 .attachment-notice > .icon { flex-shrink: 0; margin-top: 2px; }
 .attachment-notice > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .attachment-notice p { margin: 0; }
@@ -45,7 +45,7 @@ button.attachment-thumb { cursor: zoom-in; }
 .attachment-preview[open] { display: flex; flex-direction: column; }
 .attachment-preview::backdrop { background: #0b100dcc; }
 .attachment-preview img { display: block; min-height: 0; max-width: 100%; max-height: calc(92dvh - 52px); object-fit: contain; background: var(--rail); }
-.attachment-preview footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; font-size: 13px; }
+.attachment-preview footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; font-size: 0.8125rem; }
 .attachment-preview footer > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-preview footer small { color: var(--muted); }
 .attachment-preview .icon-button { border: 0; padding: 8px; }
@@ -55,8 +55,8 @@ button.attachment-thumb { cursor: zoom-in; }
   backdrop-filter: blur(3px); animation: attachment-fade 140ms ease-out; }
 .drop-overlay > div { display: grid; justify-items: center; gap: 8px; padding: 26px 34px; text-align: center; border-radius: 18px; background: var(--raised); box-shadow: 0 10px 34px #1b251a1f; }
 .drop-overlay .icon { color: var(--accent); }
-.drop-overlay strong { font-size: 16px; font-weight: 600; }
-.drop-overlay span { font-size: 12px; color: var(--muted); }
+.drop-overlay strong { font-size: 1rem; font-weight: 600; }
+.drop-overlay span { font-size: 0.75rem; color: var(--muted); }
 .drop-overlay.drop-unavailable { border-color: var(--muted); }
 .drop-overlay.drop-unavailable .icon { color: var(--attention); }
 @keyframes attachment-in { from { opacity: 0; transform: scale(.92); } }
