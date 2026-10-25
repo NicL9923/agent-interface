@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
-function worker() {
+function worker(options: { maxActions?: number } = {}) {
   const handlers: Record<string, (event: any) => void> = {};
+  const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
   const showNotification = vi.fn().mockResolvedValue(undefined);
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const fetch = vi.fn().mockRejectedValue(new Error('offline'));
@@ -21,11 +22,13 @@ function worker() {
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
       registration: { showNotification },
       clients: { matchAll: async () => [], openWindow },
+      navigator: { setAppBadge, clearAppBadge },
+      Notification: { maxActions: options.maxActions ?? 0 },
     },
     caches: { open: async () => ({ match, put, addAll }) },
     URL, Response, fetch,
   });
-  return { handlers, fetch, match, put, addAll, showNotification, openWindow };
+  return { handlers, fetch, match, put, addAll, showNotification, openWindow, setAppBadge, clearAppBadge };
 }
 
 describe('service worker privacy and return path', () => {
@@ -127,4 +130,64 @@ it('opens Today for a digest without carrying unrelated URL parameters',async()=
   handlers.push({data:{json:()=>({url:'/?view=today&ignored=private'})},waitUntil});await done;
   const notification=showNotification.mock.calls[0][1];expect(notification.data.url).toBe('https://app.example/?view=today');
   handlers.notificationclick({notification:{...notification,close:vi.fn()},waitUntil});await done;expect(openWindow).toHaveBeenCalledWith('https://app.example/?view=today');
+});
+
+describe('service worker badge and approval actions', () => {
+  const approval = { title: 'Ranch', body: 'Allow command?', url: '/?bot=ranch', tag: 'approval-1', kind: 'approval', declineToken: 't'.repeat(43), badge: 2 };
+  async function push(sw: ReturnType<typeof worker>, data: object) {
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => data }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await done;
+    return sw.showNotification.mock.calls.at(-1)![1];
+  }
+  async function click(sw: ReturnType<typeof worker>, notification: object, action = '') {
+    let done: Promise<unknown> | undefined;
+    sw.handlers.notificationclick({ action, notification: { ...notification, tag: 'approval-1', close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await done;
+  }
+
+  it('sets the app badge from each push and clears it at zero, leaving it alone without a count', async () => {
+    const sw = worker();
+    await push(sw, { title: 'Done', badge: 3 });
+    expect(sw.setAppBadge).toHaveBeenCalledWith(3);
+    await push(sw, { title: 'Done', badge: 0 });
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+    await push(sw, { title: 'Done' });
+    await push(sw, { title: 'Done', badge: -1 });
+    expect(sw.setAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it('offers Review and Decline only for an approval with a token where actions are supported', async () => {
+    expect((await push(worker({ maxActions: 2 }), approval)).actions).toEqual([{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }]);
+    expect((await push(worker({ maxActions: 0 }), approval)).actions).toBeUndefined();
+    expect((await push(worker({ maxActions: 2 }), { ...approval, declineToken: undefined })).actions).toBeUndefined();
+    expect((await push(worker({ maxActions: 2 }), { ...approval, kind: 'completed' })).actions).toBeUndefined();
+  });
+
+  it('declines without opening the app, and offers the chat when that fails', async () => {
+    const sw = worker({ maxActions: 2 });
+    const notification = await push(sw, approval);
+    sw.fetch.mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+    await click(sw, notification, 'decline');
+    expect(sw.fetch).toHaveBeenCalledWith('/api/push/actions', expect.objectContaining({ method: 'POST', credentials: 'omit', body: JSON.stringify({ token: approval.declineToken }) }));
+    expect(sw.openWindow).not.toHaveBeenCalled();
+    expect(sw.showNotification).toHaveBeenCalledTimes(1);
+    sw.fetch.mockResolvedValueOnce(new Response('{}', { status: 409 }));
+    await click(sw, notification, 'decline');
+    const followUp = sw.showNotification.mock.calls.at(-1)!;
+    expect(followUp[0]).toBe("Couldn't decline");
+    expect(followUp[1]).toMatchObject({ tag: 'approval-1:decline', data: { url: 'https://app.example/?bot=ranch' } });
+    // Offline counts as failed too.
+    await click(sw, notification, 'decline');
+    expect(sw.showNotification).toHaveBeenCalledTimes(3);
+    await click(sw, followUp[1]);
+    expect(sw.openWindow).toHaveBeenCalledWith('https://app.example/?bot=ranch');
+  });
+
+  it('opens the chat for Review, as a tap does', async () => {
+    const sw = worker({ maxActions: 2 });
+    await click(sw, await push(sw, approval), 'review');
+    expect(sw.openWindow).toHaveBeenCalledWith('https://app.example/?bot=ranch');
+    expect(sw.fetch).not.toHaveBeenCalled();
+  });
 });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, write } from '../src/client-api';
 import { agentEnvelope } from '../src/shared/collaboration';
 import { GroupChats } from '../src/components/GroupChats';
@@ -9,6 +9,7 @@ import { RoutineResults } from '../src/components/RoutineResults';
 import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
 import { click, mountRoot } from './ui-harness';
+import { FakeEventSource } from './fake-event-source';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
 let root:Root, container:HTMLDivElement;
 const bootstrap = { user:{id:'one'},bots:[{id:'ranch',name:'Ranch hand'},{id:'planner',name:'Planner'}],preferences:defaultPreferences,connection:{connected:true} } as Bootstrap;
@@ -73,7 +74,7 @@ it('leaves a group that disappears and says that a personal assistant keeps a ne
   const mine={...bootstrap,bots:[...bootstrap.bots,{id:'books',name:'Ranch books',shared:false,ownerId:'one'}]} as Bootstrap;
   await act(async()=>root.render(createElement(GroupChats,{bootstrap:mine})));
   rooms=[other];
-  await act(async()=>vi.advanceTimersByTimeAsync(3000));
+  await act(async()=>vi.advanceTimersByTimeAsync(30000));
   expect(container.textContent).toContain('That group chat is no longer available to you.');
   expect(container.querySelector('[aria-current="page"]')?.textContent).toContain('Garden crew');
   const settled=reads;await act(async()=>vi.advanceTimersByTimeAsync(9000));expect(reads).toBe(settled);
@@ -92,7 +93,7 @@ it('clears a vanished group at once, even when the group list cannot be refreshe
   await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
   expect(container.textContent).toContain('The secret ledger total');
   gone=true;
-  await act(async()=>vi.advanceTimersByTimeAsync(3000));
+  await act(async()=>vi.advanceTimersByTimeAsync(30000));
   for(const leak of ['The secret ledger total','Weekend plans','@planner'])expect(container.textContent).not.toContain(leak);
   expect(container.textContent).toContain('That group chat is no longer available to you.');
 });
@@ -107,7 +108,7 @@ it('shows a sent group message at once even while a background check is still ru
   });
   vi.mocked(write).mockImplementation(async()=>{delivered=true;return{accepted:true};});
   await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
-  await act(async()=>vi.advanceTimersByTimeAsync(3000));expect(held).toBeDefined();
+  await act(async()=>vi.advanceTimersByTimeAsync(30000));expect(held).toBeDefined();
   const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
   await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field,'Plan Saturday');field.dispatchEvent(new Event('input',{bubbles:true}));});
   await act(async()=>field.form!.requestSubmit());
@@ -153,4 +154,91 @@ it('keeps the newly selected room when an action from a room that left the list 
   expect(container.querySelector('.group-heading h3')?.textContent).toBe('Fence repair');
   expect(container.textContent).not.toContain('That group chat is no longer available to you.');
   expect(vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length).toBe(reads);
+});
+
+describe('group conversation',()=>{
+  const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  const serve=(events:unknown[]=[])=>vi.mocked(api).mockImplementation(async(path)=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events,cursor:events.length,has_more:false}:state);
+  const field=()=>container.querySelector<HTMLTextAreaElement>('#group-message')!;
+  const type=(text:string,caret=text.length)=>act(async()=>{
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field(),text);
+    field().setSelectionRange(caret,caret);
+    field().dispatchEvent(new Event('input',{bubbles:true}));
+  });
+  const press=(key:string)=>act(async()=>field().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true})));
+  const suggestions=()=>[...container.querySelectorAll('.mention-list [role="option"]')].map(option=>option.querySelector('small')!.textContent);
+
+  it('names who sent each human message, falling back for older servers',async()=>{
+    serve([
+      {event_id:'a',seq:1,kind:'message.user',actor:{kind:'user',id:'app'},payload:{text:'From Nic'},created_at:1,sender:{id:'one',name:'Nicolas'}},
+      {event_id:'b',seq:2,kind:'message.user',actor:{kind:'user',id:'app'},payload:{text:'From somebody'},created_at:2},
+    ]);
+    await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+    expect([...container.querySelectorAll('.group-message strong')].map(name=>name.textContent)).toEqual(['Nicolas','Household member']);
+  });
+
+  it('offers members for @, and completes one with the arrows and Enter without sending',async()=>{
+    serve();
+    await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+    await type('Ask @');
+    expect(suggestions()).toEqual(['@ranch','@planner']);
+    expect(field().getAttribute('aria-controls')).toBe(container.querySelector('.mention-list')!.id);
+    await press('ArrowDown');
+    expect(field().getAttribute('aria-activedescendant')).toBe(container.querySelector('[aria-selected="true"]')!.id);
+    await press('Enter');
+    expect(field().value).toBe('Ask @planner ');
+    expect(write).not.toHaveBeenCalled();
+    expect(container.querySelector('.mention-list')).toBeNull();
+    await type('Ask @planner and @r');
+    expect(suggestions()).toEqual(['@ranch']);
+    await press('Escape');
+    expect(container.querySelector('.mention-list')).toBeNull();
+    await type('Ask @planner and @ra');
+    await press('Tab');
+    expect(field().value).toBe('Ask @planner and @ranch ');
+  });
+
+  it('reads new events when the stream names this room, instead of polling every few seconds',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    serve();
+    await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+    const logs=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).includes('/log')).length;
+    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room')!;
+    expect(stream).toBeDefined();
+    const before=logs();
+    await act(async()=>vi.advanceTimersByTimeAsync(10_000));
+    expect(logs()).toBe(before);
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'other',latestSeq:4})));
+    expect(logs()).toBe(before);
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:4})));
+    expect(logs()).toBe(before+1);
+    await act(async()=>root.render(createElement('div')));
+    expect(FakeEventSource.streams.has(stream)).toBe(false);
+  });
+
+  it('reloads a driver status change at the current cursor, sharing one reload between notices that arrive during a load',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    serve([{event_id:'a',seq:1,kind:'message.user',actor:{kind:'user',id:'app'},payload:{text:'Hello'},created_at:1}]);
+    await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length;
+    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room')!;
+    const before=reads();
+    // The cursor is 1; a new pending approval announces the same sequence.
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    expect(reads()).toBe(before+1);
+    let finish!:()=>void;
+    const previous=vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async(path,...rest)=>{
+      if(path==='/groups/room') await new Promise<void>(done=>{finish=done;});
+      return previous(path,...rest);
+    });
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    expect(reads()).toBe(before+2);
+    await act(async()=>finish());
+    expect(reads()).toBe(before+3);
+    await act(async()=>finish());
+    expect(reads()).toBe(before+3);
+  });
 });

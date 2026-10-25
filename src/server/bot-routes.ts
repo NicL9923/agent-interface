@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { IncompleteCreationError } from "../shared/errors.js";
 import { botIdFor, reasoningLevels, serviceTiers, type Bot, type CapabilityKey, type Runtime } from "../shared/types.js";
+import { unreadSince } from "../shared/unread.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { notFound, visible, type Roster } from "./bot-access.js";
@@ -11,8 +12,7 @@ import type { Store } from "./store.js";
 
 /** Marks a row unread when its latest message is newer than this person's last read of the chat. */
 function withUnread(bot: Bot, readAt: number | undefined): Bot {
-  const at = Date.parse(bot.lastMessage?.at ?? "");
-  return readAt !== undefined && Number.isFinite(at) && at > readAt ? { ...bot, unread: true } : bot;
+  return unreadSince(bot.lastMessage?.at, readAt) ? { ...bot, unread: true } : bot;
 }
 
 /** Roster rows as each person sees them, shared by the bot routes, bootstrap and the roster stream. */

@@ -6,8 +6,8 @@ import type { LiveActivitySender } from "./live-activity.js";
 
 export interface NativeDevice { deviceId: string; token: string; environment: "sandbox" | "production" }
 export type ApnsSender = (device: NativeDevice, payload: string) => Promise<unknown>;
-/** Asks a device to remove these delivered notifications, named by tag. */
-export type ApnsClearSender = (device: NativeDevice, tags: string[]) => Promise<unknown>;
+/** Asks a device to remove these delivered notifications, named by tag, and to show this badge if known. */
+export type ApnsClearSender = (device: NativeDevice, tags: string[], badge?: number) => Promise<unknown>;
 export type ApnsTransport = (origin: string, headers: Record<string, string>, body: string) => Promise<{ statusCode: number; reason?: string }>;
 /**
  * A push Apple refused, with Apple's status and reason for the workers to judge the token by.
@@ -36,11 +36,12 @@ const fit = (value: string, limit: number) => {
 export const accountMarker = (userId: string) => createHash("sha256").update(`wildbots-account:${userId}`).digest("hex").slice(0, 16);
 /** APNs replaces a delivered notification that has the same collapse ID. Apple allows 64 bytes; longer or unusual tags are hashed. */
 export const apnsCollapseId = (tag: string) => /^[\x21-\x7e]{1,64}$/.test(tag) ? tag : createHash("sha256").update(tag).digest("base64url");
+const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 // Notification identities are short IDs; anything longer gets no grouping or actions instead of a truncated ID.
 const short = (value: unknown): value is string => typeof value === "string" && !!value && Buffer.byteLength(JSON.stringify(value)) <= 202;
 
 export function apnsPayload(payload: string) {
-  const value = JSON.parse(payload) as { title: string; body: string; url: string; tag: string; kind?: string; botId?: string; approvalId?: string; account?: string };
+  const value = JSON.parse(payload) as { title: string; body: string; url: string; tag: string; kind?: string; botId?: string; approvalId?: string; account?: string; badge?: number };
   // Keep standard APNs payload under 4KB even when Hermes reports a long completion.
   // Never truncate a deep link into a different bot ID. Oversized runtime links are omitted.
   const url = Buffer.byteLength(JSON.stringify(value.url)) <= 2402 ? value.url : undefined;
@@ -58,7 +59,7 @@ export function apnsPayload(payload: string) {
   // when it knows which assistant and account this is. It reads both from the App Group only.
   const sender = botId && account ? { botId, account } : undefined;
   const build = (thread: boolean, act: boolean) => JSON.stringify({
-    aps: { alert, sound: "default", ...(thread && botId ? { "thread-id": botId } : {}), ...(thread && sender ? { "mutable-content": 1 } : {}),
+    aps: { alert, sound: "default", ...(count(value.badge) ? { badge: value.badge } : {}), ...(thread && botId ? { "thread-id": botId } : {}), ...(thread && sender ? { "mutable-content": 1 } : {}),
       ...urgent, ...(act && actions ? { category: actions.category } : {}) },
     url, tag, ...(thread && sender ? sender : {}), ...(act && actions ? actions.fields : {}) });
   // Grouping and actions are extras: drop them before the alert itself would exceed the limit.
@@ -69,15 +70,20 @@ export function apnsPayload(payload: string) {
  * A background push the app handles silently; it carries no alert and never wakes the screen.
  * It names notifications, not chats, so a late clear never removes a newer unread one. Tags
  * that would push it past APNs' 4KB limit are left on the device until its chat opens there.
+ * A background push's aps may hold only content-available, so the app reads the badge it
+ * should show from `badge` beside it.
  */
-export function apnsClearPayload(tags: string[]) {
+export function apnsClearPayload(tags: string[], badge?: number) {
+  const extra = count(badge) ? { badge } : {};
   const kept: string[] = [];
   for (const tag of tags) {
-    if (Buffer.byteLength(JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: [...kept, tag] } })) > 4000) break;
+    if (Buffer.byteLength(JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: [...kept, tag] }, ...extra })) > 4000) break;
     kept.push(tag);
   }
-  return JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: kept } });
+  return JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: kept }, ...extra });
 }
+/** A silent alert push that only sets the app icon's badge, which iOS applies even while the app is closed. */
+export const apnsBadgePayload = (badge: number) => JSON.stringify({ aps: { badge } });
 
 export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender; clear: ApnsClearSender }) | undefined {
   if (!config) return undefined;
@@ -139,11 +145,16 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
     if (result.statusCode !== 200) throw new ApnsError(`APNs rejected Live Activity update (${result.statusCode})`, result.statusCode, result.reason);
   };
   // Background pushes must use priority 5; iOS budgets them, so the worker sends one per device per pass.
-  const clear: ApnsClearSender = async (device, tags) => {
+  const clear: ApnsClearSender = async (device, tags, badge) => {
     if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
     const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
-      "apns-push-type": "background", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsClearPayload(tags));
+      "apns-push-type": "background", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsClearPayload(tags, badge));
     if (result.statusCode !== 200) throw new ApnsError(`APNs rejected notification clear (${result.statusCode})`, result.statusCode, result.reason);
+    // iOS drops background pushes for an app the person closed, so the badge goes separately too.
+    if (!count(badge)) return;
+    const shown = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
+      "apns-push-type": "alert", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsBadgePayload(badge));
+    if (shown.statusCode !== 200) throw new ApnsError(`APNs rejected badge update (${shown.statusCode})`, shown.statusCode, shown.reason);
   };
   return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear });
 }

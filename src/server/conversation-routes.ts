@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { z } from "zod";
 import { interruptionPendingMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
+import { messageOrigin } from "../shared/message-origin.js";
 import type { CapabilityKey, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
@@ -10,12 +11,34 @@ import { apiRoute, type ApiRequest } from "./api-route.js";
 import { signedIn, stillSignedIn } from "./auth.js";
 import { redactAgents, visibleTo, type Roster } from "./bot-access.js";
 import type { Config } from "./config.js";
-import { openEventStream } from "./event-stream.js";
+import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { httpError } from "./http-error.js";
 import { routePattern } from "./route-path.js";
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
 import { nameRequesters } from "./vault.js";
+
+// Longer than the runtime shares one history read among readers.
+const sharedReadMargin = 60000;
+
+/** Decides a pending approval for this person, as the chat and notification actions do. */
+export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
+  const readAt = Date.now();
+  const conversation = await runtime.conversation(botId, { history: false });
+  store.reconcileApprovals(botId, conversation.approvals.map(approval => approval.id), readAt);
+  const approval = conversation.approvals.find((a) => a.id === approvalId);
+  if (
+    !approval ||
+    approval.status !== "pending" ||
+    store.approval(approvalId) ||
+    (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
+  )
+    throw httpError(409, "This approval is no longer pending");
+  await runtime.approve(botId, approvalId, decision, userId);
+  store.attributeApproval(approvalId, botId, userId, decision);
+  if (conversation.activity.runId)
+    store.participate(conversation.activity.runId, userId);
+}
 
 /**
  * One conversation: its history and files, change notices, sending and steering messages,
@@ -38,7 +61,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
     }).parse(req.query);
     const windowed = window.start !== undefined || window.turns !== undefined;
+    const readAt = Date.now();
     const { window: cut, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
+    // Hermes's open requests settle approvals answered outside the app. A history read can be
+    // shared for a few seconds, so only approvals notified well before it count.
+    store.reconcileApprovals(req.params.id, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
     // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
@@ -70,8 +97,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       ({ messages: result.messages, earlier } = historyWindow(shown, window));
       ({ files: result.files, earlierFiles } = windowFiles(shown, earlier, result.files));
     }
+    // Retry stays settled on every device once anyone retried this failure.
+    const claims = result.activity.state === "failed" ? store.retryClaims(req.params.id, result.activity.runId ?? "") : [];
+    const retried = result.messages.findLast(message => claims.some(claim => claim.retryOf === message.id));
+    const retry = claims.find(claim => claim.retryOf === retried?.id);
     return {
       ...result,
+      ...(retry ? { retry: { ...retry.receipt, retryOf: retry.retryOf } } : {}),
       ...(earlier !== undefined ? { earlier, earlierFiles } : {}),
       draft: store.draft(signedIn(req).id, req.params.id),
       readPosition: store.personal(
@@ -98,26 +130,19 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       for (const changed of watchers.get((req.params as { id: string }).id) ?? []) changed();
   });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
+    // Followed before the first await, so a client that leaves during setup leaves no watcher.
+    const connection = eventStreamConnection(reply);
     const botId = id.parse((req.params as { id: string }).id);
     const optedIn = (req.query as { inflight?: string }).inflight === "1";
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
+    if (connection.closed) return connection.abandon();
     let hidden = JSON.stringify(store.privateBots());
     let last = 0, pending: ReturnType<typeof setTimeout> | undefined;
     let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
-    const stream = openEventStream(reply, streams, {
-      // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
-      teardown: () => {
-        unwatch?.();
-        listeners.delete(changed);
-        if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
-        clearTimeout(pending);
-        clearTimeout(livePending);
-      },
-    });
+    let stream: EventStream | undefined;
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
-      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream.send("data: change\n\n"); },
+      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream?.send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
     const notice = (kind?: "inflight") => {
@@ -136,13 +161,31 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          stream.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+          stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
-    watchers.set(botId, listeners.add(changed));
-    const unwatch = runtime.watch?.(botId, notice);
+    let unwatch: (() => void) | undefined;
+    const teardown = () => {
+      unwatch?.();
+      listeners.delete(changed);
+      if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+      clearTimeout(pending);
+      clearTimeout(livePending);
+    };
+    try {
+      watchers.set(botId, listeners.add(changed));
+      unwatch = runtime.watch?.(botId, notice);
+      stream = connection.open(streams, {
+        // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
+        allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+        teardown,
+      });
+    } catch (error) {
+      teardown();
+      throw error;
+    }
   });
   const message = z
     .object({
@@ -152,12 +195,18 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       reviewedInterruption: z.boolean().default(false),
       reviewedUncertain: z.boolean().default(false),
       draftBaseRevision: z.number().int().min(0).optional(),
+      retryOf: z.string().min(1).max(512).optional(),
     })
     .refine((v) => !!v.text.trim() || !!v.attachments.length, {
       message: "Message cannot be empty",
+    })
+    // A retry resends an earlier message and must never be matched to, or clear, a draft.
+    .refine((v) => v.retryOf === undefined || v.draftBaseRevision === undefined, {
+      message: "A retry is not written on a draft",
     });
   const submit = async (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">, body: z.output<typeof message>, explicitSteering = false): Promise<SubmissionReceipt> => {
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
+    if (message.retryOf !== undefined && explicitSteering) throw httpError(400, "Retry a message by sending it, not by steering");
     const input: Submission = {
       ...message,
       botId: req.params.id,
@@ -167,6 +216,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const interruptionRejected = previous?.reason === "interruption_pending";
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
+      // Every device derives one ID for retrying a failed turn, so another person, or a client
+      // that copied the text differently, follows the request already recorded.
+      if (input.retryOf !== undefined && previous.input.retryOf === input.retryOf && previous.input.botId === input.botId
+        && JSON.stringify(previous.input) !== JSON.stringify(input))
+        return previous.receipt;
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw httpError(
           409,
@@ -187,16 +241,34 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     }
     await requireCapability("chat");
     const fast = await runtime.canonicalSubmit?.() === true;
-    const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
+    // A retry reads the window that starts at its message, which also proves the message is still there.
+    const conversation = input.retryOf !== undefined
+      ? await runtime.conversation(input.botId, { window: { start: input.retryOf } })
+      : fast ? undefined : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
       throw httpError(409, interruptionPendingMessage);
+    if (input.retryOf !== undefined) {
+      const redact = await redactAgents(store, roster, input.senderId);
+      const target = conversation!.messages.find(message => message.id === input.retryOf);
+      // Only a person's own words are retried, never a scheduled delivery or another assistant's message.
+      const origin = target && messageOrigin(redact.message(target));
+      if (!target || target.role !== "user" || origin && origin.kind !== "human")
+        throw httpError(400, "That message is no longer in this conversation");
+      // Steering the retried text into a running turn would answer a different question.
+      if (["thinking", "working", "waiting", "blocked"].includes(conversation!.activity.state))
+        throw httpError(409, "Wait for the current reply to finish before retrying");
+    }
     const steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
         conversation?.activity.state ?? "idle",
       );
     if (steering || fast) await requireCapability("steering");
-    const intent = store.intent(input);
+    // The first retry of a failed turn claims it; any later one, from anyone, follows that request.
+    const intent = input.retryOf !== undefined
+      ? store.claimRetry(conversation!.activity.runId ?? "", input as Submission & { retryOf: string })
+      : store.intent(input);
+    if ("claimed" in intent) return intent.claimed;
     if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
     if (conversation?.activity.runId)
       store.participate(conversation.activity.runId, input.senderId);
@@ -223,7 +295,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Only its sender, while they can still see the assistant, learns anything about a recorded
     // submission. An unrecorded ID is a client's own unguessable pending ID, kept checkable,
     // which lets a former sender check their own message after its assistant is deleted.
-    const previous = recorded && recorded.input.senderId === signedIn(req).id && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
+    // A retry's receipt belongs to its failed turn, which anyone who sees the assistant can retry and follow.
+    const previous = recorded && (recorded.input.senderId === signedIn(req).id || recorded.input.retryOf !== undefined)
+      && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
     if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
     try {
       if ((await runtime.capabilities()).idempotency.supported) {
@@ -281,19 +355,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
     if (account !== undefined && account !== accountMarker(signedIn(req).id))
       throw httpError(409, "This approval was sent to a different account");
-    const conversation = await runtime.conversation(p.id, { history: false });
-    const approval = conversation.approvals.find((a) => a.id === p.approvalId);
-    if (
-      !approval ||
-      approval.status !== "pending" ||
-      store.approval(p.approvalId) ||
-      (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
-    )
-      throw httpError(409, "This approval is no longer pending");
-    await runtime.approve(p.id, p.approvalId, decision, signedIn(req).id);
-    store.attributeApproval(p.approvalId, p.id, signedIn(req).id, decision);
-    if (conversation.activity.runId)
-      store.participate(conversation.activity.runId, signedIn(req).id);
+    await decideApproval(runtime, store, p.id, p.approvalId, decision, signedIn(req).id);
     return { ok: true };
   });
   apiRoute(app, "GET /bots/:id/draft", {}, async req => store.draft(signedIn(req).id, req.params.id));

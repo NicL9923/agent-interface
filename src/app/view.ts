@@ -38,3 +38,16 @@ export function useUrlSync(view: View, panel: Panel | null, botId: string, userI
     history.replaceState(null, "", url);
   }, [view, routineId, botId, userId]);
 }
+/** A message a link opens the live conversation at: `?bot=<id>&message=<messageId>`. */
+export function initialMessage() {
+  const query = new URLSearchParams(location.search);
+  const botId = query.get("bot"), messageId = query.get("message");
+  return botId && messageId ? { botId, messageId } : null;
+}
+/** Once the conversation has opened, the message stays out of the address, so a reload opens at the latest. */
+export function clearMessageParam() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("message")) return;
+  url.searchParams.delete("message");
+  history.replaceState(history.state, "", url);
+}

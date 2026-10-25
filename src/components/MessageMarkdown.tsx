@@ -1,5 +1,5 @@
-import { Children, createContext, isValidElement, memo, useContext, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { Children, createContext, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,7 +7,13 @@ import { parseReplyDocument, replyCardsFromText } from "../shared/reply-cards";
 import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
+import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import "./message-markdown.css";
+
+type Highlighter = typeof import("./code-highlight");
+let highlighter: Highlighter | undefined;
+let highlighterLoad: Promise<Highlighter> | undefined;
+const loadHighlighter = () => highlighterLoad ??= import("./code-highlight").then(module => highlighter = module);
 
 interface ReplyContextValue { text: string; inlineUi?: boolean; actionableIds: Set<string>; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }
 const ReplyContext = createContext<ReplyContextValue | null>(null);
@@ -26,13 +32,24 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
   const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
   return document && context && document.cards.every(card => context.actionableIds.has(card.id))
     ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
-    : <CodeBlock key={code} code={code} language={language} />;
+    : <CodeBlock key={code} code={code} language={language} finished={!!closed} />;
 }
 
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+/**
+ * A fenced block. It renders plain at once and gains colors when the highlighter chunk is ready; color
+ * alone never changes the layout. A fence still streaming in stays plain until its closing line arrives.
+ */
+function CodeBlock({ code, language, finished }: { code: string; language?: string; finished: boolean }) {
   const [copyState, setCopyState] = useState<
     "idle" | "copying" | "copied" | "failed"
   >("idle");
+  const highlightable = finished && !!language;
+  const [html, setHtml] = useState(() => highlightable && highlighter ? highlighter.highlight(code, language!) : null);
+  // The block is keyed by its code, so a result can only ever belong to this code.
+  useEffect(() => {
+    if (!highlightable || html !== null) return;
+    loadHighlighter().then(module => setHtml(module.highlight(code, language!)), () => { /* Plain code still reads fine. */ });
+  }, [highlightable, html, code, language]);
 
   async function copy() {
     setCopyState("copying");
@@ -61,7 +78,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
         role="region"
         aria-label={language ? `${language} code block` : "Code block"}
       >
-        <code>{code}</code>
+        {html ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} /> : <code>{code}</code>}
       </pre>
       <span className="markdown-copy-status" role="status">
         {copyState === "copied"
@@ -96,18 +113,36 @@ const components: Components = {
   pre: MessagePre,
   table({ children, ...props }) {
     const { node: _node, ...tableProps } = props;
-    return (
-      <div
-        className="markdown-table-scroll"
-        tabIndex={0}
-        role="region"
-        aria-label="Table"
-      >
-        <table {...tableProps}>{children}</table>
-      </div>
-    );
+    return <MarkdownTable {...tableProps}>{children}</MarkdownTable>;
   },
 };
+
+/** A reply's table, with copies a spreadsheet or another chat can take. */
+function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
+  const table = useRef<HTMLTableElement>(null);
+  const [status, setStatus] = useState("");
+  async function copy(format: "Markdown" | "CSV") {
+    const rows = table.current ? tableRows(table.current) : [];
+    try {
+      await navigator.clipboard.writeText(format === "CSV" ? tableToCsv(rows) : tableToMarkdown(rows));
+      setStatus(`Table copied as ${format}.`);
+    } catch {
+      setStatus("Couldn't copy. Select the table and copy it manually.");
+    }
+  }
+  return (
+    <div className="markdown-table">
+      <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="Table">
+        <table ref={table} {...props}>{children}</table>
+      </div>
+      <div className="markdown-table-actions">
+        <button type="button" onClick={() => void copy("Markdown")}>Copy as Markdown</button>
+        <button type="button" onClick={() => void copy("CSV")}>Copy as CSV</button>
+        <span className="markdown-copy-status" role="status">{status}</span>
+      </div>
+    </div>
+  );
+}
 
 type MessageMarkdownProps = {
   text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;

@@ -147,7 +147,11 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
       if (!req.nativeSessionHash && req.headers.origin !== config.origin)
         throw httpError(403, "The computer connection must come from this application.");
       const query = ticketQuery.parse(req.query), key = hash(query.ticket), ticket = tickets.get(key);
-      const current = source(req);
+      // The iOS app's desktop page cannot put the app's bearer token on a WebSocket. A desktop ticket
+      // issued to that native session moments ago stands in for it, still once and from this Origin.
+      const nativePage = type === "desktop" && ticket?.session.kind === "native" && !req.nativeSessionHash;
+      if (!nativePage && !req.user) throw httpError(401, "Sign in required");
+      const current = nativePage ? ticket.session : source(req);
       if (!ticket || ticket.expires <= Date.now() || ticket.type !== type || ticket.session.kind !== current.kind
         || ticket.session.hash !== current.hash || !valid(ticket.session))
         throw httpError(401, "This computer attachment expired. Reconnect to get a fresh connection.");

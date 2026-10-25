@@ -14,6 +14,8 @@ export interface GroupEvent {
   event_id: string; seq: number; kind: string; created_at: number;
   actor: { kind: string; id: string };
   payload: Record<string, unknown>;
+  /** The household member who sent a message.user event through this app. Absent when unknown. */
+  sender?: { id: string; name: string };
 }
 export interface GroupAction {
   kind: string; task_id: string; member_id?: string; execution_generation?: number;
@@ -34,7 +36,7 @@ export type GroupRequest =
   | { operation: 'send'; roomId: string; requestId: string; text: string; threadId: string }
   | { operation: 'stop'; roomId: string; requestId: string }
   | { operation: 'approve'; roomId: string; taskId: string; memberId: string; generation: number; choice: 'once' | 'deny'; requestId: string };
-export type GroupResponse = GroupCatalog | GroupState | GroupPage | { room: GroupRoom } | { accepted?: boolean; cancelled?: number; approved?: boolean };
+export type GroupResponse = GroupCatalog | GroupState | GroupPage | { room: GroupRoom } | { accepted?: boolean; cancelled?: number; approved?: boolean; event?: GroupEvent };
 
 // Hermes's own Bot Mode envelopes. Display hints only, never authority.
 // App-attributed human messages deliberately bypass this fallback.

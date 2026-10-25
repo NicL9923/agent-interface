@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { notificationCopy } from "../shared/event-copy.js";
 import type { RuntimeEvent } from "../shared/types.js";
 import { httpError } from "./http-error.js";
@@ -9,10 +9,24 @@ import type { RoutineRepository } from "./store-routines.js";
 import type { SubmissionRepository } from "./store-submissions.js";
 import type { StoreDatabase } from "./store-database.js";
 
+/** How long a web push action such as Decline stays usable after its notification is sent. */
+export const pushActionTtl = 60 * 60000;
+export type PushAction = { userId: string; botId: string; approvalId: string; decision: "denied" };
+const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
 // Clients report an open chat every 15 seconds, so a missed beat or two never counts as leaving.
 export const presenceTtl = 45000;
+// Approvals Hermes reported since `asked.created_at>?` that nobody decided through the app,
+// Hermes's open requests do not lack, and whose own run has not settled since. An approval
+// without a recorded run waits for a decision or reconciliation. Exported for its query plan test.
+export const unresolvedApprovals = `FROM notification_events asked
+  JOIN notification_ingestion askedAt ON askedAt.event_id=asked.id
+  WHERE asked.created_at>? AND json_extract(asked.value,'$.kind')='approval'
+  AND NOT EXISTS(SELECT 1 FROM approval_attribution a WHERE a.approval_id=json_extract(asked.value,'$.approvalId'))
+  AND NOT EXISTS(SELECT 1 FROM approval_resolutions r WHERE r.approval_id=json_extract(asked.value,'$.approvalId'))
+  AND NOT EXISTS(SELECT 1 FROM run_settlements s WHERE s.bot_id=json_extract(asked.value,'$.botId')
+    AND s.run_id=json_extract(asked.value,'$.runId') AND s.ingestion_id>askedAt.id)`;
 /** What a client reports about a chat: reading it, gone after reading it, or still open but unattended. */
 export type ChatPresence = "active" | "left" | "idle";
 // Discovery lags Hermes by a poll, or longer after an outage, so Hermes's own timestamp says
@@ -82,6 +96,23 @@ export class NotificationRepository {
           .run(userId, botId, now, clientId);
     });
   }
+  /**
+   * A token a service worker presents to act on one approval for one person without their
+   * session, which it cannot read. Only its hash is kept, and it works once.
+   */
+  issuePushAction(action: PushAction, now = Date.now()) {
+    const token = randomBytes(32).toString("base64url");
+    this.db.prepare("INSERT INTO push_action_tokens(hash,user_id,bot_id,approval_id,decision,expires) VALUES(?,?,?,?,?,?)")
+      .run(tokenHash(token), action.userId, action.botId, action.approvalId, action.decision, now + pushActionTtl);
+    return token;
+  }
+  /** The action a token grants, removed as it is read so nobody can use it twice. Expired tokens grant nothing. */
+  consumePushAction(token: string, now = Date.now()): PushAction | undefined {
+    const row = this.db.prepare("DELETE FROM push_action_tokens WHERE hash=? RETURNING user_id AS userId,bot_id AS botId,approval_id AS approvalId,decision,expires")
+      .get(tokenHash(token)) as (PushAction & { expires: number }) | undefined;
+    if (!row || row.expires <= now) return undefined;
+    return { userId: row.userId, botId: row.botId, approvalId: row.approvalId, decision: row.decision };
+  }
   /** When this person last read each chat, in milliseconds, for the home list's unread marks. */
   chatReads(userId: string): Map<string, number> {
     const rows = this.db.prepare("SELECT bot_id,read_at FROM chat_reads WHERE user_id=?").all(userId) as { bot_id: string; read_at: number }[];
@@ -101,6 +132,42 @@ export class NotificationRepository {
     const read = this.db.prepare("SELECT read_at FROM chat_reads WHERE user_id=? AND bot_id=?").get(row.user_id, payload.botId) as { read_at: number } | undefined;
     const event = row.value ? JSON.parse(row.value) as RuntimeEvent : undefined;
     return !!read && read.read_at >= eventTime(event?.occurredAt, row.discovered ?? row.created_at);
+  }
+  /**
+   * Assistants with an approval this person was notified about in the last day that is still
+   * unresolved as far as this server knows: nobody decided it through the app, Hermes's open
+   * requests still hold it (see reconcileApprovals), and its own run reported no finish,
+   * failure or interruption since. Only the approval's run settles it: another run on the same
+   * assistant, such as a routine, does not. Hermes's roster can show an unopened session as idle
+   * meanwhile, so this keeps the app badge counting it.
+   */
+  pendingDecisions(userId: string, now = Date.now()): Set<string> {
+    const rows = this.db.prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}
+      AND EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=asked.id AND o.user_id=?)`)
+      .all(now - 86400000, userId) as { bot_id: string | null }[];
+    return new Set(rows.flatMap(row => row.bot_id ? [row.bot_id] : []));
+  }
+  /** Assistants with any unresolved approval from the last day. */
+  unresolvedApprovalBots(now = Date.now()): string[] {
+    return (this.db.prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}`)
+      .all(now - 86400000) as { bot_id: string | null }[]).flatMap(row => row.bot_id ? [row.bot_id] : []);
+  }
+  /**
+   * Records as resolved the approvals of this assistant that Hermes's open requests no longer
+   * hold, as when someone answered in Hermes's own UI. Nobody is credited with the decision. Only
+   * approvals notified before `notifiedBefore` count, so one opened after the read was taken is
+   * never mistaken for resolved.
+   */
+  reconcileApprovals(botId: string, open: Iterable<string>, notifiedBefore: number, now = Date.now()) {
+    const still = new Set(open);
+    const notified = this.db.prepare(`SELECT DISTINCT json_extract(value,'$.approvalId') AS id FROM notification_events
+      WHERE created_at>? AND created_at<? AND json_extract(value,'$.kind')='approval' AND json_extract(value,'$.botId')=?`)
+      .all(now - 86400000, notifiedBefore, botId) as { id: unknown }[];
+    const resolve = this.db.prepare("INSERT OR IGNORE INTO approval_resolutions(approval_id,bot_id,resolved_at) VALUES(?,?,?)");
+    let resolved = 0;
+    for (const { id } of notified)
+      if (typeof id === "string" && id && !still.has(id)) resolved += Number(resolve.run(id, botId, now).changes);
+    return resolved;
   }
   /** iOS deliveries of notifications their recipient has since read, with who read them, that no clear was sent for. */
   readOnDevices(now = Date.now()) {

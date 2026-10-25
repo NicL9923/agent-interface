@@ -25,6 +25,8 @@ export class EventRepository {
             .prepare("INSERT OR IGNORE INTO notification_events VALUES(?,?,?)")
             .run(event.id, JSON.stringify(event), Date.now());
           this.db.prepare("INSERT INTO notification_ingestion(event_id) SELECT ? WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion WHERE event_id=?)").run(event.id, event.id);
+          if (event.runId && ["completed", "failed", "interrupted"].includes(event.kind))
+            this.db.prepare("INSERT OR IGNORE INTO run_settlements(bot_id,run_id,ingestion_id) SELECT ?,?,id FROM notification_ingestion WHERE event_id=?").run(event.botId, event.runId, event.id);
           this.notifications.enqueue(event);
         }
       this.db

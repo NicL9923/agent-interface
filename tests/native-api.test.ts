@@ -287,6 +287,16 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
     await sender.clear(device, ["event"]);
     expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
     expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] } });
+    // A known badge rides beside the background clear, and as a silent alert push for a closed app.
+    await sender.clear(device, ["event"], 3);
+    expect(JSON.parse(seen[3].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] }, badge: 3 });
+    expect(seen[4].headers).toMatchObject({ "apns-push-type": "alert", "apns-priority": "5" });
+    expect(JSON.parse(seen[4].body)).toEqual({ aps: { badge: 3 } });
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: 0 }));
+    expect(JSON.parse(seen[5].body).aps).toMatchObject({ alert: { title: "Done" }, badge: 0 });
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: -1 }));
+    expect(JSON.parse(seen[6].body).aps).not.toHaveProperty("badge");
+    seen.splice(2);
     const many = apnsClearPayload(Array.from({ length: 100 }, (_, index) => `${index}`.padEnd(150, "x")));
     expect(Buffer.byteLength(many)).toBeLessThanOrEqual(4000);
     expect(JSON.parse(many).clear.tags[0]).toBe("0".padEnd(150, "x"));

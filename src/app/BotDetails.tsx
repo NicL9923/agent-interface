@@ -1,13 +1,15 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ActivityState, Bootstrap, Bot, Preferences } from "../shared/types";
-import { Avatar } from "../components/Avatar";
+import { Avatar, stateLabels } from "../components/Avatar";
 import { ArtifactsButton } from "../components/Artifacts";
 import { Icon } from "../components/Icon";
 import { Button } from "../components/ui/button";
 import { Dialog } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
-import { botSummary } from "./ChatHeader";
+import { When } from "../components/When";
+import { formatCombo, shortcuts } from "./shortcuts";
+import "./shell.css";
 import { addSection, checkSectionName, moveBotToSection, newSectionId, sectionOf, setFollowing } from "./preferences-editing";
 import type { SavedConversation } from "./storage";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
@@ -16,11 +18,13 @@ import { FormMessage } from "../components/ui/form-message";
 
 const newSectionValue = "\u0000new";
 
+const sharing = (bot: Bot) => bot.shared ? "Shared with your household" : bot.ownerId ? "Your personal assistant" : "Personal, visible to the household";
+
 /**
- * One assistant's card, like a contact in a messaging app: who it is, quick actions,
- * and the per-assistant home and notification choices.
+ * One assistant's card, like a contact in a messaging app: who it is, quick actions, what it
+ * runs on and when it last spoke, and the per-assistant home and notification choices.
  */
-export function BotDetails({ boot, bot, avatarState, conversation, connectionLost, startNewSection, editPreferences, onSettings, onClose }: {
+export function BotDetails({ boot, bot, avatarState, conversation, connectionLost, startNewSection, editPreferences, onSettings, onFind, onClose }: {
   boot: Bootstrap;
   bot: Bot;
   avatarState: ActivityState;
@@ -31,6 +35,8 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
   startNewSection?: boolean;
   editPreferences(edit: PreferenceEdit): Promise<void>;
   onSettings(bot: Bot): void;
+  /** Opens this assistant's chat with Find in chat ready. */
+  onFind(botId: string): void;
   onClose(): void;
 }) {
   const titleId = useId();
@@ -49,6 +55,7 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
     opened.current = true;
   }, [creating]);
   const ownConversation = conversation?.botId === bot.id ? conversation : null;
+  const working = !["idle", "done", "disconnected"].includes(avatarState);
   const create = () => {
     const checked = checkSectionName(prefs, name);
     if ("error" in checked) { setNameError(checked.error); nameField.current?.focus(); return; }
@@ -65,18 +72,28 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
       <div className="bot-details-hero">
         <Avatar avatar={bot.avatar} state={avatarState === "done" ? "idle" : avatarState} size={112} name={bot.name} botId={bot.id} />
         <h2 id={titleId} tabIndex={-1}>{bot.name}</h2>
-        <p>{botSummary(bot)}</p>
         {bot.description && <p className="bot-details-description">{bot.description}</p>}
+        <p>{sharing(bot)}</p>
       </div>
       <div className="bot-details-actions" role="group" aria-label="Quick actions">
         <Button className={`bot-details-action${pinned ? " on" : ""}`} aria-pressed={pinned} onClick={() => commit(value => ({ ...value, favorites: pinned ? value.favorites.filter(id => id !== bot.id) : [...value.favorites, bot.id] }))}>
           <Icon name="pin" filled={pinned} />{pinned ? "Unpin" : "Pin"}
+        </Button>
+        <Button className="bot-details-action" title={`Find in chat (${formatCombo(shortcuts.find)})`} onClick={() => onFind(bot.id)}>
+          <Icon name="search" />Find
         </Button>
         {ownConversation && <ArtifactsButton key={`${boot.user.id}:${bot.id}`} bot={bot} conversation={ownConversation} unavailable={connectionLost} />}
         <Button className="bot-details-action" onClick={() => onSettings(bot)}>
           <Icon name="gear" />Settings
         </Button>
       </div>
+      <dl className="settings-group bot-details-facts">
+        <div className="settings-row"><dt className="row-label">Model</dt><dd>{bot.provider ? `${bot.provider} / ${bot.model}` : bot.model}</dd></div>
+        {working && <div className="settings-row"><dt className="row-label">Now</dt><dd className={`bot-activity state-${avatarState}`}>{stateLabels[avatarState]}</dd></div>}
+        <div className="settings-row"><dt className="row-label">Last message</dt>
+          <dd>{bot.lastMessage?.at ? <><When value={bot.lastMessage.at} inline />{bot.lastMessage.text && <small>{bot.lastMessage.text}</small>}</>
+            : bot.lastMessage?.text ? <small>{bot.lastMessage.text}</small> : "No messages yet"}</dd></div>
+      </dl>
       <div className="settings-group">
         <label className="settings-row">
           <span className="row-text"><span className="row-label">Notify me about all activity</span>

@@ -19,7 +19,7 @@ async function client() {
   directories.push(root);
   mkdirSync(join(root, "assets"));
   for (const file of [
-    "index.html", "sw.js", "manifest.webmanifest", "icon-192.png", "index-AbC12345.js",
+    "index.html", "native-computer.html", "sw.js", "manifest.webmanifest", "icon-192.png", "index-AbC12345.js",
     "assets/index-AbC12345.js", "assets/xterm-Zx_9-Q01.css", "assets/logo.png",
   ]) writeFileSync(join(root, file), "x");
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
@@ -56,5 +56,19 @@ describe("client cache headers", () => {
     expect(isHashedAsset("/srv/client", "/srv/client/assets/addon-fit-DIOBYJe3.js")).toBe(true);
     expect(isHashedAsset("/srv/client", "/srv/client/assets/nested/index-AbC12345.js")).toBe(false);
     expect(isHashedAsset("/srv/client", "/srv/client/assets/index-short.js")).toBe(false);
+  });
+});
+
+describe("native shared desktop page", () => {
+  it("serves the viewer at /native/computer with the app's content security policy, revalidating", async () => {
+    const app = await client();
+    const response = await app.inject("/native/computer");
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.headers["cache-control"]).toBe("no-cache");
+    const policy = String(response.headers["content-security-policy"]);
+    for (const directive of ["default-src 'self'", "script-src 'self' https://accounts.google.com/gsi/client", "connect-src 'self' ws://127.0.0.1:3000", "object-src 'none'", "frame-ancestors 'none'"])
+      expect(policy).toContain(directive);
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
   });
 });

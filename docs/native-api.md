@@ -118,6 +118,25 @@ initial roster notice. The stream pings every 25 seconds and ends on sign-out. R
 reconnect and foreground as well. A 45-second bootstrap poll covers missed
 notices and changes made outside this app.
 
+`GET /api/events?group=ROOM_ID` also watches one group chat. The server checks the
+room like `GET /api/groups/:id`, answering 404 for a room the person cannot see,
+before the stream opens. While any stream watches a room, the server reads that
+room from the Hermes coordinator about every 2 seconds, one reader per room, and
+stops when the last watching stream closes. Reads slow down to every 30 seconds
+while Hermes fails. Each change to the room's latest event or its driver status
+sends `event: group` with `data: {"roomId":"ROOM_ID","latestSeq":N}`; fetch
+`GET /api/groups/:id/log?since=CURSOR&state=1` from your own cursor. `latestSeq`
+can repeat when only the driver status changed, such as a new pending approval,
+and is 0 when Hermes does not report one. There is no notice on open, so fetch
+then. A room that gains someone else's private assistant ends the stream. Watch
+one room per stream; roster events still arrive on the same stream. Each person
+may hold 8 room-watching streams at once across tabs and devices, and the server
+watches at most 24 rooms for the household. A watch beyond either limit answers
+429 with an `error` message before the stream opens; close the stream when the
+room leaves the screen, and rely on the fallback poll until a retry succeeds.
+Keep a slow fallback poll, such as every 30 seconds, for older servers and
+missed notices; they ignore `group` and send no `group` events.
+
 A personal assistant with a recorded owner is private to that owner. For anyone
 else it does not exist: lists such as `/api/bots`, bootstrap, Today, search, saved
 items, automations, routines and group chats leave it out, and every route that
@@ -164,6 +183,68 @@ discarding a valid credential. A failed/offline logout needs a visible retry
 because clearing only local storage cannot revoke the server session. When the
 server stays unreachable, the app lets the person clear the local session anyway
 after warning that the server-side session remains valid until it expires.
+
+## Retrying a failed turn
+
+`POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this
+assistant's current conversation, to send that message again after the assistant's
+turn failed. Send the failed turn's retry ID as `requestId` (below), the original
+`text`, its files as `attachments`, and no `draftBaseRevision`; a retry with
+`draftBaseRevision` answers 400. The server answers 400 when `retryOf` names a
+message that is not a person's message in the current conversation, such as an
+assistant reply, a scheduled delivery, another assistant's message or an ID from
+another chat, and 400 on `POST /api/bots/:id/steer`. While the assistant is working
+or waiting on someone it answers 409; offer Retry only after a failed turn. A retry
+never reads, merges or clears the sender's draft. Receipts, uncertain receipts and
+attribution work as for any other message.
+
+### One retry per failed turn
+
+The server admits one retry per failed turn: the assistant, `retryOf`, and the
+conversation's `activity.runId` when the retry arrives, or empty without one. The
+first request claims the turn. A later retry of the same turn with another
+`requestId`, from any device or person, admits nothing and answers the first
+request's current receipt, whose `requestId` names that request: follow it from then
+on. A retry with the claimed `requestId` takes the usual idempotent path; from
+another person, or with different text, it answers the same receipt instead of 409.
+Anyone who can see the assistant can read a retry's receipt with
+`GET /api/submissions/:id`. Once the retried message runs and fails again, Hermes
+records it as a new message in a new run, so retrying it is a new turn.
+
+While the conversation's activity is `failed`, `GET /api/bots/:id/conversation`
+carries `retry`, that turn's claim as a receipt with `retryOf`, once anyone retried
+it. Hide Retry when its `retryOf` is the latest person's message and its status is
+`accepted`, `rejected` or `interrupted`; a refused retry stays refused under its ID,
+so the person sends the message again from the composer. While it is `uncertain`,
+show "Checking whether the retry arrived…" and check its `requestId` with
+`GET /api/submissions/:id`: at once, then after 2, 4, 8 and 16 seconds, then every
+30, until a receipt settles it or the conversation moves past that message or run.
+Retry in that state sends the same request with `reviewedUncertain: true`, only
+when the `idempotency` capability is supported; without it, keep Retry disabled and
+say the retry is unconfirmed and will not be sent again. Never make a new request
+ID for the same failed turn.
+
+### Retry request ID
+
+Every client derives the same `requestId` for a failed turn, so a lost response, a
+second tab, a reload or another device can never run it twice:
+
+1. Join `wildbots-retry`, the assistant ID, `retryOf` and the failed
+   `activity.runId` (empty without one) with a NUL character (U+0000) between
+   them, and encode the result as UTF-8.
+2. Take the first 16 bytes of its SHA-256 digest.
+3. Set byte 6 to `(byte6 & 0x0F) | 0x80` (version 8) and byte 8 to
+   `(byte8 & 0x3F) | 0x80` (the RFC 9562 variant).
+4. Format the bytes as a lowercase UUID, `8-4-4-4-12` hex digits.
+
+`src/shared/retry-id.ts` implements it; `tests/retry-id.test.ts` checks these
+vectors:
+
+| Assistant | `retryOf` | Run | `requestId` |
+| --- | --- | --- | --- |
+| `ranch` | `msg-42` | `run-7` | `97260a13-beba-8fb5-9218-204b5e8a2010` |
+| `ranch` | `msg-42` | empty | `3bba2658-e84c-8ad5-a391-77d34308f4b8` |
+| `café` | `👋` | `run` | `f0431e86-8678-8bc4-92de-7d27336108fb` |
 
 ## Drafts
 
@@ -249,7 +330,8 @@ Web and native clients share these authenticated operations. See
 | `POST /api/routines/preview` | `{ "botId": "ID", "schedule": "CRON_OR_NATIVE_SCHEDULE" }`; actual timezone and upcoming runs |
 | `POST /api/routines/:id/run` | `{ "requestId": "UUID" }`; durable native trial receipt |
 | `GET /api/routines/:id/runs/:requestId` | Exact trial result; rechecking does not execute another trial |
-| `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately |
+| `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately. A `message.user` event sent through this app carries `sender: { "id": "USER_ID", "name": "NAME" }`; label others "Household member" |
+| `GET /api/search?q=TEXT&botId=ID` | `{ "hits": [...], "unavailableBots": [...] }`. `botId` is optional and searches only that assistant, answering 404 with `code: "assistant_not_found"` for one the person cannot see. A hit whose `sessionId` is the assistant's current session and that has a `messageId` can open the live chat with `GET /api/bots/:id/conversation?start=MESSAGE_ID` |
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
@@ -386,8 +468,40 @@ Share inbox items do. It is never sent for the person.
 
 Grouping and actions are optional: when they would push the payload past 4000
 bytes, the actions go first, then the grouping. IDs over 200 bytes get neither.
-Older app builds ignore the new fields. Web Push payloads are unchanged, apart
-from approval events' new `approvalId`, which browsers ignore.
+Older app builds ignore the new fields.
+
+### Badge
+
+Each alert sets `aps.badge` to the person's badge count when the server can read
+Hermes's roster; without one, the badge is left as it was. The count is the number
+of assistants they can see that show the unread mark, plus those waiting on an
+approval, a question or a secure request, each counted once. The notification being
+delivered counts too: an approval as a decision, other news as unread in a chat
+they have opened before. An approval the person was notified about keeps counting,
+even while the roster shows the assistant idle, until someone decides it in the
+app, its own run finishes, fails or is interrupted, or Hermes's open requests no
+longer hold it. Another run on the same assistant, such as a routine, does not
+settle it. The server compares open requests whenever it reads the conversation
+and, a few assistants at a time, about once a minute in the background, and
+credits nobody with a decision made outside the app. Approvals count for a day at
+most. `src/shared/unread.ts` holds the rule, which iOS mirrors in `UnreadChats`. The read-elsewhere clear push carries the new count as `badge`
+beside `aps`, since a background push's `aps` may hold only `content-available`,
+and the server follows it with a silent alert push, `{ "aps": { "badge": N } }` at
+priority 5, which iOS applies even while the app is closed.
+
+### Web Push
+
+Web Push payloads carry `title`, `body`, `url`, `tag`, `kind`, `botId`, an
+approval's `approvalId`, and `badge` as above. The service worker sets the app badge
+from `badge`, or clears it at 0. A lone approval also carries `declineToken`, a
+single-use token valid for an hour that denies that approval for that person.
+Where the browser supports notification actions, the service worker offers Review,
+which opens the chat as a tap does, and Decline, which calls
+`POST /api/push/actions` with `{ "token": "TOKEN" }` and no session or CSRF token.
+The request still needs the app's Origin. The server answers 401 for a used,
+expired or unknown token, or an assistant the person can no longer see, and 409
+when the approval is no longer pending. A failed Decline shows a notification that
+opens the chat. APNs payloads never carry the token.
 
 ### Chat presence
 
@@ -427,6 +541,34 @@ double. Physical device delivery additionally requires an Apple developer team,
 the matching signed app entitlement, a real APNs signing key, notification
 permission, and a current device registration. The repository does not provision
 those external credentials or publish a signed app.
+
+## Shared computer
+
+The iOS app shows the shared desktop in a `WKWebView` without a web session:
+
+1. `POST /api/computer/desktop` with the bearer token and `{}`, or
+   `{ "viewerId": "ID" }` to keep the same attachment identity on reconnect,
+   returns `{ "path": "/api/computer/desktop/ws?ticket=TICKET", "expiresAt": "...", "viewerId": "ID" }`.
+   The ticket works once, within 30 seconds.
+2. Load `ORIGIN/native/computer#path=ENCODED_PATH&control=0`. The page connects to
+   the ticketed WebSocket, full screen and scaled to fit, watch-only. Its socket
+   carries no bearer token or cookie: a ticket issued to a native session is
+   accepted on its own from the app's Origin, and the stream ends when that native
+   session ends.
+3. `POST /api/computer/control` with the bearer token and
+   `{ "action": "take" | "release", "viewerId": "ID" }` returns the computer status.
+   After a successful take, set `control=1` in the hash; set it back to 0 after
+   handing back or on any failure. Changing only `control` switches input without
+   reconnecting. A new `path` reconnects with that ticket.
+4. The page reports to the `computer` script message handler, when present, with
+   `{ "type": "connected" }`, `{ "type": "disconnected", "reason": "closed" | "lost" }`
+   or `{ "type": "failed", "reason": "invalid_ticket" | "viewer_unavailable" | "rejected" }`.
+   On disconnect, request a fresh ticket with the same `viewerId` and set the new
+   path. The page also sets `data-state` on its root element and announces the
+   state in a status line.
+
+The page accepts only a desktop ticket path. It is served with the app's content
+security policy and needs no Hermes credential. The terminal stays in the browser.
 
 ## Live Activity
 

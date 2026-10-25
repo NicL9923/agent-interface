@@ -2,20 +2,20 @@
 .today-intro, .memory-heading, .reply-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .today-intro { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .today-intro > p { margin: 0; }
-.today-intro > button { font-size: 13px; padding: 7px 12px; flex-shrink: 0; }
+.today-intro > button { font-size: 0.8125rem; padding: 7px 12px; flex-shrink: 0; }
 .today-counts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 28px; }
 .today-counts span { color: var(--muted); }
-.today-counts strong { font-size: 22px; color: var(--ink); margin-right: 6px; }
+.today-counts strong { font-size: 1.375rem; color: var(--ink); margin-right: 6px; }
 .today-section { padding: 20px 0; border-bottom: 1px solid var(--line); }
-.today-section h3 { margin: 0 0 12px; font-size: 18px; }
+.today-section h3 { margin: 0 0 12px; font-size: 1.125rem; }
 .today-row { display: flex; text-align: left; align-items: center; gap: 14px; width: 100%; border: 0; border-radius: 12px; padding: 13px 8px; }
 .today-row-copy { flex: 1; min-width: 0; }
 .today-row > .avatar-wrap { flex: 0 0 auto; }
 .today-row strong, .today-row small { display: block; overflow-wrap: anywhere; }
 .today-row small { color: var(--muted); margin-top: 5px; }
-.today-row > span:last-child:not(:first-child) { font-size: 18px; color: var(--muted); }
-.today-timestamp { font-size: 12px; }
-.today-section > button:not(.today-row) { font-size: 13px; padding: 7px 12px; margin-top: 8px; }
+.today-row > span:last-child:not(:first-child) { font-size: 1.125rem; color: var(--muted); }
+.today-timestamp { font-size: 0.75rem; }
+.today-section > button:not(.today-row) { font-size: 0.8125rem; padding: 7px 12px; margin-top: 8px; }
 .memory-document { border-top: 1px solid var(--line); padding: 18px 0; }
 .memory-heading { flex-wrap: wrap; }
 .memory-heading h3 { margin: 0; }
@@ -28,7 +28,7 @@
 .memory-panel .actions { flex-wrap: wrap; }
 .reply-cards { display: grid; gap: 16px; margin: 14px 0; }
 .reply-card { border: 1px solid var(--line); background: var(--raised); padding: 18px; border-radius: 14px; }
-.reply-card h3 { margin: 7px 0 14px; font-size: 19px; }
+.reply-card h3 { margin: 7px 0 14px; font-size: 1.1875rem; }
 .reply-card h4 { margin: 5px 0; }
 .reply-checklist { list-style: none; padding: 0; margin: 0 0 16px; }
 .reply-checklist li { margin: 0; }
@@ -40,7 +40,7 @@
 .reply-itinerary li + li { border-top: 1px solid var(--line); }
 .reply-itinerary p { margin: 8px 0; }
 .reply-itinerary a { display: inline-block; margin: 5px 12px 5px 0; }
-.reply-card .itinerary-note-button { padding: 5px 9px; font-size: 13px; }
+.reply-card .itinerary-note-button { padding: 5px 9px; font-size: 0.8125rem; }
 .itinerary-edit textarea { width: 100%; }
 .itinerary-edit .actions { margin-top: 8px; }
 .reply-card small { display: block; line-height: 1.5; }
@@ -50,7 +50,7 @@
 .event-proposal-dialog h2 { margin: 0; }
 .event-proposal-dialog header button { flex-shrink: 0; white-space: nowrap; }
 .event-proposal-dialog dd { margin: 4px 0 16px; }
-.event-proposal-dialog dt { color: var(--muted); font-size: 13px; }
+.event-proposal-dialog dt { color: var(--muted); font-size: 0.8125rem; }
 .event-proposal-dialog .actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .button-link { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; text-decoration: none; color: var(--ink); }
 .preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -64,4 +64,4 @@
 .voice-avatar.voice-recording::after, .voice-avatar.voice-speaking::after { content: ""; position: absolute; inset: -4px; border: 2px solid var(--accent); border-radius: 50%; animation: voice-pulse 1.4s ease-in-out infinite; }
 @keyframes voice-pulse { 50% { opacity: .3; transform: scale(1.1); } }
 @media (prefers-reduced-motion: reduce) { .voice-avatar::after { animation: none !important; } }
-@media (max-width: 620px) { .today-panel { padding: 22px 16px; } .today-intro { align-items: flex-start; } .today-counts { gap: 14px; } .today-counts span { font-size: 13px; } .today-counts strong { font-size: 21px; } .reply-card { padding: 14px; } }
+@media (max-width: 620px) { .today-panel { padding: 22px 16px; } .today-intro { align-items: flex-start; } .today-counts { gap: 14px; } .today-counts span { font-size: 0.8125rem; } .today-counts strong { font-size: 1.3125rem; } .reply-card { padding: 14px; } }

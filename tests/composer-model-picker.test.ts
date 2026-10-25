@@ -81,15 +81,43 @@ it("closes when the assistant can no longer be saved safely and returns focus af
   expect(document.activeElement).toBe(trigger());
 });
 
+/** The segment named `label` in the radio group labelled `group`. */
+const segment = (group: string, label: string) => {
+  const radios = [...document.body.querySelectorAll('[role="radiogroup"]')]
+    .find(item => document.getElementById(item.getAttribute("aria-labelledby")!)?.textContent === group)!;
+  return [...radios.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(item => item.textContent === label)!;
+};
+const checked = (group: string) => [...document.body.querySelectorAll('[role="radiogroup"]')]
+  .find(item => document.getElementById(item.getAttribute("aria-labelledby")!)?.textContent === group)!
+  .querySelector('[aria-checked="true"]')?.textContent;
+
 it("saves conversation reasoning and restores the saved value after an unsupported speed fails", async () => {
   vi.mocked(write).mockResolvedValueOnce({ reasoning: "ultra", speed: "normal" }).mockRejectedValueOnce(new Error("Fast mode is unavailable for this model."));
   await render(); await openPicker();
-  const [reasoning, speed] = [...document.body.querySelectorAll("select")];
-  await act(async () => { reasoning.value = "ultra"; reasoning.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => segment("Reasoning", "Ultra").click());
   expect(write).toHaveBeenCalledWith("/bots/ranch/inference", { reasoning: "ultra" }, "PATCH");
-  expect(reasoning.value).toBe("ultra"); expect(document.body.querySelector(".model-popover")).not.toBeNull();
-  await act(async () => { speed.value = "fast"; speed.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(speed.value).toBe("normal"); expect(document.body.textContent).toContain("Fast mode is unavailable");
+  expect(checked("Reasoning")).toBe("Ultra"); expect(document.body.querySelector(".model-popover")).not.toBeNull();
+  await act(async () => segment("Speed", "Fast").click());
+  expect(checked("Speed")).toBe("Normal"); expect(document.body.textContent).toContain("Fast mode is unavailable");
+});
+
+it("moves and saves reasoning with the arrow keys, keeping focus in the group while it saves", async () => {
+  let finish!: (value: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  await render(); await openPicker();
+  const current = document.body.querySelector<HTMLButtonElement>('[role="radiogroup"] [aria-checked="true"]')!;
+  expect(current.tabIndex).toBe(0);
+  current.focus();
+  await act(async () => current.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  const next = current.nextElementSibling as HTMLButtonElement;
+  expect(document.activeElement).toBe(next);
+  expect(next.textContent).toBe("XHigh"); expect(next.getAttribute("aria-label")).toBe("Extra high");
+  expect(write).toHaveBeenCalledWith("/bots/ranch/inference", { reasoning: "xhigh" }, "PATCH");
+  // While saving, arrows do nothing and focus stays where it is.
+  await act(async () => next.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(write).toHaveBeenCalledTimes(1); expect(document.activeElement).toBe(next);
+  await act(async () => finish({ reasoning: "xhigh", speed: "normal" }));
+  expect(next.getAttribute("aria-checked")).toBe("true");
 });
 
 it("blocks expensive-model confirmation while inference settings are saving", async () => {
@@ -97,8 +125,7 @@ it("blocks expensive-model confirmation while inference settings are saving", as
   await render(); await openPicker(); await press("New model");
   let finish!: (value: unknown) => void;
   vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-  const reasoning = document.body.querySelector("select")!;
-  await act(async () => { reasoning.value = "ultra"; reasoning.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => segment("Reasoning", "Ultra").click());
   const confirm = [...document.body.querySelectorAll("button")].find(button => button.textContent === "Confirm this model")!;
   expect(confirm.disabled).toBe(true); await act(async () => confirm.click()); expect(write).toHaveBeenCalledTimes(2);
   await act(async () => finish({ reasoning: "ultra", speed: "normal" })); expect(confirm.disabled).toBe(false);

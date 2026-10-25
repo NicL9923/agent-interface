@@ -68,7 +68,7 @@ describe("assistant Markdown", () => {
     expect(container.querySelector("em")?.textContent).toBe("patience");
     expect(container.querySelectorAll("ol li")).toHaveLength(2);
     expect(container.querySelector("code")?.textContent).toBe("config");
-    expect(container.querySelector("button")).toBeNull();
+    expect([...container.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Copy as Markdown", "Copy as CSV"]);
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://example.test/docs");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
@@ -159,6 +159,51 @@ describe("assistant Markdown", () => {
     await act(async () => finish());
     expect(button.disabled).toBe(false);
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Code copied.");
+  });
+});
+
+describe("code highlighting and tables", () => {
+  const settle = () => act(async () => { await vi.dynamicImportSettled(); });
+  it("colors a finished fence once its grammar loads, keeping the code text and Copy code", async () => {
+    await render("```ts\nconst gate: number = 1; // north\n```");
+    await settle();
+    const code = container.querySelector("pre code")!;
+    expect(code.textContent).toBe("const gate: number = 1; // north\n");
+    expect(code.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(code.querySelector(".hljs-comment")?.textContent).toBe("// north");
+    await copy();
+    expect(writeText).toHaveBeenCalledWith("const gate: number = 1; // north\n");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Code copied.");
+  });
+
+  it("escapes markup in highlighted code", async () => {
+    await render("```html\n<img src=x onerror=alert(1)>\n```");
+    await settle();
+    expect(container.querySelector("pre code img")).toBeNull();
+    expect(container.querySelector("pre code")?.textContent).toBe("<img src=x onerror=alert(1)>\n");
+  });
+
+  it("leaves a fence still streaming in, and unknown languages, plain", async () => {
+    await act(async () => root.render(createElement(StreamingMarkdown, { text: "Here:\n\n```python\nprint('hay')" })));
+    await settle();
+    expect(container.querySelector("pre code")?.textContent).toBe("print('hay')\n");
+    expect(container.querySelector("pre code [class^=hljs-]")).toBeNull();
+    await render("```brainfuck\n+++.\n```");
+    await settle();
+    expect(container.querySelector("pre code")?.innerHTML).toBe("+++.\n");
+  });
+
+  it("copies a table as Markdown or CSV and says so", async () => {
+    await render("| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |");
+    const button = (text: string) => [...container.querySelectorAll("button")].find(item => item.textContent === text)!;
+    await act(async () => button("Copy as CSV").click());
+    expect(writeText).toHaveBeenLastCalledWith('Gate,Battery\r\n"Barn, west",48%');
+    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toBe("Table copied as CSV.");
+    await act(async () => button("Copy as Markdown").click());
+    expect(writeText).toHaveBeenLastCalledWith("| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |");
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => button("Copy as CSV").click());
+    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toContain("copy it manually");
   });
 });
 
