@@ -155,6 +155,8 @@ export class Store {
   seenInChat(...args: Parameters<NotificationRepository["seenInChat"]>) { return this.notifications.seenInChat(...args); }
   chatReads(...args: Parameters<NotificationRepository["chatReads"]>) { return this.notifications.chatReads(...args); }
   pendingDecisions(...args: Parameters<NotificationRepository["pendingDecisions"]>) { return this.notifications.pendingDecisions(...args); }
+  unresolvedApprovalBots(...args: Parameters<NotificationRepository["unresolvedApprovalBots"]>) { return this.notifications.unresolvedApprovalBots(...args); }
+  reconcileApprovals(...args: Parameters<NotificationRepository["reconcileApprovals"]>) { return this.notifications.reconcileApprovals(...args); }
   issuePushAction(...args: Parameters<NotificationRepository["issuePushAction"]>) { return this.notifications.issuePushAction(...args); }
   consumePushAction(...args: Parameters<NotificationRepository["consumePushAction"]>) { return this.notifications.consumePushAction(...args); }
   readOnDevices(...args: Parameters<NotificationRepository["readOnDevices"]>) { return this.notifications.readOnDevices(...args); }

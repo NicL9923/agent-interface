@@ -17,6 +17,9 @@ export function inQuietHours(settings: import('../shared/types.js').Preferences[
   const time = `${parts.find(part=>part.type==='hour')!.value}:${parts.find(part=>part.type==='minute')!.value}`;
   return settings.quietStart < settings.quietEnd ? time >= settings.quietStart && time < settings.quietEnd : time >= settings.quietStart || time < settings.quietEnd;
 }
+// Reconciling counted approvals against Hermes: at most this many assistants, this often.
+const approvalCheckInterval = 60000;
+const approvalChecksPerPass = 5;
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
   private jobs = new Map<"runtime" | "outbox" | "live", Promise<void>>();
@@ -25,6 +28,9 @@ export class BackgroundWorker {
   private stopping?: Promise<void>;
   private closeApns?: () => void;
   private retainedAt = 0;
+  private approvalsCheckedAt = 0;
+  // When each assistant's approvals were last checked against Hermes, so every one gets its turn.
+  private approvalChecks = new Map<string, number>();
   readonly createdAt = Date.now();
   lastTickAt?: number;
   readonly loop: FailureTracker;
@@ -91,6 +97,7 @@ export class BackgroundWorker {
     const outbox = this.flushOutbox();
     const runtime = this.runJob("runtime", async () => {
       await this.reconcileRuntime();
+      await this.reconcileApprovals();
       // Include newly discovered events in this tick, even if delivery took its
       // snapshot before discovery finished. A busy outbox queues one more pass.
       void this.flushOutbox();
@@ -170,6 +177,25 @@ export class BackgroundWorker {
     } catch (error) {
       // Preserve the discovery cursor while Hermes is unavailable.
       this.discovery.failure(error);
+    }
+  }
+  /**
+   * Now and then, checks a few assistants with an approval still counted against Hermes's open
+   * requests, so one answered outside the app stops counting even if nobody opens its chat.
+   */
+  private async reconcileApprovals(now = Date.now()) {
+    if (now - this.approvalsCheckedAt < approvalCheckInterval) return;
+    this.approvalsCheckedAt = now;
+    const unresolved = this.store.unresolvedApprovalBots(now);
+    for (const botId of this.approvalChecks.keys()) if (!unresolved.includes(botId)) this.approvalChecks.delete(botId);
+    const due = unresolved.sort((a, b) => (this.approvalChecks.get(a) ?? 0) - (this.approvalChecks.get(b) ?? 0)).slice(0, approvalChecksPerPass);
+    for (const botId of due) {
+      this.approvalChecks.set(botId, now);
+      try {
+        const readAt = Date.now();
+        const conversation = await this.runtime.conversation(botId, { history: false });
+        this.store.reconcileApprovals(botId, conversation.approvals.map(approval => approval.id), readAt);
+      } catch { /* Unreadable now; it stays counted and is checked again later. */ }
     }
   }
   private async deliver() {
