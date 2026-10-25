@@ -198,7 +198,7 @@ export class BackgroundWorker {
     for (const botId of this.approvalChecks.keys()) if (!unresolved.includes(botId)) this.approvalChecks.delete(botId);
     const due = unresolved.sort((a, b) => (this.approvalChecks.get(a) ?? 0) - (this.approvalChecks.get(b) ?? 0)).slice(0, approvalChecksPerPass);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const outOfTime = new Promise<undefined>(resolve => { timer = setTimeout(resolve, approvalPassBudget); });
+    const outOfTime = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), approvalPassBudget); });
     try {
       for (const botId of due) {
         this.approvalChecks.set(botId, now);
