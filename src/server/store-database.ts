@@ -83,6 +83,13 @@ const additions = `
   CREATE TABLE IF NOT EXISTS group_senders(room_id TEXT NOT NULL,event_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,PRIMARY KEY(room_id,event_id));
   -- Single-use web push notification actions, by token hash, each bound to one person, approval and decision.
   CREATE TABLE IF NOT EXISTS push_action_tokens(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,approval_id TEXT NOT NULL,decision TEXT NOT NULL,expires INTEGER NOT NULL);
+  -- Approvals Hermes's open requests no longer held when this server read them, resolved outside the app.
+  CREATE TABLE IF NOT EXISTS approval_resolutions(approval_id TEXT PRIMARY KEY,bot_id TEXT NOT NULL,resolved_at INTEGER NOT NULL);
+  -- Each run's finishes, failures and interruptions by ingestion order, which settle that run's approvals.
+  CREATE TABLE IF NOT EXISTS run_settlements(bot_id TEXT NOT NULL,run_id TEXT NOT NULL,ingestion_id INTEGER NOT NULL REFERENCES notification_ingestion(id) ON DELETE CASCADE,PRIMARY KEY(bot_id,run_id,ingestion_id));
+  -- The first request that retried each failed turn, by assistant, retried message and failed run
+  -- ('' without one). Every later retry of that turn follows this request instead of running again.
+  CREATE TABLE IF NOT EXISTS retry_claims(bot_id TEXT NOT NULL,retry_of TEXT NOT NULL,run_id TEXT NOT NULL,request_id TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(bot_id,retry_of,run_id));
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;
@@ -132,6 +139,10 @@ export class StoreDatabase {
     migrate(this.db);
     this.db.exec(additions);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
+    // Events a previous release recorded after a rollback.
+    this.db.exec(`INSERT OR IGNORE INTO run_settlements(bot_id,run_id,ingestion_id) SELECT json_extract(e.value,'$.botId'),json_extract(e.value,'$.runId'),i.id
+      FROM notification_events e JOIN notification_ingestion i ON i.event_id=e.id
+      WHERE json_extract(e.value,'$.kind') IN ('completed','failed','interrupted') AND json_extract(e.value,'$.runId') IS NOT NULL AND json_extract(e.value,'$.botId') IS NOT NULL`);
   }
   close() {
     this.db.close();

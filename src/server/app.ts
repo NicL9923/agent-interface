@@ -37,7 +37,7 @@ import { installCollaborationRoutes, roomAccessible } from './collaboration.js';
 import { GroupWatch } from "./group-watch.js";
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
-import { openEventStream } from "./event-stream.js";
+import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { id, modelFavoriteList, preferences } from "./schemas.js";
 import { apiRoute } from "./api-route.js";
 import { HealthMonitor, installHealthRoutes } from "./health.js";
@@ -229,39 +229,48 @@ export async function createApp(
   });
   // ?group=<roomId> also watches one group chat: the server polls it while any stream watches it.
   app.get("/api/events", { exposeHeadRoute: false }, async (req, reply) => {
+    // Followed before the first await, so a client that leaves during setup never holds a watch.
+    const connection = eventStreamConnection(reply);
     const { group } = z.object({ group: id.optional() }).parse(req.query);
     const userId = signedIn(req).id;
     if (group !== undefined) await collaboration.room(userId, group);
+    if (connection.closed) return connection.abandon();
     const initial = await runtimeSnapshot();
+    if (connection.closed) return connection.abandon();
     let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
+    let stream: EventStream | undefined;
     // Admitted before the stream opens, so a refused watch answers 429 instead of a silent stream.
     // A room that gains someone else's private assistant ends the watch, as its routes answer 404.
     const unwatchGroup = group === undefined ? undefined : groups.watch(group, userId, state => {
-      if (!roomAccessible(state.room, profile => visibleTo(store, profile, userId))) { stream.end(); return; }
-      stream.send(`event: group\ndata: ${JSON.stringify({ roomId: group, latestSeq: state.room.latest_seq ?? 0 })}\n\n`);
-    });
-    const stream = openEventStream(reply, streams, {
-      allowed: () => stillSignedIn(store, config, req),
-      teardown: () => {
-        unwatchGroup?.();
-        rosterListeners.delete(changed);
-        if (!rosterListeners.size) {
-          unwatchRoster?.();
-          unwatchRoster = undefined;
-          clearTimeout(rosterPending);
-          rosterPending = undefined;
-        }
-      },
+      if (!roomAccessible(state.room, profile => visibleTo(store, profile, userId))) { stream?.end(); return; }
+      stream?.send(`event: group\ndata: ${JSON.stringify({ roomId: group, latestSeq: state.room.latest_seq ?? 0 })}\n\n`);
     });
     const changed = (bots: Bot[], nativeAvatar: boolean) => {
-      if (!stillSignedIn(store, config, req)) { stream.end(); return; }
+      if (!stillSignedIn(store, config, req)) { stream?.end(); return; }
       const next = rosterProjection(bots, signedIn(req).id, nativeAvatar);
       if (next === projection) return;
       projection = next;
-      stream.send("event: roster\ndata: roster\n\n");
+      stream?.send("event: roster\ndata: roster\n\n");
     };
-    rosterListeners.add(changed);
-    unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+    const teardown = () => {
+      unwatchGroup?.();
+      rosterListeners.delete(changed);
+      if (!rosterListeners.size) {
+        unwatchRoster?.();
+        unwatchRoster = undefined;
+        clearTimeout(rosterPending);
+        rosterPending = undefined;
+      }
+    };
+    try {
+      rosterListeners.add(changed);
+      unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+      stream = connection.open(streams, { allowed: () => stillSignedIn(store, config, req), teardown });
+    } catch (error) {
+      // Nothing it reserved outlives a setup that failed.
+      teardown();
+      throw error;
+    }
   });
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");

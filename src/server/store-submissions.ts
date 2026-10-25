@@ -13,40 +13,65 @@ const legacyInterruptionMessage = "Review the interrupted task before starting a
 const legacyReason = (receipt: SubmissionReceipt): RejectionReason | undefined =>
   receipt.status === "rejected" && receipt.message === legacyInterruptionMessage ? "interruption_pending" : undefined;
 
+type Intent = { created: boolean; receipt: SubmissionReceipt; input: Submission };
+
 /** Message admission receipts, run participants and approval attribution. */
 export class SubmissionRepository {
   constructor(private readonly database: StoreDatabase, private readonly drafts: DraftRepository) {}
   private get db() { return this.database.db; }
-  intent(input: Submission): {
-    created: boolean;
-    receipt: SubmissionReceipt;
-    input: Submission;
-  } {
+  intent(input: Submission): Intent {
+    return this.database.transaction(() => this.record(input));
+  }
+  /**
+   * Records a retry's intent as the one retry of its failed turn: an assistant, the message it
+   * retries and the run that failed, '' without one. When another request claimed that turn
+   * first, nothing is recorded and that request's receipt comes back instead, so every device
+   * that retries the same failure follows one request.
+   */
+  claimRetry(runId: string, input: Submission & { retryOf: string }): Intent | { claimed: SubmissionReceipt } {
     return this.database.transaction(() => {
-      const previous = this.submission(input.requestId);
-      if (previous) {
-        if (JSON.stringify(previous.input) !== JSON.stringify(input))
-          throw httpError(409, "This submission ID was already used for different content");
-        return { created: false, ...previous };
-      }
-      const receipt: SubmissionReceipt = {
-        requestId: input.requestId,
-        status: "uncertain",
-        message:
-          "Waiting for confirmed Hermes admission. This message will never be automatically resent.",
-      };
-      this.db
-        .prepare("INSERT INTO submissions VALUES(?,?,?,?,?,?)")
-        .run(
-          input.requestId,
-          input.botId,
-          input.senderId,
-          JSON.stringify(input),
-          JSON.stringify(receipt),
-          Date.now(),
-        );
-      return { created: true, receipt, input };
+      const claim = this.db.prepare("SELECT request_id FROM retry_claims WHERE bot_id=? AND retry_of=? AND run_id=?")
+        .get(input.botId, input.retryOf, runId) as { request_id: string } | undefined;
+      const first = claim && claim.request_id !== input.requestId ? this.submission(claim.request_id) : undefined;
+      if (first) return { claimed: first.receipt };
+      const intent = this.record(input);
+      this.db.prepare("INSERT OR REPLACE INTO retry_claims(bot_id,retry_of,run_id,request_id,created_at) VALUES(?,?,?,?,?)")
+        .run(input.botId, input.retryOf, runId, input.requestId, Date.now());
+      return intent;
     });
+  }
+  /** The retries claimed for an assistant's failed run, '' without one, with their current receipts. */
+  retryClaims(botId: string, runId: string) {
+    return (this.db.prepare("SELECT retry_of,request_id FROM retry_claims WHERE bot_id=? AND run_id=?").all(botId, runId) as { retry_of: string; request_id: string }[])
+      .flatMap(claim => {
+        const receipt = this.submission(claim.request_id)?.receipt;
+        return receipt ? [{ retryOf: claim.retry_of, receipt }] : [];
+      });
+  }
+  private record(input: Submission): Intent {
+    const previous = this.submission(input.requestId);
+    if (previous) {
+      if (JSON.stringify(previous.input) !== JSON.stringify(input))
+        throw httpError(409, "This submission ID was already used for different content");
+      return { created: false, ...previous };
+    }
+    const receipt: SubmissionReceipt = {
+      requestId: input.requestId,
+      status: "uncertain",
+      message:
+        "Waiting for confirmed Hermes admission. This message will never be automatically resent.",
+    };
+    this.db
+      .prepare("INSERT INTO submissions VALUES(?,?,?,?,?,?)")
+      .run(
+        input.requestId,
+        input.botId,
+        input.senderId,
+        JSON.stringify(input),
+        JSON.stringify(receipt),
+        Date.now(),
+      );
+    return { created: true, receipt, input };
   }
   submission(id: string) {
     const row = this.db

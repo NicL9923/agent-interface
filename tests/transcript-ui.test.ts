@@ -3,10 +3,12 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api, write } from "../src/client-api";
+import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation, Message } from "../src/shared/types";
 import { useConversation } from "../src/app/use-conversation";
+import { useTurnRetry } from "../src/app/use-turn-retry";
+import { retryRequestId } from "../src/shared/retry-id";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
@@ -88,8 +90,26 @@ describe("retry a failed turn", () => {
     conversation = { ...conversation, activity: { state: "failed", runId: "run-1" },
       messages: [prompt("q1", "Check the gate", { files: [file] })] };
   });
+  // The ID every device derives for retrying q1 after run-1 failed.
+  const turnId = () => retryRequestId("shared", "q1", "run-1");
+  // The ID is derived with Web Crypto, which settles outside fake timers.
+  const posted = (count: number) => vi.waitFor(() => expect(messagesWritten()).toHaveLength(count));
+  const receipts = (status: () => string) => {
+    const lookups: string[] = [];
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
+      lookups.push(path.split("/")[2]);
+      return { requestId: path.split("/")[2], status: status() } as T;
+    });
+    return lookups;
+  };
+  const lost = () => vi.mocked(write).mockImplementation(async <T>(path: string) => {
+    if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
+    return {} as T;
+  });
 
-  it("resends the person's message with its files, naming it, without touching the draft", async () => {
+  it("resends the person's message with its files under the failed turn's ID, without touching the draft", async () => {
     let finish!: (value: unknown) => void;
     vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
       ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
@@ -98,82 +118,127 @@ describe("retry a failed turn", () => {
     await act(async () => buttonText("Retry")!.click());
     const retrying = buttonText("Retrying…")!;
     expect(retrying.disabled).toBe(true);
+    await posted(1);
     await act(async () => retrying.click());
     expect(messagesWritten()).toHaveLength(1);
     const body = messagesWritten()[0][1] as Record<string, unknown>;
-    expect(body).toEqual({ requestId: expect.any(String), text: "Check the gate", attachments: [file], retryOf: "q1" });
+    expect(body).toEqual({ requestId: await turnId(), text: "Check the gate", attachments: [file], retryOf: "q1" });
     expect(body).not.toHaveProperty("draftBaseRevision");
     await act(async () => finish({ requestId: body.requestId, status: "accepted" }));
-    // Until the conversation shows the new run, Retry stays away, so it cannot be sent twice.
+    // Until the conversation shows the new run, Retry stays away.
     expect(buttonText("Retry")).toBeUndefined();
     expect(textarea().value).toBe("My saved draft");
     expect(vi.mocked(write).mock.calls.some(([path]) => String(path).endsWith("/draft"))).toBe(false);
   });
 
-  it("shows a refused retry in the send-error notice and offers it again", async () => {
-    vi.mocked(write).mockImplementation(async <T>(path: string) => (path === "/bots/shared/messages"
-      ? { requestId: "x", status: "rejected", message: "The assistant is busy." } : {}) as T);
-    await render();
-    await act(async () => buttonText("Retry")!.click());
-    expect(container.querySelector(".notice.error")?.textContent).toContain("The assistant is busy.");
-    expect(buttonText("Retry")?.disabled).toBe(false);
-  });
-
-  it("keeps the retry's request ID through a lost response and a reload, settling it only by its receipt", async () => {
-    let receipt = "uncertain";
-    const lookups: string[] = [];
-    const previous = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
-      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
-      lookups.push(path);
-      return { requestId: path.split("/")[2], status: receipt } as T;
-    });
-    // Hermes may have taken it; only the response was lost.
-    vi.mocked(write).mockImplementation(async <T>(path: string) => {
-      if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
-      return {} as T;
+  it("offers Retry again with the same ID after the server refused it outright, and not after Hermes refused it", async () => {
+    let refuse = true;
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) => {
+      if (path !== "/bots/shared/messages") return {} as T;
+      if (refuse) throw new ApiError("Wait for the current reply to finish before retrying", 409);
+      return { requestId: (body as { requestId: string }).requestId, status: "rejected", message: "The attachment is gone." } as T;
     });
     await render();
     await act(async () => buttonText("Retry")!.click());
-    expect(container.querySelector(".notice.error")?.textContent).toContain("Hermes hasn't confirmed the retry yet");
-    expect(container.textContent).toContain("Checking whether the retry arrived…");
-    const [first] = messagesWritten().map(([, body]) => body as Record<string, unknown>);
-    // Checked by its ID, never sent as a new request.
-    await advance(4100);
-    expect(lookups.filter(path => path === `/submissions/${first.requestId}`).length).toBeGreaterThanOrEqual(2);
-    expect(messagesWritten()).toHaveLength(1);
-    // Retrying again sends the same request, which the server matches to the first.
-    await act(async () => buttonText("Retry")!.click());
-    expect(messagesWritten()[1][1]).toEqual({ ...first, reviewedUncertain: true });
-    // A reload still knows it, and its receipt settles it.
-    await act(async () => root.render(createElement("div")));
-    receipt = "accepted";
-    lookups.length = 0;
-    await render();
-    expect(lookups).toContain(`/submissions/${first.requestId}`);
-    expect(buttonText("Retry")).toBeUndefined();
-    expect(localStorage.getItem("agent-interface:retry:one:shared")).toBeNull();
-    // The draft and the composer's own submission were never part of it.
-    expect(textarea().value).toBe("My saved draft");
-    expect(localStorage.getItem("agent-interface:submission:one:shared")).toBeNull();
-    expect(vi.mocked(write).mock.calls.some(([path]) => String(path).endsWith("/draft"))).toBe(false);
-  });
-
-  it("offers a fresh retry once a receipt check finds the earlier one refused", async () => {
-    const previous = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => (path.startsWith("/submissions/")
-      ? { requestId: path.split("/")[2], status: "rejected", message: "The assistant was busy." } : previous(path, ...rest as [])) as T);
-    vi.mocked(write).mockImplementation(async <T>(path: string) => (path === "/bots/shared/messages"
-      ? { requestId: "x", status: "uncertain" } : {}) as T);
-    await render();
-    await act(async () => buttonText("Retry")!.click());
+    await posted(1);
     await advance(0);
-    expect(container.querySelector(".notice.error")?.textContent).toContain("The assistant was busy.");
-    expect(container.textContent).not.toContain("Checking whether the retry arrived…");
+    expect(container.querySelector(".notice.error")?.textContent).toContain("Wait for the current reply to finish");
+    refuse = false;
     await act(async () => buttonText("Retry")!.click());
+    await posted(2);
+    await advance(0);
     const ids = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
-    expect(new Set(ids).size).toBe(2);
-    expect(messagesWritten()[1][1]).not.toHaveProperty("reviewedUncertain");
+    expect(ids).toEqual([await turnId(), await turnId()]);
+    expect(container.querySelector(".notice.error")?.textContent).toContain("The attachment is gone.");
+    // Hermes keeps refusing that ID, so the message box sends it anew.
+    expect(buttonText("Retry")).toBeUndefined();
+  });
+
+  it("checks a retry with a lost response by its ID, slowing down, and sends only that ID again", async () => {
+    const lookups = receipts(() => "uncertain");
+    lost();
+    await render();
+    await act(async () => buttonText("Retry")!.click());
+    await posted(1);
+    await advance(0);
+    expect(container.querySelector(".notice.error")?.textContent).toContain("Retry sends the same request again");
+    expect(container.textContent).toContain("Checking whether the retry arrived…");
+    const id = await turnId();
+    // Checks at once, then after 2, 4, 8 and 16 seconds, then every 30.
+    await advance(1);
+    expect(lookups).toEqual([id]);
+    await advance(2000 + 4000 + 8000 + 16000);
+    expect(lookups).toHaveLength(5);
+    await advance(29000);
+    expect(lookups).toHaveLength(5);
+    await advance(1000);
+    expect(lookups).toHaveLength(6);
+    expect(messagesWritten()).toHaveLength(1);
+    await act(async () => buttonText("Retry")!.click());
+    await posted(2);
+    expect(messagesWritten()[1][1]).toEqual({ ...messagesWritten()[0][1] as object, reviewedUncertain: true });
+    // Once the conversation moves on, checking stops.
+    conversation = { ...conversation, activity: { state: "working", runId: "run-2" } };
+    await changed();
+    lookups.length = 0;
+    await advance(120000);
+    expect(lookups).toEqual([]);
+  });
+
+  it("explains an unconfirmed retry without offering to resend it when Hermes cannot look requests up", async () => {
+    receipts(() => "uncertain");
+    lost();
+    bootstrap.capabilities = { ...bootstrap.capabilities, idempotency: { supported: false, reason: "This Hermes can't look up requests." } };
+    try {
+      await render();
+      await act(async () => buttonText("Retry")!.click());
+      await posted(1);
+      await advance(0);
+      const notice = container.querySelector(".notice.error")?.textContent ?? "";
+      expect(notice).toContain("won't be sent again");
+      expect(notice).not.toContain("Retry sends");
+      expect(buttonText("Retry")!.disabled).toBe(true);
+    } finally {
+      bootstrap.capabilities = { ...bootstrap.capabilities, idempotency: { supported: true } };
+    }
+  });
+
+  it("uses one ID for the same failed turn in every tab, whatever happened in the others", async () => {
+    lost();
+    const hooks: ReturnType<typeof useTurnRetry>[] = [];
+    const Tab = ({ index }: { index: number }) => {
+      hooks[index] = useTurnRetry({ botId: "shared", userId: "one", canonical: { ...conversation, draft: null, readPosition: null }, blocked: false, resendable: true, report: vi.fn() });
+      return null;
+    };
+    await act(async () => root.render(createElement("div", {}, createElement(Tab, { index: 0 }), createElement(Tab, { index: 1 }))));
+    await act(async () => { await hooks[0].run(hooks[0].message!); });
+    await act(async () => { await hooks[1].run(hooks[1].message!); });
+    const ids = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
+    expect(ids).toEqual([await turnId(), await turnId()]);
+  });
+
+  it("keeps Retry settled after a remount by the server's record of the retry, and follows the request that claimed the turn", async () => {
+    const claimed = "0d6f7d2e-5a3c-8b1d-9e4f-2a6b8c0d1e3f";
+    const lookups = receipts(() => "uncertain");
+    // Another tab or person retried first: the server answers with that request's receipt.
+    vi.mocked(write).mockImplementation(async <T>(path: string) => (path === "/bots/shared/messages"
+      ? { requestId: claimed, status: "uncertain" } : {}) as T);
+    await render();
+    await act(async () => buttonText("Retry")!.click());
+    await posted(1);
+    await advance(1);
+    expect(lookups).toEqual([claimed]);
+    // Remounted against a snapshot still showing the failed run, which carries the server's record.
+    await act(async () => root.render(createElement("div")));
+    conversation = { ...conversation, retry: { requestId: claimed, status: "accepted", retryOf: "q1" } } as Conversation;
+    await render();
+    expect(buttonText("Retry")).toBeUndefined();
+    conversation = { ...conversation, retry: { requestId: claimed, status: "uncertain", retryOf: "q1" } } as Conversation;
+    lookups.length = 0;
+    await changed();
+    expect(container.textContent).toContain("Checking whether the retry arrived…");
+    expect(lookups[0]).toBe(claimed);
+    expect(messagesWritten()).toHaveLength(1);
   });
 
   it("is not offered once the assistant replied, or while working", async () => {
@@ -464,6 +529,32 @@ describe("send anchor", () => {
     // A message from this same person on another device lands first; it is not this send.
     const elsewhere = prompt("elsewhere", "From my phone");
     await show([...conversation.messages, elsewhere, prompt("mine", "My new question"), other("theirs")]);
+    expect(top("mine")).toBe(24);
+  });
+
+  it("waits for the message the receipt names when another of this person's messages arrives first", async () => {
+    layout({ q: 400, a: 600, elsewhere: 1400, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    hook.history.sentAs("request-1", "mine");
+    const interim = [...conversation.messages, prompt("elsewhere", "From my phone")];
+    await show(interim);
+    await show([...interim, prompt("mine", "My new question")]);
+    expect(top("mine")).toBe(24);
+  });
+
+  it("replaces a guessed message with the one a later receipt names", async () => {
+    layout({ q: 400, a: 600, elsewhere: 1400, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    // Before the receipt, this person's first new message is the best guess.
+    const interim = [...conversation.messages, prompt("elsewhere", "From my phone")];
+    await show(interim);
+    expect(top("elsewhere")).toBe(24);
+    hook.history.sentAs("request-1", "mine");
+    await show([...interim, prompt("mine", "My new question")]);
     expect(top("mine")).toBe(24);
   });
 });

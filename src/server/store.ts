@@ -130,6 +130,8 @@ export class Store {
   saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) { return this.presentations.saveAvatar(...args); }
   // submissions
   intent(...args: Parameters<SubmissionRepository["intent"]>) { return this.submissions.intent(...args); }
+  claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) { return this.submissions.claimRetry(...args); }
+  retryClaims(...args: Parameters<SubmissionRepository["retryClaims"]>) { return this.submissions.retryClaims(...args); }
   submission(...args: Parameters<SubmissionRepository["submission"]>) { return this.submissions.submission(...args); }
   submissionForMessage(...args: Parameters<SubmissionRepository["submissionForMessage"]>) { return this.submissions.submissionForMessage(...args); }
   pending(...args: Parameters<SubmissionRepository["pending"]>) { return this.submissions.pending(...args); }
@@ -155,6 +157,8 @@ export class Store {
   seenInChat(...args: Parameters<NotificationRepository["seenInChat"]>) { return this.notifications.seenInChat(...args); }
   chatReads(...args: Parameters<NotificationRepository["chatReads"]>) { return this.notifications.chatReads(...args); }
   pendingDecisions(...args: Parameters<NotificationRepository["pendingDecisions"]>) { return this.notifications.pendingDecisions(...args); }
+  unresolvedApprovalBots(...args: Parameters<NotificationRepository["unresolvedApprovalBots"]>) { return this.notifications.unresolvedApprovalBots(...args); }
+  reconcileApprovals(...args: Parameters<NotificationRepository["reconcileApprovals"]>) { return this.notifications.reconcileApprovals(...args); }
   issuePushAction(...args: Parameters<NotificationRepository["issuePushAction"]>) { return this.notifications.issuePushAction(...args); }
   consumePushAction(...args: Parameters<NotificationRepository["consumePushAction"]>) { return this.notifications.consumePushAction(...args); }
   readOnDevices(...args: Parameters<NotificationRepository["readOnDevices"]>) { return this.notifications.readOnDevices(...args); }

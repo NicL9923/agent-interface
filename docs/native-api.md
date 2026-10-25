@@ -188,15 +188,63 @@ after warning that the server-side session remains valid until it expires.
 
 `POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this
 assistant's current conversation, to send that message again after the assistant's
-turn failed. Send a new `requestId`, the original `text`, its files as
-`attachments`, and no `draftBaseRevision`; a retry with `draftBaseRevision` answers
-400. The server answers 400 when `retryOf` names a message that is not a person's
-message in the current conversation, such as an assistant reply, a scheduled
-delivery, another assistant's message or an ID from another chat, and 400 on
-`POST /api/bots/:id/steer`. While the assistant is working or waiting on someone
-it answers 409; offer Retry only after a failed turn. A retry never reads, merges
-or clears the sender's draft. Receipts, uncertain receipts and attribution work as
-for any other message.
+turn failed. Send the failed turn's retry ID as `requestId` (below), the original
+`text`, its files as `attachments`, and no `draftBaseRevision`; a retry with
+`draftBaseRevision` answers 400. The server answers 400 when `retryOf` names a
+message that is not a person's message in the current conversation, such as an
+assistant reply, a scheduled delivery, another assistant's message or an ID from
+another chat, and 400 on `POST /api/bots/:id/steer`. While the assistant is working
+or waiting on someone it answers 409; offer Retry only after a failed turn. A retry
+never reads, merges or clears the sender's draft. Receipts, uncertain receipts and
+attribution work as for any other message.
+
+### One retry per failed turn
+
+The server admits one retry per failed turn: the assistant, `retryOf`, and the
+conversation's `activity.runId` when the retry arrives, or empty without one. The
+first request claims the turn. A later retry of the same turn with another
+`requestId`, from any device or person, admits nothing and answers the first
+request's current receipt, whose `requestId` names that request: follow it from then
+on. A retry with the claimed `requestId` takes the usual idempotent path; from
+another person, or with different text, it answers the same receipt instead of 409.
+Anyone who can see the assistant can read a retry's receipt with
+`GET /api/submissions/:id`. Once the retried message runs and fails again, Hermes
+records it as a new message in a new run, so retrying it is a new turn.
+
+While the conversation's activity is `failed`, `GET /api/bots/:id/conversation`
+carries `retry`, that turn's claim as a receipt with `retryOf`, once anyone retried
+it. Hide Retry when its `retryOf` is the latest person's message and its status is
+`accepted`, `rejected` or `interrupted`; a refused retry stays refused under its ID,
+so the person sends the message again from the composer. While it is `uncertain`,
+show "Checking whether the retry arrived…" and check its `requestId` with
+`GET /api/submissions/:id`: at once, then after 2, 4, 8 and 16 seconds, then every
+30, until a receipt settles it or the conversation moves past that message or run.
+Retry in that state sends the same request with `reviewedUncertain: true`, only
+when the `idempotency` capability is supported; without it, keep Retry disabled and
+say the retry is unconfirmed and will not be sent again. Never make a new request
+ID for the same failed turn.
+
+### Retry request ID
+
+Every client derives the same `requestId` for a failed turn, so a lost response, a
+second tab, a reload or another device can never run it twice:
+
+1. Join `wildbots-retry`, the assistant ID, `retryOf` and the failed
+   `activity.runId` (empty without one) with a NUL character (U+0000) between
+   them, and encode the result as UTF-8.
+2. Take the first 16 bytes of its SHA-256 digest.
+3. Set byte 6 to `(byte6 & 0x0F) | 0x80` (version 8) and byte 8 to
+   `(byte8 & 0x3F) | 0x80` (the RFC 9562 variant).
+4. Format the bytes as a lowercase UUID, `8-4-4-4-12` hex digits.
+
+`src/shared/retry-id.ts` implements it; `tests/retry-id.test.ts` checks these
+vectors:
+
+| Assistant | `retryOf` | Run | `requestId` |
+| --- | --- | --- | --- |
+| `ranch` | `msg-42` | `run-7` | `97260a13-beba-8fb5-9218-204b5e8a2010` |
+| `ranch` | `msg-42` | empty | `3bba2658-e84c-8ad5-a391-77d34308f4b8` |
+| `café` | `👋` | `run` | `f0431e86-8678-8bc4-92de-7d27336108fb` |
 
 ## Drafts
 
@@ -429,8 +477,14 @@ Hermes's roster; without one, the badge is left as it was. The count is the numb
 of assistants they can see that show the unread mark, plus those waiting on an
 approval, a question or a secure request, each counted once. The notification being
 delivered counts too: an approval as a decision, other news as unread in a chat
-they have opened before. `src/shared/unread.ts` holds the rule, which iOS mirrors
-in `UnreadChats`. The read-elsewhere clear push carries the new count as `badge`
+they have opened before. An approval the person was notified about keeps counting,
+even while the roster shows the assistant idle, until someone decides it in the
+app, its own run finishes, fails or is interrupted, or Hermes's open requests no
+longer hold it. Another run on the same assistant, such as a routine, does not
+settle it. The server compares open requests whenever it reads the conversation
+and, a few assistants at a time, about once a minute in the background, and
+credits nobody with a decision made outside the app. Approvals count for a day at
+most. `src/shared/unread.ts` holds the rule, which iOS mirrors in `UnreadChats`. The read-elsewhere clear push carries the new count as `badge`
 beside `aps`, since a background push's `aps` may hold only `content-available`,
 and the server follows it with a silent alert push, `{ "aps": { "badge": N } }` at
 priority 5, which iOS applies even while the app is closed.

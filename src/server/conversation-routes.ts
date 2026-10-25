@@ -11,16 +11,21 @@ import { apiRoute, type ApiRequest } from "./api-route.js";
 import { signedIn, stillSignedIn } from "./auth.js";
 import { redactAgents, visibleTo, type Roster } from "./bot-access.js";
 import type { Config } from "./config.js";
-import { openEventStream } from "./event-stream.js";
+import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { httpError } from "./http-error.js";
 import { routePattern } from "./route-path.js";
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
 import { nameRequesters } from "./vault.js";
 
+// Longer than the runtime shares one history read among readers.
+const sharedReadMargin = 60000;
+
 /** Decides a pending approval for this person, as the chat and notification actions do. */
 export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
+  const readAt = Date.now();
   const conversation = await runtime.conversation(botId, { history: false });
+  store.reconcileApprovals(botId, conversation.approvals.map(approval => approval.id), readAt);
   const approval = conversation.approvals.find((a) => a.id === approvalId);
   if (
     !approval ||
@@ -56,7 +61,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
     }).parse(req.query);
     const windowed = window.start !== undefined || window.turns !== undefined;
+    const readAt = Date.now();
     const { window: cut, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
+    // Hermes's open requests settle approvals answered outside the app. A history read can be
+    // shared for a few seconds, so only approvals notified well before it count.
+    store.reconcileApprovals(req.params.id, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
     // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
@@ -88,8 +97,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       ({ messages: result.messages, earlier } = historyWindow(shown, window));
       ({ files: result.files, earlierFiles } = windowFiles(shown, earlier, result.files));
     }
+    // Retry stays settled on every device once anyone retried this failure.
+    const claims = result.activity.state === "failed" ? store.retryClaims(req.params.id, result.activity.runId ?? "") : [];
+    const retried = result.messages.findLast(message => claims.some(claim => claim.retryOf === message.id));
+    const retry = claims.find(claim => claim.retryOf === retried?.id);
     return {
       ...result,
+      ...(retry ? { retry: { ...retry.receipt, retryOf: retry.retryOf } } : {}),
       ...(earlier !== undefined ? { earlier, earlierFiles } : {}),
       draft: store.draft(signedIn(req).id, req.params.id),
       readPosition: store.personal(
@@ -116,26 +130,19 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       for (const changed of watchers.get((req.params as { id: string }).id) ?? []) changed();
   });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
+    // Followed before the first await, so a client that leaves during setup leaves no watcher.
+    const connection = eventStreamConnection(reply);
     const botId = id.parse((req.params as { id: string }).id);
     const optedIn = (req.query as { inflight?: string }).inflight === "1";
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
+    if (connection.closed) return connection.abandon();
     let hidden = JSON.stringify(store.privateBots());
     let last = 0, pending: ReturnType<typeof setTimeout> | undefined;
     let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
-    const stream = openEventStream(reply, streams, {
-      // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
-      teardown: () => {
-        unwatch?.();
-        listeners.delete(changed);
-        if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
-        clearTimeout(pending);
-        clearTimeout(livePending);
-      },
-    });
+    let stream: EventStream | undefined;
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
-      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream.send("data: change\n\n"); },
+      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream?.send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
     const notice = (kind?: "inflight") => {
@@ -154,13 +161,31 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          stream.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+          stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
-    watchers.set(botId, listeners.add(changed));
-    const unwatch = runtime.watch?.(botId, notice);
+    let unwatch: (() => void) | undefined;
+    const teardown = () => {
+      unwatch?.();
+      listeners.delete(changed);
+      if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+      clearTimeout(pending);
+      clearTimeout(livePending);
+    };
+    try {
+      watchers.set(botId, listeners.add(changed));
+      unwatch = runtime.watch?.(botId, notice);
+      stream = connection.open(streams, {
+        // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
+        allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+        teardown,
+      });
+    } catch (error) {
+      teardown();
+      throw error;
+    }
   });
   const message = z
     .object({
@@ -191,6 +216,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const interruptionRejected = previous?.reason === "interruption_pending";
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
+      // Every device derives one ID for retrying a failed turn, so another person, or a client
+      // that copied the text differently, follows the request already recorded.
+      if (input.retryOf !== undefined && previous.input.retryOf === input.retryOf && previous.input.botId === input.botId
+        && JSON.stringify(previous.input) !== JSON.stringify(input))
+        return previous.receipt;
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw httpError(
           409,
@@ -234,7 +264,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         conversation?.activity.state ?? "idle",
       );
     if (steering || fast) await requireCapability("steering");
-    const intent = store.intent(input);
+    // The first retry of a failed turn claims it; any later one, from anyone, follows that request.
+    const intent = input.retryOf !== undefined
+      ? store.claimRetry(conversation!.activity.runId ?? "", input as Submission & { retryOf: string })
+      : store.intent(input);
+    if ("claimed" in intent) return intent.claimed;
     if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
     if (conversation?.activity.runId)
       store.participate(conversation.activity.runId, input.senderId);
@@ -261,7 +295,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Only its sender, while they can still see the assistant, learns anything about a recorded
     // submission. An unrecorded ID is a client's own unguessable pending ID, kept checkable,
     // which lets a former sender check their own message after its assistant is deleted.
-    const previous = recorded && recorded.input.senderId === signedIn(req).id && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
+    // A retry's receipt belongs to its failed turn, which anyone who sees the assistant can retry and follow.
+    const previous = recorded && (recorded.input.senderId === signedIn(req).id || recorded.input.retryOf !== undefined)
+      && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
     if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
     try {
       if ((await runtime.capabilities()).idempotency.supported) {

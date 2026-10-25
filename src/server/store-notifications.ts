@@ -17,6 +17,16 @@ const tokenHash = (token: string) => createHash("sha256").update(token).digest("
 export const maxDeliveryAttempts = 12;
 // Clients report an open chat every 15 seconds, so a missed beat or two never counts as leaving.
 export const presenceTtl = 45000;
+// Approvals Hermes reported since `asked.created_at>?` that nobody decided through the app,
+// Hermes's open requests do not lack, and whose own run has not settled since. An approval
+// without a recorded run waits for a decision or reconciliation. Exported for its query plan test.
+export const unresolvedApprovals = `FROM notification_events asked
+  JOIN notification_ingestion askedAt ON askedAt.event_id=asked.id
+  WHERE asked.created_at>? AND json_extract(asked.value,'$.kind')='approval'
+  AND NOT EXISTS(SELECT 1 FROM approval_attribution a WHERE a.approval_id=json_extract(asked.value,'$.approvalId'))
+  AND NOT EXISTS(SELECT 1 FROM approval_resolutions r WHERE r.approval_id=json_extract(asked.value,'$.approvalId'))
+  AND NOT EXISTS(SELECT 1 FROM run_settlements s WHERE s.bot_id=json_extract(asked.value,'$.botId')
+    AND s.run_id=json_extract(asked.value,'$.runId') AND s.ingestion_id>askedAt.id)`;
 /** What a client reports about a chat: reading it, gone after reading it, or still open but unattended. */
 export type ChatPresence = "active" | "left" | "idle";
 // Discovery lags Hermes by a poll, or longer after an outage, so Hermes's own timestamp says
@@ -125,21 +135,39 @@ export class NotificationRepository {
   }
   /**
    * Assistants with an approval this person was notified about in the last day that is still
-   * unresolved as far as this server knows: nobody decided it through the app, and the assistant
-   * reported no finish, failure or interruption since. Hermes's roster can show an unopened
-   * session as idle meanwhile, so this keeps the app badge counting it.
+   * unresolved as far as this server knows: nobody decided it through the app, Hermes's open
+   * requests still hold it (see reconcileApprovals), and its own run reported no finish,
+   * failure or interruption since. Only the approval's run settles it: another run on the same
+   * assistant, such as a routine, does not. Hermes's roster can show an unopened session as idle
+   * meanwhile, so this keeps the app badge counting it.
    */
   pendingDecisions(userId: string, now = Date.now()): Set<string> {
-    const rows = this.db.prepare(`SELECT DISTINCT json_extract(o.payload,'$.botId') AS bot_id FROM outbox o
-      LEFT JOIN notification_ingestion asked ON asked.event_id=o.event_id
-      WHERE o.user_id=? AND json_extract(o.payload,'$.kind')='approval' AND o.created_at>?
-      AND NOT EXISTS(SELECT 1 FROM approval_attribution a WHERE a.approval_id=json_extract(o.payload,'$.approvalId'))
-      AND NOT EXISTS(SELECT 1 FROM notification_events e JOIN notification_ingestion later ON later.event_id=e.id
-        WHERE json_extract(e.value,'$.botId')=json_extract(o.payload,'$.botId')
-        AND json_extract(e.value,'$.kind') IN ('completed','failed','interrupted')
-        AND (CASE WHEN asked.id IS NULL THEN e.created_at>=o.created_at ELSE later.id>asked.id END))`)
-      .all(userId, now - 86400000) as { bot_id: string | null }[];
+    const rows = this.db.prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}
+      AND EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=asked.id AND o.user_id=?)`)
+      .all(now - 86400000, userId) as { bot_id: string | null }[];
     return new Set(rows.flatMap(row => row.bot_id ? [row.bot_id] : []));
+  }
+  /** Assistants with any unresolved approval from the last day. */
+  unresolvedApprovalBots(now = Date.now()): string[] {
+    return (this.db.prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}`)
+      .all(now - 86400000) as { bot_id: string | null }[]).flatMap(row => row.bot_id ? [row.bot_id] : []);
+  }
+  /**
+   * Records as resolved the approvals of this assistant that Hermes's open requests no longer
+   * hold, as when someone answered in Hermes's own UI. Nobody is credited with the decision. Only
+   * approvals notified before `notifiedBefore` count, so one opened after the read was taken is
+   * never mistaken for resolved.
+   */
+  reconcileApprovals(botId: string, open: Iterable<string>, notifiedBefore: number, now = Date.now()) {
+    const still = new Set(open);
+    const notified = this.db.prepare(`SELECT DISTINCT json_extract(value,'$.approvalId') AS id FROM notification_events
+      WHERE created_at>? AND created_at<? AND json_extract(value,'$.kind')='approval' AND json_extract(value,'$.botId')=?`)
+      .all(now - 86400000, notifiedBefore, botId) as { id: unknown }[];
+    const resolve = this.db.prepare("INSERT OR IGNORE INTO approval_resolutions(approval_id,bot_id,resolved_at) VALUES(?,?,?)");
+    let resolved = 0;
+    for (const { id } of notified)
+      if (typeof id === "string" && id && !still.has(id)) resolved += Number(resolve.run(id, botId, now).changes);
+    return resolved;
   }
   /** iOS deliveries of notifications their recipient has since read, with who read them, that no clear was sent for. */
   readOnDevices(now = Date.now()) {
