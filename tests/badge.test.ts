@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { badgeFor } from "../src/server/badge.js";
 import { loadConfig } from "../src/server/config.js";
-import { BackgroundWorker } from "../src/server/notifications.js";
+import { approvalPassBudget, BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { unresolvedApprovals } from "../src/server/store-notifications.js";
 import { badgeCount, isUnread } from "../src/shared/unread.js";
@@ -216,6 +216,34 @@ it("checks a few assistants' counted approvals against Hermes in the background,
     await worker.tick();
     expect(conversation).toHaveBeenCalledTimes(5);
   } finally { await worker.stop(); store.close(); }
+});
+
+it("keeps discovering events and recovering receipts while an approval read hangs, and gives that pass up after its budget", async () => {
+  vi.useFakeTimers();
+  const store = people();
+  store.savePreferences("one", { ...defaultPreferences, followBots: ["barn"] });
+  recordedAgo(store, 2, [approvalEvent("ask", "barn", "a1", "run")]);
+  // An admission whose receipt the worker recovers by lookup.
+  store.intent({ requestId: "pending", botId: "barn", senderId: "one", text: "Feed", attachments: [] });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const conversation = vi.fn(async (botId: string, _options?: object) => { await held; return conversationFixture({ botId, approvals: [] }); });
+  const discoverEvents = vi.fn(async () => ({ events: [], cursor: "1" }));
+  const lookupSubmission = vi.fn(async (requestId: string) => ({ requestId, status: "accepted" as const }));
+  const runtime = fakeRuntime({ conversation, discoverEvents, lookupSubmission,
+    capabilities: async () => capabilitiesFixture({ durableEvents: { supported: true }, idempotency: { supported: true } }) });
+  const worker = new BackgroundWorker(store, runtime, loadConfig({}));
+  try {
+    worker.start();
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(conversation).toHaveBeenCalledTimes(1);
+    expect(discoverEvents.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(lookupSubmission).toHaveBeenCalledWith("pending");
+    // The hung read is abandoned once the pass runs out of time, and the next pass reads again.
+    await vi.advanceTimersByTimeAsync(approvalPassBudget + 60000);
+    expect(conversation).toHaveBeenCalledTimes(2);
+    expect(store.pendingDecisions("one")).toEqual(new Set(["barn"]));
+  } finally { release(); await worker.stop(); store.close(); vi.useRealTimers(); }
 });
 
 it("finds pending decisions through indexes on a realistically sized history", () => {
