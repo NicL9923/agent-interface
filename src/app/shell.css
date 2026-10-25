@@ -177,16 +177,18 @@ kbd {
 .composer-status { margin: 0; font-size: 12px; color: var(--muted); }
 .composer-status:not(:empty) { margin-bottom: 8px; }
 
-/* Undo toast, above the composer and clear of the phone's home indicator. */
+/* Undo toast: on a computer in the home rail's corner, clear of the composer; on a phone over home, above the home indicator. */
 .toast-region {
   position: fixed;
-  left: 50%;
-  bottom: max(96px, calc(env(safe-area-inset-bottom) + 88px));
+  left: 20px;
+  bottom: 20px;
   z-index: 40;
-  translate: -50% 0;
   width: max-content;
-  max-width: calc(100vw - 24px);
+  max-width: min(420px, calc(100vw - 40px));
   pointer-events: none;
+}
+@media (max-width: 620px) {
+  .toast-region { left: 50%; translate: -50% 0; bottom: max(20px, calc(env(safe-area-inset-bottom) + 8px)); max-width: calc(100vw - 24px); }
 }
 .toast {
   display: flex;
