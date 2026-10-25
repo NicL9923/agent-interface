@@ -30,6 +30,8 @@ export const publicApiRoutes = [
   "/api/auth/native/complete",
   "/api/auth/native/exchange",
   "/api/csp-report",
+  // Its single-use token authorizes it; a service worker has no CSRF token. Origin is still checked.
+  "/api/push/actions",
 ];
 export async function installAuth(
   app: FastifyInstance,

@@ -158,6 +158,8 @@ export interface ApiRoutes {
   "POST /push/subscriptions": { body: WebPushSubscription; response: Ok };
   "DELETE /push/subscriptions": { body: { endpoint: string }; response: Ok };
   "POST /push/test": { body: { botId: string }; response: PushTest };
+  /** A service worker's notification action, authorized by the single-use token in its push. */
+  "POST /push/actions": { body: { token: string }; response: Ok };
   // The native app's routes. docs/native-api.md is the contract the iOS app decodes.
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };

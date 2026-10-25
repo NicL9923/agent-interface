@@ -14,7 +14,7 @@ import { RetentionRepository } from "./store-retention.js";
 export { schemaVersion } from "./store-database.js";
 export type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
 export type { RejectionReason } from "./store-submissions.js";
-export { maxDeliveryAttempts, presenceTtl, type ChatPresence } from "./store-notifications.js";
+export { maxDeliveryAttempts, presenceTtl, pushActionTtl, type ChatPresence, type PushAction } from "./store-notifications.js";
 
 /**
  * The app database: one SQLite connection shared by a repository per area. Each repository
@@ -154,6 +154,8 @@ export class Store {
   chatPresence(...args: Parameters<NotificationRepository["chatPresence"]>) { return this.notifications.chatPresence(...args); }
   seenInChat(...args: Parameters<NotificationRepository["seenInChat"]>) { return this.notifications.seenInChat(...args); }
   chatReads(...args: Parameters<NotificationRepository["chatReads"]>) { return this.notifications.chatReads(...args); }
+  issuePushAction(...args: Parameters<NotificationRepository["issuePushAction"]>) { return this.notifications.issuePushAction(...args); }
+  consumePushAction(...args: Parameters<NotificationRepository["consumePushAction"]>) { return this.notifications.consumePushAction(...args); }
   readOnDevices(...args: Parameters<NotificationRepository["readOnDevices"]>) { return this.notifications.readOnDevices(...args); }
   markCleared(...args: Parameters<NotificationRepository["markCleared"]>) { return this.notifications.markCleared(...args); }
   subscribe(...args: Parameters<NotificationRepository["subscribe"]>) { return this.notifications.subscribe(...args); }

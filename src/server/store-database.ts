@@ -81,6 +81,8 @@ const additions = `
   CREATE TABLE IF NOT EXISTS native_session_starts(hash TEXT PRIMARY KEY REFERENCES native_sessions(hash) ON DELETE CASCADE,signed_in_at INTEGER NOT NULL);
   -- Which household member sent each group chat message through this app, by Hermes event ID.
   CREATE TABLE IF NOT EXISTS group_senders(room_id TEXT NOT NULL,event_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,PRIMARY KEY(room_id,event_id));
+  -- Single-use web push notification actions, by token hash, each bound to one person, approval and decision.
+  CREATE TABLE IF NOT EXISTS push_action_tokens(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,approval_id TEXT NOT NULL,decision TEXT NOT NULL,expires INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

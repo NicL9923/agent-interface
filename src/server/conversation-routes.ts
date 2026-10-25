@@ -18,6 +18,23 @@ import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
 import { nameRequesters } from "./vault.js";
 
+/** Decides a pending approval for this person, as the chat and notification actions do. */
+export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
+  const conversation = await runtime.conversation(botId, { history: false });
+  const approval = conversation.approvals.find((a) => a.id === approvalId);
+  if (
+    !approval ||
+    approval.status !== "pending" ||
+    store.approval(approvalId) ||
+    (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
+  )
+    throw httpError(409, "This approval is no longer pending");
+  await runtime.approve(botId, approvalId, decision, userId);
+  store.attributeApproval(approvalId, botId, userId, decision);
+  if (conversation.activity.runId)
+    store.participate(conversation.activity.runId, userId);
+}
+
 /**
  * One conversation: its history and files, change notices, sending and steering messages,
  * answering requests and approvals, and each person's draft, read position and presence.
@@ -302,19 +319,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
     if (account !== undefined && account !== accountMarker(signedIn(req).id))
       throw httpError(409, "This approval was sent to a different account");
-    const conversation = await runtime.conversation(p.id, { history: false });
-    const approval = conversation.approvals.find((a) => a.id === p.approvalId);
-    if (
-      !approval ||
-      approval.status !== "pending" ||
-      store.approval(p.approvalId) ||
-      (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
-    )
-      throw httpError(409, "This approval is no longer pending");
-    await runtime.approve(p.id, p.approvalId, decision, signedIn(req).id);
-    store.attributeApproval(p.approvalId, p.id, signedIn(req).id, decision);
-    if (conversation.activity.runId)
-      store.participate(conversation.activity.runId, signedIn(req).id);
+    await decideApproval(runtime, store, p.id, p.approvalId, decision, signedIn(req).id);
     return { ok: true };
   });
   apiRoute(app, "GET /bots/:id/draft", {}, async req => store.draft(signedIn(req).id, req.params.id));

@@ -208,6 +208,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/push/subscriptions": "none",
   "DELETE /api/push/subscriptions": "none",
   "POST /api/push/test": "body",
+  // The token names the assistant; the handler checks this person still sees it.
+  "POST /api/push/actions": "none",
   "GET /api/native/push/config": "none",
   "PUT /api/native/push/device": "none",
   "DELETE /api/native/push/device": "none",

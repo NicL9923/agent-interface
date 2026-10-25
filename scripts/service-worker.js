@@ -69,29 +69,73 @@ function conversationUrl(value) {
   }
 }
 
+// The server counts the badge with the push; a payload without one leaves the badge alone.
+function showBadge(count) {
+  const badges = self.navigator;
+  if (!Number.isInteger(count) || count < 0 || !badges?.setAppBadge) return Promise.resolve();
+  return (count ? badges.setAppBadge(count) : badges.clearAppBadge()).catch(() => {});
+}
+
+// An approval can be declined from the notification. Its push carries a single-use token, since
+// a service worker has no session or CSRF token; Review opens the chat like a tap does.
+function canAct() {
+  return (self.Notification?.maxActions ?? 0) >= 2;
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data?.json() || {}; } catch { /* A malformed payload still opens the app. */ }
-  event.waitUntil(self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
-    body: String(data.body || 'Your assistant has an update.').slice(0, 240),
+  const url = conversationUrl(data.url);
+  const declineToken = data.kind === 'approval' && typeof data.declineToken === 'string' && canAct() ? data.declineToken : undefined;
+  event.waitUntil(Promise.all([
+    self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
+      body: String(data.body || 'Your assistant has an update.').slice(0, 240),
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: typeof data.tag === 'string' ? data.tag : undefined,
+      data: { url, ...(declineToken ? { declineToken } : {}) },
+      ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
+    }),
+    showBadge(data.badge),
+  ]));
+});
+
+async function openChat(url) {
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
+  if (existing) {
+    if (existing.url !== url) await existing.navigate(url);
+    await existing.focus();
+  } else {
+    await self.clients.openWindow(url);
+  }
+}
+
+async function decline(notification) {
+  const url = conversationUrl(notification.data?.url);
+  let declined = false;
+  try {
+    const response = await fetch('/api/push/actions', {
+      method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: notification.data.declineToken }),
+    });
+    declined = response.ok;
+  } catch { /* Offline: say so below. */ }
+  if (declined) return;
+  await self.registration.showNotification("Couldn't decline", {
+    body: 'Open the chat to review the request.',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    tag: typeof data.tag === 'string' ? data.tag : undefined,
-    data: { url: conversationUrl(data.url) },
-  }));
-});
+    tag: (notification.tag || 'approval') + ':decline',
+    data: { url },
+  });
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = conversationUrl(event.notification.data?.url);
-  event.waitUntil((async () => {
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
-    if (existing) {
-      if (existing.url !== url) await existing.navigate(url);
-      await existing.focus();
-    } else {
-      await self.clients.openWindow(url);
-    }
-  })());
+  if (event.action === 'decline' && event.notification.data?.declineToken) {
+    event.waitUntil(decline(event.notification));
+    return;
+  }
+  event.waitUntil(openChat(conversationUrl(event.notification.data?.url)));
 });
