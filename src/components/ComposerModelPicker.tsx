@@ -6,8 +6,15 @@ import { Icon } from "./Icon";
 import { ModelSelector } from "./ModelSelector";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
-import { NativeSelect } from "./ui/native-select";
+import { Segmented, type SegmentOption } from "./ui/segmented";
 import { FormMessage } from "./ui/form-message";
+
+const reasoningNames: Record<InferenceSettings["reasoning"], [string, string?]> = {
+  none: ["Off"], minimal: ["Min", "Minimal"], low: ["Low"], medium: ["Med", "Medium"],
+  high: ["High"], xhigh: ["XHigh", "Extra high"], max: ["Max"], ultra: ["Ultra"],
+};
+const reasoningOptions: SegmentOption<InferenceSettings["reasoning"]>[] = reasoningLevels.map(value => ({ value, label: reasoningNames[value][0], name: reasoningNames[value][1] }));
+const speedOptions: SegmentOption<InferenceSettings["speed"]>[] = serviceTiers.map(value => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) }));
 
 /** Advanced mode's quick model switch. Saves through the same assistant update as settings. */
 export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
@@ -89,14 +96,10 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
           onChange={choice => void save(choice)} onFavoritesSaved={onSaved} />
         <div className="inference-controls" aria-busy={settingsBusy}>
           {settings ? <>
-            <label>Reasoning<NativeSelect value={settings.reasoning} disabled={busy || settingsBusy}
-              onChange={event => void changeSettings({ reasoning: event.target.value as InferenceSettings["reasoning"] })}>
-              {reasoningLevels.map(value => <option key={value} value={value}>{value === "none" ? "Off" : value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
-            </NativeSelect></label>
-            <label>Speed<NativeSelect value={settings.speed} disabled={busy || settingsBusy}
-              onChange={event => void changeSettings({ speed: event.target.value as InferenceSettings["speed"] })}>
-              {serviceTiers.map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
-            </NativeSelect></label>
+            <Segmented label="Reasoning" value={settings.reasoning} options={reasoningOptions} busy={busy || settingsBusy}
+              onChange={reasoning => void changeSettings({ reasoning })} />
+            <Segmented label="Speed" value={settings.speed} options={speedOptions} busy={busy || settingsBusy}
+              onChange={speed => void changeSettings({ speed })} />
             <small className="muted">Applies to this conversation. Available levels and speeds depend on the model.</small>
           </> : !settingsError && <span role="status" className="muted">Loading reasoning and speed…</span>}
           {settingsBusy && <span role="status"><Icon name="spinner" className="spin" size={14} /> Saving…</span>}

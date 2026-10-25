@@ -1,5 +1,5 @@
 import { isConversationReply } from "../shared/message-origin";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ActivityState, Bootstrap, Bot, SubmissionReceipt } from "../shared/types";
 import type { VoiceState } from "../shared/voice";
@@ -13,6 +13,27 @@ import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACC
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
 import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
 import { sendingDraft } from "./sent-echo";
+import { StatusDock, type DockItem } from "./StatusDock";
+import { ownPrompts, recallStep, type Recall } from "./prompt-recall";
+import { largePasteFile } from "./large-paste";
+import { formatBytes } from "../shared/uploads";
+
+/** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
+export function useStopResponse(botId: string, report: (message: string) => void) {
+  const [stopping, setStopping] = useState(false);
+  // A late answer belongs to the assistant it stopped, so it is dropped once another one is open.
+  const shown = useRef<string | null>(botId);
+  useEffect(() => { shown.current = botId; return () => { shown.current = null; }; }, [botId]);
+  useEffect(() => setStopping(false), [botId]);
+  const stop = useCallback(() => {
+    const target = botId;
+    setStopping(true);
+    void request("POST /bots/:id/stop", { params: { id: target } })
+      .catch(error => { if (shown.current === target) report(error.message); })
+      .finally(() => { if (shown.current === target) setStopping(false); });
+  }, [botId, report]);
+  return { stopping, stop };
+}
 
 function ModelPickerPlaceholder({ model, failed = false }: { model: string; failed?: boolean }) {
   const description = failed ? "Model controls unavailable. Reload to try again." : "Loading model controls";
@@ -102,7 +123,7 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   }, [footer]);
   return { panel, over };
 }
-export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, reviewed, setReviewed, refresh, report }: {
+export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, refresh, dock = [], stopping, onStop }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
@@ -124,15 +145,17 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   sending: boolean;
   send(): Promise<void>;
   retry(): void;
+  /** Gives up on an unconfirmed send and puts its text back in the draft. */
+  discard(): void;
   reviewed: boolean;
   setReviewed(value: boolean): void;
   refresh(): void;
-  report(message: string): void;
+  /** Notices from the rest of the app for the dock above the composer: connection, decisions, update. */
+  dock?: DockItem[];
+  stopping: boolean;
+  onStop(): void;
 }) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [stopping, setStopping] = useState(false);
   // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
   const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
   // The transcript shows a message on its way, so the composer reads empty until Hermes answers.
@@ -167,44 +190,65 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   };
   const footer = useRef<HTMLElement>(null);
   const drop = useFileDrop(footer, addFiles);
+  // Up and Down in an empty composer browse this person's earlier messages here, newest first.
+  const [recall, setRecall] = useState<Recall>(null);
+  const prompts = useMemo(() => ownPrompts(conversation?.botId === botId ? conversation.messages : undefined, boot.user.id),
+    [conversation, botId, boot.user.id]);
+  const caret = useRef<"start" | "end" | null>(null);
+  // An edit from elsewhere, such as another device or a send, ends browsing.
+  useEffect(() => { if (recall && shown.text !== prompts[recall.index]) setRecall(null); }, [recall, shown.text, prompts]);
+  useLayoutEffect(() => {
+    const field = document.getElementById("message") as HTMLTextAreaElement | null;
+    if (!caret.current || !field) return;
+    const at = caret.current === "start" ? 0 : field.value.length;
+    field.setSelectionRange(at, at);
+    caret.current = null;
+  }, [shown.text]);
+  const recallTo = (text: string, next: Recall, at: "start" | "end") => {
+    caret.current = at;
+    setRecall(next);
+    setDraft(previous => ({ ...previous, dirty: true, text }));
+  };
+  const [pasteStatus, setPasteStatus] = useState("");
+  useEffect(() => {
+    if (!pasteStatus) return;
+    const timer = setTimeout(() => setPasteStatus(""), 8000);
+    return () => clearTimeout(timer);
+  }, [pasteStatus]);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  useEffect(() => { if (!pending || sending) setConfirmDiscard(false); }, [pending, sending]);
+  const notices: DockItem[] = [...dock];
+  // A normal send only spins the send button. This appears once the request ended without a receipt.
+  if (pending && !sending) notices.push({ id: "send-uncertain", kind: "send", node: <div className="notice" role="status">
+    {confirmDiscard
+      ? <span>The message may still arrive. Its text goes back into the draft, so sending it again could deliver it twice.</span>
+      : <span>Checking whether your last message arrived…</span>}
+    <span className="notice-actions">
+      {confirmDiscard ? <>
+        <button type="button" className="danger" onClick={() => { setConfirmDiscard(false); discard(); }}>Discard and keep my text in the draft</button>
+        <button type="button" onClick={() => setConfirmDiscard(false)}>Cancel</button>
+      </> : <>
+        <button type="button" disabled={sending || !boot.capabilities.idempotency.supported} title={boot.capabilities.idempotency.reason} onClick={retry}>
+          Retry this saved message
+        </button>
+        <button type="button" onClick={() => setConfirmDiscard(true)}>Discard</button>
+      </>}
+    </span>
+  </div> });
+  if (receipt?.status === "rejected") notices.push({ id: "send-rejected", kind: "send", node: <div className="notice attention" role="alert">
+    {receipt.message || "Hermes did not accept this message. Your draft is saved."}
+  </div> });
+  if (receipt?.status === "interrupted") notices.push({ id: "send-interrupted", kind: "send", node: <div className="notice attention">
+    This submission was interrupted. Review its last actions before trying again.
+  </div> });
+  if (state === "interrupted") notices.push({ id: "interrupted", kind: "interrupted", node: <label className="interruption-review">
+    <input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} />{" "}
+    I reviewed the interrupted task and its last actions before continuing.
+  </label> });
   return (
     <footer className="composer-area" ref={footer}>
       {drop.over && drop.panel && createPortal(<DropOverlay botName={selected.name} unavailable={attachUnavailable} />, drop.panel)}
-      {state === "interrupted" && (
-        <label className="interruption-review">
-          <input
-            type="checkbox"
-            checked={reviewed}
-            onChange={(event) => setReviewed(event.target.checked)}
-          />{" "}
-          I reviewed the interrupted task and its last actions before
-          continuing.
-        </label>
-      )}
-      {/* A normal send only spins the send button. This appears once the request ended without a receipt. */}
-      {pending && !sending && (
-        <div className="notice" role="status">
-          Checking whether your last message arrived…
-          <button
-            disabled={sending || !boot.capabilities.idempotency.supported}
-            title={boot.capabilities.idempotency.reason}
-            onClick={retry}
-          >
-            Retry this saved message
-          </button>
-        </div>
-      )}
-      {receipt?.status === "rejected" && (
-        <div className="notice attention" role="alert">
-          {receipt.message || "Hermes did not accept this message. Your draft is saved."}
-        </div>
-      )}
-      {receipt?.status === "interrupted" && (
-        <div className="notice attention">
-          This submission was interrupted. Review its last actions before
-          trying again.
-        </div>
-      )}
+      <StatusDock items={notices} />
       <form
         className="composer"
         onSubmit={(event) => {
@@ -217,6 +261,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
           <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setAttachNotice([])}><Icon name="close" size={14} /></button>
         </div>}
+        <p id="composer-paste-status" className="composer-status" role="status">{pasteStatus}</p>
         <AttachmentTray attachments={shown.attachments} uploads={uploads} previews={previews}
           canOpen={boot.capabilities.generatedFiles.supported}
           onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
@@ -234,23 +279,51 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               ? `Guide ${selected.name} while they work…`
               : `Message ${selected.name}…`
           }
+          aria-describedby={pasteStatus ? "composer-paste-status" : undefined}
           // Read-only rather than disabled, so focus stays here for the next message.
           readOnly={handedOff}
-          onChange={(event) =>
+          onChange={(event) => {
+            setRecall(null);
+            setPasteStatus("");
             setDraft((previous) => ({
               ...previous,
               dirty: true,
               text: event.target.value,
-            }))
-          }
+            }));
+          }}
           onPaste={(event) => {
             const files = event.clipboardData ? pastedFiles(event.clipboardData) : [];
-            if (!files.length) return;
+            if (files.length) {
+              event.preventDefault();
+              const at = new Date();
+              addFiles(files.map((file, index) => namePastedFile(file, at, index)));
+              return;
+            }
+            // A very long paste travels as a text file; when files cannot attach now, it inserts as before.
+            const pasted = largePasteFile(event.clipboardData?.getData("text/plain") ?? "");
+            if (!pasted || attachUnavailable) return;
             event.preventDefault();
-            const at = new Date();
-            addFiles(files.map((file, index) => namePastedFile(file, at, index)));
+            addFiles([pasted]);
+            setPasteStatus(`Your paste was long, so it is attached as ${pasted.name} (${formatBytes(pasted.size)}).`);
           }}
           onKeyDown={(event) => {
+            if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+              && !event.nativeEvent.isComposing && !submitting && !handedOff) {
+              const field = event.currentTarget;
+              const collapsed = field.selectionStart === field.selectionEnd;
+              const move = recallStep(recall, event.key, prompts, field.value,
+                collapsed && field.selectionStart === 0, collapsed && field.selectionEnd === field.value.length);
+              if (move) {
+                event.preventDefault();
+                recallTo(move.text, move.recall, event.key === "ArrowUp" ? "start" : "end");
+                return;
+              }
+            }
+            if (event.key === "Escape" && recall) {
+              event.preventDefault();
+              recallTo(recall.draft, null, "end");
+              return;
+            }
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -314,12 +387,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
             title={boot.capabilities.stop.reason || "Stop response"}
-            onClick={() => {
-              setStopping(true);
-              void request("POST /bots/:id/stop", { params: { id: botId } })
-                .catch(error => { if (mounted.current) report(error.message); })
-                .finally(() => { if (mounted.current) setStopping(false); });
-            }}>
+            onClick={onStop}>
             <Icon name={stopping ? "spinner" : "stop"} className={stopping ? "spin" : undefined} size={19} />
           </button> : <button
             className="send-button"

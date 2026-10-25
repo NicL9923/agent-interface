@@ -31,10 +31,12 @@ beforeEach(() => {
     bot, avatarState: "working", conversation: null, connectionLost: false,
     // Like the session's queue: each edit applies to the newest value.
     editPreferences: vi.fn(async (edit: (value: Preferences) => Preferences) => { saved.push(edit(saved.at(-1) ?? props.boot.preferences)); }),
-    onSettings: vi.fn(), onClose: vi.fn(),
+    onSettings: vi.fn(), onFind: vi.fn(), onClose: vi.fn(),
   };
 });
 const render = () => act(async () => root.render(createElement(BotDetails, props)));
+const facts = () => Object.fromEntries([...container.querySelectorAll(".bot-details-facts .settings-row")]
+  .map(row => [row.querySelector("dt")!.textContent, row.querySelector("dd")!.textContent]));
 const select = () => container.querySelector<HTMLSelectElement>(".bot-details select")!;
 const pick = (value: string) => act(async () => {
   select().value = value;
@@ -45,7 +47,8 @@ it("shows a live avatar, who it is, and the per-assistant choices", async () => 
   await render();
   expect(container.querySelector("[data-avatar-size='112']")?.hasAttribute("data-still")).toBe(false);
   expect(container.querySelector("h2")?.textContent).toBe("Ranch hand");
-  expect(container.textContent).toContain("Shared with your household · p / m");
+  expect(container.querySelector(".bot-details-hero")?.textContent).toContain("Shared with your household");
+  expect(facts()).toEqual({ Model: "p / m", Now: "Working", "Last message": "No messages yet" });
   // Artifacts come from this assistant's open conversation, so another one's sheet leaves them out.
   expect(container.textContent).not.toContain("Artifacts");
   await act(async () => container.querySelector<HTMLInputElement>('[role="switch"]')!.click());
@@ -75,4 +78,16 @@ it("opens ready to name a new section when the home menu asks for one", async ()
   await act(async () => container.querySelector<HTMLFormElement>(".section-add")!.requestSubmit());
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("Enter a section name.");
   expect(props.editPreferences).not.toHaveBeenCalled();
+});
+
+it("says when the assistant last spoke and opens Find in its chat", async () => {
+  props.bot = { ...props.bot, lastMessage: { text: "Gate battery replaced", at: new Date(Date.now() - 5 * 60_000).toISOString() } };
+  props.avatarState = "idle";
+  await render();
+  const last = facts()["Last message"]!;
+  expect(last).toContain("Gate battery replaced");
+  expect(container.querySelector(".bot-details-facts time")).not.toBeNull();
+  expect(facts().Now).toBeUndefined();
+  await act(async () => Array.from(container.querySelectorAll("button")).find(item => item.textContent === "Find")!.click());
+  expect(props.onFind).toHaveBeenCalledWith("ranch");
 });

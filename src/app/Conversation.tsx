@@ -108,9 +108,18 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
       findReturn.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setFinding(true);
     };
+    // Assistant details and the palette ask for find in chat by event, once this chat is on screen.
+    const requested = (event: Event) => {
+      if ((event as CustomEvent<{ botId?: string }>).detail?.botId !== botId) return;
+      const field = frame.current?.querySelector<HTMLInputElement>(".find-bar input");
+      if (field) return field.select();
+      findReturn.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setFinding(true);
+    };
     window.addEventListener("keydown", open);
-    return () => window.removeEventListener("keydown", open);
-  }, [findable, scroll]);
+    window.addEventListener("wildbots:find", requested);
+    return () => { window.removeEventListener("keydown", open); window.removeEventListener("wildbots:find", requested); };
+  }, [findable, scroll, botId]);
   const closeFind = useStableCallback(() => {
     setFinding(false);
     const back = findReturn.current;
@@ -119,10 +128,6 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   });
   return (
     <TranscriptTools.Provider value={tools}>
-      {connectionLost && selected && (
-        <ConnectionPanel compact connection={boot.connection} offline={offline}
-          appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
-      )}
       {error && (
         <div className="notice error" role="alert">
           {error}
@@ -280,8 +285,8 @@ function useTurnRetry({ botId, canonical, blocked, report }: {
   const message = target && !(retried?.messageId === target.id && retried.runId === runId) ? target : undefined;
   const run = (original: Message) => void action.run(async ({ current }) => {
     const requestId = crypto.randomUUID();
-    // Contract C1: `retryOf` names the message, and a retry never carries a draft revision.
-    const body: MessageRequest & { retryOf: string } = { requestId, text: original.text, attachments: original.files ?? [], retryOf: original.id };
+    // `retryOf` names the message, and a retry never carries a draft revision.
+    const body: MessageRequest = { requestId, text: original.text, attachments: original.files ?? [], retryOf: original.id };
     let result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body });
     // An uncertain receipt is checked again, as a send's is, so a second tap never doubles the turn.
     for (let checks = 0; result.status === "uncertain" && current() && checks < 30; checks++) {
