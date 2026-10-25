@@ -264,7 +264,7 @@ struct ConversationView: View {
       // the transcript pinning to the bottom. Following resumes once the reader reaches the end.
       .onChange(of: latestTrigger) { _, _ in following = false; anchorNext = true }
       .onChange(of: findTarget) { _, id in
-        if let id { following = false; proxy.scrollTo(id, anchor: .center) }
+        if let id { following = false; proxy.scrollTo(id, anchor: .top) }
       }
       // VoiceOver reads each settled reply once, as the web's live region does.
       .onChange(of: store.replyAnnouncement) { _, reply in
@@ -301,7 +301,7 @@ struct ConversationView: View {
       viewportHeight = $0
       // The keyboard or a rotation resizes the view; a follower stays at the end, and a found
       // message stays in view.
-      if following { scrollToLatest(proxy) } else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
+      if following { scrollToLatest(proxy) } else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .top) } }
     }
     .modifier(OnDrag {
       if following { following = false }
@@ -393,7 +393,7 @@ struct ConversationView: View {
     if next.height != previous.height {
       if following { scrollToLatest(proxy) }
       // A reloaded window can finish its layout after the scroll to the found message.
-      else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
+      else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .top) } }
       return
     }
     // Leaving the end stops following; it starts again only at the true end, and not while a sent
@@ -421,7 +421,9 @@ struct ConversationView: View {
     placed = false
     sentAnchor = nil
     highlight(focus.messageId)
-    Task { @MainActor in proxy.scrollTo(focus.messageId, anchor: .center) }
+    // At the top, as the transcript's scroll position holds its top row: a centered message drifted
+    // out of a short, keyboard-sized view when a later layout pass restored that position.
+    Task { @MainActor in proxy.scrollTo(focus.messageId, anchor: .top) }
   }
   /// Outlines a message for a moment. Meanwhile a page of history added above keeps it in view.
   private func highlight(_ id: String) {
@@ -550,7 +552,7 @@ struct ConversationView: View {
       earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == first
       // A message just opened from find or search stays in view as history pages in above it.
       // It waits for the layout pass that adds the page, as scrolling to the latest message does.
-      if let held, !following { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
+      if let held, !following { Task { @MainActor in proxy.scrollTo(held, anchor: .top) } }
       else if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
