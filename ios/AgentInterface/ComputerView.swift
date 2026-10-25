@@ -87,7 +87,11 @@ struct ComputerView: View {
       .task(id: store.scope) { await attach() }
       // Losing control elsewhere takes input away here at once, before the server fences it.
       .onChange(of: DesktopLink.controlling(status)) { _, mine in if !mine { controlling = false } }
-      .onDisappear { if controlling { Task { await control("release") } } }
+      .onDisappear {
+        if controlling { Task { await control("release") } }
+        // A reconnect still waiting must not fetch tickets for a screen that is gone.
+        epoch += 1
+      }
   }
   private var toolbar: some View {
     HStack(alignment: .center, spacing: 12) {
