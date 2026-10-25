@@ -497,9 +497,26 @@ struct ConversationView: View {
           Text(line).font(.caption).italic().foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier("liveReasoning")
         }
         if let offer = store.retryOffer { retryControls(offer) }
+        if let refusal = store.retryRefusal { refusedRetry(refusal) }
       }
       Spacer(minLength: 0)
     }.padding(.vertical, 8).accessibilityElement(children: .contain).accessibilityIdentifier("liveActivity")
+  }
+  /// A retry Hermes refused, which stays refused: the reason, and the message back in the composer.
+  @ViewBuilder private func refusedRetry(_ refusal: AppStore.RetryRefusal) -> some View {
+    Text(refusal.text).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("retryRefused")
+    Button("Put my message in the message box") {
+      guard let left = store.putRetriedMessageInDraft(refusal.message) else {
+        AccessibilityNotification.Announcement("Your message is still sending. Try again once it has gone.").post()
+        return
+      }
+      composerFocused = true
+      AccessibilityNotification.Announcement(left > 0
+        ? "Your message is in the message box, without \(left) of its files: a message can carry only \(UploadRules.maxAttachments)."
+        : "Your message is in the message box.").post()
+    }.buttonStyle(.bordered).font(.subheadline)
+      .disabled(store.sendingDraft || !store.draftReady)
+      .accessibilityIdentifier("retryPutBack")
   }
   /// Retry for a failed turn, and while its outcome is unknown, what is being done about it.
   @ViewBuilder private func retryControls(_ offer: AppStore.RetryOffer) -> some View {

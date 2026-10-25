@@ -1428,6 +1428,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     var turn: String
     var state: State
     var requestId: String?
+    /// The receipt that settled it.
+    var receipt: Receipt? = nil
   }
   var retryAttempt: RetryAttempt? { didSet { updateRetryChecks() } }
   @ObservationIgnored private var retryChecks: Task<Void, Never>?
@@ -1511,14 +1513,44 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       retryAttempt = RetryAttempt(turn: turn, state: .checking, requestId: value.requestId)
       return
     }
-    retryAttempt = RetryAttempt(turn: turn, state: .settled, requestId: value.requestId)
+    retryAttempt = RetryAttempt(turn: turn, state: .settled, requestId: value.requestId, receipt: value)
     if value.status == "accepted" {
       buzz(.sent)
       if let botId = selectedBotId { Task { await LiveActivityController.shared.sent(to: botId) } }
     } else {
+      // `retryRefusal` explains it for as long as the turn stays failed.
       buzz(.failed)
-      error = value.message.flatMap { $0.isEmpty ? nil : $0 } ?? RetryTurn.refusedNotice
     }
+  }
+  /// A refused retry of the open turn, explained from this device's receipt or the server's `retry`
+  /// record, so it lasts across reloads and devices. Its ID stays refused, so the person sends the
+  /// message again from the composer.
+  struct RetryRefusal: Equatable {
+    var text: String
+    var message: Message
+  }
+  var retryRefusal: RetryRefusal? {
+    guard let turn = retryTurn else { return nil }
+    let local = retryAttempt?.turn == turn.key && retryAttempt?.state == .settled ? retryAttempt?.receipt : nil
+    let claim = conversation?.retry.flatMap { $0.retryOf == turn.message.id ? $0 : nil }
+    guard let status = local?.status ?? claim?.status, status == "rejected" || status == "interrupted" else { return nil }
+    let detail = (local != nil ? local?.message : claim?.message).flatMap { $0.isEmpty ? nil : $0 }
+    return RetryRefusal(text: detail.map { "\(RetryTurn.refusedNotice) \($0)" } ?? RetryTurn.refusedNotice, message: turn.message)
+  }
+  /// Puts a refused retry's message in the composer as the web does: its text after the draft's
+  /// own, separated by a blank line, and its files after the draft's, as many as a message can
+  /// carry. It never replaces the draft and does nothing while the draft is on its way. Returns how
+  /// many files did not fit, or nil when the draft cannot change now.
+  @discardableResult func putRetriedMessageInDraft(_ message: Message) -> Int? {
+    guard let id = selectedBotId, draftReady, !sendingDraft else { return nil }
+    let missing = (message.files ?? []).filter { file in !draft.attachments.contains { $0.id == file.id } }
+    let added = Array(missing.prefix(max(0, attachmentSlots(id))))
+    editComposer { draft in
+      let kept = String(draft.text.reversed().drop(while: \.isWhitespace).reversed())
+      draft.text = kept.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? message.text : kept + "\n\n" + message.text
+      draft.attachments += added.filter { file in !draft.attachments.contains { $0.id == file.id } }
+    }
+    return missing.count - added.count
   }
   /// Checks an unconfirmed retry by the ID it follows, never sending it as a new request, until a
   /// receipt settles it or the turn changes. Reads only while connected.

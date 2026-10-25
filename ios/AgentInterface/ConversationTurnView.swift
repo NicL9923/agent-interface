@@ -323,7 +323,7 @@ enum RetryTurn {
     return [hex.prefix(8), hex.dropFirst(8).prefix(4), hex.dropFirst(12).prefix(4), hex.dropFirst(16).prefix(4), hex.dropFirst(20)]
       .map(String.init).joined(separator: "-")
   }
-  static let refusedNotice = "Hermes didn't take the retry. Send the message again from the message box."
+  static let refusedNotice = "Hermes didn't take the retry."
   static let checkingNotice = "Checking whether the retry arrived…"
   static let unconfirmedNotice = "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
 }

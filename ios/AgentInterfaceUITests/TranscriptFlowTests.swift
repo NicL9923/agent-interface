@@ -69,6 +69,25 @@ import XCTest
     try capture(app, "retry-answered")
   }
 
+  func testARefusedRetryExplainsItselfAndPutsTheMessageBackOnRequest() throws {
+    let app = launch(["AGENT_INTERFACE_UI_RETRY": "refused"])
+    let retry = app.buttons["retryTurn"]
+    XCTAssertTrue(retry.waitForExistence(timeout: 15), app.debugDescription)
+    let composer = app.textViews["messageComposer"]
+    composer.typeWhenFocused("My note")
+    app.buttons["hideKeyboard"].tapWhenReady()
+    XCTAssertTrue(composer.waitForKeyboardFocus(false))
+    retry.tapWhenReady()
+    let refused = app.staticTexts["retryRefused"]
+    XCTAssertTrue(refused.waitForExistence(timeout: 10))
+    XCTAssertEqual(refused.label, "Hermes didn't take the retry. The gate service is offline.")
+    XCTAssertTrue(retry.waitForDisappearance(), "A refused retry stays refused")
+    XCTAssertEqual(composer.value as? String, "My note", "Nothing changes the draft by itself")
+    try capture(app, "retry-refused")
+    app.buttons["retryPutBack"].tapWhenReady()
+    XCTAssertTrue(composer.wait(until: "value == %@", "My note\n\nIs the north gate closed?"), String(describing: composer.value))
+  }
+
   func testFindCountsUnloadedHistoryAndOpensTheChatThere() throws {
     let app = launch(["AGENT_INTERFACE_UI_LONG_HISTORY": "1"])
     XCTAssertTrue(app.staticTexts["Fixture answer 60."].waitForExistence(timeout: 15))

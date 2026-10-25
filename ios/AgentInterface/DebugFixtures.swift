@@ -88,7 +88,7 @@
           FixtureProtocol.preferences["presentation"] = environment["AGENT_INTERFACE_UI_WORK_PRESENTATION"] ?? "simple"
           FixtureProtocol.messages = TranscriptFixtures.work
         }
-        if environment["AGENT_INTERFACE_UI_RETRY"] == "1" { FixtureProtocol.messages = TranscriptFixtures.failed }
+        if environment["AGENT_INTERFACE_UI_RETRY"] != nil { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
           let output = (1...120).map { "Fixture output line \($0): synthetic tool details stay readable and scroll inside this receipt." }.joined(separator: "\n") + "\nEND OF FIXTURE OUTPUT"
@@ -128,6 +128,7 @@
     nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
     nonisolated(unsafe) static var questionAnswered = false
     nonisolated(unsafe) static var retried = false
+    nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
     nonisolated(unsafe) static var preferences: [String: Any] = [
@@ -330,9 +331,10 @@
             "attention": Self.questionAnswered ? [] : [["id": "fixture-question", "kind": "clarify", "title": "Which plan?", "detail": "Choose a suggestion or write your own answer.", "questions": asked]],
             "draft": Self.draft]
         }
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "1" {
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] != nil {
           var value = object as! [String: Any]
           value["activity"] = ["state": Self.retried ? "idle" : "failed", "detail": Self.retried ? NSNull() as Any : "The weather service did not answer." as Any]
+          if let claim = Self.retryClaim { value["retry"] = claim }
           object = value
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
@@ -557,12 +559,20 @@
       } else if path.hasSuffix("/messages"), let retryOf = body["retryOf"] as? String {
         // A retry repeats the person's message and, this time, the assistant answers. The draft stays.
         let id = body["requestId"] as? String ?? UUID().uuidString
-        Self.retried = true
-        Self.messages += [["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]],
-          ["id": "retry-answer", "role": "assistant", "text": "Retried \(retryOf): the north gate is closed and the battery reads 80%."]]
-        let receipt: [String: Any] = ["requestId": id, "status": "accepted", "messageId": id]
-        Self.receipts[id] = receipt
-        object = receipt
+        // "refused": Hermes refuses the retry, which the conversation then records as its claim.
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "refused" {
+          let receipt: [String: Any] = ["requestId": id, "status": "rejected", "message": "The gate service is offline."]
+          Self.retryClaim = receipt.merging(["retryOf": retryOf]) { $1 }
+          Self.receipts[id] = receipt
+          object = receipt
+        } else {
+          Self.retried = true
+          Self.messages += [["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]],
+            ["id": "retry-answer", "role": "assistant", "text": "Retried \(retryOf): the north gate is closed and the battery reads 80%."]]
+          let receipt: [String: Any] = ["requestId": id, "status": "accepted", "messageId": id]
+          Self.receipts[id] = receipt
+          object = receipt
+        }
       } else if path.hasSuffix("/messages") {
         let id = body["requestId"] as? String ?? UUID().uuidString
         Self.messages.append([

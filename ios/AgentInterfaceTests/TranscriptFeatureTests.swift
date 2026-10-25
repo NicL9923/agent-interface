@@ -360,6 +360,11 @@ import XCTest
     XCTAssertEqual(RetryTurn.requestId(botId: "ranch", retryOf: "msg-42", runId: "run-7"), "97260a13-beba-8fb5-9218-204b5e8a2010")
     XCTAssertEqual(RetryTurn.requestId(botId: "ranch", retryOf: "msg-42", runId: ""), "3bba2658-e84c-8ad5-a391-77d34308f4b8")
     XCTAssertEqual(RetryTurn.requestId(botId: "café", retryOf: "👋", runId: "run"), "f0431e86-8678-8bc4-92de-7d27336108fb")
+    // The server takes only the exact derived ID, in lowercase; `UUID().uuidString` would be uppercase.
+    let id = RetryTurn.requestId(botId: "Ranch", retryOf: "MSG", runId: "RUN")
+    XCTAssertEqual(id, id.lowercased())
+    XCTAssertEqual(id.split(separator: "-").map(\.count), [8, 4, 4, 4, 12])
+    XCTAssertEqual(Array(id)[14], "8", "Version 8"); XCTAssertTrue("89ab".contains(Array(id)[19]), "RFC 9562 variant")
   }
 
   func testRetrySendsTheTurnsOwnIDWithoutTouchingTheDraft() async throws {
@@ -383,16 +388,41 @@ import XCTest
     XCTAssertNil(value.retryOffer, "Working again, the turn offers no Retry")
   }
 
-  func testARetryHermesRefusedHidesRetryAndPointsToTheComposer() async throws {
+  func testARetryHermesRefusedHidesRetryAndPutsTheMessageBackOnRequest() async throws {
     let box = Box(); failedTurn(box); box.receipt = "rejected"
     let (value, server) = try await store(box)
     await value.retry()
     XCTAssertNil(value.retryOffer, "The same ID would be refused again")
-    XCTAssertEqual(value.error, RetryTurn.refusedNotice)
-    XCTAssertEqual(value.draft.text, "Keep my words", "A refused retry never goes into the draft")
+    XCTAssertEqual(value.retryRefusal?.text, "Hermes didn't take the retry.")
+    XCTAssertEqual(value.draft.text, "Keep my words", "A refused retry never goes into the draft by itself")
     XCTAssertEqual(value.haptic?.kind, .failed)
     await value.retry()
     XCTAssertEqual(try sends(server).count, 1)
+    // Put back: after the draft's own words and files, never replacing them.
+    value.editComposer { $0.attachments = [FileRef(id: "mine", name: "mine.txt", mime: "text/plain")] }
+    XCTAssertEqual(value.putRetriedMessageInDraft(try XCTUnwrap(value.retryRefusal?.message)), 0)
+    XCTAssertEqual(value.draft.text, "Keep my words\n\nIs the gate closed?")
+    XCTAssertEqual(value.draft.attachments.map(\.id), ["mine", "f"])
+    // Never while the draft is on its way.
+    value.pending = PendingSubmission(requestId: "r", botId: "bot", text: value.draft.text, attachments: value.draft.attachments,
+      reviewedInterruption: false)
+    value.sending = true
+    XCTAssertNil(value.putRetriedMessageInDraft(try XCTUnwrap(value.retryRefusal?.message)))
+    XCTAssertEqual(value.draft.text, "Keep my words\n\nIs the gate closed?")
+    value.sending = false; value.pending = nil
+  }
+
+  func testTheServersRefusedClaimExplainsItselfAfterAReload() async throws {
+    let box = Box(); failedTurn(box)
+    box.claim = ["requestId": RetryTurn.requestId(botId: "bot", retryOf: "p", runId: "run-1"), "status": "interrupted",
+      "message": "Hermes stopped.", "retryOf": "p"]
+    let (value, _) = try await store(box)
+    XCTAssertNil(value.retryOffer)
+    XCTAssertEqual(value.retryRefusal?.text, "Hermes didn't take the retry. Hermes stopped.")
+    value.editComposer { $0.text = "  " }
+    value.putRetriedMessageInDraft(try XCTUnwrap(value.retryRefusal?.message))
+    XCTAssertEqual(value.draft.text, "Is the gate closed?", "A blank draft takes the message as it is")
+    XCTAssertEqual(value.draft.attachments.map(\.id), ["f"])
   }
 
   func testARetryTheServerRefusedOutrightComesBackWithTheSameID() async throws {
