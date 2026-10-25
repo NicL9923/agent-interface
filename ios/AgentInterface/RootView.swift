@@ -18,6 +18,7 @@ struct RootView: View {
   @State private var initialScope: String?
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
+  @State private var quickSwitcherOpen = false
   var body: some View {
     Group {
       if store.bootstrap == nil {
@@ -27,6 +28,10 @@ struct RootView: View {
       }
     }
     .background(Palette.surface(scheme))
+    .background { AppBadgeSync() }
+    .sheet(isPresented: $quickSwitcherOpen) {
+      QuickSwitcher(choose: go).appStore(store).coveringChat(store)
+    }
     .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
     .modifier(sheets)
     .onAppear { checkShares() }
@@ -150,6 +155,21 @@ struct RootView: View {
       store.searchFocusPending = true
       destination = .find; path = [.search]; compactColumn = .detail
     case .stop: break
+    case .quickSwitch: if store.bootstrap != nil { quickSwitcherOpen = true }
+    }
+  }
+  /// Where the quick switcher sends the person, the same way home's links and rows do.
+  private func go(_ target: QuickSwitchTarget) {
+    quickSwitcherOpen = false
+    let phone = UIDevice.current.userInterfaceIdiom == .phone
+    switch target {
+    case .bot(let id):
+      destination = .conversation
+      if phone { path = [.chat] } else { compactColumn = .detail }
+      Task { await store.select(id) }
+    case .today: destination = .today; path = [.today]; compactColumn = .detail
+    case .groups: destination = .groups; path = [.groups]; compactColumn = .detail
+    case .search: store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail
     }
   }
   private func checkShares() {
@@ -317,6 +337,8 @@ struct BotListView: View {
   @State private var checkingConnection = false
   /// The assistant a new home section is being named for.
   @State private var sectionFor: Bot?
+  /// Undo for the last pin or section move made from a row here.
+  @State private var undo = UndoQueue()
   @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
@@ -381,6 +403,7 @@ struct BotListView: View {
         }
       }.refreshable { await store.refreshBootstrap() }
       .newSectionAlert(for: $sectionFor)
+      .undoToast($undo) { change in Task { await store.undo(change) } }
   }
   /// The person's own avatar is the button, with the connection dot on it; no capsule around it.
   private var accountButton: some View {
@@ -487,16 +510,21 @@ struct BotListView: View {
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
       .contextMenu { botMenu(bot) }
-      .swipeAction(isPinned(bot) ? "Unpin" : "Pin", symbol: isPinned(bot) ? "pin.slash" : "pin", enabled: canPin) { Task { await store.togglePin(bot.id) } }
+      .swipeAction(isPinned(bot) ? "Unpin" : "Pin", symbol: isPinned(bot) ? "pin.slash" : "pin", enabled: canPin) { togglePin(bot) }
   }
-  private func isPinned(_ bot: Bot) -> Bool { store.bootstrap?.preferences.favorites.contains(bot.id) == true }
+  private func isPinned(_ bot: Bot) -> Bool { store.homePreferences?.favorites.contains(bot.id) == true }
+  private func togglePin(_ bot: Bot) {
+    let pinned = !isPinned(bot)
+    Task { await store.togglePin(bot.id) }
+    undo.show(.pin(bot, pinned: pinned))
+  }
   private var canPin: Bool { store.householdConnected }
   @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
-    Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") {
-      Task { await store.togglePin(bot.id) }
-    }.disabled(!canPin)
+    Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") { togglePin(bot) }.disabled(!canPin)
     Menu("Move to section", systemImage: "rectangle.stack") {
-      HomeSectionPicker(botId: bot.id) { sectionFor = bot }
+      HomeSectionPicker(botId: bot.id, newSection: { sectionFor = bot }) { from, to in
+        undo.show(.move(bot, from: from, to: store.homeSectionName(to)))
+      }
     }.disabled(!canPin)
     Button("Assistant settings", systemImage: "gearshape") { edit(bot) }
   }

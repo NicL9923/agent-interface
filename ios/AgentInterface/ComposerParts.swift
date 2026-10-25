@@ -15,6 +15,10 @@ struct ComposerTextView: UIViewRepresentable {
   /// Return on a hardware keyboard. Shift-Return and the on-screen Return start a new line.
   var onReturn: () -> Void
   var onPasteImages: ([Data]) -> Void
+  /// Up or Down on a hardware keyboard. Returns true when it took the key, as prompt recall does.
+  var onArrow: (_ up: Bool) -> Bool = { _ in false }
+  /// A paste too long for the message, which becomes an attachment instead.
+  var onPasteLongText: (String) -> Void = { _ in }
 
   func makeUIView(context: Context) -> ComposerUITextView {
     let view = ComposerUITextView()
@@ -38,6 +42,8 @@ struct ComposerTextView: UIViewRepresentable {
     view.accessibilityHint = readOnly ? "Sending your message…" : nil
     view.onReturn = onReturn
     view.onPasteImages = onPasteImages
+    view.onArrow = onArrow
+    view.onPasteLongText = onPasteLongText
     // Only a change asked for here moves focus. An update still carrying the value from before
     // a tap must not take the keyboard away again.
     guard focused != context.coordinator.focused else { return }
@@ -86,18 +92,32 @@ struct ComposerTextView: UIViewRepresentable {
 final class ComposerUITextView: UITextView {
   var onReturn: (() -> Void)?
   var onPasteImages: (([Data]) -> Void)?
+  var onArrow: ((Bool) -> Bool)?
+  var onPasteLongText: ((String) -> Void)?
   var readOnly = false
+  /// Arrows this view took, so their release never reaches the text view either.
+  private var takenArrows: Set<UIKeyboardHIDUsage> = []
   /// Presses come only from hardware keyboards, so the on-screen Return still starts a line.
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-    guard presses.count == 1, let key = presses.first?.key,
-      Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil)
-    else { return super.pressesBegan(presses, with: event) }
-    onReturn?()
+    guard presses.count == 1, let key = presses.first?.key else { return super.pressesBegan(presses, with: event) }
+    if Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil) { onReturn?(); return }
+    if let up = Self.recallArrow(key.keyCode, key.modifierFlags, composing: markedTextRange != nil), onArrow?(up) == true {
+      takenArrows.insert(key.keyCode)
+      return
+    }
+    super.pressesBegan(presses, with: event)
   }
   override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     // The release of a Return that sent, so the text view never sees half a press.
     if presses.count == 1, let key = presses.first?.key, Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil) { return }
+    if presses.count == 1, let key = presses.first?.key, takenArrows.remove(key.keyCode) != nil { return }
     super.pressesEnded(presses, with: event)
+  }
+  /// Plain Up or Down, which may recall an earlier message. Modified arrows select or jump, and
+  /// arrows while composing pick a candidate, so those stay the text view's.
+  static func recallArrow(_ key: UIKeyboardHIDUsage, _ modifiers: UIKeyModifierFlags, composing: Bool) -> Bool? {
+    guard !composing, modifiers.intersection([.shift, .alternate, .command, .control]).isEmpty else { return nil }
+    return key == .keyboardUpArrow ? true : key == .keyboardDownArrow ? false : nil
   }
   /// Return sends, as Enter does on the web. Shift-Return starts a line, and Return while text is
   /// still being composed, such as Japanese input, confirms it.
@@ -111,6 +131,9 @@ final class ComposerUITextView: UITextView {
     return super.canPerformAction(action, withSender: sender)
   }
   override func paste(_ sender: Any?) {
+    if !Self.pastedImagesOnly, let text = UIPasteboard.general.string, LargePaste.attaches(text), let onPasteLongText {
+      return onPasteLongText(text)
+    }
     guard Self.pastedImagesOnly else { return super.paste(sender) }
     let images = UIPasteboard.general.items.compactMap(Self.imageData)
     if !images.isEmpty { onPasteImages?(images) }

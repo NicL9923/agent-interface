@@ -23,6 +23,7 @@ final class MarkdownCache: @unchecked Sendable {
   }
   private let cache = NSCache<NSString, Entry>()
   private let inline = NSCache<NSString, Inline>()
+  private let code = NSCache<NSString, Inline>()
   private let lock = NSLock()
   private var streams: [Stream] = []
   /// Replies streaming at once, counting each Markdown part of a reply with cards.
@@ -30,6 +31,7 @@ final class MarkdownCache: @unchecked Sendable {
   init() {
     cache.countLimit = 64; cache.totalCostLimit = 4 * 1024 * 1024
     inline.countLimit = 512; inline.totalCostLimit = 2 * 1024 * 1024
+    code.countLimit = 64; code.totalCostLimit = 2 * 1024 * 1024
   }
   func blocks(_ text: String) -> [MarkdownBlock] {
     let key = text as NSString
@@ -76,9 +78,24 @@ final class MarkdownCache: @unchecked Sendable {
     if keep, text.utf16.count <= 100_000 { inline.setObject(Inline(value), forKey: key, cost: text.utf16.count * 8) }
     return value
   }
+  /// A fenced code block colored by `SyntaxHighlighter`, or nil for a language it does not know.
+  /// Only settled blocks are colored: a block still streaming changes with every patch, and its
+  /// fence may not be closed yet. `style` is the app's one theme, so it is not part of the key.
+  func highlighted(_ text: String, language: String?, settled: Bool,
+    style: (SyntaxToken.Kind) -> AttributeContainer) -> AttributedString?
+  {
+    guard settled, let language else { return nil }
+    let key = "\(SyntaxHighlighter.normalized(language))\u{0}\(text)" as NSString
+    if let cached = code.object(forKey: key) { return cached.value }
+    guard let tokens = SyntaxHighlighter.tokens(text, language: language) else { return nil }
+    let value = SyntaxHighlighter.attributed(tokens, style: style)
+    code.setObject(Inline(value), forKey: key, cost: text.utf16.count * 8)
+    return value
+  }
   func clear() {
     cache.removeAllObjects()
     inline.removeAllObjects()
+    code.removeAllObjects()
     lock.withLock { streams.removeAll() }
   }
 }

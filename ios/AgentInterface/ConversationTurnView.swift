@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 /// Whether Hermes is reachable, for rows that show "Last seen running".
@@ -33,12 +34,14 @@ struct TranscriptTurns: View, Equatable {
   var advanced: Bool
   /// The person's sent message still shown from this device, and how far it got.
   var delivery: SentEcho.Delivery?
+  /// The turn the assistant is still working on, whose work reads as live.
+  var liveTurn: String? = nil
   var body: some View {
     // Only the turn holding the message on its way renders again as it goes.
     ForEach(turns) { turn in
       ConversationTurnView(turn: turn, advanced: advanced,
-        delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil)
-    }
+        delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn)
+    }.disclosureGroupStyle(TranscriptDisclosureStyle())
   }
 }
 
@@ -46,16 +49,18 @@ struct ConversationTurnView: View, Equatable {
   var turn: ConversationTurn
   var advanced: Bool
   var delivery: SentEcho.Delivery? = nil
+  var live = false
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.transcriptRecipient) private var recipient
-  nonisolated static func == (a: Self, b: Self) -> Bool { a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery }
+  nonisolated static func == (a: Self, b: Self) -> Bool {
+    a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live
+  }
   var body: some View {
     let visible = turn.visibleMessages
     VStack(alignment: .leading, spacing: 18) {
-      ForEach(turn.rows(advanced: advanced)) { row in
+      ForEach(turn.transcriptRows(advanced: advanced)) { row in
         switch row {
-        case .reasoning: reasoning
-        case .activity(let group): activityGroup(group)
+        case .work: work
         case .message(let index, let message):
         MessageView(message: message,
           continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant" && message.id != turn.replyStart,
@@ -63,6 +68,18 @@ struct ConversationTurnView: View, Equatable {
         }
       }
     }
+  }
+  /// All of a turn's intermediate work behind one row, so the conversation reads as messages.
+  /// Expanded, it shows the grouped views as they were: reasoning, tool calls and each activity group.
+  private var work: some View {
+    DisclosureGroup {
+      VStack(alignment: .leading, spacing: 12) {
+        if advanced && !turn.reasoning.isEmpty { reasoning }
+        ForEach(turn.activityGroups) { activityGroup($0) }
+      }
+    } label: {
+      WorkLabel(summary: WorkSummary(turn), live: live, connected: connected)
+    }.font(.subheadline).disclosureIdentifier("turnWork")
   }
   private func activityGroup(_ group: CoordinationGroup) -> some View {
     DisclosureGroup {
@@ -78,7 +95,7 @@ struct ConversationTurnView: View, Equatable {
           Text(connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(.secondary)
         }
       }
-    }.font(.subheadline).accessibilityIdentifier(group.id)
+    }.disclosureIdentifier(group.id)
   }
   /// As the web's ToolCalls: an agent exchange first, then a tool call, then other activity.
   @ViewBuilder private func activityRow(_ message: Message) -> some View {
@@ -118,7 +135,7 @@ struct ReasoningDisclosure: View {
         Text("Reasoning")
         if parts.count > 1 { Text("\(parts.count)").font(.caption).foregroundStyle(.secondary) }
       }
-    }.accessibilityIdentifier("Reasoning")
+    }.disclosureIdentifier("Reasoning")
   }
 }
 
@@ -157,4 +174,168 @@ struct ApprovalDecisionView: View {
       } catch { if scope == store.scope { decision = nil; store.buzz(.failed); store.report(error) } }
     }
   }
+}
+
+/// A turn's rows as the transcript shows them: its messages, with all intermediate work folded into
+/// one `work` row where the first of it would have been.
+enum TranscriptRow: Identifiable {
+  case message(Int, Message)
+  case work
+  var id: String {
+    switch self {
+    case .message(_, let message): "message-" + message.id
+    case .work: "work"
+    }
+  }
+}
+extension ConversationTurn {
+  func transcriptRows(advanced: Bool) -> [TranscriptRow] {
+    var result: [TranscriptRow] = []
+    for row in rows(advanced: advanced) {
+      switch row {
+      case .message(let index, let message): result.append(.message(index, message))
+      case .activity, .reasoning: if !result.contains(where: { $0.id == "work" }) { result.append(.work) }
+      }
+    }
+    return result
+  }
+}
+
+/// What the work row says: how long the turn worked, when its messages carry times, and what it did.
+struct WorkSummary: Equatable {
+  struct Count: Equatable { var group: String; var count: Int }
+  var counts: [Count]
+  var reasoning: Bool
+  var started: Date?
+  var ended: Date?
+  init(_ turn: ConversationTurn) {
+    counts = turn.activityGroups.map { Count(group: $0.id, count: $0.messages.count) }
+    reasoning = !turn.reasoning.isEmpty
+    let times = turn.messages.flatMap { message in
+      [message.createdAt, message.toolCall?.startedAt, message.toolCall?.completedAt].compactMap { $0.flatMap(ServerDate.parse) }
+    }
+    // The turn starts with the person's message when it carries a time.
+    started = turn.messages.first?.createdAt.flatMap(ServerDate.parse) ?? times.min()
+    ended = times.max()
+  }
+  /// The groups in words, such as "3 tool calls, 1 subagent".
+  var detail: String {
+    counts.map { "\($0.count) \(Self.noun($0.group, $0.count))" }.joined(separator: ", ")
+  }
+  static func noun(_ group: String, _ count: Int) -> String {
+    let one = count == 1
+    switch group {
+    case "Subagents": return one ? "subagent" : "subagents"
+    case "Bot messages": return one ? "bot message" : "bot messages"
+    case "Scheduled jobs": return one ? "scheduled handoff" : "scheduled handoffs"
+    case "Background processes": return one ? "background process" : "background processes"
+    case "Diagnostics": return one ? "diagnostic" : "diagnostics"
+    default: return one ? "tool call" : "tool calls"
+    }
+  }
+  /// "Worked for 2m 14s · 3 tool calls, 1 subagent"; while working, the time so far.
+  func label(live: Bool, now: Date = Date()) -> String {
+    let end = live ? now : ended
+    let seconds = started.flatMap { start in end.map { $0.timeIntervalSince(start) } }.flatMap { $0 >= 1 ? $0 : nil }
+    let lead = seconds.map { "\(live ? "Working" : "Worked") for \(Self.duration($0))" } ?? (live ? "Working" : nil)
+    let what = detail.isEmpty ? (reasoning && lead == nil ? "Reasoning" : nil) : detail
+    return [lead, what].compactMap { $0 }.joined(separator: " · ")
+  }
+  static func duration(_ seconds: TimeInterval) -> String {
+    let total = Int(seconds.rounded(.down))
+    if total < 60 { return "\(total)s" }
+    if total < 3600 { return total % 60 == 0 ? "\(total / 60)m" : "\(total / 60)m \(total % 60)s" }
+    let minutes = total / 60 % 60
+    return minutes == 0 ? "\(total / 3600)h" : "\(total / 3600)h \(minutes)m"
+  }
+}
+/// The work row's label. While the turn works, its time ticks each second.
+private struct WorkLabel: View {
+  var summary: WorkSummary
+  var live: Bool
+  var connected: Bool
+  var body: some View {
+    if live && summary.started != nil && connected {
+      TimelineView(.periodic(from: .now, by: 1)) { context in text(summary.label(live: true, now: context.date)) }
+    } else {
+      text(summary.label(live: live && connected))
+    }
+  }
+  private func text(_ value: String) -> some View {
+    Text(value).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// The transcript's disclosures: a small chevron before the label that turns as it opens, a plain
+/// label in the row's own color, and the content indented under it.
+struct TranscriptDisclosureStyle: DisclosureGroupStyle {
+  func makeBody(configuration: Configuration) -> some View { Disclosure(configuration: configuration) }
+  private struct Disclosure: View {
+    let configuration: DisclosureGroupStyleConfiguration
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.disclosureIdentifier) private var identifier
+    var body: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        Button {
+          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { configuration.isExpanded.toggle() }
+        } label: {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+              .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0)).accessibilityHidden(true)
+            configuration.label.frame(maxWidth: .infinity, alignment: .leading)
+          }.padding(.vertical, 4).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+          .accessibilityIdentifier(identifier ?? "")
+          .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+          .accessibilityHint(configuration.isExpanded ? "Hides the details" : "Shows the details")
+        if configuration.isExpanded {
+          // A disclosure's content starts again from the system style, so nested ones are styled here.
+          configuration.content.padding(.leading, 18).frame(maxWidth: .infinity, alignment: .leading)
+            .environment(\.disclosureIdentifier, nil).disclosureGroupStyle(TranscriptDisclosureStyle())
+        }
+      }
+    }
+  }
+}
+
+/// Whether the latest turn offers Retry (contract C1): its run failed, and the person's latest
+/// message has no reply text after it. Activity rows and empty assistant rows do not count as a reply.
+enum RetryTurn {
+  static func target(_ conversation: Conversation) -> Message? {
+    guard conversation.activity.state == .failed,
+      let index = conversation.messages.lastIndex(where: { $0.role == "user" && $0.presentationOrigin == nil })
+    else { return nil }
+    let replied = conversation.messages[(index + 1)...].contains {
+      $0.role == "assistant" && !$0.isInternalActivity && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    let message = conversation.messages[index]
+    guard !replied, !message.text.isEmpty || !(message.files ?? []).isEmpty else { return nil }
+    return message
+  }
+  /// The request ID for retrying one failed turn, the same on every device as the web's
+  /// `src/shared/retry-id.ts` derives it: a version 8 UUID from SHA-256 over `wildbots-retry`, the
+  /// assistant, the retried message and the failed run (empty without one), joined with NUL.
+  static func requestId(botId: String, retryOf: String, runId: String) -> String {
+    var bytes = Array(SHA256.hash(data: Data(["wildbots-retry", botId, retryOf, runId].joined(separator: "\u{0}").utf8)).prefix(16))
+    bytes[6] = (bytes[6] & 0x0F) | 0x80
+    bytes[8] = (bytes[8] & 0x3F) | 0x80
+    let hex = bytes.map { String(format: "%02x", $0) }.joined()
+    return [hex.prefix(8), hex.dropFirst(8).prefix(4), hex.dropFirst(12).prefix(4), hex.dropFirst(16).prefix(4), hex.dropFirst(20)]
+      .map(String.init).joined(separator: "-")
+  }
+  static let refusedNotice = "Hermes didn't take the retry."
+  static let checkingNotice = "Checking whether the retry arrived…"
+  static let unconfirmedNotice = "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
+}
+
+private struct DisclosureIdentifierKey: EnvironmentKey { static let defaultValue: String? = nil }
+extension EnvironmentValues {
+  /// The identifier a transcript disclosure gives its toggle, and not the rows inside it.
+  var disclosureIdentifier: String? {
+    get { self[DisclosureIdentifierKey.self] }
+    set { self[DisclosureIdentifierKey.self] = newValue }
+  }
+}
+extension View {
+  func disclosureIdentifier(_ identifier: String) -> some View { environment(\.disclosureIdentifier, identifier) }
 }

@@ -519,3 +519,31 @@ enum Markdown {
   static func indent(_ line: String) -> Int { line.prefix { $0 == " " }.count }
   static func isBlank(_ line: String) -> Bool { line.allSatisfy { $0 == " " || $0 == "\t" } }
 }
+
+/// A table copied out of a reply: as GFM Markdown, which keeps its inline formatting and alignment,
+/// or as CSV of the text a reader sees, which spreadsheets open.
+extension MarkdownTable {
+  var markdown: String {
+    func row(_ cells: [String]) -> String {
+      "| " + cells.map { $0.replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ") }
+        .joined(separator: " | ") + " |"
+    }
+    let delimiter = alignments.map { alignment -> String in
+      switch alignment {
+      case .leading: "---"
+      case .center: ":---:"
+      case .trailing: "---:"
+      }
+    }
+    return ([row(header), "| " + delimiter.joined(separator: " | ") + " |"] + rows.map(row)).joined(separator: "\n")
+  }
+  /// RFC 4180: a field with a comma, quote or line break is quoted, and its quotes doubled.
+  var csv: String {
+    func field(_ cell: String) -> String {
+      let text = String(Markdown.attributed(cell).characters)
+      guard text.contains(where: { $0 == "," || $0 == "\"" || $0.isNewline }) else { return text }
+      return "\"" + text.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+    return ([header] + rows).map { $0.map(field).joined(separator: ",") }.joined(separator: "\r\n")
+  }
+}

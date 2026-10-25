@@ -339,6 +339,8 @@ struct Question: Codable, Identifiable, Equatable {
   var id: String
   var prompt: String
   var options: [String]?
+  /// The shared `multiple` field (src/shared/types.ts): several options may be chosen. Absent means one.
+  var multiple: Bool? = nil
 }
 struct Attention: Codable, Identifiable, Equatable {
   var id: String
@@ -585,6 +587,9 @@ struct Conversation: Codable, Equatable {
   var draft: SavedDraft?
   var readPosition: ReadPosition?
   var toolCalls: [ToolCall]?
+  /// After a failed turn: anyone's retry of it, as the server claimed it, with its current receipt.
+  /// Older servers omit it.
+  var retry: RetryClaim?
   var activityMessages: [Message] {
     let canonical = messages.filter { $0.isInternalActivity || $0.isToolActivity || $0.toolCall != nil }
     let known = Set(canonical.compactMap { $0.toolCall?.id })
@@ -862,6 +867,15 @@ struct Receipt: Codable, Equatable {
   var runId: String?
   var messageId: String?
   var message: String?
+}
+/// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
+struct RetryClaim: Codable, Equatable {
+  var requestId: String
+  var status: String
+  var runId: String?
+  var messageId: String?
+  var message: String?
+  var retryOf: String
 }
 struct PendingSubmission: Codable, Equatable {
   var requestId: String

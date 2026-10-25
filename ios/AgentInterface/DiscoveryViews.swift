@@ -29,6 +29,11 @@ struct DiscoveryView: View {
   @State private var savedMessage: String?
   @State private var scrollRequest: UUID?
   @FocusState private var searchFocused: Bool
+  /// Numbers each search, so only the latest one's results are shown.
+  @State private var searchSeq = 0
+  /// The query the shown results answer, so a debounce after Enter does not search again.
+  @State private var searchedQuery = ""
+  @State private var searching = false
   var body: some View {
     ScrollViewReader { proxy in
       list.onChange(of: scrollRequest) { _, _ in
@@ -68,10 +73,11 @@ struct DiscoveryView: View {
         Section {
           HStack {
             TextField("Answers, files, or a topic",text:Binding(get:{ query },set:{ query=Self.clip($0) })).submitLabel(.search).onSubmit { Task { await search() } }.accessibilityLabel("Search conversations").focused($searchFocused)
+            if searching { ProgressView().controlSize(.small).accessibilityLabel("Searching") }
             Button("Search") { Task { await search() } }.buttonStyle(.bordered).controlSize(.small)
               .disabled(Self.trimmed(query).isEmpty || busy).accessibilityIdentifier("nativeSearchSubmit")
           }
-          ForEach(hits) { hit in Button { if let routine=hit.routineId { store.routineResult=RoutineResultDestination(botId:hit.botId,routineId:routine,resultId:hit.resultId) } else { Task { await history(hit.botId,hit.sessionId,hit.offset ?? 0,hit.messageId,searchHit:true) } } } label: { HStack(spacing:12) { VStack(alignment:.leading,spacing:4) { Text(hit.title).font(.headline).foregroundStyle(Color.primary);Text(hit.botName).font(.caption).foregroundStyle(Palette.muted);Text(String(hit.snippet.replacingOccurrences(of:"<[^>]*>",with:"",options:.regularExpression).prefix(300))).lineLimit(4).font(.footnote).foregroundStyle(Palette.muted) }.frame(maxWidth:.infinity,alignment:.leading);Image(systemName:"chevron.right").font(.caption).foregroundStyle(.secondary) } }.accessibilityIdentifier("nativeSearchResult-" + hit.sessionId) }
+          ForEach(hits) { hit in Button { open(hit) } label: { HStack(spacing:12) { VStack(alignment:.leading,spacing:4) { Text(hit.title).font(.headline).foregroundStyle(Color.primary);Text(hit.botName).font(.caption).foregroundStyle(Palette.muted);Text(String(hit.snippet.replacingOccurrences(of:"<[^>]*>",with:"",options:.regularExpression).prefix(300))).lineLimit(4).font(.footnote).foregroundStyle(Palette.muted) }.frame(maxWidth:.infinity,alignment:.leading);Image(systemName:"chevron.right").font(.caption).foregroundStyle(.secondary) } }.accessibilityIdentifier("nativeSearchResult-" + hit.sessionId) }
         } footer: { Text("Searches answers, attachment names and routine previews across your assistants.") }
       } else if tab == "saved" {
         Section {
@@ -116,6 +122,14 @@ struct DiscoveryView: View {
       }
     }.householdListBackground().viewHeader("Search & saved", "Past answers, saved items and automations")
       .onAppear { Task { await load() } }.onChange(of:tab) { _,_ in page=nil;historyRequest=nil;Task { await load() } }
+      // Results follow typing after a short pause, as on the web; Enter still searches at once.
+      .task(id: query) {
+        guard tab == "search", page == nil else { return }
+        do { try await Task.sleep(for: Self.searchDelay) } catch { return }
+        let text = Self.trimmed(query)
+        if text.count < Self.minimumQuery { searchSeq += 1; searching = false; searchedQuery = ""; hits = []; if notice != nil { notice = nil }; return }
+        if text != searchedQuery { await search() }
+      }
       .onChange(of:store.scope) { _,_ in loadId=UUID();hits=[];saved=[];overview=nil;page=nil;error=nil;Task { await load() } }
       .refreshable { await load() }
   }
@@ -152,7 +166,47 @@ struct DiscoveryView: View {
     if scope != store.scope { hits=[];saved=[];overview=nil;page=nil;notice=nil }
   }
   private func load() async { await perform { api in if tab=="saved" { saved=try await api.get("/saved") };if tab=="automations" { overview=try await api.get("/automations") } } }
-  private func search() async { let scope = store.scope; await perform { api in let result:SearchResponse=try await api.get("/search?q=\(Self.trimmed(query).addingPercentEncoding(withAllowedCharacters:.alphanumerics) ?? "")");guard scope == store.scope else { return };hits=result.hits;notice=result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)." } }
+  /// Typing waits this long before searching; at least two characters are needed.
+  static let searchDelay: Duration = .milliseconds(300)
+  static let minimumQuery = 2
+  /// Searches for the current query. A slower answer to an earlier query is dropped.
+  private func search() async {
+    let text = Self.trimmed(query)
+    guard !text.isEmpty, let api = store.api else { return }
+    searchSeq += 1
+    let seq = searchSeq, scope = store.scope
+    searching = true; error = nil
+    defer { if seq == searchSeq { searching = false } }
+    do {
+      let result: SearchResponse = try await api.get("/search?q=\(text.addingPercentEncoding(withAllowedCharacters:.alphanumerics) ?? "")")
+      guard seq == searchSeq, scope == store.scope else { return }
+      searchedQuery = text
+      hits = result.hits
+      notice = result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)."
+      AccessibilityNotification.Announcement(Self.resultsAnnouncement(hits.count)).post()
+    } catch {
+      guard seq == searchSeq, scope == store.scope else { return }
+      self.error = error.localizedDescription
+    }
+  }
+  static func resultsAnnouncement(_ count: Int) -> String { count == 0 ? "No matching conversations" : count == 1 ? "1 result" : "\(count) results" }
+  /// A hit in an assistant's current conversation opens that conversation at the message, so the
+  /// person can reply there. Older sessions and routine results open their read-only history.
+  private func open(_ hit: SearchHit) {
+    if let routine = hit.routineId {
+      store.routineResult = RoutineResultDestination(botId: hit.botId, routineId: routine, resultId: hit.resultId)
+    } else if let messageId = Self.liveMessage(hit, bots: store.bootstrap?.bots ?? []) {
+      Task { await store.openConversation(botId: hit.botId, atMessage: messageId) }
+    } else {
+      Task { await history(hit.botId, hit.sessionId, hit.offset ?? 0, hit.messageId, searchHit: true) }
+    }
+  }
+  /// The message to open in the live conversation, when the hit is in its assistant's current session.
+  static func liveMessage(_ hit: SearchHit, bots: [Bot]) -> String? {
+    guard hit.routineId == nil, let messageId = hit.messageId,
+      let session = bots.first(where: { $0.id == hit.botId })?.sessionId, session == hit.sessionId else { return nil }
+    return messageId
+  }
   private func history(_ bot:String,_ session:String,_ offset:Int=0,_ messageId:String?=nil,searchHit:Bool=false) async {
     let request = UUID(); historyRequest = request; let scope = store.scope
     await perform { api in
