@@ -6,6 +6,7 @@ import { visibleTo } from "./bot-access.js";
 import { accountMarker, ApnsError, createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
+import { badgeFor, rosterOnce } from "./badge.js";
 export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
@@ -16,14 +17,26 @@ export function inQuietHours(settings: import('../shared/types.js').Preferences[
   const time = `${parts.find(part=>part.type==='hour')!.value}:${parts.find(part=>part.type==='minute')!.value}`;
   return settings.quietStart < settings.quietEnd ? time >= settings.quietStart && time < settings.quietEnd : time >= settings.quietStart || time < settings.quietEnd;
 }
+// Reconciling counted approvals against Hermes: at most this many assistants, this often, and
+// for no longer than the budget. A read still pending then is abandoned and checked next pass.
+const approvalCheckInterval = 60000;
+const approvalChecksPerPass = 5;
+export const approvalPassBudget = 20000;
+type Job = "runtime" | "outbox" | "live" | "approvals";
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
-  private jobs = new Map<"runtime" | "outbox" | "live", Promise<void>>();
+  private jobs = new Map<Job, Promise<void>>();
+  private halt!: () => void;
+  // Settles on stop, so shutdown never waits on an approval read.
+  private halted = new Promise<void>(resolve => { this.halt = resolve; });
   private outboxRequested = false;
   private stopped = false;
   private stopping?: Promise<void>;
   private closeApns?: () => void;
   private retainedAt = 0;
+  private approvalsCheckedAt = 0;
+  // When each assistant's approvals were last checked against Hermes, so every one gets its turn.
+  private approvalChecks = new Map<string, number>();
   readonly createdAt = Date.now();
   lastTickAt?: number;
   readonly loop: FailureTracker;
@@ -74,6 +87,7 @@ export class BackgroundWorker {
   }
   stop(): Promise<void> {
     this.stopped = true;
+    this.halt();
     if (this.timer) clearInterval(this.timer);
     return this.stopping ??= (async () => {
       // Recovery can request another delivery pass while shutdown is draining.
@@ -97,9 +111,11 @@ export class BackgroundWorker {
     const live = this.runJob("live", async () => {
       try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
     });
-    return [outbox, runtime, live];
+    // Its own job, so a slow Hermes read never holds up discovery or receipt recovery.
+    const approvals = this.runJob("approvals", () => this.reconcileApprovals());
+    return [outbox, runtime, live, approvals];
   }
-  private runJob(name: "runtime" | "outbox" | "live", work: () => Promise<void>, rerun?: () => boolean) {
+  private runJob(name: Job, work: () => Promise<void>, rerun?: () => boolean) {
     const running = this.jobs.get(name);
     if (running) return running;
     const job = Promise.resolve().then(async () => {
@@ -171,8 +187,34 @@ export class BackgroundWorker {
       this.discovery.failure(error);
     }
   }
+  /**
+   * Now and then, checks a few assistants with an approval still counted against Hermes's open
+   * requests, so one answered outside the app stops counting even if nobody opens its chat.
+   */
+  private async reconcileApprovals(now = Date.now()) {
+    if (now - this.approvalsCheckedAt < approvalCheckInterval) return;
+    this.approvalsCheckedAt = now;
+    const unresolved = this.store.unresolvedApprovalBots(now);
+    for (const botId of this.approvalChecks.keys()) if (!unresolved.includes(botId)) this.approvalChecks.delete(botId);
+    const due = unresolved.sort((a, b) => (this.approvalChecks.get(a) ?? 0) - (this.approvalChecks.get(b) ?? 0)).slice(0, approvalChecksPerPass);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outOfTime = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), approvalPassBudget); });
+    try {
+      for (const botId of due) {
+        this.approvalChecks.set(botId, now);
+        try {
+          const readAt = Date.now();
+          // A read that outlives the pass or the worker is never applied.
+          const conversation = await Promise.race([this.runtime.conversation(botId, { history: false }), outOfTime, this.halted]);
+          if (!conversation) return;
+          this.store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
+        } catch { /* Unreadable now; it stays counted and is checked again later. */ }
+      }
+    } finally { clearTimeout(timer); }
+  }
   private async deliver() {
     if (!this.send && !this.sendApns) return;
+    const roster = rosterOnce(this.runtime);
     for (const item of this.store.deliveryGroups()) {
       try {
         const user = this.store.getUser(item.user_id);
@@ -191,13 +233,21 @@ export class BackgroundWorker {
         // Rebuild the frozen membership's display after revocation, preserving its
         // tag and each endpoint's delivery receipts without exposing removed titles.
         const original = JSON.parse(item.payload);
-        const deliveryPayload = original.url === '/?view=today' ? JSON.stringify({...original,title:`${item.items.length} assistant update${item.items.length===1?'':'s'}`,body:item.items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · ')}) : item.payload;
+        const display = original.url === '/?view=today' ? {...original,title:`${item.items.length} assistant update${item.items.length===1?'':'s'}`,body:item.items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · ')} : original;
+        // The person's app badge as of this delivery, including what it is about to tell them.
+        const badge = badgeFor(await roster(), this.store, item.user_id, item.items.map(row => JSON.parse(row.payload)));
+        const deliveryPayload = JSON.stringify(badge === undefined ? display : {...display, badge});
         // Notification actions name the account they act for, so a phone signed in as someone else refuses them.
         const nativePayload = JSON.stringify({...JSON.parse(deliveryPayload), account: accountMarker(item.user_id)});
         const subscriptions = this.send ? this.store.subscriptions(item.user_id) : [];
         const devices = this.sendApns && this.config.apns ? this.store.nativeDevices(item.user_id, this.config.apns.environment) : [];
         // Keep undelivered events durable until this person has a subscription.
         if (!subscriptions.length && !devices.length) continue;
+        // A browser's Decline action carries its own single-use authority; the service worker has no session.
+        const single = item.items.length === 1 ? JSON.parse(item.items[0].payload) as { kind?: string; botId?: unknown; approvalId?: unknown } : undefined;
+        const declineToken = subscriptions.length && single?.kind === "approval" && typeof single.botId === "string" && typeof single.approvalId === "string" && single.approvalId
+          ? this.store.issuePushAction({ userId: item.user_id, botId: single.botId, approvalId: single.approvalId, decision: "denied" }) : undefined;
+        const webPayload = declineToken ? JSON.stringify({...JSON.parse(deliveryPayload), declineToken}) : deliveryPayload;
         let failed: string | undefined;
         // A send can take a while; an assistant made private meanwhile stops the rest of this
         // delivery before its frozen payload reaches another endpoint. The next pass drops it.
@@ -208,7 +258,7 @@ export class BackgroundWorker {
           if (item.items.every(row => this.store.delivered(row.id, subscription.endpoint))) continue;
           if (!stillVisible()) { revoked = true; break; }
           try {
-            await this.send!(subscription, deliveryPayload);
+            await this.send!(subscription, webPayload);
             for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
             this.push.success();
           } catch (error) {
@@ -261,10 +311,11 @@ export class BackgroundWorker {
   private async clearRead() {
     if (!this.sendClear || !this.config.apns) return;
     const environment = this.config.apns.environment;
-    const byEndpoint = new Map<string, { device?: NativeDevice; tags: string[]; rows: string[] }>();
+    const roster = rosterOnce(this.runtime);
+    const byEndpoint = new Map<string, { device?: NativeDevice; userId: string; tags: string[]; rows: string[] }>();
     for (const row of this.store.readOnDevices()) {
       const device = this.store.nativeDevices(row.user_id, environment).find(device => `apns:${device.environment}:${device.token}` === row.endpoint);
-      const entry = byEndpoint.get(row.endpoint) ?? { device, tags: [], rows: [] };
+      const entry = byEndpoint.get(row.endpoint) ?? { device, userId: row.user_id, tags: [], rows: [] };
       byEndpoint.set(row.endpoint, entry);
       entry.rows.push(row.outbox_id);
       // The device that read the chat already cleared its own notifications.
@@ -275,7 +326,8 @@ export class BackgroundWorker {
       // not retried. Opening the chat on that device clears the rest.
       if (entry.device && entry.tags.length) try {
         // Newest first, so the ones most likely still on screen fit.
-        await this.sendClear(entry.device, entry.tags.reverse());
+        // The read lowered the person's badge on every device, including this closed one.
+        await this.sendClear(entry.device, entry.tags.reverse(), badgeFor(await roster(), this.store, entry.userId));
         this.clears.success();
       } catch (error) { this.clears.failure(error); }
       for (const id of entry.rows) this.store.markCleared(id, endpoint);

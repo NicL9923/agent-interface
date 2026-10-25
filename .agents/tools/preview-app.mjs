@@ -134,6 +134,35 @@ if (process.env.PREVIEW_LONG_TOOL === '1') {
     { id: 'fixture-final', role: 'assistant', text: 'Fixture final answer follows the tool results.' });
   Object.assign(conversations.ranch, { activity: { state: 'done' }, toolCalls: [], approvals: [] });
 }
+// Transcript catch-up fixtures: a failed turn to retry, a question with one answer and one with several,
+// a finished turn with timed tool work, and a reply with code in several languages and a table.
+{
+  const t = (minutes, seconds = 0) => new Date(Date.UTC(2026, 9, 1, 15, minutes, seconds)).toISOString();
+  conversations.guide = { sessionId: 'fixture-guide', approvals: [], activity: { state: 'failed', runId: 'run_guide_1', detail: 'The trail conditions service did not respond.' }, messages: [
+    { id: 'guide-ask', role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: 'Are the Lost Maples trails open this Saturday?', createdAt: t(10) },
+    { id: 'guide-fetch', role: 'tool', text: '', createdAt: t(10, 30), toolCall: { id: 'guide-call', name: 'web.fetch', status: 'failed', error: 'Fixture: the trail conditions service did not respond.', startedAt: t(10, 5), completedAt: t(10, 30) } },
+  ] };
+  conversations.ledger.attention[0].questions.push({ id: 'split', prompt: 'Who should share it?', options: ['Nicolas', 'Jordan', 'The ranch account'], multiple: true });
+  const code = [
+    'Here is a small checker. It reads each sensor, logs the low ones and exits non-zero when any need a battery.',
+    '```bash\n#!/usr/bin/env bash\nset -euo pipefail\nfor gate in north east barn; do\n  level=$(ha state "sensor.${gate}_gate_battery")\n  if (( level < 20 )); then echo "$gate: ${level}%"; fi\ndone\n```',
+    '```ts\ntype Gate = { name: string; battery: number };\nexport const low = (gates: Gate[]) => gates.filter(gate => gate.battery < 20); // fixture\n```',
+    '```python\ndef low(gates: dict[str, int]) -> list[str]:\n    """Gates under 20 percent."""\n    return [name for name, level in gates.items() if level < 20]\n```',
+    '```swift\nstruct Gate { let name: String; let battery: Int }\nlet low = gates.filter { $0.battery < 20 }\n```',
+    '```json\n{ "north": 14, "east": 62, "barn": 48, "notify": true }\n```',
+    '```diff\n- threshold: 15\n+ threshold: 20\n```',
+    '| Gate | Battery | Action |\n| --- | --- | --- |\n| North | 14% | Replace now |\n| East | 62% | Check Nov 1 |\n| Barn, west | 48% | Check Nov 1 |',
+    'Explicit preview fixture. Nothing was run.',
+  ].join('\n\n');
+  conversations.fox = { sessionId: 'fixture-fox', approvals: [], activity: { state: 'done' }, messages: [
+    { id: 'fox-ask', role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: 'Write me a script that checks the gate batteries and flags the low ones.', createdAt: t(30) },
+    { id: 'fox-search', role: 'tool', text: '', createdAt: t(30, 40), toolCall: { id: 'fox-call-1', name: 'home_assistant.states', status: 'completed', result: '{"north":14,"east":62,"barn":48}', startedAt: t(30, 8), completedAt: t(30, 40) } },
+    { id: 'fox-run', role: 'tool', text: '', createdAt: t(31, 50), toolCall: { id: 'fox-call-2', name: 'terminal', status: 'completed', arguments: '{"command":"bash check-gates.sh"}', result: 'north: 14%', startedAt: t(31), completedAt: t(31, 50) } },
+    { id: 'fox-helper', role: 'user', text: 'Subagent Task Completed: Review thresholds\nTwenty percent leaves two weeks of margin.', createdAt: t(32), origin: { kind: 'subagent', visibility: 'activity', title: 'Review thresholds completed' } },
+    { id: 'fox-reply', role: 'assistant', text: code, createdAt: t(32, 14), reasoning: 'Read the three battery sensors.\nCompare each against a 20 percent threshold.' },
+  ] };
+  conversations.kitchen.sessionId = 'fixture-kitchen';
+}
 const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'planner'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
 const groupRooms = [previewRoom];
 const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
@@ -246,6 +275,28 @@ const server = createServer(async (request, response) => {
     if (path === '/auth/confirm') { terminalConfirmed = true; return json(response, { confirmedAt: new Date().toISOString() }); }
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
+    // Find in chat: botId scopes search to one assistant's canonical session. Every saved message can match.
+    if (path === '/search' && url.searchParams.get('botId')) {
+      const botId = url.searchParams.get('botId'), q = (url.searchParams.get('q') || '').toLowerCase(), conversation = conversationFor(botId), bot = bots.find(item => item.id === botId);
+      const hits = conversation.sessionId ? conversation.messages.flatMap((message, offset) => ['user', 'assistant'].includes(message.role) && message.text.toLowerCase().includes(q)
+        ? [{ botId, botName: bot?.name, sessionId: conversation.sessionId, title: bot?.name, snippet: message.text.slice(0, 120), messageId: message.id, offset }] : []) : [];
+      return json(response, { hits, unavailableBots: [] });
+    }
+    // Retry of a failed turn: the fixture runs again briefly, then answers. Nothing is fetched.
+    const retryMatch = request.method === 'POST' && body.retryOf ? /^\/bots\/([^/]+)\/messages$/.exec(path) : null;
+    if (retryMatch) {
+      const botId = decodeURIComponent(retryMatch[1]), conversation = conversations[botId];
+      if (body.draftBaseRevision !== undefined || !conversation?.messages.some(message => message.id === body.retryOf && message.role === 'user')) return json(response, { error: 'Fixture: that message cannot be retried.' }, 400);
+      const runId = `run_retry_${Date.now()}`;
+      const original = conversation.messages.find(message => message.id === body.retryOf);
+      conversation.messages.push({ ...original, id: `retry-${runId}`, createdAt: new Date().toISOString() });
+      conversation.activity = { state: 'thinking', runId }; changed(botId);
+      setTimeout(() => {
+        conversation.messages.push({ id: `retry-reply-${runId}`, role: 'assistant', text: 'Fixture retry: the trails are open Saturday. Bring water and check the weather first.', createdAt: new Date().toISOString() });
+        conversation.activity = { state: 'done', runId }; changed(botId);
+      }, 2500);
+      return json(response, { requestId: body.requestId, status: 'accepted', runId });
+    }
     if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.',messageId:'m2',offset:0}],unavailableBots:[]});
     if (/\/history\//.test(path)) return json(response,{botId:'ranch',sessionId:'fixture-history',messages:ranchMessages,offset:0,hasMore:false});
     if (path === '/saved') { if(request.method==='POST'){const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);}return json(response,savedItems); }

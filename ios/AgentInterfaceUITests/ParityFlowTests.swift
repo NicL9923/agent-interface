@@ -121,8 +121,10 @@ import UIKit
     app.buttons["composerModel"].tap()
     XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 10))
     try capture("model-dark")
-    let speed = app.buttons["inferenceSpeed"]
-    scroll(app, to: speed); speed.tap(); app.buttons["Fast"].tapWhenReady()
+    // Three speeds fit as a segmented control: one tap, no menu.
+    let speed = app.segmentedControls["inferenceSpeed"]
+    scroll(app, to: speed); speed.buttons["Fast"].tapWhenReady()
+    XCTAssertTrue(speed.buttons["Fast"].wait(until: "selected == true"), "Fast is selected")
     let favorite = app.buttons["Add Fixture fast model to favorites"]
     scroll(app, to: favorite); favorite.tap()
     XCTAssertTrue(app.buttons["Remove Fixture fast model from favorites"].waitForExistence(timeout: 5))
@@ -243,6 +245,7 @@ import UIKit
     XCTAssertFalse(app.staticTexts["Fixture tool result"].exists)
     XCTAssertTrue(app.buttons["Fixture output.txt"].exists)
     XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "fixture_file_tool")).firstMatch.exists)
+    app.buttons["turnWork"].tapWhenReady()
     app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tapWhenReady()
     app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_search")).firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
@@ -256,6 +259,7 @@ import UIKit
       app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
       app.launchEnvironment["AGENT_INTERFACE_UI_LONG_TOOL"] = presentation
       app.launch()
+      app.buttons["turnWork"].tapWhenReady()
       let tools = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch
       XCTAssertTrue(tools.waitForExistence(timeout: 10)); tools.tap()
       XCTAssertLessThan(tools.frame.minY, app.staticTexts["Fixture final answer follows the tool results."].frame.minY)

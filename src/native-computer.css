@@ -1,0 +1,4 @@
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+#screen { position: fixed; inset: 0; }
+/* The app shows its own status; this line is for VoiceOver and tests. */
+#status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

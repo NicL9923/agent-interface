@@ -4,7 +4,8 @@ import type { Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { visibleTo } from "./bot-access.js";
-import type { Config } from "./config.js";
+import { allowedIdentity, type Config } from "./config.js";
+import { decideApproval } from "./conversation-routes.js";
 import { httpError } from "./http-error.js";
 import type { LiveActivities } from "./live-activity.js";
 import { apnsToken, id } from "./schemas.js";
@@ -41,6 +42,17 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
   };
   apiRoute(app, "POST /push/subscriptions", { ...webPush, body: subscription }, async (req, input) => {
     store.subscribe(signedIn(req).id, input);
+    return { ok: true };
+  });
+  // A service worker's notification action, such as Decline, has no session or CSRF token. The
+  // single-use token in its push names the person, approval and decision; nothing else is trusted.
+  apiRoute(app, "POST /push/actions", { body: z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict() }, async (_req, { token }) => {
+    const action = store.consumePushAction(token);
+    const user = action && store.getUser(action.userId);
+    if (!action || !user || !allowedIdentity(config, user) || !visibleTo(store, action.botId, user.id))
+      throw httpError(401, "This notification action expired. Open the chat to answer.");
+    if (!(await runtime.capabilities()).approvals.supported) throw httpError(409, "Approvals are unavailable");
+    await decideApproval(runtime, store, action.botId, action.approvalId, action.decision, user.id);
     return { ok: true };
   });
   apiRoute(app, "POST /push/test", { ...webPush, body: z.object({ botId: id }) }, async (req, { botId }) => {

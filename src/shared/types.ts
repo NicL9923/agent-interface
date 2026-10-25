@@ -248,13 +248,19 @@ export interface AttentionRequest {
   kind: "clarify" | "official" | "secure";
   title: string;
   detail: string;
-  questions?: { id: string; prompt: string; options?: string[] }[];
+  /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
+  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
 }
 export interface Conversation {
   attention?: AttentionRequest[];
   botId: string;
   sessionId?: string;
+  /**
+   * The live Hermes session whose open requests `approvals` and `attention` list, which
+   * discovered events name as `sessionId`. Server-side only; clients never receive it.
+   */
+  requestSessionId?: string;
   messages: Message[];
   activity: Activity;
   approvals: Approval[];
@@ -337,6 +343,8 @@ export interface Submission {
   senderId: string;
   /** The draft revision this message was written on. Older clients omit it. */
   draftBaseRevision?: number;
+  /** The user message this one retries. A retry never reads, merges or clears the sender's draft. */
+  retryOf?: string;
 }
 export interface SubmissionReceipt {
   requestId: string;
@@ -351,6 +359,8 @@ export interface RuntimeEvent {
   botId: string;
   runId?: string;
   routineId?: string;
+  /** The live Hermes session the event happened in, as `Conversation.requestSessionId` names it. */
+  sessionId?: string;
   kind: "completed" | "approval" | "failed" | "interrupted" | "activity";
   /** The pending approval an approval event asked about, from add-ons that report it. */
   approvalId?: string;

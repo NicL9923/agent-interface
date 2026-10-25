@@ -15,17 +15,27 @@ struct ReplyActions: ViewModifier {
     if eligible {
       content.contextMenu {
         Button("Copy answer", systemImage: "doc.on.doc", action: copy)
+        Button("Quote in reply", systemImage: "text.quote", action: quote)
         ShareLink(item: message.text) { Label("Share answer", systemImage: "square.and.arrow.up") }
         Button(saved ? "Reply saved" : saving ? "Saving…" : "Save reply", systemImage: "bookmark", action: save)
           .disabled(saving || saved || !connected)
       }
       .accessibilityAction(named: "Copy answer", copy)
+      .accessibilityAction(named: "Quote in reply", quote)
       .accessibilityAction(named: "Save reply", save)
     } else { content }
   }
   private func copy() {
     UIPasteboard.general.string = message.text
     AccessibilityNotification.Announcement("Answer copied.").post()
+  }
+  private func quote() {
+    guard let store, let botId = store.selectedBotId else { return }
+    switch store.quoteInReply(message.text, botId: botId) {
+    case .added: AccessibilityNotification.Announcement("Quote added to your draft.").post()
+    case .waiting: store.notice = ReplyQuote.waitingNotice; AccessibilityNotification.Announcement(ReplyQuote.waitingNotice).post()
+    case .refused: break
+    }
   }
   private func save() {
     guard connected && store?.connected == true else {
@@ -47,5 +57,26 @@ struct ReplyActions: ViewModifier {
         AccessibilityNotification.Announcement("Reply saved.").post()
       } catch { if store.scope == scope { store.report(error) } }
     }
+  }
+}
+
+/// A reply quoted into the draft as a Markdown block quote, with a blank line below for the answer.
+enum ReplyQuote {
+  enum Outcome { case added, waiting, refused }
+  static let waitingNotice = "The quote joins your draft once your message is sent."
+  static func block(_ text: String) -> String {
+    let lines = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines)
+    return lines.map { $0.isEmpty ? ">" : "> " + $0 }.joined(separator: "\n") + "\n\n"
+  }
+}
+extension AppStore {
+  /// Quotes a reply into this assistant's draft through the path Share and Siri text take: it joins
+  /// the draft at once when the draft can take it, and otherwise waits, as while a send to this
+  /// assistant is unsettled, because a draft and its send are told apart by content.
+  @discardableResult func quoteInReply(_ text: String, botId: String) -> ReplyQuote.Outcome {
+    guard let scope, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .refused }
+    let waits = holdsAdditions(botId) || selectedBotId != botId || !draftReady
+    guard hold(DraftAddition(source: .share, botId: botId, text: ReplyQuote.block(text), scope: scope)) else { return .refused }
+    return waits ? .waiting : .added
   }
 }

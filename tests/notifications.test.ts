@@ -184,7 +184,8 @@ it("delivers durable alerts while receipt recovery waits, then delivers recovere
   const tick = worker.tick();
   try {
     await entered.promise;
-    expect([...sent]).toEqual(["https://push.example.test/two"]);
+    // Recovery is still waiting; delivery reads the roster for the badge first.
+    await vi.waitFor(() => expect([...sent]).toEqual(["https://push.example.test/two"]));
     expect(discoverEvents).not.toHaveBeenCalled();
     expect(store.cursor()).toBe("previous-cursor");
   } finally {

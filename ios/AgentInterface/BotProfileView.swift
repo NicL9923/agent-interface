@@ -14,11 +14,15 @@ struct BotProfileView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.dynamicTypeSize) private var typeSize
   @State private var sectionFor: Bot?
+  /// The list's content height, once measured, so the sheet can fit it.
+  @State private var contentHeight: CGFloat?
+  private let clock = MinuteClock.shared
   var body: some View {
     NavigationStack {
       List {
         Section { header; actions }.listRowBackground(Color.clear).listRowSeparator(.hidden)
           .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 12, trailing: 0))
+        Section { details }
         Section {
           Toggle("Notify me about all activity", isOn: follow).disabled(!store.homeCanOrganize).accessibilityIdentifier("followBot")
           HomeSectionPicker(botId: bot.id) { sectionFor = bot }
@@ -29,22 +33,28 @@ struct BotProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("closeBotProfile") } }
         .newSectionAlert(for: $sectionFor)
+        .measuringContent($contentHeight)
     }.presentationDragIndicator(.visible)
+      .modifier(FittedDetents(contentHeight: contentHeight))
   }
   private var header: some View {
-    VStack(spacing: 10) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, size: 104, name: bot.name, botId: bot.id)
-        .padding(.bottom, 4)
+    VStack(spacing: 8) {
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, size: 88, name: bot.name, botId: bot.id)
       Text(bot.name).font(.title2.bold()).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
-      VStack(spacing: 3) {
-        Text(BotProfileView.audience(bot))
-        Text(bot.provider.map { "\($0) · \(bot.model)" } ?? bot.model).lineLimit(2)
-      }.font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-      if let description = bot.description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
-        Text(description).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-          .lineLimit(4).padding(.top, 2)
-      }
-    }.frame(maxWidth: .infinity).padding(.top, 8).padding(.horizontal, 16).padding(.bottom, 18)
+      Text(Self.roleLine(bot)).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        .lineLimit(3).accessibilityIdentifier("profileRole")
+    }.frame(maxWidth: .infinity).padding(.top, 4).padding(.horizontal, 16).padding(.bottom, 14)
+  }
+  /// Who it works for, the model it runs on and when it last spoke, as rows that read at a glance.
+  @ViewBuilder private var details: some View {
+    LabeledContent("Model") {
+      Text(bot.provider.map { "\($0) · \(bot.model)" } ?? bot.model).lineLimit(2).multilineTextAlignment(.trailing)
+    }.accessibilityIdentifier("profileModel")
+    LabeledContent("Last activity") {
+      if state != .idle && state != .done { ActivityLabel(state: state) }
+      else { Text(Self.lastActivity(bot, now: clock.now)) }
+    }.accessibilityIdentifier("profileLastActivity")
+    LabeledContent("Who sees it", value: Self.audience(bot))
   }
   /// Four equal tiles in a row; at the largest text sizes, two rows of two.
   private var actions: some View {
@@ -65,6 +75,16 @@ struct BotProfileView: View {
   }
   private var follow: Binding<Bool> {
     Binding(get: { store.homeFollows(bot.id) }, set: { store.homeFollow(bot.id, $0) })
+  }
+  /// The assistant's role in one line: its description, or what it is when it has none.
+  static func roleLine(_ bot: Bot) -> String {
+    let role = bot.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return role.isEmpty ? (bot.shared ? "Shared assistant" : "Personal assistant") : role
+  }
+  /// When the conversation last moved, from the roster's latest message.
+  static func lastActivity(_ bot: Bot, now: Date) -> String {
+    guard let at = bot.lastMessage?.at, let date = ServerDate.parse(at) else { return "No messages yet" }
+    return When.format(date, now: now)
   }
   /// Who the assistant works for, in the words the chat header used to show.
   static func audience(_ bot: Bot) -> String {
@@ -97,5 +117,47 @@ private struct ProfileActionTile: View {
         .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
         .contentShape(RoundedRectangle(cornerRadius: 14))
     }.buttonStyle(.plain)
+  }
+}
+
+/// Sheet heights for the card: the medium detent when the content fits in it, otherwise the
+/// content's own height while that leaves the top of the screen free, and full height beyond.
+enum FittedSheet {
+  /// The navigation bar, grabber and bottom inset around the measured list content.
+  static let chrome: CGFloat = 76
+  static func detents(contentHeight: CGFloat?, available: CGFloat) -> Set<PresentationDetent> {
+    guard let contentHeight, available > 0 else { return [.medium, .large] }
+    let needed = contentHeight + chrome
+    if needed <= available * 0.5 { return [.medium, .large] }
+    if needed <= available * 0.9 { return [.height(needed.rounded(.up)), .large] }
+    return [.large]
+  }
+}
+private struct FittedDetents: ViewModifier {
+  var contentHeight: CGFloat?
+  @State private var selection: PresentationDetent = .medium
+  /// The window's height. The sheet's own size follows the detent, so it cannot be the measure.
+  private var available: CGFloat {
+    UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+      .first { $0.isKeyWindow }?.bounds.height ?? 0
+  }
+  func body(content: Content) -> some View {
+    let detents = FittedSheet.detents(contentHeight: contentHeight, available: available)
+    content
+      .presentationDetents(detents, selection: $selection)
+      // The smallest detent that holds the content, until the person drags it.
+      .onChange(of: detents, initial: true) { _, detents in
+        if let fitted = detents.first(where: { $0 != .large }) { selection = fitted } else { selection = .large }
+      }
+  }
+}
+private extension View {
+  /// The list's content height, on iOS 18 and later. iOS 17 keeps the medium and large detents.
+  @ViewBuilder func measuringContent(_ height: Binding<CGFloat?>) -> some View {
+    if #available(iOS 18, *) {
+      onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, value in
+        if value > 0 { height.wrappedValue = value }
+      }
+    } else { self }
   }
 }

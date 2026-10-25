@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, write } from '../client-api';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { api, ApiError, changeStream, write } from '../client-api';
+import { insertMention, matchMembers, mentionAt } from '../app/mentions';
 import { useAction } from '../app/use-action';
 import { useResource } from '../app/use-resource';
 import { groupCreateKey, groupSendKey } from '../app/storage';
@@ -12,6 +13,8 @@ import { When } from './When';
 import './collaboration.css';
 type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
+/** Who sent a human message, when the server knows. Older servers leave it out. */
+type Attributed = GroupEvent & { sender?: { id: string; name: string } };
 function saved<T>(key: string): T | null { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } }
 
 export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
@@ -38,8 +41,9 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const { data: catalog, setData: setCatalog } = groups;
   // The room log is read from a cursor, so each check adds only newer events to what is shown.
   const cursor = useRef(0);
+  // The event stream announces new room events; this slow poll only covers a missed notice.
   const room = useResource<RoomView>(roomId ? `/groups/${encodeURIComponent(roomId)}` : null, {
-    pollMs: 3000,
+    pollMs: 30000,
     load: async (path, signal) => {
       const state = await api<GroupState>(path, { signal });
       // Read after the first request, once a room change has reset the cursor and the events.
@@ -61,6 +65,63 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     },
   });
   const state = room.data?.state ?? null;
+  // While a room is open, its stream asks the server to watch it, and a `group` notice names new events.
+  const reloadRoom = useRef(room.reload); reloadRoom.current = room.reload;
+  useEffect(() => {
+    if (!roomId) return;
+    // Notices that arrive while the room loads share one more load after it, instead of each
+    // restarting it. This room's own reload does nothing once another room is open.
+    const reload = reloadRoom.current;
+    let loading = false, again = false;
+    const refresh = () => {
+      if (loading) { again = true; return; }
+      loading = true;
+      void reload().finally(() => { loading = false; if (again) { again = false; refresh(); } });
+    };
+    const stream = changeStream(`/events?group=${encodeURIComponent(roomId)}`, refresh, undefined, {
+      // Every notice counts, even one at the cursor: the server also announces driver status
+      // changes, such as a new pending approval, that add no event.
+      group: data => {
+        try {
+          if ((JSON.parse(data) as { roomId?: string }).roomId === roomId) refresh();
+        } catch { refresh(); }
+      },
+    });
+    const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.close(); };
+    wake();
+    const retry = setInterval(wake, 45_000);
+    window.addEventListener('online', wake); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
+    return () => {
+      clearInterval(retry); stream.close();
+      window.removeEventListener('online', wake); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake);
+    };
+  }, [roomId]);
+  // Typing @ offers the room's assistants by handle or name.
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionList = useId();
+  const field = useRef<HTMLTextAreaElement>(null);
+  const caret = useRef<number | null>(null);
+  const suggestions = mention && state ? matchMembers(state.room.members, mention.query) : [];
+  const suggesting = suggestions.length > 0;
+  const chosen = suggestions[Math.min(mentionIndex, suggestions.length - 1)];
+  const findMention = (input: HTMLTextAreaElement) => {
+    const found = input.selectionStart === input.selectionEnd ? mentionAt(input.value, input.selectionStart) : null;
+    setMention(current => current?.start === found?.start && current?.query === found?.query ? current : found);
+    if (found?.start !== mention?.start) setMentionIndex(0);
+  };
+  const saveDraft = (text: string) => { setDraft(text); try { localStorage.setItem(`${key}:draft`, JSON.stringify(text)); } catch { setError('This browser cannot save your group draft.'); } };
+  const accept = (handle: string) => {
+    if (!mention) return;
+    const next = insertMention(draft, mention, handle);
+    caret.current = next.caret;
+    saveDraft(next.text); setMention(null);
+  };
+  useLayoutEffect(() => {
+    if (caret.current === null || !field.current) return;
+    field.current.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [draft]);
   useEffect(() => {
     cursor.current = 0; setEvents([]); setMore(false); setError(''); setThreadId('');
     setDraft(saved<string>(`${key}:draft`) || ''); setPending(saved<PendingMessage>(key));
@@ -115,15 +176,35 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     {!!catalog?.rooms.length && <div className="group-layout"><nav className="group-rooms" aria-label="Group chats">{catalog.rooms.map(room => <button key={room.room_id} disabled={busy} aria-current={roomId === room.room_id && !drafting ? 'page' : undefined} onClick={() => { setCreating(false); setNotice(''); setRoomId(room.room_id); }}>{room.name}<small>{room.members.length} assistants</small></button>)}{newGroup}</nav>
       <section aria-label="Group conversation">{drafting ? createForm : (state ? <><div className="group-heading"><div><h3>{state.room.name}</h3>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p></div>{state.driver_status?.working && <button disabled={busy || !writable} onClick={() => void act('stop', { requestId: crypto.randomUUID() })}><Icon name="stop" size={14} /> Stop discussion</button>}</div>
-        {messages.map(event => { const member = state.room.members.find(member => member.member_id === event.actor.id || member.member_id === event.payload.member_id); return <article className="group-message" key={event.event_id}><div className="message-attribution"><strong>{event.kind === 'message.user' ? 'Household member' : member?.display_name || member?.profile || event.actor.id}</strong><When value={event.created_at * 1000} /></div><MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''} />
+        {messages.map(event => { const member = state.room.members.find(member => member.member_id === event.actor.id || member.member_id === event.payload.member_id); return <article className="group-message" key={event.event_id}><div className="message-attribution"><strong>{event.kind === 'message.user' ? (event as Attributed).sender?.name || 'Household member' : member?.display_name || member?.profile || event.actor.id}</strong><When value={event.created_at * 1000} /></div><MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''} />
           {typeof event.payload.thread_id === 'string' && <button className="group-reply" disabled={busy || !!pending || !writable} onClick={() => setThreadId(event.payload.thread_id as string)}>Reply in thread</button>}</article>; })}
         {more && <button className="group-more" onClick={() => void room.reload()}>Load more messages</button>}
         {!messages.length && <p className="muted">Start a discussion. Use @handle to address an assistant.</p>}
         {state.driver_status?.pending_actions.map(actionItem => actionItem.kind === 'approval' ? <div className="approval-card" key={actionItem.task_id}><strong>{actionItem.approval?.description || actionItem.approval?.command || 'An assistant needs approval'}</strong><div className="actions">{(['once', 'deny'] as const).map(choice => <button key={choice} disabled={busy || !writable} onClick={() => void act('approve', { taskId: actionItem.task_id, memberId: actionItem.member_id, generation: actionItem.execution_generation, requestId: actionItem.request_id || actionItem.approval?.request_id, choice })}>{choice === 'once' ? 'Allow once' : 'Deny'}</button>)}</div></div> : <p key={actionItem.task_id} className="capability-note">Hermes cannot confirm a member's last turn. Review it in the native group client before retrying.</p>)}
         <form className="composer group-composer" onSubmit={event => { event.preventDefault(); void send(); }}>{threadId && <p className="group-thread">Replying in thread <button type="button" onClick={() => setThreadId('')}>New topic</button></p>}
           <label className="sr-only" htmlFor="group-message">Message the group</label>
-          <textarea id="group-message" rows={2} placeholder="Message the group… use @handle to address one assistant" value={pending?.text || draft} disabled={busy || !!pending || !writable} maxLength={16000} onChange={event => { setDraft(event.target.value); try { localStorage.setItem(`${key}:draft`, JSON.stringify(event.target.value)); } catch { setError('This browser cannot save your group draft.'); } }}
-            onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); } }} />
+          {suggesting && <ul className="mention-list" id={mentionList} role="listbox" aria-label="Assistants in this group">
+            {suggestions.map(member => <li key={member.member_id} id={`${mentionList}-${member.member_id}`} role="option" aria-selected={member === chosen}
+              onPointerDown={event => event.preventDefault()} onClick={() => accept(member.handle)}>
+              <strong>{member.display_name || member.profile}</strong><small>@{member.handle}</small></li>)}
+          </ul>}
+          <textarea ref={field} id="group-message" rows={2} placeholder="Message the group… use @handle to address one assistant" value={pending?.text || draft} disabled={busy || !!pending || !writable} maxLength={16000}
+            aria-autocomplete="list" aria-controls={suggesting ? mentionList : undefined}
+            aria-activedescendant={suggesting && chosen ? `${mentionList}-${chosen.member_id}` : undefined}
+            onChange={event => { saveDraft(event.target.value); findMention(event.target); }}
+            onSelect={event => findMention(event.currentTarget)} onBlur={() => setMention(null)}
+            onKeyDown={event => {
+              if (suggesting && !event.nativeEvent.isComposing) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setMentionIndex(index => (Math.min(index, suggestions.length - 1) + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length);
+                  return;
+                }
+                if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
+                if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
+              }
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
+            }} />
           <div className="composer-tools"><span role="status" className="group-status">{status}</span>
             {pending ? <button type="submit" className="primary" disabled={busy || !writable}>Retry same saved message</button>
               : <button type="submit" className="send-button" aria-label={busy ? 'Sending…' : 'Send to group'} disabled={busy || !writable || !draft.trim()}><Icon name="send" size={19} /></button>}</div>

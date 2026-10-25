@@ -1,15 +1,23 @@
 import { useEffect, useState } from "react";
 export type InstallEvent = Event & { prompt: () => Promise<void> };
-export function useMobile() {
-  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 620px)").matches);
+/** Whether a media query matches now, following changes such as a resize or a mouse plugged in. */
+export function useMediaQuery(media: string) {
+  const [matches, setMatches] = useState(() => matchMedia(media).matches);
   useEffect(() => {
-    const query = matchMedia("(max-width: 620px)");
-    const update = () => setMobile(query.matches);
+    const query = matchMedia(media);
+    const update = () => setMatches(query.matches);
+    update();
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
-  }, []);
-  return mobile;
+  }, [media]);
+  return matches;
 }
+export const useMobile = () => useMediaQuery("(max-width: 620px)");
+/**
+ * Whether a mouse or trackpad is attached, the closest a page can come to knowing a keyboard is.
+ * Touch-only phones and tablets have neither, so keyboard hints stay off there.
+ */
+export const useFinePointer = () => useMediaQuery("(any-pointer: fine)");
 /** How often a long-open tab or installed app asks for a newer build. Browsers only check on navigation. */
 export const UPDATE_CHECK_MS = 30 * 60_000;
 export interface AppUpdate {

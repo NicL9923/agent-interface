@@ -41,6 +41,9 @@ const paths = {
   sliders: "M4 7h9M18 7h2M4 17h3M12 17h8M15.5 4.5v5M9.5 14.5v5",
   plug: "M9 3v4M15 3v4M6.5 7h11v4a5.5 5.5 0 0 1-11 0ZM12 16.5V21",
   chevron: "M9.5 6l6 6-6 6",
+  "chevron-up": "M6 14.5l6-6 6 6",
+  "chevron-down": "M6 9.5l6 6 6-6",
+  keyboard: "M3.5 6.5h17v11h-17ZM7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8",
   download: "M12 4v11M7 10l5 5 5-5M5 20h14",
   external: "M13 5h6v6M19 5l-8 8M17 14v5H5V7h5",
   check: "M5 12.5l4.5 4.5L19 7.5",
@@ -59,6 +62,12 @@ const paths = {
   folder: "M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z",
   bell: "M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14ZM10 20.5a2 2 0 0 0 4 0",
   alert: "M12 4L2.8 19.5h18.4ZM12 10v4.2M12 17h.01",
+  copy: "M9 9h10v11H9ZM5 15V4h10",
+  share: "M12 15V4M8 8l4-4 4 4M5 12v7h14v-7",
+  bookmark: "M7 4h10v16l-5-4-5 4Z",
+  quote: "M5 11h4v6H5ZM5 11c0-3 1-5 4-6M14 11h4v6h-4ZM14 11c0-3 1-5 4-6",
+  up: "M6 15l6-6 6 6",
+  down: "M6 9l6 6 6-6",
 } as const;
 export type IconName = keyof typeof paths;
 const filledIcons: IconName[] = ["stop"];

@@ -214,7 +214,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     try {
       const value = await rpc('agent-interface.submit', {profile: input.botId, ...(state ? {session_id: state.session_id} : {}),
         request_id: input.requestId, sender_id: input.senderId, text: input.text + (references ? '\n' + references : ''),
-        attachments, steer, reviewed_interruption: input.reviewedInterruption === true});
+        attachments, steer, reviewed_interruption: input.reviewedInterruption === true,
+        // A retry answers its failed turn. Hermes refuses it under its submission lock if another
+        // turn started since the app checked, instead of steering the old question into that turn.
+        ...(input.retryOf !== undefined ? {require_idle: true} : {})});
       // A misadvertised older add-on must not be retried after possible admission.
       // Fall back to its old read checks for future sends, and recover participation now.
       if (fast && value.admission !== 'canonical') {
@@ -225,6 +228,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       return receipt(value);
     } catch (error) {
       if (error instanceof TransportError && error.rpcCode === 4094) throw httpError(409, interruptionPendingMessage, {code: 'interruption_pending'});
+      // Refused before admission: nothing reached the assistant.
+      if (input.retryOf !== undefined && error instanceof TransportError && error.rpcCode === 4091)
+        return {requestId: input.requestId, status: 'rejected', message: 'Another reply started before this retry, so it was not sent.'};
       return {requestId: input.requestId, status: 'uncertain', message: error instanceof Error ? error.message : 'Hermes response lost. Review before retrying.'};
     }
   }
@@ -321,6 +327,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     return {
       botId,
       sessionId: value.canonical_stored_session_id ?? value.stored_session_id ?? value.info?.stored_session_id ?? sid,
+      requestSessionId: sid,
       messages: cut ? shown.slice(cut.context) : shown,
       ...(cut ? {window: {earlier: cut.earlier, context: shown.slice(0, cut.context)}} : {}),
       activity: {state: value.app_interruption ? 'interrupted' : attention.length ? 'blocked' : activity, detail, runId},

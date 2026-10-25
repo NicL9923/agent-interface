@@ -149,7 +149,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/health": "none",
   "GET /api/health/ready": "none",
   "GET /api/bootstrap": "list",
-  "GET /api/events": "none",
+  // ?group=<roomId> watches a group chat, checked like the room's own routes.
+  "GET /api/events": "group",
   "POST /api/connection/retry": "none",
   "PATCH /api/preferences": "none",
   "PUT /api/preferences/models": "none",
@@ -160,7 +161,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/files/:id": "file",
   "GET /api/today": "list",
   "PUT /api/today/seen": "none",
-  "GET /api/search": "list",
+  // Optional botId narrows the search to one assistant; without it, only visible ones are searched.
+  "GET /api/search": "query",
   "GET /api/saved": "list",
   "POST /api/saved": "body",
   "DELETE /api/saved/:id": "none",
@@ -206,6 +208,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/push/subscriptions": "none",
   "DELETE /api/push/subscriptions": "none",
   "POST /api/push/test": "body",
+  // The token names the assistant; the handler checks this person still sees it.
+  "POST /api/push/actions": "none",
   "GET /api/native/push/config": "none",
   "PUT /api/native/push/device": "none",
   "DELETE /api/native/push/device": "none",

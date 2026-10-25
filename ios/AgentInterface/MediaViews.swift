@@ -310,6 +310,16 @@ struct MarkdownTableView: View {
         }
       }.padding(8)
     }.accessibilityLabel("Table")
+      .contextMenu {
+        Button("Copy as Markdown", systemImage: "doc.on.doc") { copy(table.markdown, "Table copied as Markdown.") }
+        Button("Copy as CSV", systemImage: "tablecells") { copy(table.csv, "Table copied as CSV.") }
+      }
+      .accessibilityAction(named: "Copy as Markdown") { copy(table.markdown, "Table copied as Markdown.") }
+      .accessibilityAction(named: "Copy as CSV") { copy(table.csv, "Table copied as CSV.") }
+  }
+  private func copy(_ text: String, _ announcement: String) {
+    UIPasteboard.general.string = text
+    AccessibilityNotification.Announcement(announcement).post()
   }
   static func alignment(_ value: MarkdownTable.Alignment) -> HorizontalAlignment {
     switch value {
@@ -324,6 +334,7 @@ struct MarkdownCodeBlock: View {
   var code: String
   var language: String?
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.markdownSettled) private var settled
   @State private var copied = false
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -334,7 +345,12 @@ struct MarkdownCodeBlock: View {
       }.padding(.horizontal, 12).padding(.vertical, 8)
       Rectangle().fill(Palette.line).frame(height: 1)
       ScrollView(.horizontal) {
-        Text(code).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(14)
+        // Colored once the block can no longer change; a block still streaming stays plain.
+        Group {
+          if let colored = MarkdownCache.shared.highlighted(code, language: language, settled: settled, style: CodeTheme.style) {
+            Text(colored)
+          } else { Text(code) }
+        }.font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(14)
       }.accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
       if copied {
         Text("Code copied.").font(.caption).foregroundStyle(.secondary).padding([.horizontal, .bottom], 14)
@@ -346,5 +362,31 @@ struct MarkdownCodeBlock: View {
     UIPasteboard.general.string = code
     copied = true
     AccessibilityNotification.Announcement("Code copied.").post()
+  }
+}
+
+/// Code colors in the app's palette: each holds at least 4.5:1 on the raised code background in
+/// light and dark, and resolves with the appearance, so one cached string serves both.
+enum CodeTheme {
+  static let keyword = Color.adaptive(light: "#8A3FA0", dark: "#D7A6E8")
+  static let string = Color.adaptive(light: "#86561A", dark: "#E6C07B")
+  static let number = Color.adaptive(light: "#1F6A9E", dark: "#8CC4F0")
+  static let type = Color.adaptive(light: "#246F59", dark: "#8BD2B2")
+  static let attribute = Color.adaptive(light: "#9B4D2A", dark: "#F0A984")
+  static func style(_ kind: SyntaxToken.Kind) -> AttributeContainer {
+    var container = AttributeContainer()
+    switch kind {
+    case .keyword: container.foregroundColor = keyword
+    case .string: container.foregroundColor = string
+    case .number, .meta: container.foregroundColor = number
+    case .type: container.foregroundColor = type
+    case .attribute: container.foregroundColor = attribute
+    case .comment:
+      container.foregroundColor = Palette.muted
+      container.inlinePresentationIntent = .emphasized
+    case .added: container.foregroundColor = Palette.accent
+    case .removed: container.foregroundColor = Palette.danger
+    }
+    return container
   }
 }

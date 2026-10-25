@@ -34,7 +34,7 @@ export async function installNativeAuth(app: FastifyInstance, store: Store, conf
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in to WildBots</title>
 <style nonce="${scriptNonce}">
-body{font:17px system-ui;max-width:480px;margin:10vh auto;padding:24px;color:#18332a;background:#f6f8f4}
+body{font:1.0625rem system-ui;max-width:480px;margin:10vh auto;padding:24px;color:#18332a;background:#f6f8f4}
 button{display:block;margin:20px 0;padding:12px}#error{color:#a12626}
 </style></head><body>
 <h1>Connect WildBots</h1><p>Choose the household account to use in the iOS app.</p>

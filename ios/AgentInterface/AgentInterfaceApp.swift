@@ -111,9 +111,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
     let tags = (userInfo["clear"] as? [String: Any])?["tags"] as? [String] ?? []
-    guard !tags.isEmpty else { completionHandler(.noData); return }
+    let badge = AppBadge.cleared(userInfo)
+    guard !tags.isEmpty || badge != nil else { completionHandler(.noData); return }
     Task { @MainActor in
-      await NotificationController.shared.removeDelivered(tags: Set(tags))
+      if !tags.isEmpty { await NotificationController.shared.removeDelivered(tags: Set(tags)) }
+      // The server's count, which also holds decisions only it knows about. While the app is open
+      // it shows its own count, which `AppBadgeSync` keeps.
+      if let badge, UIApplication.shared.applicationState != .active { try? await UNUserNotificationCenter.current().setBadgeCount(badge) }
       completionHandler(.newData)
     }
   }

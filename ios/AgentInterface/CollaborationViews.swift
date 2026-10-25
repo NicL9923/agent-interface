@@ -88,9 +88,24 @@ struct GroupAccepted: Decodable { var accepted: Bool }
 struct GroupApproved: Decodable { var approved: Bool }
 struct GroupEventPayload: Decodable { var text: String?; var thread_id: String?; var member_id: String? }
 struct GroupActor: Decodable { var kind: String?; var id: String? }
+/// The household member who sent a `message.user` event through this app. Older servers omit it.
+struct GroupSender: Decodable, Equatable { var id: String; var name: String }
 struct GroupEvent: Decodable, Identifiable {
   var event_id: String; var seq: Int; var kind: String; var created_at: Double; var actor: GroupActor?; var payload: GroupEventPayload
+  var sender: GroupSender? = nil
   var id: String { event_id }
+  private enum CodingKeys: String, CodingKey { case event_id, seq, kind, created_at, actor, payload, sender }
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    event_id = try container.decode(String.self, forKey: .event_id)
+    seq = try container.decode(Int.self, forKey: .seq)
+    kind = try container.decode(String.self, forKey: .kind)
+    created_at = try container.decode(Double.self, forKey: .created_at)
+    actor = try container.decodeIfPresent(GroupActor.self, forKey: .actor)
+    payload = try container.decode(GroupEventPayload.self, forKey: .payload)
+    // A sender this version cannot read is left out rather than failing the page.
+    sender = try? container.decodeIfPresent(GroupSender.self, forKey: .sender)
+  }
 }
 /// The limits the web enforces as input `maxLength`, so what is sent is what was typed.
 enum GroupLimits {
@@ -336,7 +351,10 @@ struct GroupConversationView: View {
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       await load()
     }
-    .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: .seconds(3)) { if !missing { await load() } }
+    // The server announces new events on the app event stream; this slow poll only covers a
+    // stream that failed unnoticed, and the room's state.
+    .watchingGroup(room.id, cursor: { cursor }) { if !missing { await load() } }
+    .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: Self.fallbackInterval) { if !missing { await load() } }
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -348,6 +366,15 @@ struct GroupConversationView: View {
         Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption).foregroundStyle(.secondary)
         Button("Retry same saved message") { Task { await send() } }.buttonStyle(.borderedProminent).disabled(busy || !canSend || !store.connected)
       } else {
+        if let query = GroupMentions.query(in: draft), canSend {
+          let members = GroupMentions.suggestions(for: query, members: room.members)
+          if !members.isEmpty {
+            MentionSuggestions(members: members) { member in
+              draft = GroupLimits.clip(GroupMentions.insert(member, into: draft), to: GroupLimits.message)
+              AccessibilityNotification.Announcement("Mentioned \(member.display_name ?? member.profile)").post()
+            }
+          }
+        }
         HStack(alignment: .bottom, spacing: 10) {
           TextField("Message the group… use @handle to address one assistant", text: Binding(get: { draft }, set: { draft = GroupLimits.clip($0, to: GroupLimits.message) }), axis: .vertical).lineLimit(1...6)
             .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
@@ -366,8 +393,15 @@ struct GroupConversationView: View {
     }.padding(12).background(.regularMaterial)
   }
   private func author(_ event: GroupEvent) -> String {
-    if event.kind == "message.user" { return "Household member" }
+    if event.kind == "message.user" { return Self.memberName(event) }
     return Self.assistantName(event, in: room)
+  }
+  /// While the room is watched, new events arrive by notice; this poll is the fallback.
+  static let fallbackInterval: Duration = .seconds(30)
+  /// The household member who wrote a message, when the server recorded it.
+  static func memberName(_ event: GroupEvent) -> String {
+    let name = event.sender?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return name.isEmpty ? "Household member" : name
   }
   /// Matches the author by the event's actor as well as its payload, like the web.
   static func assistantName(_ event: GroupEvent, in room: GroupRoom) -> String {

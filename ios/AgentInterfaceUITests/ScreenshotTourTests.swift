@@ -145,6 +145,19 @@ import XCTest
     XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5))
     try capture("03b-home-working")
 
+    // Transcript states: a finished turn's folded work with a colored code block and a table, the
+    // question card, and a failed turn offering Retry.
+    for (environment, ready, name) in [
+      (["AGENT_INTERFACE_UI_WORK": "1"], "turnWork", "21-conversation-work"),
+      (["AGENT_INTERFACE_UI_QUESTION": "2"], "Send answers", "22-question-card"),
+      (["AGENT_INTERFACE_UI_RETRY": "1"], "retryTurn", "23-failed-turn-retry"),
+    ] {
+      app.terminate()
+      app = launch(environment: environment)
+      XCTAssertTrue(app.buttons[ready].waitForExistence(timeout: 15))
+      try capture(name)
+    }
+
     // Without the fixture, a reset launch shows the first-run connection screen.
     app.terminate()
     let fresh = XCUIApplication()
@@ -162,8 +175,9 @@ import XCTest
     try capture("20b-assistant-card-large-text")
   }
 
-  private func launch(liveActivity: Bool = false, textSize: String? = nil) -> XCUIApplication {
+  private func launch(liveActivity: Bool = false, textSize: String? = nil, environment: [String: String] = [:]) -> XCUIApplication {
     let app = XCUIApplication()
+    for (key, value) in environment { app.launchEnvironment[key] = value }
     if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"

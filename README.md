@@ -54,6 +54,12 @@ Reading a chat on one device stops its pending notifications to the others and
 removes its delivered ones from your iPhone and iPad. A browser tab counts while
 it is focused and has had input in the last five minutes.
 
+The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
+show how many assistants have unread messages or a decision waiting for you. A web
+approval notification offers **Review** and **Decline** where the browser supports
+notification buttons, as the iOS notification does. Decline works without opening
+the app and can only decline that one request.
+
 ## Run locally
 
 Use Node 24.21 or 26.10 and npm. `.node-version` selects the tested Node 24 LTS
@@ -135,7 +141,8 @@ supported services, one-time hosting configuration and device limitations.
 
 The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
 browser for all assistants, with human takeover for every household member and a
-real VPS terminal for terminal administrators.
+real VPS terminal for terminal administrators. The iOS app shows the desktop on its
+own Computer screen with Take over and Hand back; the terminal still opens in Safari.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -182,9 +189,12 @@ across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
 send. **Listen to reply** reads the latest reply with Hermes speech on web and iOS.
 
-Hermes questions on web and iOS accept a suggested answer or **Write my own answer**.
+Hermes questions on web and iOS show each suggested answer as a card to tap, with
+**Write my own answer** last. A question that allows several answers shows checkboxes.
+On a computer, number keys pick an option. Choosing an answer moves on to the next
+question, and Send answers waits until every question has one.
 
-**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
+**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants as you type. A match in an assistant's current conversation opens that chat at the message. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
@@ -194,7 +204,7 @@ An empty conversation on web and iOS offers a role discussion using the assistan
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 
-The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9.
+The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9 and any destination with Cmd+K.
 
 Assistant settings > **Memory** lets you inspect, correct and forget native
 Hermes profile memory. Existing conversations keep their memory snapshot until
@@ -227,8 +237,9 @@ Routine notifications open this history directly. Results stay within the select
 Hermes profile; a run with only a saved preview says so.
 
 **Group chats** lets 2–6 local assistants discuss a task in one room. Create a
-named group, address assistants with `@handle`, reply in a thread, approve a
-pending action or stop the discussion. Hermes owns the persistent coordinator.
+named group, address assistants with `@handle` (typing `@` suggests members),
+reply in a thread, approve a pending action or stop the discussion. Messages show
+which household member sent them, and new messages arrive live. Hermes owns the persistent coordinator.
 If that coordinator is unavailable, rooms remain readable and sending is disabled.
 After an uncertain send or creation, retry the saved request to check its status
 without creating a duplicate. Conversation activity keeps bot messages, scheduled-job handoffs, subagents,
@@ -243,6 +254,40 @@ login vault. Native login, code, vault-unlock and secret requests appear inline
 with masked fields, outside chat and drafts. Ownership and source controls follow
 Hermes. See [passwords and logins](docs/PasswordsAndLogins.md) for storage scope,
 external password managers and uncertain-request recovery.
+
+## Chatting
+
+Each finished reply offers **Copy reply**, **Share reply** where the device can share,
+**Save reply** and **Quote in reply**. On a computer they appear when you point at or
+tab to the reply; on touch screens and in the iOS long-press menu they are always
+there. Select part of a web reply to quote just that part. Code blocks are colored by
+language, and tables can be copied as Markdown or CSV.
+
+When a reply fails, **Retry** under it sends your message again without touching
+your draft. A failed turn can be retried once, by anyone, from any device: a second
+tap, tab or phone gets the first retry's result instead of starting another turn.
+
+After you send, your message moves near the top and the reply grows below it.
+Scrolling up stops the view from following; it follows again once you return to
+the end. Each finished turn folds its tool calls and delegated work into one row,
+such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the
+assistant works, one live line shows its current tool and, in Advanced, its latest
+reasoning. Decisions and requests for input stay outside the fold.
+
+**Find in chat** (Cmd/Ctrl+F on web, Find on iOS) matches loaded messages at once and
+adds older matches from the conversation's history; choosing one opens the chat at
+that message. A status area above the message box gathers send problems, the
+interrupted-task review, waiting decisions with **Review**, and connection trouble,
+most urgent first.
+
+On a computer, Cmd/Ctrl+K opens a command palette for assistants, Today, Group chats,
+Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
+installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
+reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K
+"Go to…" and Cmd+1 to 9. In an empty message box, Up recalls your earlier messages
+in that chat. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning
+or moving an assistant on home shows Undo for five seconds. Web text follows the
+browser's text size setting.
 
 ## Hermes updates and activity
 
@@ -272,7 +317,7 @@ describes recovery.
 Conversations show an animated avatar inline after the latest message while
 Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
-Done status. Web tool calls and delegated work appear in counted accordions.
+Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning
 Hermes exposes. Approval buttons show submission feedback immediately. Stop
 replaces Send while a response is active and the draft has no text or attachments;

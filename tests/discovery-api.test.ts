@@ -54,3 +54,14 @@ it('locates a live reply before saving and re-resolves an old saved pointer on o
   expect((await s.app.inject({url:'/api/bots/private/history/history?messageId=stable-uid',headers:s.headers})).statusCode).toBe(404);
   expect(s.experienceRequest.mock.calls.length).toBe(count);
 });
+it('narrows a search to one visible assistant and refuses a hidden or unknown one',async()=>{
+  const s=await setup();
+  const response=await s.app.inject({url:'/api/search?q=dinners&botId=shared',headers:s.headers});
+  expect(response.statusCode).toBe(200);expect(response.json().hits.map((hit:{botId:string})=>hit.botId)).toEqual(['shared','shared']);
+  expect(s.experienceRequest).toHaveBeenCalledTimes(1);expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});
+  for(const botId of ['private','missing']){
+    const refused=await s.app.inject({url:`/api/search?q=dinners&botId=${botId}`,headers:s.headers});
+    expect([refused.statusCode,refused.json().code]).toEqual([404,'assistant_not_found']);
+  }
+  expect(s.experienceRequest).toHaveBeenCalledTimes(1);
+});

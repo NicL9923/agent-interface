@@ -34,11 +34,10 @@ struct PreferencesView: View {
               detail: store.connected ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
               status: store.connected ? Palette.accent : Palette.attention)
           }.accessibilityIdentifier("Hermes updates")
-          if let url = try? store.api?.url("/?computer=1") {
-            Link(destination: url) {
-              settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
-            }.disabled(store.computerStatus?.available == false).accessibilityIdentifier("sharedComputer")
-          }
+          // The desktop opens in the app; its screen links to the terminal, which stays in Safari.
+          NavigationLink { ComputerView() } label: {
+            settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
+          }.disabled(store.computerStatus?.available == false).accessibilityIdentifier("sharedComputer")
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
           }.accessibilityIdentifier("Integrations")

@@ -188,6 +188,19 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     rpcErrors.set('agent-interface.submit',{code:4094,message:'Review interruption'});
     await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
   });
+  it('fences a retry to an idle assistant and reports a refusal without admission', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('accepted');
+    expect(calls[0].params).not.toHaveProperty('require_idle');
+    calls=[];
+    expect((await runtime.submit({...input(),text:'Again',retryOf:'m1'})).status).toBe('accepted');
+    expect(calls[0].params).toMatchObject({require_idle:true,steer:false});
+    rpcErrors.set('agent-interface.submit',{code:4091,message:'Started another turn'});
+    expect(await runtime.submit({...input(),text:'Again',retryOf:'m1'})).toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
+    // Any other send keeps its uncertain receipt, since admission may have happened.
+    expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('uncertain');
+  });
   it('lets native answers prove staleness without a second open', async () => {
     rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];
     beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
