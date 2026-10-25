@@ -97,8 +97,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       ({ messages: result.messages, earlier } = historyWindow(shown, window));
       ({ files: result.files, earlierFiles } = windowFiles(shown, earlier, result.files));
     }
+    // Retry stays settled on every device once anyone retried this failure.
+    const claims = result.activity.state === "failed" ? store.retryClaims(req.params.id, result.activity.runId ?? "") : [];
+    const retried = result.messages.findLast(message => claims.some(claim => claim.retryOf === message.id));
+    const retry = claims.find(claim => claim.retryOf === retried?.id);
     return {
       ...result,
+      ...(retry ? { retry: { ...retry.receipt, retryOf: retry.retryOf } } : {}),
       ...(earlier !== undefined ? { earlier, earlierFiles } : {}),
       draft: store.draft(signedIn(req).id, req.params.id),
       readPosition: store.personal(
@@ -211,6 +216,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const interruptionRejected = previous?.reason === "interruption_pending";
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
+      // Every device derives one ID for retrying a failed turn, so another person, or a client
+      // that copied the text differently, follows the request already recorded.
+      if (input.retryOf !== undefined && previous.input.retryOf === input.retryOf && previous.input.botId === input.botId
+        && JSON.stringify(previous.input) !== JSON.stringify(input))
+        return previous.receipt;
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw httpError(
           409,
@@ -254,7 +264,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         conversation?.activity.state ?? "idle",
       );
     if (steering || fast) await requireCapability("steering");
-    const intent = store.intent(input);
+    // The first retry of a failed turn claims it; any later one, from anyone, follows that request.
+    const intent = input.retryOf !== undefined
+      ? store.claimRetry(conversation!.activity.runId ?? "", input as Submission & { retryOf: string })
+      : store.intent(input);
+    if ("claimed" in intent) return intent.claimed;
     if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
     if (conversation?.activity.runId)
       store.participate(conversation.activity.runId, input.senderId);
@@ -281,7 +295,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Only its sender, while they can still see the assistant, learns anything about a recorded
     // submission. An unrecorded ID is a client's own unguessable pending ID, kept checkable,
     // which lets a former sender check their own message after its assistant is deleted.
-    const previous = recorded && recorded.input.senderId === signedIn(req).id && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
+    // A retry's receipt belongs to its failed turn, which anyone who sees the assistant can retry and follow.
+    const previous = recorded && (recorded.input.senderId === signedIn(req).id || recorded.input.retryOf !== undefined)
+      && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
     if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
     try {
       if ((await runtime.capabilities()).idempotency.supported) {

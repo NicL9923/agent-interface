@@ -110,4 +110,66 @@ describe("retrying a failed turn", () => {
     const { send } = await installation({ activity: { state: "interrupted" } });
     expect((await send({ text: "Order more feed", retryOf: "u2" })).statusCode).toBe(409);
   });
+
+  describe("one retry per failed turn", () => {
+    const failed = { activity: { state: "failed" as const, runId: "run-1" } };
+    it("admits the first retry of a failed run and answers later ones, with other IDs, with its receipt", async () => {
+      const submit = vi.fn(async (input: Submission) => ({ requestId: input.requestId, status: "uncertain" as const }));
+      const { send } = await installation(failed, { submit });
+      const first = (await send({ text: "Order more feed", retryOf: "u2" })).json();
+      const second = await send({ text: "Order more feed", retryOf: "u2" });
+      expect(second.statusCode).toBe(200);
+      // The later request follows the first, by its ID.
+      expect(second.json()).toEqual(first);
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("admits only one of two retries that arrive together, whichever claims the turn first", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>(resolve => { open = resolve; });
+      const { submit, read, send } = await installation(failed);
+      const reading = read.getMockImplementation()!;
+      // Both reads are in flight before either request claims the turn.
+      read.mockImplementation(async (...args) => { await gate; return reading(...args); });
+      const both = Promise.all([send({ text: "Order more feed", retryOf: "u2" }), send({ text: "Order more feed", retryOf: "u2" })]);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      open();
+      const receipts = (await both).map(response => response.json());
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(receipts[0].requestId).toBe(receipts[1].requestId);
+    });
+
+    it("lets another person's retry of the same failure follow it, by the same or another ID, and see its receipt", async () => {
+      const { app, submit, send } = await installation(failed);
+      const first = (await send({ text: "Order more feed", retryOf: "u2" })).json();
+      const other = await localLogin(app, origin, "two");
+      const post = (requestId: string) => app.inject({ method: "POST", url: "/api/bots/shared/messages", headers: other,
+        payload: { requestId, text: "Order more feed", attachments: [], retryOf: "u2" } });
+      for (const requestId of [first.requestId, randomUUID()]) {
+        const followed = await post(requestId);
+        expect(followed.statusCode).toBe(200);
+        expect(followed.json()).toMatchObject({ requestId: first.requestId, status: "accepted" });
+      }
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect((await app.inject({ url: `/api/submissions/${first.requestId}`, headers: other })).json()).toMatchObject({ status: "accepted", runId: "run" });
+      // An ordinary message's receipt stays its sender's.
+      const own = (await send({ text: "Something else" })).json();
+      expect((await app.inject({ url: `/api/submissions/${own.requestId}`, headers: other })).json().status).toBe("uncertain");
+    });
+
+    it("tells every reader of the failed conversation about the claim, and takes a new retry once the retried message fails again", async () => {
+      const { app, headers, submit, read, send } = await installation(failed);
+      const first = (await send({ text: "Order more feed", retryOf: "u2" })).json();
+      const page = (await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers })).json();
+      expect(page.retry).toEqual({ ...first, retryOf: "u2" });
+      // Hermes ran the retried message as a new one, which failed in its own run.
+      const again = [...history, { id: "u3", role: "user" as const, text: "Order more feed" }];
+      read.mockImplementation(async (botId: string) => conversationFixture({ botId, messages: again, activity: { state: "failed", runId: "run-2" } }));
+      expect((await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers })).json()).not.toHaveProperty("retry");
+      const next = (await send({ text: "Order more feed", retryOf: "u3" })).json();
+      expect(next.requestId).not.toBe(first.requestId);
+      expect(submit).toHaveBeenCalledTimes(2);
+    });
+  });
 });
+

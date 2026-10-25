@@ -130,6 +130,8 @@ export class Store {
   saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) { return this.presentations.saveAvatar(...args); }
   // submissions
   intent(...args: Parameters<SubmissionRepository["intent"]>) { return this.submissions.intent(...args); }
+  claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) { return this.submissions.claimRetry(...args); }
+  retryClaims(...args: Parameters<SubmissionRepository["retryClaims"]>) { return this.submissions.retryClaims(...args); }
   submission(...args: Parameters<SubmissionRepository["submission"]>) { return this.submissions.submission(...args); }
   submissionForMessage(...args: Parameters<SubmissionRepository["submissionForMessage"]>) { return this.submissions.submissionForMessage(...args); }
   pending(...args: Parameters<SubmissionRepository["pending"]>) { return this.submissions.pending(...args); }

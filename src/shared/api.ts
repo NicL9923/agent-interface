@@ -38,6 +38,11 @@ export type ConversationPage = Omit<Conversation, "window"> & {
   earlierFiles?: number;
   draft: SavedDraft | null;
   readPosition: ReadPosition | null;
+  /**
+   * After a failed turn: the request that already retried it, from any device or person, with
+   * its current receipt. `retryOf` names the retried message.
+   */
+  retry?: SubmissionReceipt & { retryOf: string };
 };
 export interface MessageRequest {
   requestId: string;

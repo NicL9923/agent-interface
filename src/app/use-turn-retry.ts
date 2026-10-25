@@ -1,32 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import type { FileRef, Message, SubmissionReceipt } from "../shared/types";
+import type { Message, SubmissionReceipt } from "../shared/types";
 import type { MessageRequest } from "../shared/api";
+import { retryRequestId } from "../shared/retry-id";
 import { ApiError, request as apiRequest } from "../client-api";
-import { localRead, localRemove, localSave, retryKey } from "./storage";
 import type { SavedConversation } from "./storage";
 import { retryTarget } from "./transcript-logic";
 
-/**
- * A retry of a failed turn, saved before it is sent and kept under its request ID until Hermes's
- * receipt settles it. It lives apart from the composer's draft and submission, which it never
- * reads or changes.
- */
-export type RetrySubmission = {
-  requestId: string;
-  botId: string;
-  text: string;
-  attachments: FileRef[];
-  /** The user message it retries. */
-  retryOf: string;
-  /** The failed run it retried, so Retry stays hidden for that run once Hermes accepts. */
-  runId?: string;
+/** What this view knows about the retry of one failed turn. */
+type Attempt = {
+  /** The failed turn: person, assistant, retried message and failed run. */
+  turn: string;
+  state: "sending" | "checking" | "settled";
+  /** The request followed: this turn's own ID, or the one that claimed the turn first. */
+  requestId?: string;
 };
+// Receipt checks start every 2 seconds and slow to every 30 while nothing settles them.
+const firstCheck = 2000, slowestCheck = 30000;
 
 /**
- * Retry for a failed turn: resends the person's latest message as a new request naming it. A
- * request whose outcome is unknown, such as after a lost response, stays saved through navigation
- * and reloads and is checked by its ID until a receipt settles it. Retrying it again sends the same
- * request, so a delayed original and the retry can never run the turn twice.
+ * Retry for a failed turn: resends the person's latest message as a request naming it. Every
+ * device, tab and reload derives the same request ID for the same failed turn, and the server
+ * admits one retry per failed turn, so a lost response, a second tab or another person can never
+ * run it twice. The server's record of a retry, from the conversation or a receipt, settles
+ * Retry; one whose outcome is unknown is checked by its ID until a receipt settles it or the
+ * conversation moves on. The composer's draft and submission are never read or changed.
  */
 export function useTurnRetry({ botId, userId, canonical, blocked, resendable, report }: {
   botId: string;
@@ -37,86 +34,82 @@ export function useTurnRetry({ botId, userId, canonical, blocked, resendable, re
   resendable: boolean;
   report(message: string): void;
 }) {
-  const key = userId && botId ? retryKey(userId, botId) : undefined;
-  const [saved, setSaved] = useState<RetrySubmission | null>(null);
-  const [sending, setSending] = useState(false);
-  const [retried, setRetried] = useState<{ messageId: string; runId?: string } | null>(null);
-  // State belongs to the person and assistant on screen; work for another one only updates storage.
-  const keyRef = useRef(key);
-  keyRef.current = key;
+  const target = canonical?.botId === botId && !blocked ? retryTarget(canonical.messages, canonical.activity.state) : undefined;
+  const runId = canonical?.activity.runId ?? "";
+  const turn = target ? [userId ?? "", botId, target.id, runId].join("\u0000") : undefined;
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  // Results for a turn no longer on screen, such as another person's or assistant's, change nothing.
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
   const reportRef = useRef(report);
   reportRef.current = report;
-  useEffect(() => {
-    setSaved(key ? localRead<RetrySubmission>(key) : null);
-    setSending(false);
-    setRetried(null);
-  }, [key]);
-  // Forgets a retry only while storage still holds this one, never a newer retry saved since.
-  const forget = (storageKey: string, request: RetrySubmission) => {
-    if (localRead<RetrySubmission>(storageKey)?.requestId === request.requestId) localRemove(storageKey);
-    if (keyRef.current === storageKey) setSaved(current => current?.requestId === request.requestId ? null : current);
-  };
-  const settle = (storageKey: string, request: RetrySubmission, result: SubmissionReceipt | null) => {
-    if (result?.status === "accepted") {
-      forget(storageKey, request);
-      if (keyRef.current === storageKey) setRetried({ messageId: request.retryOf, runId: request.runId });
-    } else if (result?.status === "rejected" || result?.status === "interrupted") {
-      forget(storageKey, request);
-      if (keyRef.current === storageKey) reportRef.current(result.message || "Hermes didn't take the retry. Try again in a moment.");
+  const sending = useRef(false);
+  const local = attempt?.turn === turn ? attempt : undefined;
+  // Anyone's retry of this failure, as the server recorded it.
+  const claim = target && canonical?.retry?.retryOf === target.id ? canonical.retry : undefined;
+  const settled = local?.state === "settled" || !!claim && claim.status !== "uncertain";
+  const checking = !settled && local?.state !== "sending" && (local?.state === "checking" || claim?.status === "uncertain");
+  const followed = local?.requestId ?? claim?.requestId;
+  const settle = (forTurn: string, result: SubmissionReceipt) => {
+    if (turnRef.current !== forTurn) return;
+    if (result.status === "uncertain") {
+      setAttempt({ turn: forTurn, state: "checking", requestId: result.requestId });
+      return;
     }
+    setAttempt({ turn: forTurn, state: "settled", requestId: result.requestId });
+    // A refused retry keeps its ID, which Hermes refuses again, so the message box sends it anew.
+    if (result.status !== "accepted")
+      reportRef.current(result.message || "Hermes didn't take the retry. Send the message again from the message box.");
   };
-  // An unsettled retry is checked by its ID, never sent as a new one, until a receipt settles it.
+  // Checked by its ID, never sent as a new request, until a receipt settles it or the turn changes.
   useEffect(() => {
-    if (!saved || sending || !key) return;
-    let live = true, loading = false;
+    if (!checking || !followed || !turn) return;
+    let live = true, delay = firstCheck, timer: ReturnType<typeof setTimeout> | undefined;
     const check = async () => {
-      if (loading || navigator.onLine === false || document.visibilityState === "hidden") return;
-      loading = true;
-      try {
-        const result = await apiRequest("GET /submissions/:id", { params: { id: saved.requestId } });
-        if (live) settle(key, saved, result);
-      } catch {
-        /* It stays saved until a reliable receipt. */
-      } finally { loading = false; }
+      if (navigator.onLine !== false && document.visibilityState !== "hidden") {
+        try {
+          const result = await apiRequest("GET /submissions/:id", { params: { id: followed } });
+          if (!live) return;
+          if (result.status !== "uncertain") { settle(turn, result); return; }
+        } catch {
+          /* Unconfirmed until a reliable receipt. */
+        }
+      }
+      if (!live) return;
+      timer = setTimeout(() => void check(), delay);
+      delay = Math.min(delay * 2, slowestCheck);
     };
     void check();
-    const timer = setInterval(() => void check(), 2000);
-    return () => { live = false; clearInterval(timer); };
-  }, [saved, sending, key]);
-  const target = canonical?.botId === botId && !blocked ? retryTarget(canonical.messages, canonical.activity.state) : undefined;
-  const runId = canonical?.activity.runId;
-  const message = target && !(retried?.messageId === target.id && retried.runId === runId) ? target : undefined;
-  // The saved retry of this message, still waiting for its receipt.
-  const unsettled = message && saved?.retryOf === message.id ? saved : null;
+    return () => { live = false; clearTimeout(timer); };
+  }, [checking, followed, turn]);
   const run = async (original: Message) => {
-    if (!key || sending) return;
-    const previous = saved?.retryOf === original.id ? saved : null;
-    if (previous && !resendable) return;
-    const storageKey = key;
-    const request: RetrySubmission = previous ?? {
-      requestId: crypto.randomUUID(), botId, text: original.text, attachments: original.files ?? [], retryOf: original.id, runId,
-    };
-    // Saved before it is sent, so a lost response or a reload still knows its ID.
-    if (!previous) localSave(storageKey, request);
-    setSaved(request);
-    setSending(true);
-    // `retryOf` names the message, and a retry never carries a draft revision.
-    const body: MessageRequest = { requestId: request.requestId, text: request.text, attachments: request.attachments, retryOf: request.retryOf,
-      ...(previous ? { reviewedUncertain: true } : {}) };
+    if (!turn || sending.current || checking && !resendable) return;
+    const forTurn = turn, again = checking;
+    sending.current = true;
+    setAttempt({ turn: forTurn, state: "sending", requestId: followed });
+    let requestId = followed;
     try {
-      settle(storageKey, request, await apiRequest("POST /bots/:id/messages", { params: { id: request.botId }, body }));
+      requestId ??= await retryRequestId(botId, original.id, runId);
+      // `retryOf` names the message, and a retry never carries a draft revision.
+      const body: MessageRequest = { requestId, text: original.text, attachments: original.files ?? [], retryOf: original.id,
+        ...(again ? { reviewedUncertain: true } : {}) };
+      settle(forTurn, await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body }));
     } catch (cause) {
+      if (turnRef.current !== forTurn) return;
       // Only a first attempt the server refused outright never reached Hermes. Anything else may
-      // have, so its ID stays saved and is checked.
-      if (!previous && cause instanceof ApiError && cause.status < 500) {
-        forget(storageKey, request);
-        if (keyRef.current === storageKey) reportRef.current(cause.message);
-      } else if (keyRef.current === storageKey) {
-        reportRef.current("Hermes hasn't confirmed the retry yet. It's being checked; Retry sends the same request again.");
+      // have, so it is checked by its ID.
+      if (!again && (!requestId || cause instanceof ApiError && cause.status < 500)) {
+        setAttempt(null);
+        reportRef.current(cause instanceof Error ? cause.message : "Hermes didn't take the retry. Try again in a moment.");
+      } else {
+        setAttempt({ turn: forTurn, state: "checking", requestId });
+        reportRef.current(resendable
+          ? "Hermes hasn't confirmed the retry yet. It's being checked; Retry sends the same request again, so it can't run twice."
+          : "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box.");
       }
     } finally {
-      if (keyRef.current === storageKey) setSending(false);
+      sending.current = false;
     }
   };
-  return { message, busy: sending, checking: !!unsettled && !sending, resendable, run };
+  return { message: settled ? undefined : target, busy: local?.state === "sending", checking, resendable, run };
 }
