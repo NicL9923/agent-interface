@@ -49,6 +49,11 @@ export interface MessageRequest {
   reviewedUncertain?: boolean;
   /** The draft revision this message was written on. */
   draftBaseRevision?: number;
+  /**
+   * The id of the user message in this assistant's canonical conversation that this one resends
+   * after a failed turn. Never sent with draftBaseRevision: a retry leaves the draft untouched.
+   */
+  retryOf?: string;
 }
 export interface DraftSave { text: string; attachments?: FileRef[]; baseRevision?: number }
 export interface WebPushSubscription { endpoint: string; keys: { p256dh: string; auth: string } }

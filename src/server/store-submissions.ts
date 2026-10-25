@@ -81,7 +81,8 @@ export class SubmissionRepository {
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
         .run(JSON.stringify(stored), receipt.requestId);
       const row = this.submission(receipt.requestId);
-      if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
+      // A retry resends an earlier message, never the draft, which stays the person's own.
+      if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted" && row.input.retryOf === undefined)
         this.drafts.clearSubmittedDraft(row.input.senderId, row.input.botId, {
           text: row.input.text, attachments: row.input.attachments ?? [],
         }, row.input.draftBaseRevision);
