@@ -50,7 +50,7 @@ export function App() {
   };
   const session = useSession({
     onIdentityChange: () => {
-      reset(); clearUploads();
+      reset(); clearUploads(); toast.dismiss();
       closePanels("settings", "details", "preferences", "upgrade", "integrations", "computer"); setError("");
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
@@ -59,6 +59,7 @@ export function App() {
   });
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
+  const toast = useToast(session.auth ? undefined : userId);
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
@@ -77,6 +78,9 @@ export function App() {
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
+  // The anchored send follows the ID Hermes gave its message, once the receipt names one.
+  const { sentAs } = history;
+  useEffect(() => { if (receipt?.messageId) sentAs(receipt.requestId, receipt.messageId); }, [receipt, sentAs]);
   // A sent message shows in the transcript at once; Send keeps spinning until Hermes answers.
   const echoes = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
@@ -114,7 +118,7 @@ export function App() {
       setConversation(null);
       setDraft({ text: "", attachments: [] });
       // The signed-out account's in-flight work can never clear these once the identity changes.
-      reset(); clearUploads();
+      reset(); clearUploads(); toast.dismiss();
       setRailOpen(mobile);
       closePanels("settings", "details", "preferences", "upgrade", "integrations");
     } catch (e) {
@@ -127,8 +131,8 @@ export function App() {
   const openPanel = useStableCallback((next: Panel) => setPanel(next));
   const newBot = useStableCallback(() => setPanel({ kind: "settings", bot: "new" }));
   const openPreferences = useStableCallback(() => setPanel({ kind: "preferences" }));
-  // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z.
-  const toast = useToast();
+  // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
+  // toast belongs to whoever made the change; useToast drops it for anyone else.
   const undoable = (change: UndoableEdit) => {
     void session.editPreferences(change.apply);
     toast.show(change.message, () => void session.editPreferences(change.undo));
@@ -236,7 +240,7 @@ export function App() {
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={upload}
             retryUpload={retryUpload} cancelUpload={cancelUpload} pending={pending} receipt={receipt}
             sending={sending} retry={retry} discard={discard}
-            send={() => { history.anchorSend(); return send(); }} reviewed={reviewed} setReviewed={setReviewed}
+            send={() => send(request => history.anchorSend(request.requestId))} reviewed={reviewed} setReviewed={setReviewed}
             stopping={stopping} onStop={stop} dock={dock}
             refresh={() => void session.refresh()} />}
         </>}

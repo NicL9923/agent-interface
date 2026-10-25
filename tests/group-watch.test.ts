@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
-import { GROUP_POLL_MAX_MS, GroupWatch } from "../src/server/group-watch.js";
+import { GROUP_POLL_MAX_MS, GROUP_WATCHED_ROOMS, GROUP_WATCHES_PER_PERSON, GroupWatch } from "../src/server/group-watch.js";
 import type { GroupRequest, GroupState } from "../src/shared/collaboration.js";
 import type { Runtime } from "../src/shared/types.js";
 import { botFixture } from "./helpers/runtime-fixtures.js";
@@ -22,8 +22,8 @@ describe("group room watcher", () => {
     const groupRequest = vi.fn(async (input: GroupRequest) => state((input as { roomId: string }).roomId, seq, working));
     const watch = new GroupWatch({ groupRequest });
     const first = vi.fn(), second = vi.fn(), other = vi.fn();
-    const stopFirst = watch.watch("ranch", first), stopSecond = watch.watch("ranch", second);
-    const stopOther = watch.watch("barn", other);
+    const stopFirst = watch.watch("ranch", "one", first), stopSecond = watch.watch("ranch", "one", second);
+    const stopOther = watch.watch("barn", "one", other);
     await vi.advanceTimersByTimeAsync(0);
     expect(groupRequest).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(1); expect(other).toHaveBeenCalledTimes(1);
@@ -56,7 +56,7 @@ describe("group room watcher", () => {
     const groupRequest = vi.fn(async () => { at.push(Date.now()); if (failing) throw new Error("coordinator down"); return state("ranch", 1); });
     const watch = new GroupWatch({ groupRequest });
     const listener = vi.fn();
-    watch.watch("ranch", listener);
+    watch.watch("ranch", "one", listener);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(4000 + 8000 + 16000 + 30000 + 30000);
     const gaps = at.slice(1).map((time, index) => time - at[index]);
@@ -77,13 +77,38 @@ describe("group room watcher", () => {
     const groupRequest = vi.fn(() => new Promise<GroupState>(resolve => { answer = resolve; }));
     const watch = new GroupWatch({ groupRequest });
     const listener = vi.fn();
-    const stop = watch.watch("ranch", listener);
+    const stop = watch.watch("ranch", "one", listener);
     await vi.advanceTimersByTimeAsync(0);
     stop();
     answer(state("ranch", 5));
     await vi.advanceTimersByTimeAsync(10_000);
     expect(listener).not.toHaveBeenCalled();
     expect(groupRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps each person's watches and the rooms watched in total, freeing a place when a watch ends", async () => {
+    vi.useFakeTimers();
+    const groupRequest = vi.fn(async (input: GroupRequest) => state((input as { roomId: string }).roomId, 1));
+    const watch = new GroupWatch({ groupRequest });
+    const mine = Array.from({ length: GROUP_WATCHES_PER_PERSON }, (_, index) => watch.watch(index % 2 ? "ranch" : "barn", "one", () => {}));
+    expect(() => watch.watch("ranch", "one", () => {})).toThrow(expect.objectContaining({ statusCode: 429, message: expect.stringContaining("Too many group chats are open for you") }));
+    // Someone else still gets in, and ending one watch frees its place. Ending it twice frees nothing more.
+    const theirs = watch.watch("ranch", "two", () => {});
+    mine[0](); mine[0]();
+    const again = watch.watch("ranch", "one", () => {});
+    expect(() => watch.watch("ranch", "one", () => {})).toThrow(expect.objectContaining({ statusCode: 429 }));
+    for (const stop of [...mine, theirs, again]) stop();
+    expect(watch.watched).toEqual([]);
+    // Rooms beyond the total are refused for anyone, before any poll; a room already watched still takes more watchers.
+    const people = Array.from({ length: GROUP_WATCHED_ROOMS }, (_, index) => watch.watch(`room-${index}`, `person-${index}`, () => {}));
+    groupRequest.mockClear();
+    expect(() => watch.watch("one-more", "newcomer", () => {})).toThrow(expect.objectContaining({ statusCode: 429, message: expect.stringContaining("in this household") }));
+    const joined = watch.watch("room-0", "newcomer", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(groupRequest).not.toHaveBeenCalledWith({ operation: "state", roomId: "one-more" });
+    expect(watch.watched).toHaveLength(GROUP_WATCHED_ROOMS);
+    for (const stop of [...people, joined]) stop();
+    watch.close();
   });
 });
 
@@ -148,5 +173,27 @@ describe("watching a group chat on the app event stream", () => {
       expect(s.groupRequest.mock.calls.filter(([input]) => input.operation === "state")).toHaveLength(2);
       expect((await fetch(`${s.base}/api/events?group=shared`)).status).toBe(401);
     } finally { await s.app.close(); }
+  });
+
+  it("refuses a watch beyond the person's share with a clear 429, before opening the stream", async () => {
+    const s = await setup();
+    const open: Response[] = [];
+    try {
+      for (let index = 0; index < GROUP_WATCHES_PER_PERSON; index++) {
+        const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+        expect(response.status).toBe(200);
+        open.push(response);
+      }
+      const refused = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+      expect(refused.status).toBe(429);
+      expect((await refused.json()).error).toContain("Too many group chats are open for you");
+      // A stream without a room is not a watch and still opens.
+      const roster = await fetch(`${s.base}/api/events`, { headers: { cookie: s.cookie } });
+      expect(roster.status).toBe(200);
+      open.push(roster);
+    } finally {
+      await Promise.all(open.map(response => response.body?.cancel()));
+      await s.app.close();
+    }
   });
 });

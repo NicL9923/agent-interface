@@ -52,6 +52,9 @@ export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
+/** A failed turn's retry until its receipt settles it. Apart from the submission: it is never a draft. */
+export const retryKey = (user: string, bot: string) =>
+  `agent-interface:retry:${user}:${bot}`;
 export const goalResumeKey = (user: string, bot: string) => `automation-goal-resume:${user}:${bot}`;
 /** In sessionStorage: a sign-in flow belongs to this tab. */
 export const integrationFlowKey = (user: string, profile: string) => `integration-flow:${user ? `${user}:` : ""}${profile}`;

@@ -234,7 +234,12 @@ export async function createApp(
     if (group !== undefined) await collaboration.room(userId, group);
     const initial = await runtimeSnapshot();
     let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
-    let unwatchGroup: (() => void) | undefined;
+    // Admitted before the stream opens, so a refused watch answers 429 instead of a silent stream.
+    // A room that gains someone else's private assistant ends the watch, as its routes answer 404.
+    const unwatchGroup = group === undefined ? undefined : groups.watch(group, userId, state => {
+      if (!roomAccessible(state.room, profile => visibleTo(store, profile, userId))) { stream.end(); return; }
+      stream.send(`event: group\ndata: ${JSON.stringify({ roomId: group, latestSeq: state.room.latest_seq ?? 0 })}\n\n`);
+    });
     const stream = openEventStream(reply, streams, {
       allowed: () => stillSignedIn(store, config, req),
       teardown: () => {
@@ -257,11 +262,6 @@ export async function createApp(
     };
     rosterListeners.add(changed);
     unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
-    // A room that gains someone else's private assistant ends the watch, as its routes answer 404.
-    if (group !== undefined) unwatchGroup = groups.watch(group, state => {
-      if (!roomAccessible(state.room, profile => visibleTo(store, profile, userId))) { stream.end(); return; }
-      stream.send(`event: group\ndata: ${JSON.stringify({ roomId: group, latestSeq: state.room.latest_seq ?? 0 })}\n\n`);
-    });
   });
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");

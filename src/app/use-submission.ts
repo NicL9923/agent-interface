@@ -90,7 +90,8 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       clearInterval(timer);
     };
   }, [pending, userId, sending]);
-  const send = async () => {
+  /** `onStart` hears the request once it is on its way, such as to anchor the view to it. */
+  const send = async (onStart?: (request: Pending) => void) => {
     if (
       !userId ||
       connectionLost ||
@@ -116,6 +117,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     markSent(userId, request, true);
     setPending(request);
     setSending(true);
+    onStart?.(request);
     try {
       const result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body: request });
       if (epoch !== identityEpoch.current) return;

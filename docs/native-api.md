@@ -129,9 +129,13 @@ sends `event: group` with `data: {"roomId":"ROOM_ID","latestSeq":N}`; fetch
 can repeat when only the driver status changed, such as a new pending approval,
 and is 0 when Hermes does not report one. There is no notice on open, so fetch
 then. A room that gains someone else's private assistant ends the stream. Watch
-one room per stream; roster events still arrive on the same stream. Keep a slow
-fallback poll, such as every 30 seconds, for older servers and missed notices;
-they ignore `group` and send no `group` events.
+one room per stream; roster events still arrive on the same stream. Each person
+may hold 8 room-watching streams at once across tabs and devices, and the server
+watches at most 24 rooms for the household. A watch beyond either limit answers
+429 with an `error` message before the stream opens; close the stream when the
+room leaves the screen, and rely on the fallback poll until a retry succeeds.
+Keep a slow fallback poll, such as every 30 seconds, for older servers and
+missed notices; they ignore `group` and send no `group` events.
 
 A personal assistant with a recorded owner is private to that owner. For anyone
 else it does not exist: lists such as `/api/bots`, bootstrap, Today, search, saved

@@ -7,22 +7,32 @@ export const TOAST_MS = 5000;
 export type ToastValue = { id: number; message: string; undo?: () => void };
 
 /**
- * One short-lived notice at a time, with an optional Undo. The timer pauses while the pointer or
- * keyboard focus is on the toast, so nobody loses it while reaching for the button.
+ * One short-lived notice at a time, with an optional Undo, belonging to the signed-in person who
+ * caused it. Another person signing in, or signing out, hides it, and its Undo never runs for
+ * them. The timer pauses while the pointer or keyboard focus is on the toast, so nobody loses it
+ * while reaching for the button.
  */
-export function useToast() {
-  const [toast, setToast] = useState<ToastValue | null>(null);
+export function useToast(owner: string | undefined) {
+  const [toast, setToast] = useState<(ToastValue & { owner: string }) | null>(null);
   const next = useRef(0);
-  const show = useCallback((message: string, undo?: () => void) => setToast({ id: ++next.current, message, undo }), []);
+  const ownerRef = useRef(owner);
+  ownerRef.current = owner;
+  const show = useCallback((message: string, undo?: () => void) => {
+    const shownFor = ownerRef.current;
+    if (shownFor) setToast({ id: ++next.current, message, undo, owner: shownFor });
+  }, []);
   const dismiss = useCallback(() => setToast(null), []);
+  // A change of person drops the toast outright, so it cannot come back if they return.
+  useEffect(() => { setToast(current => current && current.owner !== owner ? null : current); }, [owner]);
+  const shown = toast && toast.owner === owner ? toast : null;
   /** Runs the shown toast's undo once. False when nothing can be undone. */
   const undo = useCallback(() => {
-    if (!toast?.undo) return false;
-    toast.undo();
+    if (!shown?.undo || shown.owner !== ownerRef.current) return false;
+    shown.undo();
     setToast(null);
     return true;
-  }, [toast]);
-  return { toast, show, dismiss, undo };
+  }, [shown]);
+  return { toast: shown as ToastValue | null, show, dismiss, undo };
 }
 
 export function Toast({ toast, onDismiss, onUndo }: { toast: ToastValue | null; onDismiss(): void; onUndo(): void }) {

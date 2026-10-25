@@ -210,6 +210,42 @@ describe("undo toast", () => {
     await advance(200);
     expect(toast()).toBeNull();
   });
+
+  it("leaves with the account that made the change, and its Undo never acts for another", async () => {
+    boot.bots[0] = { ...boot.bots[0], shared: false, ownerId: "one", name: "Private ledger" };
+    await render();
+    await pinFromMenu("Private ledger", "Pin to top");
+    expect(toast()?.textContent).toContain("Pinned Private ledger");
+    boot = { ...boot, user: { id: "two", name: "Two", email: "two@example.test" }, bots: [boot.bots[1]], preferences: { ...defaultPreferences, startPage: "assistant" } };
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await advance(0);
+    expect(mount.container.textContent).not.toContain("Private ledger");
+    expect(toast()).toBeNull();
+    const writes = vi.mocked(write).mock.calls.length;
+    await key({ key: "z", ctrlKey: true });
+    expect(vi.mocked(write).mock.calls.slice(writes).filter(([path]) => path === "/preferences")).toEqual([]);
+  });
+
+  it("is dismissed by signing out, and does not come back when the same person signs in again", async () => {
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/auth/config" ? { localDevAuth: true } as T : original(path) as Promise<T>);
+    await render();
+    await pinFromMenu("Shared", "Pin to top");
+    expect(toast()).not.toBeNull();
+    await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    await loaded();
+    await act(async () => [...mount.container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Sign out")!.click());
+    expect(write).toHaveBeenCalledWith("/auth/logout", {});
+    expect(toast()).toBeNull();
+    await advance(0);
+    await act(async () => [...mount.container.querySelectorAll("button")].find(button => button.textContent === "Enter local workspace")!.click());
+    await advance(0);
+    expect(mount.container.querySelector(".sign-in")).toBeNull();
+    expect(toast()).toBeNull();
+    const writes = vi.mocked(write).mock.calls.length;
+    await key({ key: "z", ctrlKey: true });
+    expect(vi.mocked(write).mock.calls.slice(writes).filter(([path]) => path === "/preferences")).toEqual([]);
+  });
 });
 
 describe("status dock", () => {

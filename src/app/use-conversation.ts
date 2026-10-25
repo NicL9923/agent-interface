@@ -62,8 +62,13 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   const endSpace = useRef<HTMLDivElement>(null);
   // Following keeps the latest message in view as replies, images and cards grow. See scroll-follow.ts.
   const mode = useRef<ScrollMode>("follow");
-  // The person's last message before they sent, so the new one can be told apart; null when no send is anchored.
-  const sendAnchor = useRef<{ before?: string } | null>(null);
+  /**
+   * The message a send anchored, null when none is. It is followed from its echo, named by the
+   * request ID, to Hermes's copy: by that ID, by the ID its receipt names, or as this person's first
+   * message after those `known` when they sent. Once Hermes's copy is found, `id` holds it, so later
+   * rows, such as another member's guidance, never take its place.
+   */
+  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string } | null>(null);
   // Where a scroll event last left the transcript, so reading upward can be told from growth.
   const lastTop = useRef(0);
   // A smooth jump reports positions short of the end until it lands.
@@ -73,9 +78,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   // The message at the top of the view, held in place while history above it changes.
   const anchor = useRef<{ id: string; offset: number } | null>(null);
   const reveal = useRef<string | null>(null);
-  // A message to open, from a link or find, and the assistant it belongs to.
+  // A message to open, from a link or find, and the assistant it belongs to. `generation` names the
+  // load that opens it; only once that load's page arrives is it `ready` to scroll to.
   const [linked] = useState(initialMessage);
-  const target = useRef<{ botId: string; messageId: string } | null>(linked);
+  const target = useRef<{ botId: string; messageId: string; generation?: number; ready?: boolean } | null>(linked);
   const found = useRef<{ element: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
   const seen = useRef(new Set<string>());
   const current = useRef(conversation);
@@ -87,8 +93,11 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   useEffect(() => {
     if (!botId || !userId) return;
     let live = true;
+    // Each request to open a message starts a new navigation. A load begun before it cannot place
+    // the window or consume the target.
+    let navigation = 0;
     const opening = target.current?.botId === botId ? target.current.messageId : undefined;
-    if (target.current && !opening) target.current = null;
+    target.current = opening ? { botId, messageId: opening, generation: ++navigation } : null;
     clearMessageParam();
     restored.current = false;
     mode.current = opening ? "free" : "follow";
@@ -128,6 +137,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (gone) return;
       if (loading) { again = true; return; }
       loading = true;
+      const generation = navigation;
       const earlierPage = more;
       more = false;
       if (!start && mode.current !== "follow") start = cachedStart;
@@ -138,6 +148,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       try {
         const result = await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
+        // A message was asked for meanwhile: this page is from before, and the load for it follows.
+        if (generation !== navigation) {
+          again = true;
+          if (earlierPage) more = true;
+          return;
+        }
         // The latest page can slide past the cached message a reader scrolled to meanwhile.
         if (!fromStart && mode.current !== "follow" && cachedStart
           && !result.messages.some(message => message.id === cachedStart)) {
@@ -156,6 +172,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         if (heard.reply) setReply({ botId, id: String(++announced), text: replySnippet(heard.reply.text) });
         firstConversation = false;
         if (result !== current.current) holdPlace();
+        if (target.current?.botId === botId && target.current.generation === generation) target.current.ready = true;
         setConversation(patch(result, latestInflight));
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
@@ -184,7 +201,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // Opens the window at a message that is not loaded, such as an older find match.
     requestStart.current = messageId => {
       if (!live) return;
-      target.current = { botId, messageId };
+      target.current = { botId, messageId, generation: ++navigation };
       mode.current = "free";
       start = messageId;
       void load();
@@ -243,12 +260,23 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const target = firstMessageBelow(element, top);
     if (target) anchor.current = { id: target.dataset.messageId!, offset: target.getBoundingClientRect().top - top };
   };
-  // The person's message a send anchored: the last one of theirs, once it is not the one from before.
+  // The person's message a send anchored. See sendAnchor for how it is followed.
   const sentMessage = () => {
-    const element = scroll.current;
-    if (!element || !sendAnchor.current) return undefined;
-    const last = [...element.querySelectorAll<HTMLElement>(".message-user[data-message-id]")].at(-1);
-    return last && last.dataset.messageId !== sendAnchor.current.before ? last : undefined;
+    const element = scroll.current, sent = sendAnchor.current;
+    if (!element || !sent) return undefined;
+    if (sent.id) return messageElement(element, sent.id);
+    const lock = (id: string) => { sent.id = id; return messageElement(element, id); };
+    const named = [sent.requestId, sent.messageId].filter((id): id is string => !!id);
+    const own = current.current?.botId === botId ? current.current.messages : [];
+    const canonical = own.find(message => named.includes(message.id));
+    if (canonical) return lock(canonical.id);
+    // The echo stands in, named by the request ID, until Hermes's copy replaces it.
+    const echo = sent.requestId ? messageElement(element, sent.requestId) : undefined;
+    if (echo) return echo;
+    // Only after the newest message known at the send, so an earlier page loaded since never counts.
+    const mine = own.slice(own.findLastIndex(message => sent.known.has(message.id)) + 1).find(message => message.role === "user" && !isActivityMessage(message)
+      && !message.id.endsWith("-inflight") && (message.sender ? message.sender.id === userId : true));
+    return mine ? lock(mine.id) : undefined;
   };
   // Keeps enough space at the end for the sent message to reach the top of the view. It never moves
   // what is above it, and it shrinks as the reply grows into it.
@@ -295,7 +323,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     reveal.current = null;
     const card = request ? [...element.querySelectorAll<HTMLElement>(".secure-request")]
       .find(item => item.dataset.requestId === request) : undefined;
-    const opening = target.current?.botId === botId ? target.current.messageId : undefined;
+    // The message asked for opens once its own page arrived, not on a render of an older one.
+    const opening = target.current?.botId === botId && target.current.ready ? target.current.messageId : undefined;
     const opened = opening ? messageElement(element, opening) : undefined;
     if (opening) target.current = null;
     if (opened) showFound(opened);
@@ -382,18 +411,21 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     } else element.scrollTop = element.scrollHeight;
   }, []);
   /**
-   * Called as the person sends: their new message moves near the top of the view and the reply
-   * grows below it, instead of the view chasing the end.
+   * Called as the person sends, with the request's ID: their new message moves near the top of
+   * the view and the reply grows below it, instead of the view chasing the end.
    */
-  const anchorSend = useCallback(() => {
-    const element = scroll.current;
+  const anchorSend = useCallback((requestId?: string) => {
     jumping.current = 0;
-    sendAnchor.current = { before: element ? [...element.querySelectorAll<HTMLElement>(".message-user[data-message-id]")].at(-1)?.dataset.messageId : undefined };
+    sendAnchor.current = { requestId, known: new Set(current.current?.messages.map(message => message.id)) };
     mode.current = "anchored";
     setAtLatest(true);
     setUnseen(0);
     if (current.current) markSeen(current.current.messages);
     placeLatest.current();
+  }, []);
+  /** The ID Hermes gave an anchored send, from its receipt, so the anchor follows its echo there. */
+  const sentAs = useCallback((requestId: string, messageId: string) => {
+    if (sendAnchor.current?.requestId === requestId && !sendAnchor.current.id) sendAnchor.current.messageId = messageId;
   }, []);
   /** Shows a message of this conversation, loading the history window from it when it is not loaded. */
   const openMessage = useCallback((messageId: string, mark = true) => {
@@ -466,6 +498,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     loadEarlier,
     jumpToLatest,
     anchorSend,
+    sentAs,
     openMessage,
     openAt,
   };

@@ -1,10 +1,10 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { badgeFor } from "../src/server/badge.js";
 import { loadConfig } from "../src/server/config.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { badgeCount, isUnread } from "../src/shared/unread.js";
-import type { Bot } from "../src/shared/types.js";
+import { defaultPreferences, type Bot } from "../src/shared/types.js";
 import { botFixture, capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { fakeRuntime } from "./helpers/server.js";
 
@@ -70,5 +70,49 @@ it("sends the badge with every push and with the read-elsewhere clear", async ()
     store.chatPresence("one", "shared", "desk", "left");
     await worker.tick();
     expect(clears).toEqual([1]);
+  } finally { await worker.stop(); store.close(); }
+});
+
+it("counts every known unresolved approval in alerts and clears, until it is decided or the assistant moves on", async () => {
+  const store = people();
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
+  config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" };
+  store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.nativeSession("phone-session", "one", Date.now() + 100000);
+  store.registerNativeDevice("one", "phone-session", "phone", "ab".repeat(32), "sandbox");
+  store.savePreferences("one", { ...defaultPreferences, followBots: ["barn", "gate", "kitchen"] });
+  // Unopened sessions: Hermes's roster shows every assistant idle.
+  const bots = [botFixture({ id: "barn" }), botFixture({ id: "gate" }), botFixture({ id: "kitchen", lastMessage: { text: "Old", at: at(20) } })];
+  const web: string[] = [], clears: (number | undefined)[] = [];
+  const listBots = vi.fn(async () => bots);
+  const runtime = fakeRuntime({ listBots, capabilities: async () => capabilitiesFixture() });
+  const worker = new BackgroundWorker(store, runtime, config, async (_, payload) => { web.push(payload); }, async () => {},
+    undefined, undefined, async (_, __, badge) => { clears.push(badge); });
+  const event = (id: string, botId: string, kind: "approval" | "completed", extra: object = {}) =>
+    ({ id, botId, kind, title: kind, occurredAt: new Date().toISOString(), ...extra });
+  const badges = () => web.map(payload => JSON.parse(payload)).map(payload => [payload.tag, payload.badge]);
+  try {
+    store.recordEvents([event("ask-barn", "barn", "approval", { approvalId: "a1" }), event("ask-gate", "gate", "approval", { approvalId: "a2" })], "1");
+    await worker.tick();
+    // Each lone approval knows about the other, and a second approval from the same assistant counts it once.
+    expect(badges()).toEqual([["ask-barn", 2], ["ask-gate", 2]]);
+    // One roster read serves the whole delivery pass.
+    expect(listBots).toHaveBeenCalledTimes(1);
+    store.recordEvents([event("ask-barn-2", "barn", "approval", { approvalId: "a3" })], "2");
+    await worker.tick();
+    expect(badges().at(-1)).toEqual(["ask-barn-2", 2]);
+    // Decided through the app, one of barn's approvals no longer counts, but its other one does.
+    store.attributeApproval("a1", "barn", "two", "approved");
+    store.chatPresence("one", "kitchen", "desk", "left", Date.now() - 10 * 60000);
+    store.recordEvents([event("reply", "kitchen", "completed")], "3");
+    await worker.tick();
+    expect(badges().at(-1)).toEqual(["reply", 3]);
+    // The gate finished, so its approval was resolved elsewhere; the read-elsewhere clear counts the same way.
+    store.recordEvents([event("gate-done", "gate", "completed")], "4");
+    store.chatPresence("one", "kitchen", "phone-other", "left");
+    await worker.tick();
+    expect(clears.at(-1)).toBe(1);
+    store.attributeApproval("a3", "barn", "one", "denied");
+    expect(badgeFor(bots, store, "one")).toBe(0);
   } finally { await worker.stop(); store.close(); }
 });

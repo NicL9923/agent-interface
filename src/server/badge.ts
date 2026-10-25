@@ -8,9 +8,11 @@ export type Arriving = { botId?: string; kind?: string };
 
 /**
  * The app badge for one person, as their home would show it: assistants they see with the
- * unread mark, plus those waiting on a decision. Notifications being delivered count too: an
- * approval waits on a decision, and other news is unread in a chat they opened before.
- * Undefined without a connected roster, so a push leaves the badge as it was.
+ * unread mark, plus those waiting on a decision, by the roster or by an approval this person
+ * was notified about that is not resolved yet. Notifications being delivered count too: an
+ * approval waits on a decision, and other news is unread in a chat they opened before. Alerts
+ * and clears count the same way. Undefined without a connected roster, so a push leaves the
+ * badge as it was.
  */
 export function badgeFor(bots: Bot[] | undefined, store: Store, userId: string, arriving: Arriving[] = []) {
   if (!bots || bots.some(bot => bot.activity === "disconnected")) return undefined;
@@ -18,7 +20,8 @@ export function badgeFor(bots: Bot[] | undefined, store: Store, userId: string, 
   const seen = bots.filter(bot => visible({ ...bot, ...store.presentation(bot.id) }, userId));
   const lastAt = new Map(seen.map(bot => [bot.id, bot.lastMessage?.at]));
   const news = new Set(arriving.filter(item => item.kind !== "approval" && item.kind !== "security").map(item => item.botId));
-  const decisions = new Set(arriving.filter(item => item.kind === "approval").map(item => item.botId));
+  const decisions = store.pendingDecisions(userId);
+  for (const item of arriving) if (item.kind === "approval" && item.botId) decisions.add(item.botId);
   return badgeCount(seen,
     botId => unreadSince(lastAt.get(botId), reads.get(botId)) || news.has(botId) && reads.has(botId),
     botId => decisions.has(botId));

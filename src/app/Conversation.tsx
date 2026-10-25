@@ -15,16 +15,15 @@ import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import { receipt } from "../shared/discovery";
 import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
-import type { MessageRequest } from "../shared/api";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
-import { useAction } from "./use-action";
 import { useStableCallback } from "./use-stable-callback";
+import { useTurnRetry } from "./use-turn-retry";
 import { AttentionCard } from "./AttentionCard";
 import { FindBar } from "./FindBar";
 import { QuoteSelection, ReplyActions, TranscriptTools } from "./ReplyActions";
-import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, retryTarget, turnDuration, workGroups } from "./transcript-logic";
+import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
 import "./transcript.css";
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
 export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft }: {
@@ -89,7 +88,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce }),
     [botId, conversation?.sessionId, connectionLost, quote, announce]);
   const frame = useRef<HTMLDivElement>(null);
-  const retry = useTurnRetry({ botId, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported, report: setError });
+  const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
+    resendable: boot.capabilities.idempotency.supported, report: setError });
   // Find in chat takes Cmd/Ctrl+F while a conversation is on screen. Covered by a dialog or the
   // phone's assistant list, the browser's own find stays.
   const [finding, setFinding] = useState(false);
@@ -220,8 +220,10 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
                 {liveTool && <p className="activity-live-tool">{liveTool}</p>}
                 {liveThought && <p className="activity-live-thought">{liveThought}</p>}
               </div>}
-              {retry.message && <button type="button" className="with-progress retry-turn" disabled={retry.busy}
-                onClick={() => retry.run(retry.message!)}>
+              {retry.message && retry.checking && <p className="muted" role="status">Checking whether the retry arrived…</p>}
+              {retry.message && <button type="button" className="with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
+                title={retry.checking ? retry.resendable ? "Sends the same request again, so it can't run twice" : boot.capabilities.idempotency.reason : undefined}
+                onClick={() => void retry.run(retry.message!)}>
                 {retry.busy ? <Icon name="spinner" className="spin" size={16} /> : <Icon name="refresh" size={16} />}
                 {retry.busy ? "Retrying…" : "Retry"}
               </button>}
@@ -268,39 +270,6 @@ function latestReasoning(messages: Message[]) {
   const start = messages.findLastIndex(isHumanMessage) + 1;
   const text = messages.slice(start).findLast(message => message.role === "assistant" && message.reasoning?.trim())?.reasoning ?? "";
   return text.trim().split("\n").findLast(line => line.trim())?.trim();
-}
-/**
- * Retry for a failed turn: resends the person's latest message as a new request naming it. The draft
- * is never read or changed. Once Hermes accepts, Retry stays hidden for that run.
- */
-function useTurnRetry({ botId, canonical, blocked, report }: {
-  botId: string; canonical: SavedConversation | null; blocked: boolean; report(message: string): void;
-}) {
-  const action = useAction();
-  const [retried, setRetried] = useState<{ messageId: string; runId?: string } | null>(null);
-  const { reset } = action;
-  useEffect(() => { reset(); setRetried(null); }, [botId, reset]);
-  const target = canonical?.botId === botId && !blocked ? retryTarget(canonical.messages, canonical.activity.state) : undefined;
-  const runId = canonical?.activity.runId;
-  const message = target && !(retried?.messageId === target.id && retried.runId === runId) ? target : undefined;
-  const run = (original: Message) => void action.run(async ({ current }) => {
-    const requestId = crypto.randomUUID();
-    // `retryOf` names the message, and a retry never carries a draft revision.
-    const body: MessageRequest = { requestId, text: original.text, attachments: original.files ?? [], retryOf: original.id };
-    let result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body });
-    // An uncertain receipt is checked again, as a send's is, so a second tap never doubles the turn.
-    for (let checks = 0; result.status === "uncertain" && current() && checks < 30; checks++) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      result = await apiRequest("GET /submissions/:id", { params: { id: requestId } });
-    }
-    if (result.status === "uncertain") throw new Error("Hermes hasn't confirmed the retry yet. Check the conversation before trying again.");
-    if (result.status !== "accepted") throw new Error(result.message || "Hermes didn't take the retry. Try again in a moment.");
-    return result;
-  }, {
-    onSuccess: () => setRetried({ messageId: original.id, runId }),
-    onError: cause => { report((cause as Error).message); return null; },
-  });
-  return { message, busy: action.busy, run };
 }
 // The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
 function Shimmer({ text }: { text: string }) {
