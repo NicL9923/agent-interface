@@ -194,7 +194,7 @@ struct ConversationView: View {
     let match = matches[index]
     following = false
     findTarget = match.id
-    if !match.loaded { Task { await store.openConversation(botId: bot.id, atMessage: match.id) } }
+    if match.loaded { highlight(match.id) } else { Task { await store.openConversation(botId: bot.id, atMessage: match.id) } }
   }
   /// After a 300 ms pause in typing, moves to the first loaded match, so the chat does not jump on
   /// every keystroke, then asks the server for matches in this chat's history, as the web's find
@@ -411,11 +411,15 @@ struct ConversationView: View {
     // The reader is placed; earlier history pages in as usual from here.
     placed = true
     sentAnchor = nil
-    highlighted = focus.messageId
+    highlight(focus.messageId)
     Task { @MainActor in proxy.scrollTo(focus.messageId, anchor: .center) }
+  }
+  /// Outlines a message for a moment. Meanwhile a page of history added above keeps it in view.
+  private func highlight(_ id: String) {
+    highlighted = id
     Task { @MainActor in
       try? await Task.sleep(for: .seconds(2.5))
-      guard highlighted == focus.messageId else { return }
+      guard highlighted == id else { return }
       if reduceMotion { highlighted = nil } else { withAnimation(.easeOut(duration: 0.4)) { highlighted = nil } }
     }
   }
@@ -537,7 +541,9 @@ struct ConversationView: View {
       await store.loadEarlier()
       // The store reports a failed page as an error and leaves the window as it was.
       earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == first
-      if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
+      // A message just opened from find or search stays in view as history pages in above it.
+      if let held = highlighted, !following { proxy.scrollTo(held, anchor: .center) }
+      else if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
   private func approvalCard(_ approval: Approval) -> some View {

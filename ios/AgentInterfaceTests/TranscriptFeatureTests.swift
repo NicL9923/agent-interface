@@ -294,6 +294,8 @@ import XCTest
     }
   }
   private var stores: [AppStore] = []
+  /// Held for the test: the fake network keeps its servers weakly, so a dropped one stops answering.
+  private var servers: [FakeServer] = []
   override func tearDown() async throws {
     for value in stores {
       value.suspend()
@@ -302,6 +304,7 @@ import XCTest
       }
     }
     stores = []
+    servers = []
     try await super.tearDown()
   }
   private func store(_ box: Box) async throws -> (AppStore, FakeServer) {
@@ -316,7 +319,7 @@ import XCTest
     value.selectedBotId = "bot"
     await value.refreshConversation()
     value.draft = Draft(text: "Keep my words", attachments: [], dirty: false, baseRevision: 1); value.draftReady = true
-    stores.append(value)
+    stores.append(value); servers.append(server)
     return (value, server)
   }
   private func failedTurn(_ box: Box) {
