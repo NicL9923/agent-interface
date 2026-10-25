@@ -35,7 +35,7 @@
   border: 0;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 650;
   letter-spacing: 0.3px;
 }
@@ -64,7 +64,7 @@
   align-items: center;
   gap: 7px;
   min-width: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
   color: var(--muted);
 }
 .home-bar-actions {
@@ -143,7 +143,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 .home .pinned-bot.selected .pinned-name { color: var(--ink); font-weight: 600; }
@@ -168,7 +168,7 @@
   gap: 7px;
   padding: 7px 13px;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--muted);
 }
 .home-links button[aria-current="page"] {
@@ -204,7 +204,7 @@
 .home .bot-row.unread small:not(.bot-activity) { color: var(--ink); }
 .home .bot-row-top time {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 .home .bot-row,
@@ -240,7 +240,7 @@
   border: 0;
   border-radius: 10px;
   text-align: left;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 .bot-menu [data-highlighted],
 .bot-menu [data-popup-open] { background: var(--accent-soft); color: var(--accent); }
@@ -279,7 +279,7 @@
   padding: 12px 64px;
   flex-shrink: 0;
 }
-.sheet-header h2 { margin: 0; font-size: 17px; outline: none; }
+.sheet-header h2 { margin: 0; font-size: 1.0625rem; outline: none; }
 .sheet-close {
   position: absolute;
   left: 12px;
@@ -306,13 +306,13 @@
 .settings-heading {
   margin: 0 0 8px;
   padding: 0 16px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--muted);
 }
 .settings-footnote {
   margin: -14px 16px 22px;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
   color: var(--muted);
 }
@@ -328,7 +328,7 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: 15px;
+  font-size: 0.9375rem;
   text-align: left;
   color: var(--ink);
 }
@@ -338,7 +338,7 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .settings-row.danger { color: var(--danger); }
 .row-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .row-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.row-text small { font-size: 12px; color: var(--muted); }
+.row-text small { font-size: 0.75rem; color: var(--muted); }
 .row-icon { position: relative; display: grid; place-items: center; width: 22px; color: var(--muted); }
 .row-status {
   position: absolute;
@@ -382,8 +382,8 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   overflow: hidden;
 }
 .account-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.settings-account strong { font-size: 16px; }
-.settings-account small { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.settings-account strong { font-size: 1rem; }
+.settings-account small { font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
 .settings-sheet input[role="switch"] {
   appearance: none;
   position: relative;
@@ -416,12 +416,12 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .settings-notifications { display: block; }
 .settings-notifications .notification-settings { margin: 0; padding: 0; border: 0; background: transparent; }
 .settings-notifications .notification-settings-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.settings-notifications h3 { margin: 0; font-size: 15px; font-weight: 400; }
-.settings-notifications .notification-toggle { flex-direction: row; align-items: center; gap: 10px; margin: 0; color: var(--muted); font-size: 13px; }
-.settings-notifications p { margin: 6px 0 0; font-size: 12px; }
+.settings-notifications h3 { margin: 0; font-size: 0.9375rem; font-weight: 400; }
+.settings-notifications .notification-toggle { flex-direction: row; align-items: center; gap: 10px; margin: 0; color: var(--muted); font-size: 0.8125rem; }
+.settings-notifications p { margin: 6px 0 0; font-size: 0.75rem; }
 /* A row that is also its own card keeps the card's surface. */
 .settings-group.settings-row { margin-bottom: 22px; background: var(--raised); }
-.settings-intro { margin: 0 16px 14px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.settings-intro { margin: 0 16px 14px; font-size: 0.8125rem; line-height: 1.5; color: var(--muted); }
 .section-row { padding: 0 8px 0 0; gap: 0; }
 .section-open {
   display: flex;
@@ -483,9 +483,9 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .bot-details .sheet-header { min-height: 56px; }
 .bot-details-hero { display: grid; justify-items: center; gap: 6px; padding: 0 12px 22px; text-align: center; }
 .bot-details-hero .avatar-wrap { margin-bottom: 10px; }
-.bot-details-hero h2 { margin: 0; font-size: 24px; outline: none; overflow-wrap: anywhere; }
-.bot-details-hero p { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-.bot-details-hero .bot-details-description { margin-top: 6px; color: var(--ink); font-size: 14px; }
+.bot-details-hero h2 { margin: 0; font-size: 1.5rem; outline: none; overflow-wrap: anywhere; }
+.bot-details-hero p { margin: 0; font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
+.bot-details-hero .bot-details-description { margin-top: 6px; color: var(--ink); font-size: 0.875rem; }
 .bot-details-actions { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 10px; margin: 0 0 22px; }
 .bot-details-actions > button {
   position: relative;
@@ -501,7 +501,7 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   border-radius: 16px;
   background: var(--raised);
   color: var(--ink);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .bot-details-actions > button:hover:enabled { background: var(--accent-soft); }
 .bot-details-actions > button.on { color: var(--accent); }
@@ -515,7 +515,7 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   border-radius: 999px;
   background: var(--accent);
   color: var(--surface);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 650;
 }
 .bot-details .section-add { padding-top: 6px; }
@@ -526,9 +526,9 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   padding: 10px 0 8px;
   color: var(--muted);
 }
-.settings-footer .brand-mark { width: 44px; height: 44px; border-radius: 14px; font-size: 36px; line-height: 38px; }
-.settings-footer strong { color: var(--ink); font-size: 17px; }
-.settings-footer small { font-size: 12px; }
+.settings-footer .brand-mark { width: 44px; height: 44px; border-radius: 14px; font-size: 36px; /* px: glyph sized to its fixed box */ line-height: 38px; }
+.settings-footer strong { color: var(--ink); font-size: 1.0625rem; }
+.settings-footer small { font-size: 0.75rem; }
 @keyframes settings-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
 
 @media (max-width: 620px) {
@@ -555,14 +555,14 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   .home-bar { padding-bottom: 20px; }
   .home-pinned { gap: 10px 18px; padding: 8px 0 26px; }
   .home .pinned-bot { width: 124px; gap: 10px; }
-  .pinned-name { font-size: 15px; }
-  .home .pinned-bot small.pinned-activity { font-size: 13px; }
+  .pinned-name { font-size: 0.9375rem; }
+  .home .pinned-bot small.pinned-activity { font-size: 0.8125rem; }
   .home-links { padding-bottom: 12px; }
-  .home-links button { font-size: 14px; min-height: 40px; }
+  .home-links button { font-size: 0.875rem; min-height: 40px; }
   .home .bot-row { min-height: 78px; gap: 16px; padding: 12px 6px; }
-  .home .bot-row strong { font-size: 17px; }
-  .home .bot-row small { font-size: 14px; margin-top: 4px; }
-  .home .bot-row-top time { font-size: 13px; }
+  .home .bot-row strong { font-size: 1.0625rem; }
+  .home .bot-row small { font-size: 0.875rem; margin-top: 4px; }
+  .home .bot-row-top time { font-size: 0.8125rem; }
   .home .bot-row.selected { background: transparent; }
   .settings-sheet {
     width: auto;
@@ -576,7 +576,7 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   }
   .settings-sheet[open] { animation: settings-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
   .sheet-body { padding-inline: 14px; }
-  .settings-row { min-height: 56px; font-size: 16px; }
+  .settings-row { min-height: 56px; font-size: 1rem; }
 }
 @keyframes settings-up { from { transform: translateY(40%); opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) {

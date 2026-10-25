@@ -9,7 +9,7 @@ kbd {
   border-radius: 6px;
   background: var(--surface);
   color: var(--muted);
-  font: 500 11px/1.5 ui-sans-serif, system-ui, sans-serif;
+  font: 500 0.6875rem/1.5 ui-sans-serif, system-ui, sans-serif;
   text-align: center;
   white-space: nowrap;
 }
@@ -43,13 +43,13 @@ kbd {
   border: 0;
   padding: 6px 0;
   background: transparent;
-  font-size: 16px;
+  font-size: max(16px, 1rem);
 }
 .palette-search input:focus-visible { outline: none; }
 .palette-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
 .palette-heading {
   padding: 10px 10px 4px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.6px;
   text-transform: uppercase;
@@ -85,9 +85,9 @@ kbd {
   background: var(--accent);
 }
 .palette-copy { display: grid; flex: 1; min-width: 0; }
-.palette-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.palette-copy small { color: var(--muted); font-size: 12px; }
-.palette-group { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.palette-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.875rem; }
+.palette-copy small { color: var(--muted); font-size: 0.75rem; }
+.palette-group { color: var(--muted); font-size: 0.6875rem; flex-shrink: 0; }
 .palette-check { color: var(--accent); }
 .palette-footer {
   display: flex;
@@ -95,7 +95,7 @@ kbd {
   padding: 8px 16px;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .palette-footer kbd { margin-right: 3px; }
 @media (max-width: 620px) {
@@ -117,11 +117,11 @@ kbd {
 
 /* Keyboard shortcuts and confirmations reuse the settings sheet. */
 .shortcuts-dialog .sheet-body { padding-bottom: 20px; }
-.shortcut-heading { margin: 4px 16px 8px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.shortcut-heading { margin: 4px 16px 8px; font-size: 0.8125rem; font-weight: 500; color: var(--muted); }
 .shortcut-list { margin: 0 0 20px; background: var(--raised); border-radius: 18px; overflow: hidden; }
 .shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 46px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 .shortcut-row:last-child { border-bottom: 0; }
-.shortcut-row dt { font-size: 14px; }
+.shortcut-row dt { font-size: 0.875rem; }
 .shortcut-row dd { margin: 0; flex-shrink: 0; }
 .confirm-dialog {
   margin: auto;
@@ -134,8 +134,8 @@ kbd {
   box-shadow: 0 24px 90px #0005;
 }
 .confirm-dialog::backdrop { background: #101a1466; }
-.confirm-dialog h2 { margin: 0 0 8px; font-size: 18px; }
-.confirm-dialog p { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+.confirm-dialog h2 { margin: 0 0 8px; font-size: 1.125rem; }
+.confirm-dialog p { margin: 0 0 18px; color: var(--muted); font-size: 0.875rem; }
 .confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin: 0; }
 
 /* Status dock: the notices above the composer, one stack sorted by urgency. */
@@ -169,12 +169,12 @@ kbd {
   border: 1px solid var(--attention);
   border-radius: 12px;
   background: var(--raised);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .dock-row > .icon { color: var(--attention); }
 .dock-row > span { flex: 1; min-width: 0; }
-.dock-row button { flex-shrink: 0; padding: 6px 14px; font-size: 13px; }
-.composer-status { margin: 0; font-size: 12px; color: var(--muted); }
+.dock-row button { flex-shrink: 0; padding: 6px 14px; font-size: 0.8125rem; }
+.composer-status { margin: 0; font-size: 0.75rem; color: var(--muted); }
 .composer-status:not(:empty) { margin-bottom: 8px; }
 
 /* Undo toast: on a computer in the home rail's corner, clear of the composer; on a phone over home, above the home indicator. */
@@ -198,7 +198,7 @@ kbd {
   border-radius: 14px;
   background: var(--ink);
   color: var(--surface);
-  font-size: 14px;
+  font-size: 0.875rem;
   box-shadow: 0 10px 30px #0004;
   pointer-events: auto;
   animation: toast-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -215,8 +215,8 @@ kbd {
 .bot-details-facts .settings-row { justify-content: space-between; min-height: 48px; border-bottom: 1px solid var(--line); }
 .bot-details-facts .settings-row:last-child { border-bottom: 0; }
 .bot-details-facts dt { flex-shrink: 0; }
-.bot-details-facts dd { display: grid; justify-items: end; gap: 2px; min-width: 0; margin: 0; color: var(--muted); font-size: 14px; text-align: right; overflow-wrap: anywhere; }
-.bot-details-facts dd small { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.bot-details-facts dd { display: grid; justify-items: end; gap: 2px; min-width: 0; margin: 0; color: var(--muted); font-size: 0.875rem; text-align: right; overflow-wrap: anywhere; }
+.bot-details-facts dd small { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .bot-details-facts .bot-activity { color: var(--accent); }
 .settings-sheet.bot-details .sheet-body { padding-bottom: 8px; }
 @media (max-width: 620px) {

@@ -22,7 +22,7 @@
 .transcript-frame .turn-work > summary::after { margin: 0 3px; }
 
 /* One quiet row per turn's work; open, the grouped accordions sit under a guide line. */
-.turn-work { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.turn-work { margin: 0 0 16px; color: var(--muted); font-size: 0.8125rem; }
 .turn-work > summary {
   display: inline-flex;
   align-items: center;
@@ -34,7 +34,7 @@
 .turn-work > summary:hover { color: var(--ink); }
 .turn-work > summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .turn-work-content { display: grid; gap: 2px; margin: 4px 0 0 3px; padding: 2px 0 4px 14px; border-left: 2px solid var(--line); }
-.tool-calls { margin: 0; color: var(--muted); font-size: 12px; }
+.tool-calls { margin: 0; color: var(--muted); font-size: 0.75rem; }
 .tool-calls > summary { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 .tool-count { padding: 1px 7px; border-radius: 6px; background: var(--rail); font-variant-numeric: tabular-nums; }
 .tool-calls-content { display: grid; gap: 6px; padding: 0 0 8px; }
@@ -47,10 +47,10 @@
 }
 
 /* The running turn's live row, beside the working avatar. */
-.activity-live { display: grid; gap: 2px; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.activity-live { display: grid; gap: 2px; margin-top: 2px; font-size: 0.75rem; color: var(--muted); }
 .activity-live p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-live-thought { font-style: italic; }
-.conversation-activity .retry-turn { margin-top: 8px; padding: 6px 14px; font-size: 13px; border: 1px solid var(--line); }
+.conversation-activity .retry-turn { margin-top: 8px; padding: 6px 14px; font-size: 0.8125rem; border: 1px solid var(--line); }
 
 /* Reply actions: on hover or focus with a mouse, always with touch. */
 .reply-actions { display: flex; gap: 2px; margin: 6px 0 0 -7px; }
@@ -84,7 +84,7 @@
   background: var(--ink);
   border-color: var(--ink);
   color: var(--surface);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   box-shadow: 0 6px 22px rgb(0 0 0 / 18%);
 }
@@ -122,7 +122,7 @@
 .find-bar input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 8px 4px; color: var(--ink); }
 .find-bar input:focus-visible { outline: none; }
 .find-bar:focus-within { border-color: var(--accent); }
-.find-count { flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.find-count { flex-shrink: 0; font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .find-bar .icon-button { width: 34px; height: 34px; border-radius: 8px; }
 @media (pointer: coarse) { .find-bar .icon-button { width: 44px; height: 44px; } }
 @media (max-width: 620px) { .find-bar { left: 8px; right: 8px; width: auto; } }
@@ -142,7 +142,7 @@
   gap: 12px;
   margin: 0;
   min-height: 48px;
-  font-size: 15px;
+  font-size: 0.9375rem;
   padding: 10px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -175,7 +175,7 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--muted);
-  font: 11px/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font: 0.6875rem/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace;
   text-align: center;
 }
 @media not ((hover: hover) and (pointer: fine)) { .option-key { display: none; } }
