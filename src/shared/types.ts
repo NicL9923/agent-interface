@@ -248,7 +248,8 @@ export interface AttentionRequest {
   kind: "clarify" | "official" | "secure";
   title: string;
   detail: string;
-  questions?: { id: string; prompt: string; options?: string[] }[];
+  /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
+  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
 }
 export interface Conversation {

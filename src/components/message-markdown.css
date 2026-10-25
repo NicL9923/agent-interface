@@ -144,7 +144,6 @@
 }
 .markdown-table-scroll {
   max-width: 100%;
-  margin: 1em 0;
   overflow-x: auto;
 }
 .message-markdown table {
@@ -182,3 +181,42 @@
     padding: 12px;
   }
 }
+.markdown-table {
+  margin: 1em 0;
+}
+.markdown-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.markdown-table-actions button {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.markdown-table-actions .markdown-copy-status {
+  padding: 0;
+}
+@media (pointer: coarse) {
+  .markdown-table-actions button { min-height: 44px; }
+}
+/* Highlighted code changes color only, never weight or size, so painting it moves nothing. */
+.message-markdown .hljs {
+  --code-keyword: var(--accent);
+  --code-string: var(--attention);
+  --code-number: var(--danger);
+  --code-comment: var(--muted);
+  --code-title: var(--ink);
+  color: var(--ink);
+}
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal, .hljs-type, .hljs-meta .hljs-keyword, .hljs-doctag, .hljs-section { color: var(--code-keyword); }
+.hljs-string, .hljs-regexp, .hljs-char.escape_, .hljs-attr, .hljs-attribute, .hljs-symbol, .hljs-template-tag, .hljs-template-variable, .hljs-selector-attr, .hljs-link { color: var(--code-string); }
+.hljs-number, .hljs-variable.constant_, .hljs-selector-id, .hljs-selector-class, .hljs-name, .hljs-tag .hljs-attr { color: var(--code-number); }
+.hljs-comment, .hljs-quote, .hljs-meta, .hljs-punctuation, .hljs-tag { color: var(--code-comment); }
+.hljs-comment, .hljs-quote { font-style: italic; }
+.hljs-title, .hljs-title.class_, .hljs-title.function_, .hljs-property, .hljs-params, .hljs-variable { color: var(--code-title); }
+.hljs-addition { color: var(--accent); background: var(--accent-soft); }
+.hljs-deletion { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }

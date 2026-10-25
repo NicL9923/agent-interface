@@ -59,6 +59,12 @@ const paths = {
   folder: "M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z",
   bell: "M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14ZM10 20.5a2 2 0 0 0 4 0",
   alert: "M12 4L2.8 19.5h18.4ZM12 10v4.2M12 17h.01",
+  copy: "M9 9h10v11H9ZM5 15V4h10",
+  share: "M12 15V4M8 8l4-4 4 4M5 12v7h14v-7",
+  bookmark: "M7 4h10v16l-5-4-5 4Z",
+  quote: "M5 11h4v6H5ZM5 11c0-3 1-5 4-6M14 11h4v6h-4ZM14 11c0-3 1-5 4-6",
+  up: "M6 15l6-6 6 6",
+  down: "M6 9l6 6 6-6",
 } as const;
 export type IconName = keyof typeof paths;
 const filledIcons: IconName[] = ["stop"];

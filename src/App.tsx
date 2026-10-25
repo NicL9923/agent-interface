@@ -12,7 +12,7 @@ import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useSubmission } from "./app/use-submission";
-import { useSentEchoes, withEchoes } from "./app/sent-echo";
+import { sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveBotToSection } from "./app/preferences-editing";
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { latestMessageAt, useReadThrough } from "./app/unread";
@@ -54,7 +54,7 @@ export function App() {
   useUrlSync(view, panel, botId, userId);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId, id => {
+  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
     void session.refresh();
@@ -167,19 +167,24 @@ export function App() {
         {/* On a computer the rail is always beside this, so its notice is enough. */}
         {mobile && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading key="groups"><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
-          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} echo={outgoing} state={state}
+          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
-            notifications={notifications} scroll={scroll} content={content} history={history} reply={reply} onScroll={scrolled}
-            onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
+            notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
+            onDraft={text => {
+              // Drafts are known by their text, so one on its way must not change.
+              if (sendingDraft(draft, pending, sending)) return false;
+              setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${text}` : text }));
+              return true;
+            }}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={upload}
             retryUpload={retryUpload} cancelUpload={cancelUpload} pending={pending} receipt={receipt}
             sending={sending} retry={retry}
-            send={() => { history.jumpToLatest(); return send(); }} reviewed={reviewed} setReviewed={setReviewed}
+            send={() => { history.anchorSend(); return send(); }} reviewed={reviewed} setReviewed={setReviewed}
             report={setError}
             refresh={() => void session.refresh()} />}
         </>}

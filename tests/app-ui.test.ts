@@ -98,10 +98,12 @@ describe("conversation state", () => {
       { id: "note", prompt: "Any details?" },
     ] }];
     await render();
-    const select = container.querySelector<HTMLSelectElement>('.approval-card select')!;
-    const submit = container.querySelector<HTMLButtonElement>('.approval-card button')!;
+    const options = () => [...container.querySelectorAll<HTMLInputElement>('.approval-card [data-question="0"] input[type="radio"]')];
+    const submit = container.querySelector<HTMLButtonElement>('.approval-card button[type="submit"]')!;
+    expect(container.querySelector(".approval-card")?.getAttribute("data-attention-id")).toBe("ask");
+    expect(options().map(option => option.closest("label")?.querySelector(".option-label")?.textContent)).toEqual(["First", "Write my own answer", "Write my own answer"]);
     expect(submit.disabled).toBe(true);
-    await act(async () => { select.value = "custom"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => options()[2].click());
     const custom = container.querySelector<HTMLInputElement>('[aria-label="Your answer: Which plan?"]')!;
     await typeInto(custom, "   ");
     await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Any details?"]')!, "Keep the draft");
@@ -111,12 +113,11 @@ describe("conversation state", () => {
     await act(async () => submit.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" } });
     expect(custom.value).toBe("A different plan");
-    await act(async () => { select.value = "option-1"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    // An option that happens to read "Write my own answer" is still an option, not the field.
+    await act(async () => options()[1].click());
     expect(container.querySelector('[aria-label="Your answer: Which plan?"]')).toBeNull();
     await act(async () => submit.click());
     expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" } });
-    await act(async () => { select.value = ""; select.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(submit.disabled).toBe(true);
   });
 
   it("reopens a refused household stream at the fallback interval", async () => {
@@ -744,10 +745,11 @@ describe("conversation state", () => {
     expect(accordions).toHaveLength(1);
     expect(accordions[0].querySelector(".tool-count")?.textContent).toBe("2");
     expect([...accordions[0].querySelectorAll(".reasoning-part")].map(part => part.textContent)).toEqual(["Plan the SSH steps.", "Check the status."]);
-    expect(accordions[0].previousElementSibling?.getAttribute("data-message-id")).toBe("question");
-    const tools = accordions[0].nextElementSibling;
-    expect(tools?.classList.contains("tool-calls")).toBe(true);
-    expect(tools?.nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
+    // Reasoning and tools share the turn's one fold between the prompt and the reply.
+    const fold = accordions[0].closest(".turn-work")!;
+    expect(fold.previousElementSibling?.getAttribute("data-message-id")).toBe("question");
+    expect(accordions[0].nextElementSibling?.classList.contains("tool-calls")).toBe(true);
+    expect(fold.nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
   });
 
   it("switches Stop back to Send while drafting guidance", async () => {
@@ -794,7 +796,7 @@ describe("conversation state", () => {
       { id: "answer-part-two", role: "assistant", text: "The figures match." },
     ], toolCalls: [call] };
     await render();
-    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .tool-calls')]
+    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .turn-work')]
       .map(row => row.getAttribute("data-message-id") ?? "tools");
     expect(order).toEqual(status === "running"
       ? ["question", "commentary", "answer", "answer-part-two", "tools"]
@@ -809,7 +811,7 @@ describe("conversation state", () => {
       { id: "answer", role: "assistant", text: "", files: [{ id: "report", name: "report.txt", mime: "text/plain" }] },
     ] };
     await render();
-    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .tool-calls')]
+    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .turn-work')]
       .map(row => row.getAttribute("data-message-id") ?? "tools");
     expect(order).toEqual(["question", "commentary", "tools", "answer"]);
     expect(container.querySelector('[data-message-id="answer"] a')?.textContent).toContain("report.txt");
@@ -823,15 +825,17 @@ describe("conversation state", () => {
       { id: "answer", role: "assistant", text: "Checking." },
     ] };
     await render();
+    const fold = container.querySelector<HTMLDetailsElement>(".turn-work")!;
     const group = container.querySelector<HTMLDetailsElement>(".tool-calls")!;
     const receipt = group.querySelector<HTMLDetailsElement>(".action-receipt")!;
     const output = receipt.querySelector("pre")!;
-    group.open = receipt.open = true; output.scrollTop = 120;
+    fold.open = group.open = receipt.open = true; output.scrollTop = 120;
     conversation = { ...conversation, activity: { state: "done" }, messages: conversation.messages.map(message =>
       message.toolCall ? { ...message, toolCall: { ...running, status: "completed" as const } } : message) };
     await changed();
+    expect(container.querySelector(".turn-work")).toBe(fold);
     expect(container.querySelector(".tool-calls")).toBe(group);
-    expect(group.open).toBe(true); expect(receipt.open).toBe(true);
+    expect(fold.open).toBe(true); expect(group.open).toBe(true); expect(receipt.open).toBe(true);
     expect(output.scrollTop).toBe(120);
     expect(output.getAttribute("role")).toBe("region");
     expect(output.getAttribute("aria-label")).toBe("Result from terminal");
@@ -924,7 +928,7 @@ describe("conversation state", () => {
       { id: "answer", role: "assistant", text: "The file is in your Documents folder." },
     ] };
     await changed();
-    expect(container.querySelector(".transcript")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
+    expect(container.querySelector(".transcript-content")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
     expect(container.querySelector(".conversation-activity")).toBeNull();
     expect(container.querySelector(".chat-header [data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("idle");
   });
