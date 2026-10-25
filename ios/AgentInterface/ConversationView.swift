@@ -542,7 +542,8 @@ struct ConversationView: View {
       // The store reports a failed page as an error and leaves the window as it was.
       earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == first
       // A message just opened from find or search stays in view as history pages in above it.
-      if let held = highlighted, !following { proxy.scrollTo(held, anchor: .center) }
+      // It waits for the layout pass that adds the page, as scrolling to the latest message does.
+      if let held = highlighted, !following { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
       else if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
