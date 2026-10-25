@@ -3,7 +3,7 @@ import SwiftUI
 /// A hardware keyboard shortcut, delivered to whichever screen owns it. Home opens pinned
 /// assistants and Search; the open chat finds and stops. The number keeps repeats distinct.
 struct KeyboardCommand: Equatable {
-  enum Kind: Equatable { case pinned(Int), find, stop }
+  enum Kind: Equatable { case pinned(Int), find, stop, quickSwitch }
   var number: Int
   var kind: Kind
 }
@@ -16,7 +16,8 @@ extension AppStore {
   var pinnedForShortcuts: [Bot] { bootstrap.map { Array($0.preferences.pinnedAssistants($0.bots).prefix(9)) } ?? [] }
 }
 
-/// The menu iPadOS shows when Command is held, and the Mac menu bar. None of these keys is used by
+/// The menu iPadOS shows when Command is held, and the Mac menu bar. Cmd+K opens the quick
+/// switcher, as in the web app. None of these keys is used by
 /// the composer: its hardware Return sends and Shift-Return adds a line, and Command-Return is
 /// left to the system.
 struct AssistantCommands: Commands {
@@ -28,6 +29,8 @@ struct AssistantCommands: Commands {
           .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
       }
       if !store.pinnedForShortcuts.isEmpty { Divider() }
+      Button("Go to…") { store.command(.quickSwitch) }.keyboardShortcut("k", modifiers: .command)
+        .disabled(store.bootstrap == nil)
       Button("Find") { store.command(.find) }.keyboardShortcut("f", modifiers: .command)
         .disabled(store.bootstrap == nil)
       Button("Stop active work") { store.command(.stop) }.keyboardShortcut(".", modifiers: .command)

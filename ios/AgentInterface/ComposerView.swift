@@ -23,10 +23,13 @@ struct ComposerView: View {
   @State private var modelOpen = false
   @State private var stopping = false
   @State private var dropTargeted = false
+  @State private var recall = PromptRecall()
+  /// A short line after a long paste became an attachment.
+  @State private var pasteNotice: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      ComposerNotices(botId: bot.id, discardConfirm: $discardConfirm)
+      StatusDock(botId: bot.id, discardConfirm: $discardConfirm)
       card
     }.padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
       .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
@@ -87,7 +90,8 @@ struct ComposerView: View {
         set: { text in store.editComposer { $0.text = text } }),
       label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
-      onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } }
+      onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } },
+      onArrow: recallArrow, onPasteLongText: attachLongPaste
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
@@ -155,6 +159,9 @@ struct ComposerView: View {
       .accessibilityIdentifier("sendMessage")
   }
   @ViewBuilder private var footnotes: some View {
+    if let pasteNotice {
+      Label(pasteNotice, systemImage: "doc.text").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("pasteNotice")
+    }
     if store.uploads.uploading && !store.uploads.items.contains(where: { $0.botId == bot.id }) {
       ProgressView("Uploading…").font(.caption)
     } else if store.draft.text.utf16.count > AppStore.maxMessageLength {
@@ -187,7 +194,36 @@ struct ComposerView: View {
     store.listenRequest = nil
     Task { await voice.startRecording() }
   }
+  /// Steps through earlier messages from an empty composer. Never while a message is on its way:
+  /// until it settles, the draft is told apart from its send only by its text.
+  private func recallArrow(_ up: Bool) -> Bool {
+    guard store.draftReady, !store.sending, !store.sendingDraft, store.selectedBotId == bot.id else { recall.reset(); return false }
+    let userId = store.bootstrap?.user.id
+    let text = store.composerDraft.text
+    // The conversation is read only when recall starts, so streamed replies never render the composer.
+    guard let next = recall.arrow(up: up, text: text, messages: { PromptRecall.ownMessages(store.conversation?.messages ?? [], userId: userId) })
+    else { return false }
+    if next != text { store.editComposer { $0.text = next } }
+    return true
+  }
+  /// A paste of 32 KiB or more goes through the upload queue as a text file, like any other file.
+  private func attachLongPaste(_ text: String) {
+    let botId = bot.id
+    Task {
+      guard store.selectedBotId == botId else { return }
+      do {
+        let url = try LargePaste.file(text)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        await store.uploads.attach(urls: [url])
+        guard store.uploads.notice.isEmpty else { return }
+        pasteNotice = LargePaste.notice
+        AccessibilityNotification.Announcement(LargePaste.notice).post()
+      } catch { store.report(error) }
+    }
+  }
   private func send() {
+    recall.reset()
+    pasteNotice = nil
     // The message shows in the transcript at once, so the transcript follows it now. The box keeps
     // focus, as on the web, so the next message can start as soon as this one settles.
     onSent()
@@ -279,46 +315,6 @@ private struct ComposerPickers: ViewModifier {
     Task {
       guard scope == store.scope, store.selectedBotId == botId else { return }
       await store.uploads.attach(images: images, named: "Photo")
-    }
-  }
-}
-
-/// The unconfirmed send, rejection and interruption notices above the message box.
-private struct ComposerNotices: View {
-  var botId: String
-  @Binding var discardConfirm: Bool
-  @Environment(AppStore.self) private var store
-  @Environment(\.colorScheme) private var scheme
-  var body: some View {
-    if store.activity == .interrupted {
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: Bindable(store).interruptionReviewed)
-        .toggleStyle(CheckboxStyle()).font(.footnote)
-    }
-    // A normal send only spins the send button. This appears once the request ended without a receipt.
-    if store.pending != nil, !store.sending {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Checking whether your last message arrived…").font(.footnote)
-        Button("Retry this saved message") { Task { await store.send(reviewedUncertain: true) } }
-          .font(.footnote).disabled(store.sending || !store.supports(.idempotency) || !store.connected)
-        // A send that never resolves would otherwise block this assistant on this device.
-        Button("Discard and keep my text in the draft", role: .destructive) {
-          discardConfirm = true
-        }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
-      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .contain)
-    }
-    if store.holdsText(for: botId) {
-      Text("Text from a notification, Siri or the Share sheet joins this draft once your last message settles.")
-        .font(.footnote).foregroundStyle(.secondary)
-    }
-    if let receipt = store.receipt, receipt.status == "rejected" {
-      Text(receipt.message?.isEmpty == false ? receipt.message! : "Hermes did not accept this message. Your draft is saved.")
-        .font(.footnote).foregroundStyle(Palette.attention)
-    }
-    if store.receipt?.status == "interrupted" {
-      Text("This submission was interrupted. Review its last actions before trying again.")
-        .font(.footnote).foregroundStyle(Palette.attention)
     }
   }
 }

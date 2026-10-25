@@ -31,12 +31,20 @@ struct HomeSectionPicker: View {
   var botId: String
   /// Asks for a name; the new section is created from the alert.
   var newSection: () -> Void
+  /// Called after a move to an existing section or to none, with the section it left. Home offers Undo.
+  var moved: ((_ from: String?, _ to: String?) -> Void)? = nil
   @Environment(AppStore.self) private var store
   private static let new = "new-section"
   var body: some View {
     let selection = Binding<String>(
       get: { store.homeSectionId(of: botId) ?? "" },
-      set: { value in if value == Self.new { newSection() } else { store.homeMove(botId, toSection: value.isEmpty ? nil : value) } })
+      set: { value in
+        if value == Self.new { newSection(); return }
+        let from = store.homeSectionId(of: botId), to = value.isEmpty ? nil : value
+        guard from != to else { return }
+        store.homeMove(botId, toSection: to)
+        moved?(from, to)
+      })
     Picker("Home section", selection: selection) {
       Text("None").tag("")
       ForEach(store.homePreferences?.sections ?? []) { section in

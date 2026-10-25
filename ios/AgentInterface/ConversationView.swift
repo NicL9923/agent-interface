@@ -34,7 +34,6 @@ struct ConversationView: View {
   var edit: () -> Void
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
-  @State private var checkingConnection = false
   private let reachability = NetworkReachability.shared
   @State private var earlierFailed = false
   @State private var visibleMessage: String?
@@ -119,8 +118,8 @@ struct ConversationView: View {
     if let date = store.offlineSavedAt, store.householdConnected, !reachability.offline {
       Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reloading this chat…")
         .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("chatSavedCopy")
-    } else if cardShown { connectionCard }
-    // The connection card already says a poll failed; its error would only repeat it.
+    }
+    // The connection card in the status dock already says a poll failed; its error would only repeat it.
     if let error = store.error, store.connectionError == nil || !cardShown {
       ErrorBanner(message: error, dismiss: { store.dismissError() }).padding(.horizontal).padding(.bottom, 8)
     }
@@ -513,32 +512,6 @@ struct ConversationView: View {
       .disabled(busy || !store.connected || store.pending != nil || !store.supports(.chat))
       .accessibilityHint("Sends your last message again. Your draft stays as it is.")
       .accessibilityIdentifier("retryTurn")
-  }
-  /// The compact connection card the web shows above the transcript while Hermes is unreachable.
-  private var connectionCard: some View {
-    let connection = store.bootstrap?.connection
-    let copy = ConnectionCopy.compact(code: connection?.code, appUnavailable: store.appUnavailable, offline: reachability.offline)
-    return VStack(alignment: .leading, spacing: 6) {
-      Text(copy.title).font(.subheadline.bold())
-      Text(copy.detail).font(.caption).foregroundStyle(.secondary)
-      Button(checkingConnection ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now") {
-        checkingConnection = true
-        Task { await store.reconnect(); checkingConnection = false }
-      }.font(.caption).buttonStyle(.bordered).disabled(checkingConnection || reachability.offline).padding(.vertical, 2)
-      DisclosureGroup(copy.setup ? "Set up this installation" : "Connection details") {
-        VStack(alignment: .leading, spacing: 8) {
-          if let address = connection?.address { Text("Hermes address: \(address)").textSelection(.enabled) }
-          if let detail = connection?.detail, !detail.isEmpty { Text(detail) }
-          if let last = connection?.lastConnectedAt, !When.format(last).isEmpty { Text("Last connected \(When.format(last, inline: true)).") }
-          if copy.setup {
-            Text("On the computer running WildBots, open its project folder and run `npm run setup`. Setup keeps the connection token on that computer. Restart this app after saving; everyone else can simply sign in.")
-          }
-          Text("For a read-only connection check on that computer, run `npm run doctor`.")
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-      }.font(.caption).foregroundStyle(.secondary)
-    }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-      .background(Palette.raised(scheme)).overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
-      .accessibilityElement(children: .contain).accessibilityIdentifier("connectionCard")
   }
   private var composer: some View {
     ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }
