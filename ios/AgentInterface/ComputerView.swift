@@ -94,12 +94,12 @@ struct ComputerView: View {
       .task { await watchStatus() }
       .task(id: store.scope) { await attach() }
       // Losing control elsewhere takes input away here at once, before the server fences it.
-      .onChange(of: DesktopLink.controlling(status)) { _, _ in desktop.statusChanged(status) }
+      .onChange(of: status) { _, status in desktop.statusChanged(status) }
       .onAppear { desktop.returned() }
       .onDisappear {
         // After a takeover still on its way, whatever this viewer holds goes back to the assistants.
-        let viewer = viewerId, store = store, desktop = desktop
-        Task { await desktop.leave(store, viewerId: viewer) }
+        let store = store, desktop = desktop
+        Task { await desktop.leave(store) }
         // A reconnect still waiting must not fetch tickets for a screen that is gone.
         epoch += 1
       }
@@ -116,8 +116,7 @@ struct ComputerView: View {
       }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
         .accessibilityIdentifier("computerStatus")
       Button(desktop.submitting ? "Updating…" : desktop.held ? "Hand back" : "Take over") {
-        guard let viewerId else { return }
-        Task { if desktop.held { await desktop.release(store, viewerId: viewerId) } else { await desktop.take(store, viewerId: viewerId) } }
+        Task { if desktop.held { await desktop.release(store) } else { await desktop.take(store) } }
       }.buttonStyle(.borderedProminent).tint(desktop.held ? Palette.muted : Palette.accent)
         .disabled(desktop.submitting || viewerId == nil || !desktop.held && (phase != .connected || !DesktopLink.canTake(status)))
         .accessibilityIdentifier("computerControl")
@@ -154,7 +153,7 @@ struct ComputerView: View {
   }
   /// The viewer takes input only while this viewer holds the desktop, no control change is on its
   /// way, and the page is connected; a dropped connection watches until it reconnects.
-  private var input: Bool { desktop.held && !desktop.submitting && phase == .connected }
+  private var input: Bool { desktop.input && phase == .connected }
   private var phaseLabel: String {
     switch phase {
     case .opening: "Opening desktop"
@@ -196,6 +195,7 @@ struct ComputerView: View {
     case .success(let value)?:
       error = nil
       if let id = value.viewerId { viewerId = id }
+      if let viewerId { desktop.opened(store, viewerId: viewerId) }
       ticket = value
       await connectDeadline(value, epoch: current)
     case .failure(let failure)?: dropped(failure.localizedDescription, epoch: current)
@@ -236,26 +236,60 @@ struct ComputerView: View {
   }
 }
 
-/// The desktop's control from one screen's side. `held` follows the server: a takeover that it
-/// confirmed for this viewer sets it, and a hand back or the server's status saying this person no
-/// longer holds the desktop clears it. A dropped connection does not, since watching locally proves
-/// nothing about the server's lease. Leaving waits for a takeover still on its way, then hands back
-/// whatever this viewer holds, so assistants are never left paused by a screen that is gone.
+/// The desktop's control from one screen's side. The screen's viewer, with the signed-in client
+/// and account it was opened with, is captured once the desktop attaches. `held` is the server's
+/// word: a takeover it confirmed sets it, and a hand back or an available status that says this
+/// person no longer holds the desktop clears it. An unavailable status only stops input. Leaving
+/// does not trust any of that: it waits for a takeover still on its way to settle, whatever its
+/// result, then always hands back that viewer through that same client, so assistants are never
+/// left paused by a screen that is gone. The server ignores a release for a viewer that holds
+/// nothing and refuses one that would touch anyone else's control.
 @MainActor @Observable final class DesktopControl {
+  struct Viewer: Equatable {
+    var id: String
+    var client: APIClient
+    var account: String?
+    static func == (a: Self, b: Self) -> Bool { a.id == b.id && a.client === b.client && a.account == b.account }
+  }
   private(set) var held = false
+  /// The last status said the desktop is unavailable, so input waits until it is back.
+  private(set) var unavailable = false
   private(set) var submitting = false
   private(set) var error: String?
-  @ObservationIgnored private var pendingTake: Task<Result<ComputerStatus, Error>?, Never>?
+  @ObservationIgnored private(set) var viewer: Viewer?
+  @ObservationIgnored private var pendingTake: Task<Result<ComputerStatus, Error>, Never>?
   @ObservationIgnored private(set) var left = false
+  /// Whether the viewer takes the person's input now.
+  var input: Bool { held && !unavailable && !submitting }
+  /// The desktop attached with this viewer, through the store's current client and account. A
+  /// different viewer than before, as after another account signed in, hands the earlier one back
+  /// through its own client once its takeover, if any, settles.
+  func opened(_ store: AppStore, viewerId: String) {
+    guard let client = store.api else { return }
+    let next = Viewer(id: viewerId, client: client, account: store.scope)
+    guard next != viewer else { return }
+    if let earlier = viewer {
+      let pending = pendingTake
+      Task { if let pending { _ = await pending.value }; await Self.handBack(store, earlier) }
+      held = false
+    }
+    viewer = next
+  }
+  private static func handBack(_ store: AppStore, _ viewer: Viewer) async {
+    guard viewer.client.token != nil else { return }
+    _ = await store.controlComputer("release", viewerId: viewer.id, through: viewer.client, scope: viewer.account)
+  }
   /// Take over. Input stays off until the server confirms it; a takeover is never replayed after a failure.
-  func take(_ store: AppStore, viewerId: String) async {
-    guard !submitting, !left else { return }
+  func take(_ store: AppStore) async {
+    guard !submitting, !left, let viewer else { return }
     submitting = true
     error = nil
-    let task = Task { [weak self] () -> Result<ComputerStatus, Error>? in
-      let result = await store.controlComputer("take", viewerId: viewerId) { self?.left == false }
+    let task = Task { [weak self] () -> Result<ComputerStatus, Error> in
+      let result = await store.controlComputer("take", viewerId: viewer.id, through: viewer.client, scope: viewer.account) {
+        self?.left == false
+      }
       // Recorded here, before anyone waiting on the takeover resumes, so leaving sees it.
-      if case .success(let next)? = result { self?.held = DesktopLink.controlling(next) }
+      if case .success(let next) = result, self?.left == false, self?.viewer == viewer { self?.held = DesktopLink.controlling(next) }
       return result
     }
     pendingTake = task
@@ -264,37 +298,45 @@ struct ComputerView: View {
     submitting = false
     guard !left else { return }
     switch result {
-    case .success?: AccessibilityNotification.Announcement(held ? "You have control of the desktop." : "You are watching the desktop.").post()
-    case .failure(let failure)?: error = failure.localizedDescription + " You are watching. Try Take over again."
-    case nil: break
+    case .success: AccessibilityNotification.Announcement(held ? "You have control of the desktop." : "You are watching the desktop.").post()
+    case .failure(let failure): error = failure.localizedDescription + " You are watching. Try Take over again."
     }
   }
   /// Hand back. Input stops at once; the desktop stays this viewer's until the server confirms.
-  func release(_ store: AppStore, viewerId: String) async {
-    guard !submitting, !left else { return }
+  func release(_ store: AppStore) async {
+    guard !submitting, !left, let viewer else { return }
     submitting = true
     error = nil
     defer { submitting = false }
-    switch await store.controlComputer("release", viewerId: viewerId, publish: { [weak self] in self?.left == false }) {
-    case .success?:
+    let result = await store.controlComputer("release", viewerId: viewer.id, through: viewer.client, scope: viewer.account) {
+      [weak self] in self?.left == false
+    }
+    // A screen that is gone says nothing more.
+    guard !left else { return }
+    switch result {
+    case .success:
       held = false
       AccessibilityNotification.Announcement("You are watching the desktop.").post()
-    case .failure(let failure)?: error = failure.localizedDescription
-    case nil: break
+    case .failure(let failure): error = failure.localizedDescription
     }
   }
-  /// The server's status changed: losing control elsewhere ends it here at once.
+  /// The server's status changed. Losing control elsewhere ends it here at once; an unavailable
+  /// status, as when Hermes could not be read, only stops input until the desktop is back.
   func statusChanged(_ status: ComputerStatus?) {
-    if held && !DesktopLink.controlling(status) { held = false }
+    guard let status else { return }
+    unavailable = !status.available
+    if status.available && held && !DesktopLink.controlling(status) { held = false }
   }
   func returned() { left = false }
-  /// The screen is gone. After any takeover still on its way, hands back what this viewer holds,
-  /// with the viewer identity captured when it left.
-  func leave(_ store: AppStore, viewerId: String?) async {
+  /// The screen is gone: after any takeover still on its way settles, hands back this viewer
+  /// through the client it was opened with. Skipped only when that client's sign-in is gone, since
+  /// another account's client must never send it.
+  func leave(_ store: AppStore) async {
     left = true
     if let pendingTake { _ = await pendingTake.value }
-    guard held, let viewerId else { return }
-    if case .success? = await store.controlComputer("release", viewerId: viewerId) { held = false }
+    guard let viewer else { return }
+    await Self.handBack(store, viewer)
+    held = false
   }
 }
 

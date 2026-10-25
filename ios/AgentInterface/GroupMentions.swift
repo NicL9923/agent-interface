@@ -124,18 +124,35 @@ private struct GroupWatch: ViewModifier {
   }
 }
 
-/// Runs refreshes one at a time. One asked for while another runs is folded into a single run after
-/// it, so the stream, the fallback poll and actions never overlap and the latest snapshot lands last.
+/// Runs refreshes one at a time. One asked for while another runs waits for it, then runs in a task
+/// of its own with the work it brought, so the stream, the fallback poll and actions never overlap,
+/// the latest snapshot lands last, and a caller that was cancelled meanwhile, as an old room's
+/// watch, never swallows a fresh caller's refresh. Callers that ask while one is already queued
+/// join that one.
 @MainActor final class SerialRefresh {
-  private var running = false
-  private var again = false
-  func run(_ work: () async -> Void) async {
-    if running { again = true; return }
-    running = true
-    defer { running = false }
-    repeat {
-      again = false
+  private var tail: Task<Void, Never>?
+  private var queued: (id: Int, task: Task<Void, Never>)?
+  private var next = 0
+  /// Callers waiting behind a refresh that is running.
+  private(set) var waiting = 0
+  func run(_ work: @escaping @MainActor () async -> Void) async {
+    if let queued {
+      waiting += 1
+      await queued.task.value
+      waiting -= 1
+      return
+    }
+    next += 1
+    let id = next, previous = tail
+    let task = Task { @MainActor [weak self] in
+      await previous?.value
+      if self?.queued?.id == id { self?.queued = nil }
       await work()
-    } while again
+    }
+    tail = task
+    if previous != nil { queued = (id, task); waiting += 1 }
+    await task.value
+    if previous != nil { waiting -= 1 }
+    if tail == task { tail = nil }
   }
 }

@@ -766,6 +766,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   }
   private static func missing(_ error: Error) -> Bool { (error as? APIError)?.code == "assistant_not_found" }
   func select(_ id: String?, navigate: Bool = true) async {
+    selections += 1
     if id != nil { stayHome = false; notice = nil }
     persistDraft()
     flushDraft()
@@ -1598,17 +1599,27 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// Each call is one operation: a later open, a find step to a loaded message, another account or
   /// another assistant makes it obsolete, and an obsolete one changes neither window nor focus.
   func openConversation(botId: String, atMessage messageId: String?) async {
-    openRequests += 1
-    let request = openRequests, account = scope
-    let current = { [weak self] in self?.openRequests == request && self?.scope == account && self?.selectedBotId == botId }
-    if selectedBotId != botId || conversation?.botId != botId { await select(botId) } else { conversationRequest = UUID() }
+    // A newer open supersedes the last one, whatever it targets: its window request is dropped too.
+    cancelOpeningAtMessage()
+    let request = openRequests, account = scope, before = selections
+    if selectedBotId != botId || conversation?.botId != botId {
+      await select(botId)
+      // Bound to the selection it made: any other selection meanwhile makes it obsolete.
+      guard selections == before + 1 else { return }
+    } else { conversationRequest = UUID() }
+    let selection = selections
+    let current = { [weak self] in
+      self?.openRequests == request && self?.scope == account && self?.selectedBotId == botId && self?.selections == selection
+    }
     guard let messageId, current() else { return }
     if conversation?.messages.contains(where: { $0.id == messageId }) != true {
       // The window now starts at the message; polls keep it, and pages add history above it.
+      requestedWindow = (botId, messageId, historyStarts[botId])
       historyStarts[botId] = messageId
       windowGeneration += 1
       await refreshConversation()
       guard current() else { return }
+      requestedWindow = nil
     }
     guard conversation?.messages.contains(where: { $0.id == messageId }) == true else {
       // The message is gone or the read failed: keep the window that did load, at its latest message.
@@ -1618,14 +1629,20 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     focusedMessage = MessageFocus(botId: botId, messageId: messageId)
   }
   @ObservationIgnored private var openRequests = 0
-  /// Makes any open-at-message still loading obsolete, as find moving to a loaded message does. A
-  /// window it asked for is dropped, and polls keep the window that is loaded.
+  /// Counts selections, so an open-at bound to one notices any other.
+  @ObservationIgnored private var selections = 0
+  /// Makes any open-at-message still loading obsolete, as a newer open or find moving to a loaded
+  /// message does. A window it asked for and has not applied is dropped: the window before it comes
+  /// back, and its read, still on the way, is refused.
   func cancelOpeningAtMessage() {
     openRequests += 1
-    guard let id = selectedBotId, let first = conversation?.messages.first?.id, historyStarts[id] != first else { return }
-    historyStarts[id] = first
+    guard let requested = requestedWindow else { return }
+    requestedWindow = nil
+    guard historyStarts[requested.botId] == requested.start else { return }
+    historyStarts[requested.botId] = requested.previous
     windowGeneration += 1
   }
+  @ObservationIgnored private var requestedWindow: (botId: String, start: String, previous: String?)?
 
   func reconnect() async {
     guard let api else { return }
@@ -1927,20 +1944,22 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     else { return }
     computerStatus = value
   }
-  /// Takes over or hands back the shared desktop for a viewer. Status reads are ordered against it:
-  /// one started before or during it is dropped, so an older read never undoes it. `publish` says,
-  /// once it answers, whether its status still belongs in the store, as for the screen that asked.
-  func controlComputer(_ action: String, viewerId: String, publish: @escaping @MainActor () -> Bool = { true }) async
-    -> Result<ComputerStatus, Error>?
+  /// Takes over or hands back the shared desktop for a viewer, through the client the screen opened
+  /// it with. The raw outcome always comes back, even once the account changed, since cleanup needs
+  /// it; its status reaches the store only for that same client and account, and when `publish`
+  /// still says so. Status reads are ordered against it: one started before or during it is
+  /// dropped, so an older read never undoes it.
+  func controlComputer(_ action: String, viewerId: String, through client: APIClient, scope account: String?,
+    publish: @MainActor () -> Bool = { true }) async -> Result<ComputerStatus, Error>
   {
     computerEpoch += 1
     computerWrites += 1
     defer { computerWrites -= 1; computerEpoch += 1 }
-    let result = await attempt { context -> ComputerStatus in
-      try await context.api.write("/computer/control", ["action": action, "viewerId": viewerId])
-    }
-    if case .success(let next)? = result, publish() { computerStatus = next }
-    return result
+    do {
+      let next: ComputerStatus = try await client.write("/computer/control", ["action": action, "viewerId": viewerId])
+      if api === client, scope == account, !sessionExpired, publish() { computerStatus = next }
+      return .success(next)
+    } catch { return .failure(error) }
   }
   @ObservationIgnored private var computerEpoch = 0
   @ObservationIgnored private var computerWrites = 0

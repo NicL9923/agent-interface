@@ -1206,7 +1206,7 @@ enum FindMatches {
 /// Which row is the sent message the transcript holds near the top, as the web follows it: the echo
 /// under its request ID, then the copy the receipt names, which it waits for rather than taking
 /// another row. Only while no receipt names one does it guess this person's newest message with the
-/// sent words, so another member's newer message never takes the anchor.
+/// sent words, so another member's newer message, or a scheduled one, never takes the anchor.
 enum SendAnchor {
   static func resolve(_ messages: [Message], requestId: String, messageId: String?, text: String?, senderId: String?) -> String? {
     if messages.contains(where: { $0.id == requestId }) { return requestId }
@@ -1214,7 +1214,7 @@ enum SendAnchor {
     let words = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !words.isEmpty else { return nil }
     return messages.last {
-      $0.role == "user" && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ($0.sender == nil || $0.sender?.id == senderId)
+      $0.isHumanMessage && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ($0.sender == nil || $0.sender?.id == senderId)
     }?.id
   }
 }

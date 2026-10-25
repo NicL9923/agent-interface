@@ -63,7 +63,8 @@ import XCTest
     value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"""
       {"user":{"id":"review-\#(UUID().uuidString)","name":"Tester","email":"t@example.test"},"household":[],
        "preferences":{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]},
-       "bots":[{"id":"bot","name":"Bot","model":"test","shared":true,"activity":"idle"}],
+       "bots":[{"id":"bot","name":"Bot","model":"test","shared":true,"activity":"idle"},
+               {"id":"b","name":"B","model":"test","shared":true,"activity":"idle"}],
        "capabilities":{"chat":{"supported":true}},"connection":{"connected":true},"csrfToken":null}
       """#.utf8))
     stores.append(value); hosts.append(host)
@@ -98,76 +99,134 @@ import XCTest
   private final class Desktop: @unchecked Sendable {
     let lock = NSLock()
     var owner = #"{"kind":"bot","name":"Ranch"}"#
+    var available = true
+    var reads = 0
   }
-  private func desktopHost(_ desktop: Desktop, hold: @escaping @Sendable (String) -> Bool) -> HoldingHost {
+  /// A desktop server. A status read answers with "Fresh read" as the holder's name, so a test can
+  /// tell a read's status from a control write's.
+  private func desktopHost(_ desktop: Desktop, hold: @escaping @Sendable (String, Int) -> Bool) -> HoldingHost {
     HoldingHost(answer: { request, body in
       desktop.lock.withLock {
         let action = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["action"] as? String
         if request.url?.path == "/api/computer/control" {
           desktop.owner = action == "take" ? #"{"kind":"human","mine":true,"name":"Tester"}"# : #"{"kind":"idle"}"#
+          return .init(body: #"{"available":true,"control":\#(desktop.owner)}"#)
         }
-        return .init(body: #"{"available":true,"control":\#(desktop.owner)}"#)
+        let owner = desktop.owner.replacingOccurrences(of: "Tester", with: "Fresh read")
+        return .init(body: desktop.available ? #"{"available":true,"control":\#(owner)}"# : #"{"available":false,"reason":"Hermes did not answer","control":{"kind":"idle"}}"#)
       }
     }, holding: { request, body in
       let action = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["action"] as? String
       let key = request.url?.path == "/api/computer" ? "status" : action ?? ""
-      return hold(key) ? key : nil
+      let count = desktop.lock.withLock { () -> Int in
+        if key == "status" { desktop.reads += 1; return desktop.reads }
+        return 0
+      }
+      return hold(key, count) ? key : nil
     })
   }
+  private func releases(_ host: HoldingHost) -> [String?] {
+    host.bodies(path: "/api/computer/control").filter { $0["action"] as? String == "release" }.map { $0["viewerId"] as? String }
+  }
+  private func status(_ json: String) throws -> ComputerStatus { try JSONDecoder().decode(ComputerStatus.self, from: Data(json.utf8)) }
 
   func testAStatusReadFromBeforeATakeoverCannotUndoIt() async throws {
     let desktop = Desktop()
-    let host = desktopHost(desktop) { $0 == "status" }
+    // Only the first read is held; it started before the takeover.
+    let host = desktopHost(desktop) { key, count in key == "status" && count == 1 }
     let value = try store(host)
     let read = Task { await value.refreshComputer() }
     try await until { host.heldCount("status") == 1 }
     let control = DesktopControl()
-    await control.take(value, viewerId: "viewer-1")
+    control.opened(value, viewerId: "viewer-1")
+    await control.take(value)
     XCTAssertTrue(control.held)
-    XCTAssertTrue(DesktopLink.controlling(value.computerStatus))
-    // The read saw the assistant's control before the takeover; it lands after it.
+    XCTAssertEqual(value.computerStatus?.control.name, "Tester")
     host.release("status")
     await read.value
-    XCTAssertTrue(DesktopLink.controlling(value.computerStatus), "An older read never replaces the takeover's status")
+    XCTAssertEqual(value.computerStatus?.control.name, "Tester", "An older read never replaces the takeover's status")
     control.statusChanged(value.computerStatus)
     XCTAssertTrue(control.held, "So the screen keeps control and offers Hand back")
+    // A read started after the takeover answers and applies as usual.
     await value.refreshComputer()
-    XCTAssertTrue(DesktopLink.controlling(value.computerStatus), "A read started after it applies as usual")
+    XCTAssertEqual(value.computerStatus?.control.name, "Fresh read")
+    XCTAssertTrue(DesktopLink.controlling(value.computerStatus))
   }
 
   func testLeavingDuringATakeoverHandsTheDesktopBackOnceItLands() async throws {
     let desktop = Desktop()
-    let host = desktopHost(desktop) { $0 == "take" }
+    let host = desktopHost(desktop) { key, _ in key == "take" }
     let value = try store(host)
     let control = DesktopControl()
-    let take = Task { await control.take(value, viewerId: "viewer-1") }
+    control.opened(value, viewerId: "viewer-1")
+    let take = Task { await control.take(value) }
     try await until { host.heldCount("take") == 1 }
-    // The screen closes while the takeover is on its way, with that viewer's identity.
-    let leave = Task { await control.leave(value, viewerId: "viewer-1") }
+    // The screen closes while the takeover is on its way.
+    let leave = Task { await control.leave(value) }
     host.release("take")
     await take.value
     await leave.value
-    let releases = host.bodies(path: "/api/computer/control").filter { $0["action"] as? String == "release" }
-    XCTAssertEqual(releases.count, 1, "The late takeover is handed back")
-    XCTAssertEqual(releases.first?["viewerId"] as? String, "viewer-1")
-    XCTAssertFalse(control.held)
+    XCTAssertEqual(releases(host), ["viewer-1"], "The late takeover is handed back")
     XCTAssertFalse(DesktopLink.controlling(value.computerStatus))
   }
 
-  func testLeavingHandsBackWhatTheServerConfirmedEvenAfterTheViewWentToWatching() async throws {
+  func testAnUnavailableStatusOnlyStopsInputAndLeavingStillHandsBack() async throws {
     let desktop = Desktop()
-    let host = desktopHost(desktop) { _ in false }
+    let host = desktopHost(desktop) { _, _ in false }
     let value = try store(host)
     let control = DesktopControl()
-    await control.take(value, viewerId: "viewer-1")
-    XCTAssertTrue(control.held)
-    // A dropped connection puts the viewer in watch mode, which says nothing of the server's lease.
-    await control.leave(value, viewerId: "viewer-1")
-    XCTAssertEqual(host.bodies(path: "/api/computer/control").map { $0["action"] as? String }, ["take", "release"])
-    // Nothing held, nothing to hand back.
-    let idle = DesktopControl()
-    await idle.leave(value, viewerId: "viewer-2")
-    XCTAssertEqual(host.bodies(path: "/api/computer/control").count, 2)
+    control.opened(value, viewerId: "viewer-1")
+    await control.take(value)
+    XCTAssertTrue(control.input)
+    // One status read fails in Hermes; the server answers 200 with the desktop unavailable.
+    desktop.lock.withLock { desktop.available = false }
+    await value.refreshComputer()
+    control.statusChanged(value.computerStatus)
+    XCTAssertFalse(control.input, "Input stops while the desktop is unavailable")
+    XCTAssertTrue(control.held, "The lease the server confirmed is not forgotten")
+    desktop.lock.withLock { desktop.available = true }
+    await value.refreshComputer()
+    control.statusChanged(value.computerStatus)
+    XCTAssertTrue(control.input, "Back with the person still in control")
+    await control.leave(value)
+    XCTAssertEqual(releases(host), ["viewer-1"])
+  }
+
+  func testLeavingAlwaysHandsBackTheViewerEvenWithNothingConfirmed() async throws {
+    let desktop = Desktop()
+    let host = desktopHost(desktop) { _, _ in false }
+    let value = try store(host)
+    let control = DesktopControl()
+    control.opened(value, viewerId: "viewer-1")
+    // Nothing confirmed here; leaving does not trust that and hands the viewer back anyway.
+    await control.leave(value)
+    XCTAssertEqual(releases(host), ["viewer-1"], "Sent whatever this screen believes")
+    XCTAssertNil(control.error, "A release for a viewer holding nothing is not an error to show")
+  }
+
+  func testATakeoverThatLandsAfterAnAccountSwitchIsHandedBackThroughItsOwnClient() async throws {
+    let desktop = Desktop(), other = Desktop()
+    let host = desktopHost(desktop) { key, _ in key == "take" }
+    let otherHost = desktopHost(other) { _, _ in false }
+    let value = try store(host)
+    let control = DesktopControl()
+    control.opened(value, viewerId: "viewer-1")
+    let take = Task { await control.take(value) }
+    try await until { host.heldCount("take") == 1 }
+    let leave = Task { await control.leave(value) }
+    // Another member signs in before the takeover answers.
+    value.api = otherHost.api(); hosts.append(otherHost)
+    value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"""
+      {"user":{"id":"other-\#(UUID().uuidString)","name":"Other","email":"o@example.test"},"household":[],
+       "preferences":{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]},
+       "bots":[],"capabilities":{},"connection":{"connected":true},"csrfToken":null}
+      """#.utf8))
+    host.release("take")
+    await take.value
+    await leave.value
+    XCTAssertEqual(releases(host), ["viewer-1"], "Released through the client that took it")
+    XCTAssertTrue(otherHost.requests.isEmpty, "Nothing goes through the new account's client")
+    XCTAssertNil(value.computerStatus, "Nothing of the old account reaches the new one")
   }
 
   // MARK: 4. Opening a chat at a message
@@ -175,14 +234,20 @@ import XCTest
   private final class History: @unchecked Sendable {
     let lock = NSLock()
     let messages: [[String: Any]] = (1...6).map { ["id": "m\($0)", "role": $0 % 2 == 1 ? "user" : "assistant", "text": "Message \($0)"] }
+    /// How many messages the latest page holds.
+    var latest = 2
   }
-  private func historyHost(hold: String?) -> HoldingHost {
-    let history = History()
+  private func historyHost(hold: String?, history: History = History()) -> HoldingHost {
     return HoldingHost(answer: { request, _ in
+      if request.url?.path == "/api/bots/b/conversation" {
+        return .init(body: Self.json(["botId": "b", "sessionId": "other", "messages": [["id": "b1", "role": "user", "text": "Hi"]],
+          "activity": ["state": "idle"], "approvals": [], "files": []]))
+      }
       guard request.url?.path == "/api/bots/bot/conversation" else { return .init() }
       let start = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "start" }?.value
       let messages = history.messages
-      let from = start.flatMap { id in messages.firstIndex { $0["id"] as? String == id } } ?? messages.count - 2
+      let latest = history.lock.withLock { history.latest }
+      let from = start.flatMap { id in messages.firstIndex { $0["id"] as? String == id } } ?? messages.count - latest
       return .init(body: Self.json(["botId": "bot", "sessionId": "session", "messages": Array(messages[from...]), "earlier": from,
         "activity": ["state": "idle"], "approvals": [], "files": [], "draft": ["text": "", "attachments": [], "revision": 1]]))
     }, holding: { request, _ in
@@ -217,6 +282,38 @@ import XCTest
     XCTAssertEqual(lastStart(host), "start=m2", "Polls keep the newer window")
   }
 
+  func testAnOpenAtObsoletedByLeavingAndReturningNeverRefocuses() async throws {
+    let history = History()
+    let host = historyHost(hold: "m3", history: history)
+    let value = try await openStore(host)
+    let older = Task { await value.openConversation(botId: "bot", atMessage: "m3") }
+    try await until { host.heldCount("m3") == 1 }
+    // The person goes to another assistant and back; the latest page now holds m3 too.
+    history.lock.withLock { history.latest = 4 }
+    await value.select("b")
+    await value.select("bot")
+    XCTAssertEqual(value.conversation?.messages.map(\.id), ["m3", "m4", "m5", "m6"])
+    host.release("m3")
+    await older.value
+    XCTAssertNil(value.focusedMessage, "The abandoned open never jumps the newly opened chat")
+  }
+
+  func testANewerOpenOfALoadedMessageDropsTheOlderWindow() async throws {
+    let host = historyHost(hold: "m3")
+    let value = try await openStore(host)
+    let older = Task { await value.openConversation(botId: "bot", atMessage: "m3") }
+    try await until { host.heldCount("m3") == 1 }
+    await value.openConversation(botId: "bot", atMessage: "m5")
+    XCTAssertEqual(value.focusedMessage?.messageId, "m5")
+    host.release("m3")
+    await older.value
+    XCTAssertEqual(value.conversation?.messages.map(\.id), ["m5", "m6"], "The older window never lands")
+    XCTAssertEqual(value.focusedMessage?.messageId, "m5")
+    await value.refreshConversation()
+    XCTAssertNotEqual(lastStart(host), "start=m3", "Polls keep the window that is loaded")
+    XCTAssertEqual(value.conversation?.messages.first?.id, "m5")
+  }
+
   func testAFindStepToALoadedMessageMakesAPendingOpenObsolete() async throws {
     let host = historyHost(hold: "m3")
     let value = try await openStore(host)
@@ -228,7 +325,8 @@ import XCTest
     XCTAssertNil(value.focusedMessage)
     XCTAssertEqual(value.conversation?.messages.map(\.id), ["m5", "m6"], "The window it asked for is dropped")
     await value.refreshConversation()
-    XCTAssertEqual(lastStart(host), "start=m5")
+    XCTAssertNotEqual(lastStart(host), "start=m3")
+    XCTAssertEqual(value.conversation?.messages.first?.id, "m5")
   }
 
   // MARK: 5. Search
@@ -256,7 +354,7 @@ import XCTest
   func testOverlappingRoomRefreshesRunOneAtATimeAndFoldTogether() async throws {
     let refresh = SerialRefresh(), gate = Gate()
     var running = 0, peak = 0, runs = 0
-    let work = {
+    let work: @MainActor () async -> Void = {
       runs += 1; running += 1; peak = max(peak, running)
       await gate.wait()
       running -= 1
@@ -264,14 +362,31 @@ import XCTest
     let first = Task { await refresh.run(work) }
     try await until { gate.count == 1 }
     // A notice, the fallback poll and an action all ask while the first load runs.
-    await refresh.run(work); await refresh.run(work); await refresh.run(work)
+    let asks = (0..<3).map { _ in Task { await refresh.run(work) } }
+    try await until { refresh.waiting == 3 }
     XCTAssertEqual(runs, 1)
     gate.open()
     try await until { gate.count == 1 }
     XCTAssertEqual(runs, 2, "The three requests become one more load")
     gate.open()
     await first.value
+    for ask in asks { await ask.value }
     XCTAssertEqual(runs, 2); XCTAssertEqual(peak, 1, "Loads never overlap")
+  }
+
+  func testACancelledLoadNeverSwallowsAFreshCallersRefresh() async throws {
+    let refresh = SerialRefresh(), gate = Gate()
+    var applied: [String] = []
+    // The old room's watch is loading when the scene changes and cancels it.
+    let owner = Task { await refresh.run { await gate.wait(); applied.append("old snapshot") } }
+    try await until { gate.count == 1 }
+    owner.cancel()
+    // The reconnected watch asks for a fresh snapshot while the cancelled load still runs.
+    let live = Task { await refresh.run { applied.append(Task.isCancelled ? "skipped" : "fresh snapshot") } }
+    gate.open()
+    await owner.value
+    await live.value
+    XCTAssertEqual(applied.last, "fresh snapshot", "The live caller's own work runs, in a task that is not cancelled")
   }
 
   // MARK: Send anchor
@@ -288,6 +403,9 @@ import XCTest
     XCTAssertEqual(SendAnchor.resolve([mine, theirs], requestId: "req", messageId: nil, text: "Check the gate", senderId: "me"), "canonical",
       "Without a receipt, this person's message with the sent words, never another member's newer one")
     XCTAssertNil(SendAnchor.resolve([theirs], requestId: "req", messageId: nil, text: "Check the gate", senderId: "me"))
+    let scheduled = Message(id: "cron", role: "user", text: "Check the gate", origin: MessageOrigin(kind: "scheduled", visibility: "conversation"))
+    XCTAssertNil(SendAnchor.resolve([scheduled], requestId: "req", messageId: nil, text: "Check the gate", senderId: "me"),
+      "A scheduled prompt with the same words is not the person's message")
   }
 
   // MARK: Desktop bridge
