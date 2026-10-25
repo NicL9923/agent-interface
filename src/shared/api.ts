@@ -76,7 +76,7 @@ type MemorySave = { revision: string; entries: { id?: string; text: string }[] }
 export interface ApiRoutes {
   "GET /today": { query: { since?: string }; response: TodayOverview };
   "PUT /today/seen": { body: { seenAt: string; frontier: string }; response: Ok };
-  "GET /search": { query: { q: string }; response: { hits: SearchHit[]; unavailableBots: string[] } };
+  "GET /search": { query: { q: string; botId?: string }; response: { hits: SearchHit[]; unavailableBots: string[] } };
   "GET /bots/:botId/history/:sessionId": { query: { offset?: number; messageId?: string }; response: HistoryPage };
   "GET /saved": { response: SavedItem[] };
   "POST /saved": { body: SaveItem; response: SavedItem };

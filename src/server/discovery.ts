@@ -19,8 +19,10 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     return runtime.experienceRequest.bind(runtime);
   }
   apiRoute(app, "GET /search", {}, async req => {
-    const { q } = z.object({ q: z.string().trim().min(1).max(200) }).strict().parse(req.query);
-    const bots = await visible(signedIn(req).id);
+    const { q, botId } = z.object({ q: z.string().trim().min(1).max(200), botId: id.optional() }).strict().parse(req.query);
+    // With botId, as find in chat asks, only that assistant is searched.
+    const bots = (await visible(signedIn(req).id)).filter(bot => botId === undefined || bot.id === botId);
+    if (botId !== undefined && !bots.length) throw httpError(404, notFound.error, { code: notFound.code });
     const hits: SearchHit[] = []; const unavailableBots: string[] = [];
     for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index, index + 4).map(async bot => {
       try { hits.push(...(await experience()({ operation: 'search', profile: bot.id, query: q })).map(hit => ({ ...hit, botName: bot.name }))); }

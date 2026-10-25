@@ -160,7 +160,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/files/:id": "file",
   "GET /api/today": "list",
   "PUT /api/today/seen": "none",
-  "GET /api/search": "list",
+  // Optional botId narrows the search to one assistant; without it, only visible ones are searched.
+  "GET /api/search": "query",
   "GET /api/saved": "list",
   "POST /api/saved": "body",
   "DELETE /api/saved/:id": "none",
