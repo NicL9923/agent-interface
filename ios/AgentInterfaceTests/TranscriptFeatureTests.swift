@@ -273,6 +273,26 @@ import XCTest
     var state = "failed"
     var sendStatus = 200
   }
+  /// The fake app server's routes. Nonisolated: URLSession calls it off the main actor.
+  nonisolated private static func answer(_ request: URLRequest, _ box: Box) -> FakeServer.Reply {
+    let path = request.url?.path ?? ""
+    return box.lock.withLock {
+      if path == "/api/bots/bot/messages" {
+        guard box.sendStatus == 200 else { return .init(status: box.sendStatus, body: #"{"error":"Refused"}"#) }
+        let id = (FakeExchange.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["requestId"] as? String ?? ""
+        box.state = "thinking"
+        return .init(body: #"{"requestId":"\#(id)","status":"accepted","messageId":"\#(id)"}"#)
+      }
+      if path == "/api/bots/bot/conversation" {
+        let start = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "start" }?.value
+        let from = start.flatMap { id in box.messages.firstIndex { $0["id"] as? String == id } } ?? max(0, box.messages.count - 2)
+        let body: [String: Any] = ["botId": "bot", "sessionId": "session", "messages": Array(box.messages[from...]), "earlier": from,
+          "activity": ["state": box.state], "approvals": [], "files": [], "draft": ["text": "Keep my words", "attachments": [], "revision": 1]]
+        return .init(body: String(decoding: try! JSONSerialization.data(withJSONObject: body), as: UTF8.self))
+      }
+      return .init()
+    }
+  }
   private var stores: [AppStore] = []
   override func tearDown() async throws {
     for value in stores {
@@ -285,25 +305,7 @@ import XCTest
     try await super.tearDown()
   }
   private func store(_ box: Box) async throws -> (AppStore, FakeServer) {
-    let server = FakeServer { request in
-      let path = request.url?.path ?? ""
-      return box.lock.withLock {
-        if path == "/api/bots/bot/messages" {
-          guard box.sendStatus == 200 else { return .init(status: box.sendStatus, body: #"{"error":"Refused"}"#) }
-          let id = (FakeExchange.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["requestId"] as? String ?? ""
-          box.state = "thinking"
-          return .init(body: #"{"requestId":"\#(id)","status":"accepted","messageId":"\#(id)"}"#)
-        }
-        if path == "/api/bots/bot/conversation" {
-          let start = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "start" }?.value
-          let from = start.flatMap { id in box.messages.firstIndex { $0["id"] as? String == id } } ?? max(0, box.messages.count - 2)
-          let body: [String: Any] = ["botId": "bot", "sessionId": "session", "messages": Array(box.messages[from...]), "earlier": from,
-            "activity": ["state": box.state], "approvals": [], "files": [], "draft": ["text": "Keep my words", "attachments": [], "revision": 1]]
-          return .init(body: String(decoding: try! JSONSerialization.data(withJSONObject: body), as: UTF8.self))
-        }
-        return .init()
-      }
-    }
+    let server = FakeServer { Self.answer($0, box) }
     let value = AppStore(); value.api = server.api()
     value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"""
       {"user":{"id":"transcript-\#(UUID().uuidString)","name":"Tester","email":"t@example.test"},"household":[],

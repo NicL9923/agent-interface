@@ -288,8 +288,9 @@ struct TranscriptDisclosureStyle: DisclosureGroupStyle {
           .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
           .accessibilityHint(configuration.isExpanded ? "Hides the details" : "Shows the details")
         if configuration.isExpanded {
+          // A disclosure's content starts again from the system style, so nested ones are styled here.
           configuration.content.padding(.leading, 18).frame(maxWidth: .infinity, alignment: .leading)
-            .environment(\.disclosureIdentifier, nil)
+            .environment(\.disclosureIdentifier, nil).disclosureGroupStyle(TranscriptDisclosureStyle())
         }
       }
     }

@@ -76,21 +76,21 @@ import XCTest
     app.buttons["profileFind"].tapWhenReady()
     let find = app.textFields["findConversation"]
     XCTAssertTrue(find.waitForExistence(timeout: 5))
-    find.typeWhenFocused("question 4")
-    // Turns 41 to 49 are loaded and match at once; the server adds 4 and 40 from earlier history.
+    // Turns 41 to 60 are loaded, so nothing matches at once; the server finds 3 and 30 to 39.
+    find.typeWhenFocused("question 3")
     let status = app.staticTexts["findStatus"]
-    XCTAssertTrue(status.wait(until: "label == %@", "3 of 11"), status.label)
-    XCTAssertTrue(app.staticTexts["Fixture question 41"].exists)
-    XCTAssertFalse(app.staticTexts["Fixture question 40"].exists, "Turn 40 is not loaded yet")
+    XCTAssertTrue(status.wait(until: "label == %@", "11 matches"), status.label)
+    XCTAssertFalse(app.staticTexts["Fixture question 30"].exists, "Turn 30 is not loaded yet")
     try capture(app, "find-merged")
-    app.buttons["Previous match"].tapWhenReady()
-    let forty = app.staticTexts["Fixture question 40"]
-    XCTAssertTrue(forty.waitUntilHittable(timeout: 15), "The chat reloads at the unloaded match and shows it")
-    XCTAssertTrue(status.wait(until: "label == %@", "2 of 11"))
-    app.buttons["Previous match"].tapWhenReady()
-    XCTAssertTrue(app.staticTexts["Fixture question 4"].waitUntilHittable(timeout: 15))
-    XCTAssertTrue(status.wait(until: "label == %@", "1 of 11"))
+    app.buttons["Next match"].tapWhenReady()
+    let three = app.staticTexts["Fixture question 3"]
+    XCTAssertTrue(three.waitUntilHittable(timeout: 15), "The chat reloads at the unloaded match and shows it")
+    XCTAssertTrue(status.wait(until: "label == %@", "1 of 11"), status.label)
     try capture(app, "find-opened-earlier")
+    // Loaded from turn 3 on, the next match is already there.
+    app.buttons["Next match"].tapWhenReady()
+    XCTAssertTrue(status.wait(until: "label == %@", "2 of 11"), status.label)
+    XCTAssertTrue(app.staticTexts["Fixture question 30"].waitUntilHittable(timeout: 10))
   }
 
   func testFinishedWorkFoldsAndCodeAndTablesOfferTheirCopies() throws {
@@ -115,6 +115,29 @@ import XCTest
     try capture(app, "table-copy-menu")
     app.buttons["Copy as CSV"].tapWhenReady()
     XCTAssertTrue(app.buttons["Copy as CSV"].waitForDisappearance())
+  }
+
+  func testAdvancedWorkKeepsReasoningInsideTheFold() throws {
+    let app = launch(["AGENT_INTERFACE_UI_WORK": "1", "AGENT_INTERFACE_UI_WORK_PRESENTATION": "advanced"])
+    let work = app.buttons["turnWork"]
+    XCTAssertTrue(work.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertFalse(app.buttons["Reasoning"].exists, "Reasoning folds with the rest of the work")
+    try capture(app, "work-advanced")
+    work.tapWhenReady()
+    app.buttons["Reasoning"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "The gate log shows a low battery.")).firstMatch
+      .waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Tool calls"].exists)
+  }
+
+  func testTheRunningTurnShowsOneLiveRowBesideTheAvatar() throws {
+    let app = launch(["AGENT_INTERFACE_UI_LIVE_ACTIVITY": "1"])
+    XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.staticTexts["liveReceipt"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["liveReasoning"].label, "Fixture exposed reasoning: current weather needs a fresh forecast.")
+    XCTAssertFalse(app.buttons["Tool calls"].exists, "The running turn's tool calls stay in its fold")
+    XCTAssertFalse(app.buttons["retryTurn"].exists, "Work in progress offers no Retry")
+    try capture(app, "working-live")
   }
 
   func testQuoteInReplyAddsTheReplyToTheDraft() throws {
