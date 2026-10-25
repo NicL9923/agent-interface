@@ -174,6 +174,27 @@ it("settles approvals by run outcomes a rolled-back release recorded", () => {
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
+it("backfills settlements on start only from events recorded since the last backfill, including a rolled-back release's", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-store-"));
+  const path = join(directory, "app.db");
+  const done = (id: string, runId: string) => ({ id, botId: "barn", runId, kind: "completed" as const, title: "Done", occurredAt: new Date().toISOString() });
+  const settled = (store: Store) => (storeDb(store).prepare("SELECT run_id FROM run_settlements ORDER BY run_id").all() as { run_id: string }[]).map(row => row.run_id);
+  let store = new Store(path);
+  try {
+    store.recordEvents([done("old", "old-run")], "1");
+    store.close();
+    store = new Store(path);
+    // Startup read that event already, so it is never read again, even if its settlement goes missing.
+    storeDb(store).exec("DELETE FROM run_settlements");
+    // A rolled-back release records an event but not its settlement.
+    store.recordEvents([done("later", "later-run")], "2");
+    storeDb(store).exec("DELETE FROM run_settlements");
+    store.close();
+    store = new Store(path);
+    expect(settled(store)).toEqual(["later-run"]);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 it("drops approvals Hermes no longer holds open when the app reads the conversation, crediting nobody", async () => {
   const approvals = [approvalFixture({ id: "open" })];
   const conversation = vi.fn(async (botId: string) => conversationFixture({ botId, approvals, requestSessionId: "live" }));
