@@ -46,3 +46,43 @@ it('opens a search conversation without a highlight when the matching row was re
   expect(container.textContent).toContain('Remaining conversation');
   expect(container.querySelector('#history-remaining')?.getAttribute('style')).toBeNull();
 });
+
+it('searches as the person types, after a pause, and drops answers for older words',async()=>{
+  vi.useFakeTimers();
+  const answers=new Map<string,(value:unknown)=>void>();
+  vi.mocked(api).mockImplementation(path=>new Promise(resolve=>answers.set(String(path),resolve)));
+  await act(async()=>root.render(createElement(DiscoveryPanel,{bootstrap:{user:{id:'one'},bots:[{id:'ranch',name:'Ranch'}],household:[]} as unknown as Bootstrap,onRoutine:()=>{}})));
+  const input=container.querySelector('input')!;
+  await typeInto(input,'g');
+  await act(async()=>vi.advanceTimersByTimeAsync(1000));
+  expect(api).not.toHaveBeenCalled();
+  await typeInto(input,'ga');
+  await act(async()=>vi.advanceTimersByTimeAsync(299));
+  expect(api).not.toHaveBeenCalled();
+  await act(async()=>vi.advanceTimersByTimeAsync(1));
+  expect(api).toHaveBeenCalledExactlyOnceWith('/search?q=ga');
+  await typeInto(input,'gate');
+  // Enter searches at once; the pause that follows does not search the same words again.
+  await act(async()=>container.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  await act(async()=>vi.advanceTimersByTimeAsync(1000));
+  expect(vi.mocked(api).mock.calls.map(([path])=>path)).toEqual(['/search?q=ga','/search?q=gate']);
+  const hit=(title:string)=>({hits:[{botId:'ranch',botName:'Ranch',sessionId:'s',title,snippet:''}],unavailableBots:[]});
+  await act(async()=>answers.get('/search?q=gate')!(hit('Gate battery')));
+  await act(async()=>answers.get('/search?q=ga')!(hit('Garden')));
+  expect(container.textContent).toContain('Gate battery');expect(container.textContent).not.toContain('Garden');
+  expect(container.querySelector('[role="status"].sr-only')?.textContent).toBe('1 result');
+});
+it('opens a hit in the live conversation at its message, and older sessions read-only',async()=>{
+  vi.mocked(api).mockImplementation(async(path)=>path.startsWith('/search')?{hits:[
+    {botId:'ranch',botName:'Ranch',sessionId:'canonical',title:'Live',snippet:'',messageId:'m9'},
+    {botId:'ranch',botName:'Ranch',sessionId:'older',title:'Old',snippet:'',messageId:'m1'},
+  ],unavailableBots:[]}:{botId:'ranch',sessionId:'older',messages:[{id:'m1',role:'assistant',text:'Old answer'}],offset:0,hasMore:false});
+  const onOpenMessage=vi.fn();
+  await act(async()=>root.render(createElement(DiscoveryPanel,{bootstrap:{user:{id:'one'},bots:[{id:'ranch',name:'Ranch',sessionId:'canonical'}],household:[]} as unknown as Bootstrap,onRoutine:()=>{},onOpenMessage,search:{text:'answer',id:1}})));
+  expect(container.querySelector('input')!.value).toBe('answer');
+  const [live,older]=[...container.querySelectorAll<HTMLButtonElement>('.today-row')];
+  await act(async()=>live!.click());
+  expect(onOpenMessage).toHaveBeenCalledWith('ranch','m9');
+  await act(async()=>older!.click());
+  expect(container.textContent).toContain('Old answer');
+});

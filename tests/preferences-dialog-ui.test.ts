@@ -43,7 +43,7 @@ beforeEach(() => {
     editPreferences: vi.fn((edit: (value: Preferences) => Preferences) => { saved.push(edit(saved.at(-1) ?? props.boot.preferences)); return new Promise<void>(() => {}); }),
     notifications: { busy: false } as ComponentProps<typeof PreferencesDialog>["notifications"],
     installEvent: null, notice: "",
-    onClose: vi.fn(), onSignOut: vi.fn(), onComputer: vi.fn(), onIntegrations: vi.fn(), onUpgrade: vi.fn(),
+    onClose: vi.fn(), onSignOut: vi.fn(), onComputer: vi.fn(), onIntegrations: vi.fn(), onUpgrade: vi.fn(), onShortcuts: vi.fn(),
   };
 });
 const render = () => act(async () => root.render(createElement(PreferencesDialog, props)));

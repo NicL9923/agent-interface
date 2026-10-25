@@ -1,0 +1,35 @@
+/* A row of equal segments with the chosen one raised, like a native segmented control. */
+.segmented-field { display: grid; gap: 6px; min-width: 0; }
+.segmented-label { font-size: 12px; color: var(--muted); }
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.segmented button {
+  flex: 1 1 0;
+  min-width: max-content;
+  min-height: 32px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.segmented button:hover:enabled { background: color-mix(in srgb, var(--raised) 55%, transparent); }
+.segmented button[aria-checked="true"] {
+  background: var(--raised);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px #0002;
+}
+.segmented button:focus-visible { outline-offset: -2px; }
+.segmented[aria-busy="true"] button { cursor: progress; }
+@media (prefers-reduced-motion: reduce) { .segmented button { transition: none; } }

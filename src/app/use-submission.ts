@@ -159,8 +159,17 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
         if (epoch === identityEpoch.current) setSending(false);
       });
   };
+  // Gives up on checking an unconfirmed send, as the native client can: its text and files go back
+  // into the draft, no longer marked as sent. The message may still arrive.
+  const discard = () => {
+    if (!pending || sending || !userId) return;
+    refused(userId, pending);
+    setPending(null);
+    setReceipt(null);
+    localRemove(submissionKey(userId, pending.botId));
+  };
   const reset = () => {
     setSending(false); setPending(null); setReceipt(null);
   };
-  return { pending, receipt, sending, send, retry, reset };
+  return { pending, receipt, sending, send, retry, discard, reset };
 }

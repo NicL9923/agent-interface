@@ -45,3 +45,25 @@
   .group-panel .group-rooms > .group-new { margin-top: 0; }
   .group-panel button.group-reply, .group-panel .group-thread button { min-height: 44px; }
 }
+
+/* Group chat @mentions: suggestions open above the composer. */
+.mention-list {
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% - 6px);
+  z-index: 5;
+  min-width: 220px;
+  max-width: calc(100% - 24px);
+  max-height: 220px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px #0003;
+}
+.mention-list li { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.mention-list li small { color: var(--muted); }
+.mention-list li[aria-selected="true"] { background: var(--accent-soft); }

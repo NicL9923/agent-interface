@@ -55,10 +55,6 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
   const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
   return (
     <>
-      {connectionLost && selected && (
-        <ConnectionPanel compact connection={boot.connection} offline={offline}
-          appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
-      )}
       {error && (
         <div className="notice error" role="alert">
           {error}

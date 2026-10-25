@@ -161,9 +161,10 @@ const STREAM_SILENCE = 60_000;
 /**
  * Calls onChange for each change notice on a server event stream, and each time it
  * connects, since notices sent before the subscription are lost. EventSource retries a drop
- * itself but never a refusal, so `open` replaces a closed or silent stream.
+ * itself but never a refusal, so `open` replaces a closed or silent stream. `named` handles other
+ * named events by their data, such as group chat notices.
  */
-export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void) {
+export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {}) {
   let source: EventSource | undefined, heard = 0;
   const close = () => {
     source?.close();
@@ -184,6 +185,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
     });
     current.addEventListener("roster", () => { heard = Date.now(); onChange(); });
+    for (const [name, handle] of Object.entries(named))
+      current.addEventListener(name, event => { heard = Date.now(); handle((event as MessageEvent).data); });
     current.addEventListener("ping", () => { heard = Date.now(); });
     current.onmessage = () => {
       heard = Date.now();

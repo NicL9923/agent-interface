@@ -1,0 +1,232 @@
+/* App shell additions: command palette, keyboard help, status dock, toasts, assistant details, mentions. */
+
+kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 500 11px/1.5 ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Command palette: a centered card on a computer, a sheet from the bottom on a phone. */
+.command-palette {
+  margin: 12vh auto auto;
+  padding: 0;
+  width: min(600px, calc(100vw - 32px));
+  max-height: min(560px, 76dvh);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 24px 90px #0006;
+  overflow: hidden;
+}
+.command-palette[open] { display: flex; flex-direction: column; animation: palette-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.command-palette::backdrop { background: #101a1466; backdrop-filter: blur(2px); }
+@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } }
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.palette-search input {
+  flex: 1;
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  font-size: 16px;
+}
+.palette-search input:focus-visible { outline: none; }
+.palette-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
+.palette-heading {
+  padding: 10px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.palette-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.palette-option.active { background: var(--accent-soft); }
+.palette-icon, .palette-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.palette-avatar .unread-mark {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent);
+}
+.palette-copy { display: grid; flex: 1; min-width: 0; }
+.palette-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.palette-copy small { color: var(--muted); font-size: 12px; }
+.palette-group { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.palette-check { color: var(--accent); }
+.palette-footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.palette-footer kbd { margin-right: 3px; }
+@media (max-width: 620px) {
+  .command-palette {
+    inset: auto 0 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
+    border-bottom: 0;
+    border-radius: 24px 24px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .command-palette[open] { animation: palette-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .palette-escape, .palette-footer, .palette-option kbd { display: none; }
+  .palette-option { min-height: 52px; }
+}
+@keyframes palette-up { from { transform: translateY(30%); opacity: 0.5; } }
+
+/* Keyboard shortcuts and confirmations reuse the settings sheet. */
+.shortcuts-dialog .sheet-body { padding-bottom: 20px; }
+.shortcut-heading { margin: 4px 16px 8px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.shortcut-list { margin: 0 0 20px; background: var(--raised); border-radius: 18px; overflow: hidden; }
+.shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 46px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.shortcut-row:last-child { border-bottom: 0; }
+.shortcut-row dt { font-size: 14px; }
+.shortcut-row dd { margin: 0; flex-shrink: 0; }
+.confirm-dialog {
+  margin: auto;
+  padding: 22px;
+  width: min(400px, calc(100vw - 32px));
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 24px 90px #0005;
+}
+.confirm-dialog::backdrop { background: #101a1466; }
+.confirm-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+.confirm-dialog p { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 10px; margin: 0; }
+
+/* Status dock: the notices above the composer, one stack sorted by urgency. */
+.status-dock { display: grid; gap: 8px; margin-bottom: 10px; }
+.status-dock:empty { display: none; }
+.dock-item { animation: dock-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes dock-in { from { opacity: 0; transform: translateY(6px); } }
+.status-dock .notice, .status-dock .app-update { margin: 0; }
+.status-dock .notice { border-radius: 12px; padding: 10px 12px; }
+.notice-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.status-dock .connection-panel.compact {
+  max-height: 30dvh;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.status-dock .connection-panel.compact .connection-actions { margin: 6px 0 2px; }
+.status-dock .interruption-review {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--raised);
+  border: 1px solid var(--attention);
+  color: var(--ink);
+}
+.dock-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--attention);
+  border-radius: 12px;
+  background: var(--raised);
+  font-size: 13px;
+}
+.dock-row > .icon { color: var(--attention); }
+.dock-row > span { flex: 1; min-width: 0; }
+.dock-row button { flex-shrink: 0; padding: 6px 14px; font-size: 13px; }
+.composer-status { margin: 0; font-size: 12px; color: var(--muted); }
+.composer-status:not(:empty) { margin-bottom: 8px; }
+
+/* Undo toast, above the composer and clear of the phone's home indicator. */
+.toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: max(96px, calc(env(safe-area-inset-bottom) + 88px));
+  z-index: 40;
+  translate: -50% 0;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 16px;
+  border-radius: 14px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 14px;
+  box-shadow: 0 10px 30px #0004;
+  pointer-events: auto;
+  animation: toast-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.toast > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast button { border: 0; color: inherit; }
+.toast .toast-undo { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; font-weight: 600; color: var(--accent-soft); }
+.toast button:hover:enabled { background: #fff2; }
+.toast .toast-close { padding: 8px; opacity: 0.7; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* Assistant details: sized to its content, with facts that make the space useful. */
+.bot-details-facts { margin: 0 0 22px; }
+.bot-details-facts .settings-row { justify-content: space-between; min-height: 48px; border-bottom: 1px solid var(--line); }
+.bot-details-facts .settings-row:last-child { border-bottom: 0; }
+.bot-details-facts dt { flex-shrink: 0; }
+.bot-details-facts dd { display: grid; justify-items: end; gap: 2px; min-width: 0; margin: 0; color: var(--muted); font-size: 14px; text-align: right; overflow-wrap: anywhere; }
+.bot-details-facts dd small { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.bot-details-facts .bot-activity { color: var(--accent); }
+.settings-sheet.bot-details .sheet-body { padding-bottom: 8px; }
+@media (max-width: 620px) {
+  /* Anchored to the bottom and only as tall as its content, like a phone's contact card. */
+  .settings-sheet.bot-details {
+    inset: auto 8px 0;
+    max-height: calc(100dvh - max(10px, env(safe-area-inset-top)));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .bot-details-facts dd small { max-width: 180px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-palette[open], .dock-item, .toast { animation: none; }
+}

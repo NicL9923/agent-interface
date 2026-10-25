@@ -39,7 +39,7 @@ describe("background polls in a hidden tab", () => {
   it.each<[string, () => ReactElement, (path: string) => boolean, number]>([
     ["Today", () => createElement(TodayPanel, { bootstrap, onOpen: vi.fn() }), path => path === "/today", 30_000],
     ["the group list", () => createElement(GroupChats, { bootstrap }), path => path === "/groups", 15_000],
-    ["an open group room", () => createElement(GroupChats, { bootstrap }), path => path === "/groups/room", 3_000],
+    ["an open group room", () => createElement(GroupChats, { bootstrap }), path => path === "/groups/room", 30_000],
     ["a routine run", () => createElement(RoutineEnhancements, { routine: { id: "r1", botId: "ranch", name: "Morning", schedule: "0 7 * * *", prompt: "Report", enabled: true }, userId: "one" }),
       path => path === "/routines/r1/runs/run", 5_000],
   ])("pauses %s while hidden and refreshes it as soon as it is shown", async (_name, element, match, interval) => {
