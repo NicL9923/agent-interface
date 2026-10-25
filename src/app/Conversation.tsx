@@ -14,6 +14,7 @@ import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import { receipt } from "../shared/discovery";
+import { MAX_ATTACHMENTS } from "../shared/uploads";
 import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
@@ -54,7 +55,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   onScroll(): void;
   onCreate(): void;
   /** Adds text to the draft. False while the draft is on its way, when it must not change. */
-  onDraft(text: string): boolean;
+  /** Adds to the person's draft, never replacing it. False while a send is on its way; otherwise how many files didn't fit. */
+  onDraft(text: string, files?: FileRef[]): number | false;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -75,7 +77,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
   const announce = useStableCallback((text: string) => setNotice(previous => ({ id: (previous?.id ?? 0) + 1, text })));
   const quote = useStableCallback((text: string) => {
-    if (!onDraft(`${quoteBlock(text)}\n\n`)) return announce("Your message is still sending. Quote once it has gone.");
+    if (onDraft(`${quoteBlock(text)}\n\n`) === false) return announce("Your message is still sending. Quote once it has gone.");
     announce("Quoted in your message.");
     // The composer is outside the transcript; its field takes the caret after the quote.
     requestAnimationFrame(() => {
@@ -84,6 +86,13 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
       field.focus();
       field.setSelectionRange(field.value.length, field.value.length);
     });
+  });
+  // A refused retry's words go back in the message box beside whatever the person already wrote.
+  const putBack = useStableCallback((original: Message) => {
+    const left = onDraft(original.text, original.files);
+    if (left === false) return announce("Your message is still sending. Try again once it has gone.");
+    announce(left ? `Your message is in the message box, without ${left} of its files: a message can carry only ${MAX_ATTACHMENTS}.` : "Your message is in the message box.");
+    requestAnimationFrame(() => document.getElementById("message")?.focus());
   });
   const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce }),
     [botId, conversation?.sessionId, connectionLost, quote, announce]);
@@ -221,6 +230,10 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
                 {liveThought && <p className="activity-live-thought">{liveThought}</p>}
               </div>}
               {retry.message && retry.checking && <p className="muted" role="status">Checking whether the retry arrived…</p>}
+              {retry.refusal && <div className="retry-refused">
+                <p role="status">{retry.refusal.text}</p>
+                <button type="button" className="retry-turn" onClick={() => putBack(retry.refusal!.message)}>Put my message in the message box</button>
+              </div>}
               {retry.message && <button type="button" className="with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
                 title={retry.checking ? retry.resendable ? "Sends the same request again, so it can't run twice" : boot.capabilities.idempotency.reason : undefined}
                 onClick={() => void retry.run(retry.message!)}>

@@ -201,21 +201,31 @@ attribution work as for any other message.
 ### One retry per failed turn
 
 The server admits one retry per failed turn: the assistant, `retryOf`, and the
-conversation's `activity.runId` when the retry arrives, or empty without one. The
-first request claims the turn. A later retry of the same turn with another
-`requestId`, from any device or person, admits nothing and answers the first
-request's current receipt, whose `requestId` names that request: follow it from then
-on. A retry with the claimed `requestId` takes the usual idempotent path; from
-another person, or with different text, it answers the same receipt instead of 409.
-Anyone who can see the assistant can read a retry's receipt with
-`GET /api/submissions/:id`. Once the retried message runs and fails again, Hermes
-records it as a new message in a new run, so retrying it is a new turn.
+conversation's `activity.runId` when the retry arrives, or empty without one. A
+retry's `requestId` must be exactly that turn's retry ID (below), derived from the
+run the server reads; any other ID answers 400 and records nothing, so reload the
+conversation and derive it again. An ordinary message or steer whose `requestId` is
+a version 8 UUID also answers 400: those IDs are kept for retries, so send ordinary
+messages with random version 4 IDs. The first retry claims the turn. A retry with
+the claimed `requestId` takes the usual idempotent path; from another person, or
+with different text, it answers the same receipt instead of 409, even when both
+arrive at once. Reviewing an `uncertain` retry with `reviewedUncertain: true`, from
+anyone who can see the assistant, sends the recorded request again: its original
+text, files and sender, which Hermes's idempotency check covers. Anyone who can see
+the assistant can read a retry's receipt with `GET /api/submissions/:id`. Once the
+retried message runs and fails again, Hermes records it as a new message in a new
+run, so retrying it is a new turn.
 
 While the conversation's activity is `failed`, `GET /api/bots/:id/conversation`
 carries `retry`, that turn's claim as a receipt with `retryOf`, once anyone retried
 it. Hide Retry when its `retryOf` is the latest person's message and its status is
-`accepted`, `rejected` or `interrupted`; a refused retry stays refused under its ID,
-so the person sends the message again from the composer. While it is `uncertain`,
+`accepted`, `rejected` or `interrupted`. A refused retry stays refused under its ID,
+so while `retry` is `rejected` or `interrupted`, show "Hermes didn't take the retry."
+followed by its `message`, if any, and offer "Put my message in the message box". That
+adds the retried message's text after the draft's own, separated by a blank line, and
+its files after the draft's, up to the attachment limit. It never replaces the draft,
+and is not offered while a message is sending. The person sends it from the composer
+as a new message. While it is `uncertain`,
 show "Checking whether the retry arrived…" and check its `requestId` with
 `GET /api/submissions/:id`: at once, then after 2, 4, 8 and 16 seconds, then every
 30, until a receipt settles it or the conversation moves past that message or run.
