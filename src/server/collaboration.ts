@@ -11,6 +11,11 @@ import { httpError } from './http-error.js';
 import { id } from './schemas.js';
 const uuid = z.string().uuid();
 
+/** Whether a room has only local assistants this person may see, as every group route requires. */
+export function roomAccessible(room: GroupRoom, visible: (profile: string) => boolean) {
+  return room.members?.length >= 2 && room.members.every(member => visible(member.profile) && (!member.target || member.target.kind === 'local'));
+}
+
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   // A group with someone else's private assistant does not exist for this person: its
   // other assistants' replies would quote and answer the private one.
@@ -36,9 +41,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     if (!runtime.groupRequest) throw httpError(409, 'Hosted group chats are unavailable on this Hermes integration.');
     return runtime.groupRequest(input);
   }
-  function accessible(room: GroupRoom, allowed: Set<string>) {
-    return room.members?.length >= 2 && room.members.every(member => allowed.has(member.profile) && (!member.target || member.target.kind === 'local'));
-  }
+  const accessible = (room: GroupRoom, allowed: Set<string>) => roomAccessible(room, profile => allowed.has(profile));
   async function room(userId: string, roomId: string) {
     const allowed = new Set((await bots(userId)).map(bot => bot.id));
     const state = await request({ operation: 'state', roomId }) as GroupState;
@@ -103,4 +106,5 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     await room(signedIn(req).id, roomId);
     return request({ operation: 'approve', roomId, ...body });
   });
+  return { room };
 }

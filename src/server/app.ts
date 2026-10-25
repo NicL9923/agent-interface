@@ -33,7 +33,8 @@ import { registerVoiceRoutes } from "./voice.js";
 import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
-import { installCollaborationRoutes } from './collaboration.js';
+import { installCollaborationRoutes, roomAccessible } from './collaboration.js';
+import { GroupWatch } from "./group-watch.js";
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
 import { openEventStream } from "./event-stream.js";
@@ -133,7 +134,8 @@ export async function createApp(
   await installExperienceRoutes(app, runtime, store, roster);
   await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);
-  await installCollaborationRoutes(app, runtime, store, roster);
+  const collaboration = await installCollaborationRoutes(app, runtime, store, roster);
+  const groups = new GroupWatch(runtime);
   await installVaultRoutes(app, runtime);
   await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId),
     redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message) });
@@ -225,12 +227,18 @@ export async function createApp(
     clearTimeout(rosterPending);
     for (const end of streams) end();
   });
+  // ?group=<roomId> also watches one group chat: the server polls it while any stream watches it.
   app.get("/api/events", { exposeHeadRoute: false }, async (req, reply) => {
+    const { group } = z.object({ group: id.optional() }).parse(req.query);
+    const userId = signedIn(req).id;
+    if (group !== undefined) await collaboration.room(userId, group);
     const initial = await runtimeSnapshot();
     let projection = rosterProjection(initial.bots, signedIn(req).id, initial.capabilities.avatarMetadata.supported);
+    let unwatchGroup: (() => void) | undefined;
     const stream = openEventStream(reply, streams, {
       allowed: () => stillSignedIn(store, config, req),
       teardown: () => {
+        unwatchGroup?.();
         rosterListeners.delete(changed);
         if (!rosterListeners.size) {
           unwatchRoster?.();
@@ -249,6 +257,11 @@ export async function createApp(
     };
     rosterListeners.add(changed);
     unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+    // A room that gains someone else's private assistant ends the watch, as its routes answer 404.
+    if (group !== undefined) unwatchGroup = groups.watch(group, state => {
+      if (!roomAccessible(state.room, profile => visibleTo(store, profile, userId))) { stream.end(); return; }
+      stream.send(`event: group\ndata: ${JSON.stringify({ roomId: group, latestSeq: state.room.latest_seq ?? 0 })}\n\n`);
+    });
   });
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");
@@ -359,6 +372,7 @@ export async function createApp(
     health.start();
   }
   app.addHook("onClose", async () => {
+    groups.close();
     health.stop();
     await worker.stop();
     await runtime.close();

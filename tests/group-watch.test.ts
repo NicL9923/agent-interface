@@ -1,0 +1,152 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createApp } from "../src/server/app.js";
+import { loadConfig } from "../src/server/config.js";
+import { GROUP_POLL_MAX_MS, GroupWatch } from "../src/server/group-watch.js";
+import type { GroupRequest, GroupState } from "../src/shared/collaboration.js";
+import type { Runtime } from "../src/shared/types.js";
+import { botFixture } from "./helpers/runtime-fixtures.js";
+import { fakeRuntime } from "./helpers/server.js";
+
+const origin = "http://127.0.0.1:3000";
+const member = (profile: string) => ({ member_id: profile, profile, handle: profile });
+const state = (roomId: string, latest_seq: number, working = false): GroupState => ({
+  room: { room_id: roomId, name: roomId, members: [member("ranch"), member("planner")], latest_seq },
+  driver_status: { running: true, working, blocked: false, pending_actions: [] },
+});
+afterEach(() => { vi.useRealTimers(); });
+
+describe("group room watcher", () => {
+  it("polls each watched room once however many watch it, announcing only changes", async () => {
+    vi.useFakeTimers();
+    let seq = 1, working = false;
+    const groupRequest = vi.fn(async (input: GroupRequest) => state((input as { roomId: string }).roomId, seq, working));
+    const watch = new GroupWatch({ groupRequest });
+    const first = vi.fn(), second = vi.fn(), other = vi.fn();
+    const stopFirst = watch.watch("ranch", first), stopSecond = watch.watch("ranch", second);
+    const stopOther = watch.watch("barn", other);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(groupRequest).toHaveBeenCalledTimes(2);
+    expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(1); expect(other).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(groupRequest).toHaveBeenCalledTimes(4);
+    expect(first).toHaveBeenCalledTimes(1);
+    seq = 2;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(first).toHaveBeenLastCalledWith(expect.objectContaining({ room: expect.objectContaining({ latest_seq: 2 }) }));
+    expect(second).toHaveBeenCalledTimes(2);
+    // A pending approval or a working driver changes without a new event.
+    working = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(first).toHaveBeenCalledTimes(3);
+    stopFirst();
+    seq = 3;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(first).toHaveBeenCalledTimes(3); expect(second).toHaveBeenCalledTimes(4);
+    stopSecond(); stopOther();
+    expect(watch.watched).toEqual([]);
+    const calls = groupRequest.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(groupRequest).toHaveBeenCalledTimes(calls);
+  });
+
+  it("backs off while Hermes fails and returns to the normal pace once it answers", async () => {
+    vi.useFakeTimers();
+    let failing = true;
+    const at: number[] = [];
+    const groupRequest = vi.fn(async () => { at.push(Date.now()); if (failing) throw new Error("coordinator down"); return state("ranch", 1); });
+    const watch = new GroupWatch({ groupRequest });
+    const listener = vi.fn();
+    watch.watch("ranch", listener);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4000 + 8000 + 16000 + 30000 + 30000);
+    const gaps = at.slice(1).map((time, index) => time - at[index]);
+    expect(gaps).toEqual([4000, 8000, 16000, GROUP_POLL_MAX_MS, GROUP_POLL_MAX_MS]);
+    expect(listener).not.toHaveBeenCalled();
+    failing = false;
+    await vi.advanceTimersByTimeAsync(GROUP_POLL_MAX_MS);
+    expect(listener).toHaveBeenCalledTimes(1);
+    const before = groupRequest.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(groupRequest).toHaveBeenCalledTimes(before + 1);
+    watch.close();
+  });
+
+  it("drops a poll answered after the last watcher left", async () => {
+    vi.useFakeTimers();
+    let answer!: (value: GroupState) => void;
+    const groupRequest = vi.fn(() => new Promise<GroupState>(resolve => { answer = resolve; }));
+    const watch = new GroupWatch({ groupRequest });
+    const listener = vi.fn();
+    const stop = watch.watch("ranch", listener);
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    answer(state("ranch", 5));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(listener).not.toHaveBeenCalled();
+    expect(groupRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("watching a group chat on the app event stream", () => {
+  async function setup() {
+    let seq = 1;
+    const rooms = [state("shared", 1).room, { ...state("private", 1).room, members: [member("ranch"), member("secret")] }];
+    const groupRequest = vi.fn(async (input: GroupRequest) => input.operation === "list" ? { supported: true, canSend: true, rooms }
+      : { ...state((input as { roomId: string }).roomId, seq), room: { ...rooms.find(room => room.room_id === (input as { roomId: string }).roomId)!, latest_seq: seq } });
+    const runtime: Runtime = fakeRuntime({
+      groupRequest, status: async () => ({ connected: true }), close: async () => {},
+      capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
+      listBots: async () => [botFixture({ id: "ranch" }), botFixture({ id: "planner" }), botFixture({ id: "secret", shared: false, ownerId: "local-two" })],
+    });
+    const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+    const base = await app.listen({ port: 0, host: "127.0.0.1" });
+    const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
+    const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
+    return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; } };
+  }
+  const read = async (response: Response, until: (text: string) => boolean, ms = 4000) => {
+    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let text = "";
+    const deadline = Date.now() + ms;
+    while (!until(text)) {
+      if (Date.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
+      const chunk = await Promise.race([reader.read(), new Promise<null>(resolve => setTimeout(() => resolve(null), 50))]);
+      if (chunk?.done) return { text, done: true, reader };
+      if (chunk) text += chunk.value;
+    }
+    return { text, done: false, reader };
+  };
+
+  it("announces room changes to a stream that asked for the room, and stops polling once it closes", async () => {
+    const s = await setup();
+    try {
+      const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+      expect(response.status).toBe(200);
+      const first = await read(response, text => text.includes("event: group"));
+      expect(first.text).toContain(`event: group\ndata: {"roomId":"shared","latestSeq":1}\n\n`);
+      // The room gains someone else's private assistant: the watch ends like its routes answer 404.
+      s.store.savePresentation("planner", { shared: false, ownerId: "local-two" });
+      s.setSeq(2);
+      let text = "";
+      for (;;) {
+        const chunk = await first.reader.read();
+        if (chunk.done) break;
+        text += chunk.value;
+      }
+      expect(text).not.toContain("latestSeq\":2");
+      const polls = s.groupRequest.mock.calls.filter(([input]) => input.operation === "state").length;
+      await new Promise(resolve => setTimeout(resolve, 2300));
+      expect(s.groupRequest.mock.calls.filter(([input]) => input.operation === "state")).toHaveLength(polls);
+    } finally { await s.app.close(); }
+  });
+
+  it("refuses a hidden or unknown room before opening the stream", async () => {
+    const s = await setup();
+    try {
+      expect((await fetch(`${s.base}/api/events?group=private`, { headers: { cookie: s.cookie } })).status).toBe(404);
+      expect((await fetch(`${s.base}/api/events?group=missing`, { headers: { cookie: s.cookie } })).status).toBe(404);
+      expect(s.groupRequest.mock.calls.filter(([input]) => input.operation === "state")).toHaveLength(2);
+      expect((await fetch(`${s.base}/api/events?group=shared`)).status).toBe(401);
+    } finally { await s.app.close(); }
+  });
+});

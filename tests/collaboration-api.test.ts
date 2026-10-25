@@ -21,7 +21,7 @@ async function fixture(privateOwner = 'someone-else') {
     { room_id:'private', name:'Private discussion', members:[member('ranch'),member('private-bot')] },
     { room_id:'peer', name:'Peer discussion', members:[member('ranch'),{...member('planner'),target:{kind:'peer',profile:'planner'}}] },
   ];
-  const groupRequest = vi.fn(async (input: any) => input.operation === 'list' ? {supported:true,canSend:true,rooms}
+  const groupRequest = vi.fn(async (input: any): Promise<any> => input.operation === 'list' ? {supported:true,canSend:true,rooms}
     : input.operation === 'state' ? {room: rooms.find(room => room.room_id === input.roomId)}
     : input.operation === 'log' ? {events:[],cursor:0,has_more:false,latest_seq:0} : {accepted:true});
   const routineResults = vi.fn(async () => []), routineOutput = vi.fn(async () => ({messages:[],previewOnly:false}));
