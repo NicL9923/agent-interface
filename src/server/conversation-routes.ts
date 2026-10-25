@@ -175,18 +175,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       clearTimeout(pending);
       clearTimeout(livePending);
     };
-    try {
-      watchers.set(botId, listeners.add(changed));
-      unwatch = runtime.watch?.(botId, notice);
-      stream = connection.open(streams, {
-        // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-        allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
-        teardown,
-      });
-    } catch (error) {
-      teardown();
-      throw error;
-    }
+    stream = connection.open(streams, {
+      reserve: () => {
+        watchers.set(botId, listeners.add(changed));
+        unwatch = runtime.watch?.(botId, notice);
+      },
+      // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
+      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+      teardown,
+    });
   });
   const message = z
     .object({
