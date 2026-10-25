@@ -20,6 +20,7 @@ Verified September 29, 2026. Direct dependencies use exact versions in
 | Base UI, web context menus and popovers | 1.9.0 | [Official documentation](https://base-ui.com/react/overview/about), [registry](https://registry.npmjs.org/@base-ui/react/1.9.0) |
 | Tailwind CSS and Vite plugin | 4.3.3 | [Theme variables](https://tailwindcss.com/docs/theme), [registry](https://registry.npmjs.org/tailwindcss/4.3.3) |
 | clsx and tailwind-merge, shared control classes | 2.1.1 / 3.7.0 | [clsx](https://github.com/lukeed/clsx), [tailwind-merge](https://github.com/dcastil/tailwind-merge) |
+| highlight.js, reply code colors (lazy chunk, common grammars only), verified October 25, 2026 | 11.12.0 | [Official documentation](https://highlightjs.readthedocs.io/), [registry](https://registry.npmjs.org/highlight.js/11.12.0) |
 | SQLite | 3.53.4 in both tested Node binaries | [Node SQLite API](https://nodejs.org/api/sqlite.html) and `SELECT sqlite_version()` |
 
 `.node-version` selects Node 24.21.0. The engine range also permits Node 26.10

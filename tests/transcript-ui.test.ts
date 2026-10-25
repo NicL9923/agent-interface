@@ -282,11 +282,15 @@ describe("turn work", () => {
     conversation = { ...conversation, approvals: [{ id: "gate", title: "Open the gate?", detail: "", status: "pending" }], messages: [
       prompt("q", "Check it", { createdAt: "2026-10-01T16:00:00Z" }),
       { id: "t", role: "tool", text: "", toolCall: call },
+      // Hermes files a subagent's result as a user row; it is still this turn's work.
+      { id: "s", role: "user", text: "Subagent Task Completed: Check", origin: { kind: "subagent", visibility: "activity" } },
       answer("a", "Checked.", { createdAt: "2026-10-01T16:02:14Z" }),
     ] };
     await render();
+    expect(container.querySelectorAll(".turn-work")).toHaveLength(1);
     const fold = container.querySelector<HTMLDetailsElement>(".turn-work")!;
-    expect(fold.querySelector("summary")?.textContent).toBe("Worked for 2m 14s · 1 tool call");
+    expect(fold.querySelector("summary")?.textContent).toBe("Worked for 2m 14s · 1 tool call, 1 subagent");
+    expect(fold.nextElementSibling?.getAttribute("data-message-id")).toBe("a");
     expect(fold.open).toBe(false);
     expect(fold.contains(container.querySelector(".approval-card"))).toBe(false);
   });

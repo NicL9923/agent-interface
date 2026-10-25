@@ -338,10 +338,13 @@ function HistoryEdge({ history, scroll, name, disabled }: {
   </div>;
 }
 type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; replyAt?: string };
+const startsTurn = (message: Message) => isHumanMessage(message) || message.role === "user" && messageOrigin(message)?.kind === "scheduled";
 function turns(conversation: SavedConversation | null, advanced: boolean) {
   const blocks: Turn[] = [];
   for (const message of withMessageOrigins(conversation?.messages || [])) {
-    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map(), reasoning: [] });
+    // A person's message or a scheduled prompt starts a turn. Subagent, process and agent rows that
+    // Hermes files as user messages belong to the work of the turn they arrive in.
+    if (!blocks.length || startsTurn(message)) blocks.push({ messages: [], tools: new Map(), reasoning: [] });
     const block = blocks.at(-1)!;
     // A turn's reasoning parts share one accordion instead of a block per reply row.
     if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
