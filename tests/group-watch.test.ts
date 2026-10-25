@@ -1,6 +1,10 @@
+import { EventEmitter } from "node:events";
+import http from "node:http";
+import type { FastifyReply } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { eventStreamConnection } from "../src/server/event-stream.js";
 import { GROUP_POLL_MAX_MS, GROUP_WATCHED_ROOMS, GROUP_WATCHES_PER_PERSON, GroupWatch } from "../src/server/group-watch.js";
 import type { GroupRequest, GroupState } from "../src/shared/collaboration.js";
 import type { Runtime } from "../src/shared/types.js";
@@ -113,21 +117,28 @@ describe("group room watcher", () => {
 });
 
 describe("watching a group chat on the app event stream", () => {
-  async function setup() {
+  async function setup(extra: Partial<Runtime> = {}) {
     let seq = 1;
+    // A gate the next room lookup waits on, when a test sets one.
+    let gate: Promise<void> | undefined;
     const rooms = [state("shared", 1).room, { ...state("private", 1).room, members: [member("ranch"), member("secret")] }];
-    const groupRequest = vi.fn(async (input: GroupRequest) => input.operation === "list" ? { supported: true, canSend: true, rooms }
-      : { ...state((input as { roomId: string }).roomId, seq), room: { ...rooms.find(room => room.room_id === (input as { roomId: string }).roomId)!, latest_seq: seq } });
+    const groupRequest = vi.fn(async (input: GroupRequest) => {
+      if (gate && input.operation === "state") { const waiting = gate; gate = undefined; await waiting; }
+      return input.operation === "list" ? { supported: true, canSend: true, rooms }
+        : { ...state((input as { roomId: string }).roomId, seq), room: { ...rooms.find(room => room.room_id === (input as { roomId: string }).roomId)!, latest_seq: seq } };
+    });
     const runtime: Runtime = fakeRuntime({
       groupRequest, status: async () => ({ connected: true }), close: async () => {},
       capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
       listBots: async () => [botFixture({ id: "ranch" }), botFixture({ id: "planner" }), botFixture({ id: "secret", shared: false, ownerId: "local-two" })],
+      ...extra,
     });
     const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
     const base = await app.listen({ port: 0, host: "127.0.0.1" });
     const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
     const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
-    return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; } };
+    return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; },
+      holdNextLookup: () => { let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; }); return release; } };
   }
   const read = async (response: Response, until: (text: string) => boolean, ms = 4000) => {
     const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
@@ -141,6 +152,64 @@ describe("watching a group chat on the app event stream", () => {
     }
     return { text, done: false, reader };
   };
+
+  // Sends a stream request over a real socket and disconnects once the server is handling it.
+  async function abandon(s: Awaited<ReturnType<typeof setup>>, path: string) {
+    const handled = new Promise<void>(resolve => s.app.server.once("request", (_request, response) => response.once("close", () => resolve())));
+    const request = http.get(`${s.base}${path}`, { headers: { cookie: s.cookie } });
+    request.on("error", () => {});
+    await new Promise(resolve => setTimeout(resolve, 50));
+    request.destroy();
+    await handled;
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+
+  it("frees a watch whose client disconnected while the room was still being looked up", async () => {
+    const s = await setup();
+    const open: Response[] = [];
+    try {
+      const release = s.holdNextLookup();
+      await abandon(s, "/api/events?group=shared");
+      release();
+      await settle();
+      // The abandoned request took no place, so every one of this person's watches still opens.
+      for (let index = 0; index < GROUP_WATCHES_PER_PERSON; index++) {
+        const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+        open.push(response);
+        expect(response.status, `stream ${index + 1}`).toBe(200);
+      }
+    } finally {
+      await Promise.all(open.map(response => response.body?.cancel()));
+      await s.app.close();
+    }
+  });
+
+  it("leaves no conversation watcher behind for a client that disconnected during setup", async () => {
+    let release!: () => void, asked!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reached = new Promise<void>(resolve => { asked = resolve; });
+    const unwatch = vi.fn();
+    const watch = vi.fn(() => unwatch);
+    let delay = true;
+    const s = await setup({ watch,
+      // The assistant access check reads Hermes's roster before the stream opens.
+      listBots: async () => { if (delay) { delay = false; asked(); await held; } return [botFixture({ id: "ranch" }), botFixture({ id: "planner" })]; } });
+    try {
+      const abandoned = abandon(s, "/api/bots/ranch/events");
+      await reached;
+      await abandoned;
+      release();
+      await settle();
+      expect(watch).not.toHaveBeenCalled();
+      // A stream that does open still watches until it closes.
+      const response = await fetch(`${s.base}/api/bots/ranch/events`, { headers: { cookie: s.cookie } });
+      expect(response.status).toBe(200);
+      expect(watch).toHaveBeenCalledTimes(1);
+      await response.body?.cancel();
+      await settle();
+      expect(unwatch).toHaveBeenCalledTimes(1);
+    } finally { await s.app.close(); }
+  });
 
   it("announces room changes to a stream that asked for the room, and stops polling once it closes", async () => {
     const s = await setup();
@@ -195,5 +264,38 @@ describe("watching a group chat on the app event stream", () => {
       await Promise.all(open.map(response => response.body?.cancel()));
       await s.app.close();
     }
+  });
+});
+
+describe("event stream setup", () => {
+  // Just enough of a hijackable Fastify reply over a real ServerResponse-like emitter.
+  function reply(destroyed: boolean) {
+    const raw = Object.assign(new EventEmitter(), {
+      destroyed, writableEnded: false, writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), destroy: vi.fn(),
+    });
+    return { raw, hijack: vi.fn(), getHeaders: () => ({}) } as unknown as FastifyReply & { raw: typeof raw };
+  }
+
+  it("ends at once, tearing down what setup reserved, when the client already left", () => {
+    const left = reply(true), streams = new Set<() => void>(), teardown = vi.fn();
+    const stream = eventStreamConnection(left).open(streams, { allowed: () => true, teardown });
+    expect(teardown).toHaveBeenCalledTimes(1);
+    expect(left.raw.writeHead).not.toHaveBeenCalled();
+    expect(streams.size).toBe(0);
+    stream.send("data: change\n\n");
+    stream.end();
+    expect(left.raw.write).not.toHaveBeenCalled();
+    expect(teardown).toHaveBeenCalledTimes(1);
+  });
+
+  it("notices a client that leaves while setup awaits, and ends that request without a stream", () => {
+    const leaving = reply(false);
+    const connection = eventStreamConnection(leaving);
+    expect(connection.closed).toBe(false);
+    leaving.raw.emit("close");
+    expect(connection.closed).toBe(true);
+    connection.abandon();
+    expect(leaving.raw.destroy).toHaveBeenCalled();
+    expect(leaving.raw.writeHead).not.toHaveBeenCalled();
   });
 });

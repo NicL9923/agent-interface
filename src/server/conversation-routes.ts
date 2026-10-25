@@ -11,7 +11,7 @@ import { apiRoute, type ApiRequest } from "./api-route.js";
 import { signedIn, stillSignedIn } from "./auth.js";
 import { redactAgents, visibleTo, type Roster } from "./bot-access.js";
 import type { Config } from "./config.js";
-import { openEventStream } from "./event-stream.js";
+import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { httpError } from "./http-error.js";
 import { routePattern } from "./route-path.js";
 import { fileRef, id } from "./schemas.js";
@@ -125,26 +125,19 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       for (const changed of watchers.get((req.params as { id: string }).id) ?? []) changed();
   });
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
+    // Followed before the first await, so a client that leaves during setup leaves no watcher.
+    const connection = eventStreamConnection(reply);
     const botId = id.parse((req.params as { id: string }).id);
     const optedIn = (req.query as { inflight?: string }).inflight === "1";
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
+    if (connection.closed) return connection.abandon();
     let hidden = JSON.stringify(store.privateBots());
     let last = 0, pending: ReturnType<typeof setTimeout> | undefined;
     let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
-    const stream = openEventStream(reply, streams, {
-      // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
-      teardown: () => {
-        unwatch?.();
-        listeners.delete(changed);
-        if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
-        clearTimeout(pending);
-        clearTimeout(livePending);
-      },
-    });
+    let stream: EventStream | undefined;
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
-      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream.send("data: change\n\n"); },
+      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream?.send("data: change\n\n"); },
         Math.max(0, last + 1000 - Date.now()));
     };
     const notice = (kind?: "inflight") => {
@@ -163,13 +156,31 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          stream.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+          stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
-    watchers.set(botId, listeners.add(changed));
-    const unwatch = runtime.watch?.(botId, notice);
+    let unwatch: (() => void) | undefined;
+    const teardown = () => {
+      unwatch?.();
+      listeners.delete(changed);
+      if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+      clearTimeout(pending);
+      clearTimeout(livePending);
+    };
+    try {
+      watchers.set(botId, listeners.add(changed));
+      unwatch = runtime.watch?.(botId, notice);
+      stream = connection.open(streams, {
+        // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
+        allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+        teardown,
+      });
+    } catch (error) {
+      teardown();
+      throw error;
+    }
   });
   const message = z
     .object({
