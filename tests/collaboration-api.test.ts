@@ -21,14 +21,14 @@ async function fixture(privateOwner = 'someone-else') {
     { room_id:'private', name:'Private discussion', members:[member('ranch'),member('private-bot')] },
     { room_id:'peer', name:'Peer discussion', members:[member('ranch'),{...member('planner'),target:{kind:'peer',profile:'planner'}}] },
   ];
-  const groupRequest = vi.fn(async (input: any) => input.operation === 'list' ? {supported:true,canSend:true,rooms}
+  const groupRequest = vi.fn(async (input: any): Promise<any> => input.operation === 'list' ? {supported:true,canSend:true,rooms}
     : input.operation === 'state' ? {room: rooms.find(room => room.room_id === input.roomId)}
     : input.operation === 'log' ? {events:[],cursor:0,has_more:false,latest_seq:0} : {accepted:true});
   const routineResults = vi.fn(async () => []), routineOutput = vi.fn(async () => ({messages:[],previewOnly:false}));
   const runtime = fakeRuntime({ groupRequest, routineResults, routineOutput, listBots:async () => [botFixture({id:'ranch'}),botFixture({id:'planner'}),botFixture({id:'private-bot',shared:false,ownerId:privateOwner})] });
   await installCollaborationRoutes(app,runtime,store);
   app.addHook('onClose',async () => store.close());
-  return {app,groupRequest,routineResults,routineOutput,headers:signIn(store,origin,'one')};
+  return {app,store,groupRequest,routineResults,routineOutput,headers:signIn(store,origin,'one')};
 }
 it('filters private and peer rooms and checks the full roster on every read and action', async () => {
   const s = await fixture();
@@ -77,4 +77,20 @@ it('keeps routine output profile scope and rejects an inaccessible assistant',as
   expect((await s.app.inject({url:'/api/bots/private-bot/routines/r1/results',headers:s.headers})).statusCode).toBe(404);
   expect((await s.app.inject({url:'/api/bots/ranch/routines/r1/results/run1',headers:s.headers})).statusCode).toBe(200);
   expect(s.routineOutput).toHaveBeenCalledWith('ranch','r1','run1'); expect(s.routineResults).not.toHaveBeenCalled();
+});
+it('names the household member who sent each group message, and nobody for messages sent elsewhere', async () => {
+  const s = await fixture();
+  const event = (event_id: string, kind = 'message.user', actor = 'user') => ({event_id, seq: 1, kind, created_at: 1, actor: {kind: actor, id: actor}, payload: {text: event_id}});
+  s.groupRequest.mockImplementation(async (input: any) => input.operation === 'state' ? {room: {room_id: 'shared', name: 'Shared discussion', members: [{member_id: 'ranch', profile: 'ranch', handle: 'ranch'}, {member_id: 'planner', profile: 'planner', handle: 'planner'}]}}
+    : input.operation === 'send' ? {event: event(`user:${input.requestId}`), accepted: true}
+    : {events: [event(`user:${sent}`), event('user:from-dashboard'), event('reply', 'message.member', 'planner')], cursor: 3, latest_seq: 3, has_more: false});
+  let sent = '';
+  const response = await s.app.inject({method: 'POST', url: '/api/groups/shared/messages', headers: s.headers, payload: {requestId: crypto.randomUUID(), threadId: 'thread', text: 'Bring water'}});
+  expect(response.statusCode).toBe(200);
+  sent = s.groupRequest.mock.calls.map(([input]) => input).find(input => input.operation === 'send').requestId;
+  s.store.user({id: 'one', name: 'Nicolas', email: 'one@example.invalid'});
+  for (const tail of ['', '&state=1']) {
+    const events = (await s.app.inject({url: `/api/groups/shared/log?since=0${tail}`, headers: s.headers})).json().events;
+    expect(events.map((event: any) => event.sender)).toEqual([{id: 'one', name: 'Nicolas'}, undefined, undefined]);
+  }
 });

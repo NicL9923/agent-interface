@@ -93,7 +93,8 @@ function seedMemberHistory(store: Store) {
 }
 const values: Record<string, string> = { approvalId: "approval", messageId: "m1", cardId: "card", target: "memory", itemId: "item", source: "onepassword", requestId: randomUUID(), sessionId: "session", routineId: "r-family", resultId: "result", roomId: "ledger-room", flowId: "f".repeat(24), audioId: "audio" };
 const ids: Record<string, (botId: string) => string> = { "/api/routines/:id": () => "r-secret", "/api/files/:id": fileId, "/api/submissions/:id": () => randomUUID(), "/api/integrations/:id": () => "workspace" };
-const queries: Record<string, (botId: string) => string> = { "/api/search": () => "q=ledger", "/api/models": botId => `botId=${botId}`, "/api/integrations": botId => `profile=${botId}`, "/api/integrations/flows/:flowId": botId => `profile=${botId}` };
+const queries: Record<string, (botId: string) => string> = { // Search names the private assistant to be refused, and otherwise searches every visible one.
+  "/api/search": botId => botId === secret ? `q=ledger&botId=${botId}` : "q=ledger", "/api/models": botId => `botId=${botId}`, "/api/integrations": botId => `profile=${botId}`, "/api/integrations/flows/:flowId": botId => `profile=${botId}` };
 const request = (method: string, url: string, botId: string) => {
   const path = url.replace(/:(\w+)/g, (_, name: string) => name === "botId" || name === "id" && url.startsWith("/api/bots/") ? botId
     : name === "id" ? Object.entries(ids).find(([prefix]) => url.startsWith(prefix))?.[1](botId) ?? "x" : values[name]!);

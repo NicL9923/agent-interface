@@ -337,6 +337,8 @@ export interface Submission {
   senderId: string;
   /** The draft revision this message was written on. Older clients omit it. */
   draftBaseRevision?: number;
+  /** The user message this one retries. A retry never reads, merges or clears the sender's draft. */
+  retryOf?: string;
 }
 export interface SubmissionReceipt {
   requestId: string;

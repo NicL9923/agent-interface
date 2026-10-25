@@ -49,6 +49,11 @@ export interface MessageRequest {
   reviewedUncertain?: boolean;
   /** The draft revision this message was written on. */
   draftBaseRevision?: number;
+  /**
+   * The id of the user message in this assistant's canonical conversation that this one resends
+   * after a failed turn. Never sent with draftBaseRevision: a retry leaves the draft untouched.
+   */
+  retryOf?: string;
 }
 export interface DraftSave { text: string; attachments?: FileRef[]; baseRevision?: number }
 export interface WebPushSubscription { endpoint: string; keys: { p256dh: string; auth: string } }
@@ -71,7 +76,7 @@ type MemorySave = { revision: string; entries: { id?: string; text: string }[] }
 export interface ApiRoutes {
   "GET /today": { query: { since?: string }; response: TodayOverview };
   "PUT /today/seen": { body: { seenAt: string; frontier: string }; response: Ok };
-  "GET /search": { query: { q: string }; response: { hits: SearchHit[]; unavailableBots: string[] } };
+  "GET /search": { query: { q: string; botId?: string }; response: { hits: SearchHit[]; unavailableBots: string[] } };
   "GET /bots/:botId/history/:sessionId": { query: { offset?: number; messageId?: string }; response: HistoryPage };
   "GET /saved": { response: SavedItem[] };
   "POST /saved": { body: SaveItem; response: SavedItem };
@@ -153,6 +158,8 @@ export interface ApiRoutes {
   "POST /push/subscriptions": { body: WebPushSubscription; response: Ok };
   "DELETE /push/subscriptions": { body: { endpoint: string }; response: Ok };
   "POST /push/test": { body: { botId: string }; response: PushTest };
+  /** A service worker's notification action, authorized by the single-use token in its push. */
+  "POST /push/actions": { body: { token: string }; response: Ok };
   // The native app's routes. docs/native-api.md is the contract the iOS app decodes.
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };

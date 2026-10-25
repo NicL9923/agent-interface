@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { notificationCopy } from "../shared/event-copy.js";
 import type { RuntimeEvent } from "../shared/types.js";
 import { httpError } from "./http-error.js";
@@ -9,6 +9,10 @@ import type { RoutineRepository } from "./store-routines.js";
 import type { SubmissionRepository } from "./store-submissions.js";
 import type { StoreDatabase } from "./store-database.js";
 
+/** How long a web push action such as Decline stays usable after its notification is sent. */
+export const pushActionTtl = 60 * 60000;
+export type PushAction = { userId: string; botId: string; approvalId: string; decision: "denied" };
+const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
 // Clients report an open chat every 15 seconds, so a missed beat or two never counts as leaving.
@@ -81,6 +85,23 @@ export class NotificationRepository {
         this.db.prepare("INSERT INTO chat_reads VALUES(?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET read_at=max(chat_reads.read_at,excluded.read_at),client_id=excluded.client_id")
           .run(userId, botId, now, clientId);
     });
+  }
+  /**
+   * A token a service worker presents to act on one approval for one person without their
+   * session, which it cannot read. Only its hash is kept, and it works once.
+   */
+  issuePushAction(action: PushAction, now = Date.now()) {
+    const token = randomBytes(32).toString("base64url");
+    this.db.prepare("INSERT INTO push_action_tokens(hash,user_id,bot_id,approval_id,decision,expires) VALUES(?,?,?,?,?,?)")
+      .run(tokenHash(token), action.userId, action.botId, action.approvalId, action.decision, now + pushActionTtl);
+    return token;
+  }
+  /** The action a token grants, removed as it is read so nobody can use it twice. Expired tokens grant nothing. */
+  consumePushAction(token: string, now = Date.now()): PushAction | undefined {
+    const row = this.db.prepare("DELETE FROM push_action_tokens WHERE hash=? RETURNING user_id AS userId,bot_id AS botId,approval_id AS approvalId,decision,expires")
+      .get(tokenHash(token)) as (PushAction & { expires: number }) | undefined;
+    if (!row || row.expires <= now) return undefined;
+    return { userId: row.userId, botId: row.botId, approvalId: row.approvalId, decision: row.decision };
   }
   /** When this person last read each chat, in milliseconds, for the home list's unread marks. */
   chatReads(userId: string): Map<string, number> {

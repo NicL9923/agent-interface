@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { z } from "zod";
 import { interruptionPendingMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
+import { messageOrigin } from "../shared/message-origin.js";
 import type { CapabilityKey, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
@@ -16,6 +17,23 @@ import { routePattern } from "./route-path.js";
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
 import { nameRequesters } from "./vault.js";
+
+/** Decides a pending approval for this person, as the chat and notification actions do. */
+export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
+  const conversation = await runtime.conversation(botId, { history: false });
+  const approval = conversation.approvals.find((a) => a.id === approvalId);
+  if (
+    !approval ||
+    approval.status !== "pending" ||
+    store.approval(approvalId) ||
+    (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
+  )
+    throw httpError(409, "This approval is no longer pending");
+  await runtime.approve(botId, approvalId, decision, userId);
+  store.attributeApproval(approvalId, botId, userId, decision);
+  if (conversation.activity.runId)
+    store.participate(conversation.activity.runId, userId);
+}
 
 /**
  * One conversation: its history and files, change notices, sending and steering messages,
@@ -152,12 +170,18 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       reviewedInterruption: z.boolean().default(false),
       reviewedUncertain: z.boolean().default(false),
       draftBaseRevision: z.number().int().min(0).optional(),
+      retryOf: z.string().min(1).max(512).optional(),
     })
     .refine((v) => !!v.text.trim() || !!v.attachments.length, {
       message: "Message cannot be empty",
+    })
+    // A retry resends an earlier message and must never be matched to, or clear, a draft.
+    .refine((v) => v.retryOf === undefined || v.draftBaseRevision === undefined, {
+      message: "A retry is not written on a draft",
     });
   const submit = async (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">, body: z.output<typeof message>, explicitSteering = false): Promise<SubmissionReceipt> => {
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
+    if (message.retryOf !== undefined && explicitSteering) throw httpError(400, "Retry a message by sending it, not by steering");
     const input: Submission = {
       ...message,
       botId: req.params.id,
@@ -187,9 +211,23 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     }
     await requireCapability("chat");
     const fast = await runtime.canonicalSubmit?.() === true;
-    const conversation = fast ? undefined : await runtime.conversation(input.botId, { history: false });
+    // A retry reads the window that starts at its message, which also proves the message is still there.
+    const conversation = input.retryOf !== undefined
+      ? await runtime.conversation(input.botId, { window: { start: input.retryOf } })
+      : fast ? undefined : await runtime.conversation(input.botId, { history: false });
     if (conversation?.activity.state === "interrupted" && !reviewedInterruption)
       throw httpError(409, interruptionPendingMessage);
+    if (input.retryOf !== undefined) {
+      const redact = await redactAgents(store, roster, input.senderId);
+      const target = conversation!.messages.find(message => message.id === input.retryOf);
+      // Only a person's own words are retried, never a scheduled delivery or another assistant's message.
+      const origin = target && messageOrigin(redact.message(target));
+      if (!target || target.role !== "user" || origin && origin.kind !== "human")
+        throw httpError(400, "That message is no longer in this conversation");
+      // Steering the retried text into a running turn would answer a different question.
+      if (["thinking", "working", "waiting", "blocked"].includes(conversation!.activity.state))
+        throw httpError(409, "Wait for the current reply to finish before retrying");
+    }
     const steering =
       explicitSteering ||
       ["thinking", "working", "waiting", "blocked"].includes(
@@ -281,19 +319,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
     if (account !== undefined && account !== accountMarker(signedIn(req).id))
       throw httpError(409, "This approval was sent to a different account");
-    const conversation = await runtime.conversation(p.id, { history: false });
-    const approval = conversation.approvals.find((a) => a.id === p.approvalId);
-    if (
-      !approval ||
-      approval.status !== "pending" ||
-      store.approval(p.approvalId) ||
-      (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
-    )
-      throw httpError(409, "This approval is no longer pending");
-    await runtime.approve(p.id, p.approvalId, decision, signedIn(req).id);
-    store.attributeApproval(p.approvalId, p.id, signedIn(req).id, decision);
-    if (conversation.activity.runId)
-      store.participate(conversation.activity.runId, signedIn(req).id);
+    await decideApproval(runtime, store, p.id, p.approvalId, decision, signedIn(req).id);
     return { ok: true };
   });
   apiRoute(app, "GET /bots/:id/draft", {}, async req => store.draft(signedIn(req).id, req.params.id));

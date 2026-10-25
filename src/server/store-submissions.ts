@@ -81,7 +81,8 @@ export class SubmissionRepository {
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
         .run(JSON.stringify(stored), receipt.requestId);
       const row = this.submission(receipt.requestId);
-      if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted")
+      // A retry resends an earlier message, never the draft, which stays the person's own.
+      if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted" && row.input.retryOf === undefined)
         this.drafts.clearSubmittedDraft(row.input.senderId, row.input.botId, {
           text: row.input.text, attachments: row.input.attachments ?? [],
         }, row.input.draftBaseRevision);
@@ -106,6 +107,20 @@ export class SubmissionRepository {
     this.db
       .prepare("INSERT INTO approval_attribution VALUES(?,?,?,?,?)")
       .run(id, botId, userId, decision, Date.now());
+  }
+  /** Records who sent a group chat message, keyed by the event Hermes appended for it. */
+  attributeGroupMessage(roomId: string, eventId: string, userId: string) {
+    this.db.prepare("INSERT OR IGNORE INTO group_senders(room_id,event_id,user_id,created_at) VALUES(?,?,?,?)").run(roomId, eventId, userId, Date.now());
+  }
+  /** The recorded sender of each of these group events that has one. */
+  groupSenders(roomId: string, eventIds: string[]) {
+    const senders = new Map<string, string>();
+    const read = this.db.prepare("SELECT user_id AS userId FROM group_senders WHERE room_id=? AND event_id=?");
+    for (const eventId of new Set(eventIds)) {
+      const row = read.get(roomId, eventId) as { userId: string } | undefined;
+      if (row) senders.set(eventId, row.userId);
+    }
+    return senders;
   }
   approval(id: string) {
     return this.db

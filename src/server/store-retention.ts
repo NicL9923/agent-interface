@@ -23,7 +23,7 @@ export class RetentionRepository {
       this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
       for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
-      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "routine_trials"])
+      for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "routine_trials", "push_action_tokens"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.accounts.users()) {
@@ -43,6 +43,7 @@ export class RetentionRepository {
     return this.database.transaction(() => {
       const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
       this.db.prepare("DELETE FROM chat_presence WHERE updated_at<?").run(now - presenceTtl);
+      this.db.prepare("DELETE FROM push_action_tokens WHERE expires<=?").run(now);
       this.db.prepare(`DELETE FROM delivered WHERE outbox_id IN (${stale})`).run(cutoff);
       this.db.prepare(`DELETE FROM notification_batch_items WHERE outbox_id IN (${stale})`).run(cutoff);
       const notifications = this.db.prepare(`DELETE FROM outbox WHERE id IN (${stale})`).run(cutoff).changes;
