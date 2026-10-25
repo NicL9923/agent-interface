@@ -65,6 +65,8 @@ struct ConversationView: View {
   @FocusState private var findFocused: Bool
   /// A message opened from search or find, highlighted for a moment.
   @State private var highlighted: String?
+  /// The found message kept in view while the chat lays out around it, until the reader drags.
+  @State private var held: String?
   /// After Send, the next message on its way is held near the top while its reply grows below.
   @State private var anchorNext = false
   @State private var anchorScrollPending = false
@@ -298,11 +300,13 @@ struct ConversationView: View {
       $0.size.height
     } action: {
       viewportHeight = $0
-      // The keyboard or a rotation resizes the view; a follower stays at the end.
-      if following { scrollToLatest(proxy) }
+      // The keyboard or a rotation resizes the view; a follower stays at the end, and a found
+      // message stays in view.
+      if following { scrollToLatest(proxy) } else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
     }
     .modifier(OnDrag {
       if following { following = false }
+      if held != nil { held = nil }
       if !placed && store.conversation != nil { placed = true }
     })
     .scrollDismissesKeyboard(.interactively)
@@ -389,6 +393,8 @@ struct ConversationView: View {
     if atLatest && following && store.conversation != nil { placed = true }
     if next.height != previous.height {
       if following { scrollToLatest(proxy) }
+      // A reloaded window can finish its layout after the scroll to the found message.
+      else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
       return
     }
     // Leaving the end stops following; it starts again only at the true end, and not while a sent
@@ -421,8 +427,10 @@ struct ConversationView: View {
   /// Outlines a message for a moment. Meanwhile a page of history added above keeps it in view.
   private func highlight(_ id: String) {
     highlighted = id
+    held = id
     Task { @MainActor in
       try? await Task.sleep(for: .seconds(2.5))
+      if held == id { held = nil }
       guard highlighted == id else { return }
       if reduceMotion { highlighted = nil } else { withAnimation(.easeOut(duration: 0.4)) { highlighted = nil } }
     }
@@ -547,7 +555,7 @@ struct ConversationView: View {
       earlierFailed = (store.conversation?.earlier ?? 0) > 0 && store.conversation?.messages.first?.id == first
       // A message just opened from find or search stays in view as history pages in above it.
       // It waits for the layout pass that adds the page, as scrolling to the latest message does.
-      if let held = highlighted, !following { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
+      if let held, !following { Task { @MainActor in proxy.scrollTo(held, anchor: .center) } }
       else if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
