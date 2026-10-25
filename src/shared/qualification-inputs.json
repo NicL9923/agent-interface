@@ -94,6 +94,7 @@
   "src/shared/message-origin.ts",
   "src/shared/qualification-inputs.json",
   "src/shared/reply-cards.ts",
+  "src/shared/retry-id.ts",
   "src/shared/routine-presets.ts",
   "src/shared/types.ts",
   "src/shared/unread.ts",

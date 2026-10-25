@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { retryRequestId } from "../src/shared/retry-id.js";
 import type { Conversation, Message, Runtime, Submission } from "../src/shared/types.js";
 import { botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
@@ -31,8 +32,11 @@ async function installation(conversation: Partial<Conversation> = {}, overrides:
   const headers = await localLogin(result.app, origin);
   const put = (text: string) => result.app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text, attachments: [] } });
   const draft = async () => (await result.app.inject({ url: "/api/bots/shared/draft", headers })).json();
-  const send = (payload: Record<string, unknown>, path = "messages") =>
-    result.app.inject({ method: "POST", url: `/api/bots/shared/${path}`, headers, payload: { requestId: randomUUID(), attachments: [], ...payload } });
+  // A retry carries its failed turn's own ID unless the test names another.
+  const idFor = (payload: Record<string, unknown>) => typeof payload.retryOf === "string"
+    ? retryRequestId("shared", payload.retryOf, conversation.activity?.runId ?? "") : Promise.resolve(randomUUID());
+  const send = async (payload: Record<string, unknown>, path = "messages", as = headers) =>
+    result.app.inject({ method: "POST", url: `/api/bots/shared/${path}`, headers: as, payload: { requestId: await idFor(payload), attachments: [], ...payload } });
   return { ...result, submit, read, headers, put, draft, send };
 }
 
@@ -68,7 +72,7 @@ describe("retrying a failed turn", () => {
 
   it("replays the same retry request idempotently and refuses its id for different content", async () => {
     const { submit, send } = await installation();
-    const requestId = randomUUID();
+    const requestId = await retryRequestId("shared", "u2");
     expect((await send({ requestId, text: "Order more feed", retryOf: "u2" })).json().status).toBe("accepted");
     expect((await send({ requestId, text: "Order more feed", retryOf: "u2" })).json().status).toBe("accepted");
     expect(submit).toHaveBeenCalledTimes(1);
@@ -113,14 +117,35 @@ describe("retrying a failed turn", () => {
 
   describe("one retry per failed turn", () => {
     const failed = { activity: { state: "failed" as const, runId: "run-1" } };
-    it("admits the first retry of a failed run and answers later ones, with other IDs, with its receipt", async () => {
+    it("admits the first retry of a failed run and answers a later one with its receipt", async () => {
       const submit = vi.fn(async (input: Submission) => ({ requestId: input.requestId, status: "uncertain" as const }));
       const { send } = await installation(failed, { submit });
       const first = (await send({ text: "Order more feed", retryOf: "u2" })).json();
+      expect(first.requestId).toBe(await retryRequestId("shared", "u2", "run-1"));
       const second = await send({ text: "Order more feed", retryOf: "u2" });
       expect(second.statusCode).toBe(200);
-      // The later request follows the first, by its ID.
       expect(second.json()).toEqual(first);
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses, before admitting anything, a retry ID bound to another turn and an ordinary message with a retry's ID", async () => {
+      const { app, submit, send } = await installation(failed);
+      // A former reader of another assistant can work out its failed turn's retry ID.
+      const taken = await retryRequestId("shared", "u2", "run-1");
+      const other = await localLogin(app, origin, "two");
+      const reserve = await app.inject({ method: "POST", url: "/api/bots/other/messages", headers: other,
+        payload: { requestId: taken, text: "Hello", attachments: [] } });
+      expect(reserve.statusCode).toBe(400);
+      for (const requestId of [randomUUID(), await retryRequestId("shared", "u2", "run-0"), await retryRequestId("other", "u2", "run-1"),
+        await retryRequestId("shared", "u1", "run-1"), taken.toUpperCase()]) {
+        const refused = await send({ requestId, text: "Order more feed", retryOf: "u2" });
+        expect(refused.statusCode).toBe(400);
+        expect((await app.inject({ url: `/api/submissions/${requestId}`, headers: other })).json().status).toBe("uncertain");
+      }
+      expect(submit).not.toHaveBeenCalled();
+      // The owner's retry still gets the turn.
+      const sent = await send({ text: "Order more feed", retryOf: "u2" });
+      expect(sent.json()).toMatchObject({ requestId: taken, status: "accepted" });
       expect(submit).toHaveBeenCalledTimes(1);
     });
 
@@ -139,14 +164,12 @@ describe("retrying a failed turn", () => {
       expect(receipts[0].requestId).toBe(receipts[1].requestId);
     });
 
-    it("lets another person's retry of the same failure follow it, by the same or another ID, and see its receipt", async () => {
+    it("lets another person's retry of the same failure follow it and see its receipt", async () => {
       const { app, submit, send } = await installation(failed);
       const first = (await send({ text: "Order more feed", retryOf: "u2" })).json();
       const other = await localLogin(app, origin, "two");
-      const post = (requestId: string) => app.inject({ method: "POST", url: "/api/bots/shared/messages", headers: other,
-        payload: { requestId, text: "Order more feed", attachments: [], retryOf: "u2" } });
-      for (const requestId of [first.requestId, randomUUID()]) {
-        const followed = await post(requestId);
+      for (const text of ["Order more feed", "Order more feed "]) {
+        const followed = await send({ text, retryOf: "u2" }, "messages", other);
         expect(followed.statusCode).toBe(200);
         expect(followed.json()).toMatchObject({ requestId: first.requestId, status: "accepted" });
       }
@@ -166,9 +189,56 @@ describe("retrying a failed turn", () => {
       const again = [...history, { id: "u3", role: "user" as const, text: "Order more feed" }];
       read.mockImplementation(async (botId: string) => conversationFixture({ botId, messages: again, activity: { state: "failed", runId: "run-2" } }));
       expect((await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers })).json()).not.toHaveProperty("retry");
-      const next = (await send({ text: "Order more feed", retryOf: "u3" })).json();
+      const next = (await send({ requestId: await retryRequestId("shared", "u3", "run-2"), text: "Order more feed", retryOf: "u3" })).json();
       expect(next.requestId).not.toBe(first.requestId);
       expect(submit).toHaveBeenCalledTimes(2);
+    });
+
+    it("answers two people retrying with the same ID at once with one receipt, admitting once", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>(resolve => { open = resolve; });
+      const { app, submit, read, send } = await installation(failed);
+      const other = await localLogin(app, origin, "two");
+      const reading = read.getMockImplementation()!;
+      // Both pass the receipt lookup before either claims the turn.
+      read.mockImplementation(async (...args) => { await gate; return reading(...args); });
+      const both = Promise.all([send({ text: "Order more feed", retryOf: "u2" }), send({ text: "Order more feed", retryOf: "u2" }, "messages", other)]);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      open();
+      const responses = await both;
+      expect(responses.map(response => response.statusCode)).toEqual([200, 200]);
+      expect(responses[1].json()).toEqual(responses[0].json());
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets another person recover an unconfirmed retry, sending the original request as its original sender", async () => {
+      const submit = vi.fn(async (input: Submission) => ({ requestId: input.requestId, status: "uncertain" as const }));
+      const lookupSubmission = vi.fn(async () => null);
+      const { app, send } = await installation(failed, { submit, lookupSubmission });
+      const first = (await send({ text: "Order more feed", retryOf: "u2" })).json();
+      expect(first.status).toBe("uncertain");
+      const other = await localLogin(app, origin, "two");
+      // Without review, it only follows the recorded request.
+      expect((await send({ text: "Order more feed ", retryOf: "u2" }, "messages", other)).json()).toEqual(first);
+      expect(submit).toHaveBeenCalledTimes(1);
+      const recovered = await send({ text: "Order more feed ", retryOf: "u2", reviewedUncertain: true }, "messages", other);
+      expect(recovered.statusCode).toBe(200);
+      expect(lookupSubmission).toHaveBeenCalledWith(first.requestId);
+      expect(submit).toHaveBeenCalledTimes(2);
+      expect(submit.mock.calls[1][0]).toEqual(submit.mock.calls[0][0]);
+      expect(submit.mock.calls[1][0]).toMatchObject({ senderId: "local-one", text: "Order more feed", requestId: first.requestId });
+    });
+
+    it("keeps an unconfirmed retry unsent when Hermes cannot look requests up, whoever reviews it", async () => {
+      let supported = true;
+      const submit = vi.fn(async (input: Submission) => ({ requestId: input.requestId, status: "uncertain" as const }));
+      const { app, send } = await installation(failed, { submit,
+        capabilities: async () => capabilitiesFixture({ chat: { supported: true }, steering: { supported: true }, idempotency: { supported } }) });
+      await send({ text: "Order more feed", retryOf: "u2" });
+      supported = false;
+      const other = await localLogin(app, origin, "two");
+      expect((await send({ text: "Order more feed", retryOf: "u2", reviewedUncertain: true }, "messages", other)).statusCode).toBe(409);
+      expect(submit).toHaveBeenCalledTimes(1);
     });
   });
 });

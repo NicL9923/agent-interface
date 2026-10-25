@@ -6,8 +6,7 @@ export type EventStream = { send: (text: string) => void; end: () => void };
 /**
  * Follows an event stream request's connection from the start of its handler, so setup that
  * awaits can tell when the client left meanwhile. Call it before the handler's first await, check
- * `closed` after each await and before reserving anything, and open the stream once setup has
- * registered everything its teardown undoes.
+ * `closed` after each await, and reserve what teardown undoes only in `open`'s `reserve`.
  */
 export function eventStreamConnection(reply: FastifyReply) {
   const response = reply.raw;
@@ -22,10 +21,26 @@ export function eventStreamConnection(reply: FastifyReply) {
       reply.hijack();
       response.destroy();
     },
-    /** Opens the stream. A client that already left ends it at once, which runs `teardown`. */
-    open(streams: Set<() => void>, options: { allowed: () => boolean; teardown: () => void }): EventStream {
+    /**
+     * Runs `reserve`, which registers everything `teardown` undoes, then opens the stream. A client
+     * that already left ends it at once. `teardown` runs once however this ends: when the stream
+     * ends, or when reserving or opening throws, which rethrows, even if teardown itself threw.
+     */
+    open(streams: Set<() => void>, options: { allowed: () => boolean; teardown: () => void; reserve?: () => void }): EventStream {
       response.off("close", left);
-      return openEventStream(reply, streams, options, closed);
+      let torn = false;
+      const teardown = () => {
+        if (torn) return;
+        torn = true;
+        options.teardown();
+      };
+      try {
+        options.reserve?.();
+        return openEventStream(reply, streams, { allowed: options.allowed, teardown }, closed);
+      } catch (error) {
+        teardown();
+        throw error;
+      }
     },
   };
 }

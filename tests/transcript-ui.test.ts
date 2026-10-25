@@ -149,9 +149,62 @@ describe("retry a failed turn", () => {
     await advance(0);
     const ids = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
     expect(ids).toEqual([await turnId(), await turnId()]);
-    expect(container.querySelector(".notice.error")?.textContent).toContain("The attachment is gone.");
+    expect(container.querySelector(".retry-refused")?.textContent).toContain("Hermes didn't take the retry. The attachment is gone.");
     // Hermes keeps refusing that ID, so the message box sends it anew.
     expect(buttonText("Retry")).toBeUndefined();
+  });
+
+  it("explains a refused retry from the server's record after a reload, and adds the message and its files to the draft", async () => {
+    conversation = { ...conversation, retry: { requestId: await turnId(), status: "rejected", message: "The attachment is gone.", retryOf: "q1" } } as Conversation;
+    await render();
+    // A reload knows it only from the conversation.
+    await act(async () => root.render(createElement("div")));
+    await render();
+    expect(buttonText("Retry")).toBeUndefined();
+    expect(container.querySelector(".retry-refused")?.textContent).toContain("Hermes didn't take the retry. The attachment is gone.");
+    await act(async () => buttonText("Put my message in the message box")!.click());
+    expect(textarea().value).toBe("My saved draft\n\nCheck the gate");
+    expect(status()).toContain("Your message is in the message box.");
+    await advance(2000);
+    expect(vi.mocked(write).mock.calls.findLast(([path]) => path === "/bots/shared/draft")?.[1])
+      .toMatchObject({ text: "My saved draft\n\nCheck the gate", attachments: [file] });
+    // While a message is on its way, the draft stays as sent and nothing is offered.
+    vi.mocked(write).mockImplementation(async <T>(path: string) => (path === "/bots/shared/messages" ? new Promise<T>(() => {}) : {}) as T);
+    await act(async () => labelled("Send message").click());
+    expect(buttonText("Put my message in the message box")).toBeUndefined();
+    expect(messagesWritten()[0][1]).toMatchObject({ text: "My saved draft\n\nCheck the gate", attachments: [file] });
+  });
+
+  it("keeps a slow retry of one assistant's turn from blocking or settling another's after switching assistants", async () => {
+    const held = new Map<string, (value: unknown) => void>();
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) => path.endsWith("/messages")
+      ? await new Promise<T>(resolve => { held.set(path, value => resolve({ requestId: (body as { requestId: string }).requestId, ...value as object } as T)); })
+      : {} as T);
+    let hook!: ReturnType<typeof useTurnRetry>;
+    // Switching assistants keeps the conversation view, and so this hook, mounted.
+    const View = ({ botId }: { botId: string }) => {
+      hook = useTurnRetry({ botId, userId: "one", canonical: { ...conversation, botId, draft: null, readPosition: null }, blocked: false, resendable: true, report: vi.fn() });
+      return null;
+    };
+    const show = (botId: string) => act(async () => root.render(createElement(View, { botId })));
+    const sent = (botId: string) => vi.mocked(write).mock.calls.filter(([path]) => path === `/bots/${botId}/messages`);
+    await show("shared");
+    let first!: Promise<void>;
+    await act(async () => { first = hook.run(hook.message!); });
+    await vi.waitFor(() => expect(held.has("/bots/shared/messages")).toBe(true));
+    await show("barn");
+    expect(hook.busy).toBe(false);
+    await act(async () => { void hook.run(hook.message!); });
+    await vi.waitFor(() => expect(sent("barn")).toHaveLength(1));
+    expect(hook.busy).toBe(true);
+    // The first assistant's retry finishing leaves this one in flight, and it isn't sent twice.
+    await act(async () => { held.get("/bots/shared/messages")!({ status: "accepted" }); await first; });
+    expect(hook.busy).toBe(true);
+    await act(async () => { await hook.run(hook.message!); });
+    expect(sent("barn")).toHaveLength(1);
+    await show("shared");
+    expect(hook.message).toBeUndefined();
+    await act(async () => held.get("/bots/barn/messages")!({ status: "accepted" }));
   });
 
   it("checks a retry with a lost response by its ID, slowing down, and sends only that ID again", async () => {

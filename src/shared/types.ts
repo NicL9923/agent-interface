@@ -256,6 +256,11 @@ export interface Conversation {
   attention?: AttentionRequest[];
   botId: string;
   sessionId?: string;
+  /**
+   * The live Hermes session whose open requests `approvals` and `attention` list, which
+   * discovered events name as `sessionId`. Server-side only; clients never receive it.
+   */
+  requestSessionId?: string;
   messages: Message[];
   activity: Activity;
   approvals: Approval[];
@@ -354,6 +359,8 @@ export interface RuntimeEvent {
   botId: string;
   runId?: string;
   routineId?: string;
+  /** The live Hermes session the event happened in, as `Conversation.requestSessionId` names it. */
+  sessionId?: string;
   kind: "completed" | "approval" | "failed" | "interrupted" | "activity";
   /** The pending approval an approval event asked about, from add-ons that report it. */
   approvalId?: string;

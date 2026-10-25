@@ -262,15 +262,15 @@ export async function createApp(
         rosterPending = undefined;
       }
     };
-    try {
-      rosterListeners.add(changed);
-      unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
-      stream = connection.open(streams, { allowed: () => stillSignedIn(store, config, req), teardown });
-    } catch (error) {
-      // Nothing it reserved outlives a setup that failed.
-      teardown();
-      throw error;
-    }
+    // Nothing it reserved outlives a setup that failed.
+    stream = connection.open(streams, {
+      reserve: () => {
+        rosterListeners.add(changed);
+        unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+      },
+      allowed: () => stillSignedIn(store, config, req),
+      teardown,
+    });
   });
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");

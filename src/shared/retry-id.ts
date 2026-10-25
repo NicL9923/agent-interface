@@ -13,3 +13,8 @@ export async function retryRequestId(botId: string, messageId: string, runId = "
   const hex = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
+/**
+ * Whether a request ID has a retry ID's shape, version 8. Other requests use random version 4
+ * IDs, so an ordinary message can never take, and so block, a failed turn's retry ID.
+ */
+export const isRetryRequestId = (requestId: string) => requestId[14] === "8";
