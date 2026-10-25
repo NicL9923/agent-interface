@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 /// Whether Hermes is reachable, for rows that show "Last seen running".
@@ -311,6 +312,20 @@ enum RetryTurn {
     guard !replied, !message.text.isEmpty || !(message.files ?? []).isEmpty else { return nil }
     return message
   }
+  /// The request ID for retrying one failed turn, the same on every device as the web's
+  /// `src/shared/retry-id.ts` derives it: a version 8 UUID from SHA-256 over `wildbots-retry`, the
+  /// assistant, the retried message and the failed run (empty without one), joined with NUL.
+  static func requestId(botId: String, retryOf: String, runId: String) -> String {
+    var bytes = Array(SHA256.hash(data: Data(["wildbots-retry", botId, retryOf, runId].joined(separator: "\u{0}").utf8)).prefix(16))
+    bytes[6] = (bytes[6] & 0x0F) | 0x80
+    bytes[8] = (bytes[8] & 0x3F) | 0x80
+    let hex = bytes.map { String(format: "%02x", $0) }.joined()
+    return [hex.prefix(8), hex.dropFirst(8).prefix(4), hex.dropFirst(12).prefix(4), hex.dropFirst(16).prefix(4), hex.dropFirst(20)]
+      .map(String.init).joined(separator: "-")
+  }
+  static let refusedNotice = "Hermes didn't take the retry. Send the message again from the message box."
+  static let checkingNotice = "Checking whether the retry arrived…"
+  static let unconfirmedNotice = "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
 }
 
 private struct DisclosureIdentifierKey: EnvironmentKey { static let defaultValue: String? = nil }

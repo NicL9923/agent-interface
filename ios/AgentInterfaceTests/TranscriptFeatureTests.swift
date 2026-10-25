@@ -108,7 +108,7 @@ import XCTest
   // MARK: Questions
 
   private let one = Question(id: "plan", prompt: "Plan", options: ["First", "Second"])
-  private let several = Question(id: "extras", prompt: "Extras", options: ["Hay", "Water", "Feed"], multiSelect: true)
+  private let several = Question(id: "extras", prompt: "Extras", options: ["Hay", "Water", "Feed"], multiple: true)
   private let written = Question(id: "note", prompt: "Note")
 
   func testASingleChoiceSettlesItsQuestionAndMovesOn() {
@@ -267,28 +267,44 @@ import XCTest
 
   // MARK: Store
 
+  /// The fake app server's state. The lock guards it: URLSession answers off the main actor.
   private final class Box: @unchecked Sendable {
     let lock = NSLock()
     var messages: [[String: Any]] = []
     var state = "failed"
+    var runId = "run-1"
+    /// Status for a POST of a message, and the receipt status a 200 carries.
     var sendStatus = 200
+    var receipt = "accepted"
+    /// The server's claim for the failed turn, as `retry` in the conversation.
+    var claim: [String: Any]?
+    /// Receipts for `GET /submissions/:id`, one per check; the last one repeats.
+    var checks: [String] = ["uncertain"]
+    var idempotency = true
   }
   /// The fake app server's routes. Nonisolated: URLSession calls it off the main actor.
   nonisolated private static func answer(_ request: URLRequest, _ box: Box) -> FakeServer.Reply {
     let path = request.url?.path ?? ""
+    func json(_ object: Any) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self) }
     return box.lock.withLock {
       if path == "/api/bots/bot/messages" {
         guard box.sendStatus == 200 else { return .init(status: box.sendStatus, body: #"{"error":"Refused"}"#) }
         let id = (FakeExchange.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["requestId"] as? String ?? ""
-        box.state = "thinking"
-        return .init(body: #"{"requestId":"\#(id)","status":"accepted","messageId":"\#(id)"}"#)
+        if box.receipt == "accepted" { box.state = "thinking" }
+        return .init(body: json(["requestId": id, "status": box.receipt, "messageId": id]))
+      }
+      if path.hasPrefix("/api/submissions/") {
+        let status = box.checks.count > 1 ? box.checks.removeFirst() : box.checks.first ?? "uncertain"
+        return .init(body: json(["requestId": request.url!.lastPathComponent, "status": status]))
       }
       if path == "/api/bots/bot/conversation" {
         let start = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "start" }?.value
         let from = start.flatMap { id in box.messages.firstIndex { $0["id"] as? String == id } } ?? max(0, box.messages.count - 2)
-        let body: [String: Any] = ["botId": "bot", "sessionId": "session", "messages": Array(box.messages[from...]), "earlier": from,
-          "activity": ["state": box.state], "approvals": [], "files": [], "draft": ["text": "Keep my words", "attachments": [], "revision": 1]]
-        return .init(body: String(decoding: try! JSONSerialization.data(withJSONObject: body), as: UTF8.self))
+        var body: [String: Any] = ["botId": "bot", "sessionId": "session", "messages": Array(box.messages[from...]), "earlier": from,
+          "activity": ["state": box.state, "runId": box.runId], "approvals": [], "files": [],
+          "draft": ["text": "Keep my words", "attachments": [], "revision": 1]]
+        if let claim = box.claim, box.state == "failed" { body["retry"] = claim }
+        return .init(body: json(body))
       }
       return .init()
     }
@@ -310,11 +326,14 @@ import XCTest
   private func store(_ box: Box) async throws -> (AppStore, FakeServer) {
     let server = FakeServer { Self.answer($0, box) }
     let value = AppStore(); value.api = server.api()
+    value.retryCheckDelays = (.milliseconds(20), .milliseconds(80))
+    let idempotency = box.lock.withLock { box.idempotency }
     value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"""
       {"user":{"id":"transcript-\#(UUID().uuidString)","name":"Tester","email":"t@example.test"},"household":[],
        "preferences":{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]},
        "bots":[{"id":"bot","name":"Bot","model":"test","shared":true,"activity":"idle"}],
-       "capabilities":{"chat":{"supported":true},"steering":{"supported":true}},"connection":{"connected":true},"csrfToken":null}
+       "capabilities":{"chat":{"supported":true},"steering":{"supported":true},"idempotency":{"supported":\#(idempotency)}},
+       "connection":{"connected":true},"csrfToken":null}
       """#.utf8))
     value.selectedBotId = "bot"
     await value.refreshConversation()
@@ -328,44 +347,140 @@ import XCTest
         ["id": "t", "role": "tool", "text": "Timed out", "toolCall": ["id": "c", "name": "gate", "status": "failed"]]]
     }
   }
+  private func sends(_ server: FakeServer) throws -> [[String: Any]] {
+    try server.requests.filter { $0.url?.path == "/api/bots/bot/messages" }
+      .map { try XCTUnwrap(FakeExchange.body($0).flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] }) }
+  }
+  private func checks(_ server: FakeServer, _ id: String) -> Int {
+    server.requests.filter { $0.url?.path == "/api/submissions/\(id)" }.count
+  }
 
-  func testRetrySendsTheMessageAgainWithoutTouchingTheDraft() async throws {
+  func testRetryRequestIDsMatchTheSharedVectors() {
+    // docs/native-api.md and tests/retry-id.test.ts hold the same vectors.
+    XCTAssertEqual(RetryTurn.requestId(botId: "ranch", retryOf: "msg-42", runId: "run-7"), "97260a13-beba-8fb5-9218-204b5e8a2010")
+    XCTAssertEqual(RetryTurn.requestId(botId: "ranch", retryOf: "msg-42", runId: ""), "3bba2658-e84c-8ad5-a391-77d34308f4b8")
+    XCTAssertEqual(RetryTurn.requestId(botId: "café", retryOf: "👋", runId: "run"), "f0431e86-8678-8bc4-92de-7d27336108fb")
+  }
+
+  func testRetrySendsTheTurnsOwnIDWithoutTouchingTheDraft() async throws {
     let box = Box(); failedTurn(box)
     let (value, server) = try await store(box)
     value.editComposer { $0.text = "A different draft" }
     let draft = value.draft
-    let prompt = try XCTUnwrap(value.conversation.flatMap(RetryTurn.target))
-    await value.retry(prompt)
-    let sends = server.requests.filter { $0.url?.path == "/api/bots/bot/messages" }
-    XCTAssertEqual(sends.count, 1)
-    let body = try XCTUnwrap(sends.first.flatMap(FakeExchange.body).flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+    XCTAssertEqual(value.retryOffer?.message.id, "p")
+    await value.retry()
+    let body = try XCTUnwrap(sends(server).first)
+    XCTAssertEqual(try sends(server).count, 1)
+    XCTAssertEqual(body["requestId"] as? String, RetryTurn.requestId(botId: "bot", retryOf: "p", runId: "run-1"))
     XCTAssertEqual(body["retryOf"] as? String, "p")
     XCTAssertEqual(body["text"] as? String, "Is the gate closed?")
     XCTAssertEqual((body["attachments"] as? [[String: Any]])?.first?["id"] as? String, "f")
     XCTAssertNil(body["draftBaseRevision"], "A retry is not written on a draft")
-    XCTAssertNotEqual(body["requestId"] as? String, "p")
+    XCTAssertNil(body["reviewedUncertain"])
     XCTAssertEqual(value.draft.text, draft.text, "The draft stays as it was")
-    XCTAssertEqual(value.draft.sentHash, nil)
-    XCTAssertNil(value.pending); XCTAssertNil(value.retrying)
-    XCTAssertEqual(value.receipt?.status, "accepted"); XCTAssertEqual(value.haptic?.kind, .sent)
-    XCTAssertNil(value.conversation.flatMap(RetryTurn.target), "Working again, the turn offers no Retry")
+    XCTAssertNil(value.pending, "A retry leaves the composer's own send alone")
+    XCTAssertEqual(value.haptic?.kind, .sent)
+    XCTAssertNil(value.retryOffer, "Working again, the turn offers no Retry")
   }
 
-  func testARefusedRetryKeepsTheDraftAndShowsTheError() async throws {
-    let box = Box(); failedTurn(box); box.sendStatus = 409
-    let (value, _) = try await store(box)
-    let prompt = try XCTUnwrap(value.conversation.flatMap(RetryTurn.target))
-    await value.retry(prompt)
-    XCTAssertEqual(value.draft.text, "Keep my words", "A refused retry never goes into the draft")
-    XCTAssertEqual(value.receipt?.status, "rejected"); XCTAssertNil(value.pending)
-    XCTAssertEqual(value.error, "Refused"); XCTAssertEqual(value.haptic?.kind, .failed)
-  }
-
-  func testRetryIsRefusedForAMessageThatIsNotTheFailedTurns() async throws {
-    let box = Box(); failedTurn(box); box.state = "idle"
+  func testARetryHermesRefusedHidesRetryAndPointsToTheComposer() async throws {
+    let box = Box(); failedTurn(box); box.receipt = "rejected"
     let (value, server) = try await store(box)
-    await value.retry(Message(id: "p", role: "user", text: "Is the gate closed?"))
-    XCTAssertTrue(server.requests.filter { $0.url?.path == "/api/bots/bot/messages" }.isEmpty)
+    await value.retry()
+    XCTAssertNil(value.retryOffer, "The same ID would be refused again")
+    XCTAssertEqual(value.error, RetryTurn.refusedNotice)
+    XCTAssertEqual(value.draft.text, "Keep my words", "A refused retry never goes into the draft")
+    XCTAssertEqual(value.haptic?.kind, .failed)
+    await value.retry()
+    XCTAssertEqual(try sends(server).count, 1)
+  }
+
+  func testARetryTheServerRefusedOutrightComesBackWithTheSameID() async throws {
+    let box = Box(); failedTurn(box); box.sendStatus = 409
+    let (value, server) = try await store(box)
+    await value.retry()
+    XCTAssertEqual(value.error, "Refused"); XCTAssertEqual(value.haptic?.kind, .failed)
+    XCTAssertEqual(value.retryOffer?.enabled, true, "Nothing was claimed, so Retry comes back")
+    box.lock.withLock { box.sendStatus = 200 }
+    await value.retry()
+    let ids = try sends(server).map { $0["requestId"] as? String }
+    XCTAssertEqual(ids.count, 2); XCTAssertEqual(ids[0], ids[1], "Never a new ID for the same failed turn")
+  }
+
+  func testAnUnconfirmedRetryIsCheckedByItsIDAndResentOnlyAsReviewed() async throws {
+    let box = Box(); failedTurn(box); box.sendStatus = 503
+    let (value, server) = try await store(box)
+    let id = RetryTurn.requestId(botId: "bot", retryOf: "p", runId: "run-1")
+    await value.retry()
+    XCTAssertEqual(value.retryOffer?.checking, true)
+    XCTAssertEqual(value.retryOffer?.enabled, true, "Hermes can look the request up, so Retry may send it again")
+    try await until { self.checks(server, id) >= 2 }
+    box.lock.withLock { box.sendStatus = 200; box.receipt = "uncertain" }
+    await value.retry()
+    let again = try XCTUnwrap(sends(server).last)
+    XCTAssertEqual(again["requestId"] as? String, id); XCTAssertEqual(again["reviewedUncertain"] as? Bool, true)
+    box.lock.withLock { box.checks = ["accepted"] }
+    try await until { value.retryOffer == nil }
+    XCTAssertEqual(try sends(server).count, 2)
+  }
+
+  func testWithoutLookupsAnUnconfirmedRetryIsNeverSentAgain() async throws {
+    let box = Box(); failedTurn(box); box.sendStatus = 503; box.idempotency = false
+    let (value, server) = try await store(box)
+    await value.retry()
+    XCTAssertEqual(value.retryOffer?.checking, true)
+    XCTAssertEqual(value.retryOffer?.enabled, false)
+    await value.retry()
+    XCTAssertEqual(try sends(server).count, 1)
+  }
+
+  func testTheServersClaimSettlesRetryOrIsFollowedByItsID() async throws {
+    let box = Box(); failedTurn(box)
+    box.claim = ["requestId": "first-claim", "status": "accepted", "retryOf": "p"]
+    let (value, server) = try await store(box)
+    XCTAssertNil(value.retryOffer, "Another device already retried this turn")
+    box.lock.withLock { box.claim = ["requestId": "first-claim", "status": "uncertain", "retryOf": "p"] }
+    await value.refreshConversation()
+    XCTAssertEqual(value.retryOffer?.checking, true); XCTAssertEqual(value.retryOffer?.followed, "first-claim")
+    try await until { self.checks(server, "first-claim") >= 1 }
+    box.lock.withLock { box.claim = ["requestId": "first-claim", "status": "accepted", "retryOf": "older"] }
+    await value.refreshConversation()
+    XCTAssertEqual(value.retryOffer?.checking, false, "A claim for another message is not this turn's")
+  }
+
+  func testChecksStopOnceTheTurnMovesOn() async throws {
+    let box = Box(); failedTurn(box); box.sendStatus = 503
+    let (value, server) = try await store(box)
+    let id = RetryTurn.requestId(botId: "bot", retryOf: "p", runId: "run-1")
+    await value.retry()
+    try await until { self.checks(server, id) >= 1 }
+    box.lock.withLock { box.state = "thinking"; box.runId = "run-2" }
+    await value.refreshConversation()
+    XCTAssertNil(value.retryOffer)
+    let count = checks(server, id)
+    // Absence: several times the slowest check interval passes without another check.
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertEqual(checks(server, id), count)
+  }
+
+  func testTheClearPushBadgeIsReadBesideAps() {
+    XCTAssertEqual(AppBadge.cleared(["aps": ["content-available": 1], "clear": ["tags": ["a"]], "badge": 3]), 3)
+    XCTAssertEqual(AppBadge.cleared(["badge": 0]), 0)
+    XCTAssertNil(AppBadge.cleared(["aps": ["badge": 3]]), "The clear push's count sits beside aps")
+    XCTAssertNil(AppBadge.cleared(["badge": -1])); XCTAssertNil(AppBadge.cleared(["badge": "2"]))
+    XCTAssertNil(AppBadge.cleared(["badge": true])); XCTAssertNil(AppBadge.cleared(["badge": 1.5]))
+  }
+
+  func testTheOpenChatCountsItsRosterDecisionAndItsLoadedRequests() async throws {
+    let box = Box(); box.state = "idle"
+    let (value, _) = try await store(box)
+    value.conversationShown("bot", true)
+    XCTAssertEqual(value.badgeCount, 0)
+    value.conversation?.attention = [Attention(id: "q", kind: "clarify", title: "Which?", detail: "")]
+    XCTAssertEqual(value.badgeCount, 1, "A question loaded in the open chat waits on a decision")
+    value.conversation?.attention = []
+    value.bootstrap?.bots[0].activity = .waiting
+    XCTAssertEqual(value.badgeCount, 1, "As on the server, the roster's waiting state counts even when the chat loaded none")
   }
 
   func testOpeningAtAnUnloadedMessageLoadsFromItAndFocusesIt() async throws {

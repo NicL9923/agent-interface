@@ -712,7 +712,7 @@
     static let longSession = "fixture-long-session"
     static var questions: [[String: Any]] { [
       ["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]],
-      ["id": "extras", "prompt": "What should come along?", "options": ["Hay", "Water", "Feed"], "multiSelect": true],
+      ["id": "extras", "prompt": "What should come along?", "options": ["Hay", "Water", "Feed"], "multiple": true],
       ["id": "note", "prompt": "Anything else?"],
     ] }
     static var work: [[String: Any]] { [

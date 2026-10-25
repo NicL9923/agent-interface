@@ -10,18 +10,28 @@ enum AppBadge {
   }
   /// Whether an assistant's roster state is a decision this person has to make.
   static func deciding(_ state: ActivityState) -> Bool { state == .waiting || state == .blocked }
+  /// The badge a read-elsewhere clear push carries. A background push's `aps` may hold only
+  /// `content-available`, so the server puts the count in a top-level `badge` beside it.
+  static func cleared(_ userInfo: [AnyHashable: Any]) -> Int? {
+    guard let value = userInfo["badge"] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), value.intValue >= 0,
+      Double(value.intValue) == value.doubleValue
+    else { return nil }
+    return value.intValue
+  }
 }
 
 extension AppStore {
-  /// The badge for the signed-in account, from what home shows. The open chat is never unread,
-  /// and its own loaded state says whether a decision waits there.
+  /// The badge for the signed-in account while the app is open, from what home shows: the server's
+  /// rule (`src/server/badge.ts`) on the roster, plus the open chat's loaded questions and pending
+  /// approvals. The server also counts approvals it notified about that are still unresolved while
+  /// the roster shows the assistant idle; the app cannot see those, so its pushes can count one more.
+  /// The open chat is never unread.
   var badgeCount: Int {
     guard let bootstrap, !sessionExpired else { return 0 }
     return AppBadge.count(bots: bootstrap.bots, unread: unread) { bot in
-      if bot.id == followedBotId, let conversation {
-        return !(conversation.attention ?? []).isEmpty || conversation.approvals.contains { $0.status == "pending" }
-      }
-      return AppBadge.deciding(bot.activity)
+      if AppBadge.deciding(bot.activity) { return true }
+      guard bot.id == followedBotId, let conversation else { return false }
+      return !(conversation.attention ?? []).isEmpty || conversation.approvals.contains { $0.status == "pending" }
     }
   }
 }

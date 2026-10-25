@@ -339,8 +339,8 @@ struct Question: Codable, Identifiable, Equatable {
   var id: String
   var prompt: String
   var options: [String]?
-  /// Set when Hermes accepts several of the options. Older servers omit it: one answer.
-  var multiSelect: Bool? = nil
+  /// The shared `multiple` field (src/shared/types.ts): several options may be chosen. Absent means one.
+  var multiple: Bool? = nil
 }
 struct Attention: Codable, Identifiable, Equatable {
   var id: String
@@ -587,6 +587,9 @@ struct Conversation: Codable, Equatable {
   var draft: SavedDraft?
   var readPosition: ReadPosition?
   var toolCalls: [ToolCall]?
+  /// After a failed turn: anyone's retry of it, as the server claimed it, with its current receipt.
+  /// Older servers omit it.
+  var retry: RetryClaim?
   var activityMessages: [Message] {
     let canonical = messages.filter { $0.isInternalActivity || $0.isToolActivity || $0.toolCall != nil }
     let known = Set(canonical.compactMap { $0.toolCall?.id })
@@ -865,6 +868,15 @@ struct Receipt: Codable, Equatable {
   var messageId: String?
   var message: String?
 }
+/// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
+struct RetryClaim: Codable, Equatable {
+  var requestId: String
+  var status: String
+  var runId: String?
+  var messageId: String?
+  var message: String?
+  var retryOf: String
+}
 struct PendingSubmission: Codable, Equatable {
   var requestId: String
   var botId: String
@@ -875,9 +887,6 @@ struct PendingSubmission: Codable, Equatable {
   /// The draft revision this message was written on, so the server clears a draft whose final
   /// edits were never saved.
   var draftBaseRevision: Int? = nil
-  /// A retry of a failed turn names the person's message it repeats. A retry never reads, saves or
-  /// clears a draft, so it carries no draft revision.
-  var retryOf: String? = nil
   var draft: Draft { Draft(text: text, attachments: attachments) }
 }
 /// A sent message shown in the transcript at once, until Hermes's own copy arrives. It never
@@ -992,7 +1001,7 @@ struct SentEcho: Equatable {
   /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
   /// because a draft and its send are told apart by content until Hermes answers.
   static func sendingDraft(_ draft: Draft, pending: PendingSubmission?, sending: Bool) -> Bool {
-    guard sending, let pending, pending.retryOf == nil, draft.isSentCopy else { return false }
+    guard sending, let pending, draft.isSentCopy else { return false }
     return draft.text == pending.text && draft.attachments == pending.attachments
   }
   private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }

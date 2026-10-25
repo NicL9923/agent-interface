@@ -496,21 +496,26 @@ struct ConversationView: View {
         if working && advanced, let line = live.reasoning {
           Text(line).font(.caption).italic().foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier("liveReasoning")
         }
-        if let target = store.conversation.flatMap(RetryTurn.target), store.pending == nil || store.retrying != nil { retryButton(target) }
+        if let offer = store.retryOffer { retryControls(offer) }
       }
       Spacer(minLength: 0)
     }.padding(.vertical, 8).accessibilityElement(children: .contain).accessibilityIdentifier("liveActivity")
   }
-  private func retryButton(_ message: Message) -> some View {
-    let busy = store.retrying != nil
-    return Button { Task { await store.retry(message) } } label: {
+  /// Retry for a failed turn, and while its outcome is unknown, what is being done about it.
+  @ViewBuilder private func retryControls(_ offer: AppStore.RetryOffer) -> some View {
+    if offer.checking {
+      Text(offer.resendable ? RetryTurn.checkingNotice : RetryTurn.unconfirmedNotice).font(.caption).foregroundStyle(.secondary)
+        .accessibilityIdentifier("retryChecking")
+    }
+    Button { Task { await store.retry() } } label: {
       HStack(spacing: 6) {
-        if busy { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise").accessibilityHidden(true) }
-        Text(busy ? "Retrying…" : "Retry")
+        if offer.busy { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise").accessibilityHidden(true) }
+        Text(offer.busy ? "Retrying…" : "Retry")
       }
     }.buttonStyle(.bordered).font(.subheadline)
-      .disabled(busy || !store.connected || store.pending != nil || !store.supports(.chat))
-      .accessibilityHint("Sends your last message again. Your draft stays as it is.")
+      .disabled(!offer.enabled || !store.connected || !store.supports(.chat))
+      .accessibilityHint(offer.checking ? "Sends the same request again, so it can't run twice. Your draft stays as it is."
+        : "Sends your last message again. Your draft stays as it is.")
       .accessibilityIdentifier("retryTurn")
   }
   private var composer: some View {
@@ -753,7 +758,7 @@ struct AttentionView: View {
   private func questionAnchor(_ question: Question) -> String { "question-\(request.id)-\(question.id)" }
   @ViewBuilder private func questionView(_ question: Question) -> some View {
     let options = question.options ?? []
-    let multiple = question.multiSelect == true
+    let multiple = question.multiple == true
     VStack(alignment: .leading, spacing: 8) {
       Text(question.prompt).font(.subheadline.weight(.semibold)).accessibilityAddTraits(.isHeader)
       if multiple && !options.isEmpty { Text("Choose any that apply.").font(.caption).foregroundStyle(.secondary) }
@@ -840,7 +845,7 @@ struct QuestionAnswers: Equatable {
   /// can move on; choices among several toggle and stay.
   mutating func choose(_ index: Int, in question: Question) -> Bool {
     guard let options = question.options, options.indices.contains(index) else { return false }
-    if question.multiSelect == true {
+    if question.multiple == true {
       var current = chosen[question.id] ?? []
       if let at = current.firstIndex(of: index) { current.remove(at: at) } else { current.append(index) }
       chosen[question.id] = current.isEmpty ? nil : current
@@ -852,7 +857,7 @@ struct QuestionAnswers: Equatable {
   }
   /// "Write my own answer": for one choice it replaces the chosen option; among several it adds to them.
   mutating func writeOwn(_ question: Question) {
-    if question.multiSelect == true {
+    if question.multiple == true {
       if writing.contains(question.id) { writing.remove(question.id) } else { writing.insert(question.id) }
     } else {
       chosen[question.id] = nil
@@ -864,7 +869,7 @@ struct QuestionAnswers: Equatable {
     let written = (text[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     if options.isEmpty { return written }
     let picked = (chosen[question.id] ?? []).sorted().compactMap { options.indices.contains($0) ? options[$0] : nil }
-    if question.multiSelect == true { return (picked + (writing.contains(question.id) && !written.isEmpty ? [written] : [])).joined(separator: ", ") }
+    if question.multiple == true { return (picked + (writing.contains(question.id) && !written.isEmpty ? [written] : [])).joined(separator: ", ") }
     return writing.contains(question.id) ? written : picked.first ?? ""
   }
   func complete(_ questions: [Question]) -> Bool { questions.allSatisfy { !answer($0).isEmpty } }
