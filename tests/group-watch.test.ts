@@ -288,6 +288,20 @@ describe("event stream setup", () => {
     expect(teardown).toHaveBeenCalledTimes(1);
   });
 
+  it("tears down once when reserving fails, or when teardown itself throws as a stream that already ended", () => {
+    const streams = new Set<() => void>(), allowed = () => true;
+    const teardown = vi.fn();
+    expect(() => eventStreamConnection(reply(false)).open(streams, { allowed, teardown, reserve: () => { throw new Error("watch refused"); } }))
+      .toThrow("watch refused");
+    expect(teardown).toHaveBeenCalledTimes(1);
+    // The client left during setup, so opening ends the stream, and its teardown fails partway.
+    const failing = vi.fn(() => { throw new Error("teardown failed"); });
+    const left = reply(true);
+    expect(() => eventStreamConnection(left).open(streams, { allowed, teardown: failing })).toThrow("teardown failed");
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(left.raw.end).toHaveBeenCalled();
+  });
+
   it("notices a client that leaves while setup awaits, and ends that request without a stream", () => {
     const leaving = reply(false);
     const connection = eventStreamConnection(leaving);

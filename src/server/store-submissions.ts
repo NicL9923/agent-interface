@@ -32,8 +32,9 @@ export class SubmissionRepository {
     return this.database.transaction(() => {
       const claim = this.db.prepare("SELECT request_id FROM retry_claims WHERE bot_id=? AND retry_of=? AND run_id=?")
         .get(input.botId, input.retryOf, runId) as { request_id: string } | undefined;
-      const first = claim && claim.request_id !== input.requestId ? this.submission(claim.request_id) : undefined;
-      if (first) return { claimed: first.receipt };
+      // The same ID from another person, or with differently copied text, follows it too.
+      const first = claim ? this.submission(claim.request_id) : undefined;
+      if (first && JSON.stringify(first.input) !== JSON.stringify(input)) return { claimed: first.receipt };
       const intent = this.record(input);
       this.db.prepare("INSERT OR REPLACE INTO retry_claims(bot_id,retry_of,run_id,request_id,created_at) VALUES(?,?,?,?,?)")
         .run(input.botId, input.retryOf, runId, input.requestId, Date.now());

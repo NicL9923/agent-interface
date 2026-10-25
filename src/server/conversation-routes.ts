@@ -4,6 +4,7 @@ import { z } from "zod";
 import { interruptionPendingMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
+import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type { CapabilityKey, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
@@ -25,7 +26,7 @@ const sharedReadMargin = 60000;
 export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
   const readAt = Date.now();
   const conversation = await runtime.conversation(botId, { history: false });
-  store.reconcileApprovals(botId, conversation.approvals.map(approval => approval.id), readAt);
+  store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
   const approval = conversation.approvals.find((a) => a.id === approvalId);
   if (
     !approval ||
@@ -62,10 +63,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     }).parse(req.query);
     const windowed = window.start !== undefined || window.turns !== undefined;
     const readAt = Date.now();
-    const { window: cut, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
+    const { window: cut, requestSessionId, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
     // Hermes's open requests settle approvals answered outside the app. A history read can be
     // shared for a few seconds, so only approvals notified well before it count.
-    store.reconcileApprovals(req.params.id, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
+    store.reconcileApprovals(req.params.id, requestSessionId, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
     // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
@@ -174,18 +175,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       clearTimeout(pending);
       clearTimeout(livePending);
     };
-    try {
-      watchers.set(botId, listeners.add(changed));
-      unwatch = runtime.watch?.(botId, notice);
-      stream = connection.open(streams, {
-        // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
-        allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
-        teardown,
-      });
-    } catch (error) {
-      teardown();
-      throw error;
-    }
+    stream = connection.open(streams, {
+      reserve: () => {
+        watchers.set(botId, listeners.add(changed));
+        unwatch = runtime.watch?.(botId, notice);
+      },
+      // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
+      allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
+      teardown,
+    });
   });
   const message = z
     .object({
@@ -207,20 +205,28 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   const submit = async (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">, body: z.output<typeof message>, explicitSteering = false): Promise<SubmissionReceipt> => {
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
     if (message.retryOf !== undefined && explicitSteering) throw httpError(400, "Retry a message by sending it, not by steering");
-    const input: Submission = {
+    const requesterId = signedIn(req).id;
+    let input: Submission = {
       ...message,
       botId: req.params.id,
-      senderId: signedIn(req).id,
+      senderId: requesterId,
     };
+    // Retry IDs are derived from their failed turn, so nobody can take one with another message.
+    if (input.retryOf === undefined && isRetryRequestId(input.requestId))
+      throw httpError(400, "This request ID is kept for retrying a failed turn. Send the message with a new ID.");
     const previous = store.submission(input.requestId);
     const interruptionRejected = previous?.reason === "interruption_pending";
     const retryInterruption = interruptionRejected && reviewedInterruption;
     if (previous) {
       // Every device derives one ID for retrying a failed turn, so another person, or a client
-      // that copied the text differently, follows the request already recorded.
+      // that copied the text differently, follows the request already recorded. Reviewing an
+      // uncertain one sends the recorded request again, as its original sender: Hermes's
+      // idempotency check covers the sender, so anyone else's copy would be a second message.
       if (input.retryOf !== undefined && previous.input.retryOf === input.retryOf && previous.input.botId === input.botId
-        && JSON.stringify(previous.input) !== JSON.stringify(input))
-        return previous.receipt;
+        && JSON.stringify(previous.input) !== JSON.stringify(input)) {
+        if (!reviewedUncertain || previous.receipt.status !== "uncertain") return previous.receipt;
+        input = previous.input;
+      }
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
         throw httpError(
           409,
@@ -257,6 +263,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       // Steering the retried text into a running turn would answer a different question.
       if (["thinking", "working", "waiting", "blocked"].includes(conversation!.activity.state))
         throw httpError(409, "Wait for the current reply to finish before retrying");
+      // A retry carries exactly its failed turn's ID, so one turn has one request everywhere.
+      if (input.requestId !== await retryRequestId(input.botId, input.retryOf, conversation!.activity.runId ?? ""))
+        throw httpError(400, "This retry doesn't match the failed turn. Reload the conversation and retry again.");
     }
     const steering =
       explicitSteering ||
@@ -271,13 +280,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     if ("claimed" in intent) return intent.claimed;
     if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
     if (conversation?.activity.runId)
-      store.participate(conversation.activity.runId, input.senderId);
+      for (const userId of new Set([input.senderId, requesterId])) store.participate(conversation.activity.runId, userId);
     try {
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption }));
       store.receipt(receipt);
-      if (receipt.runId) store.participate(receipt.runId, input.senderId);
+      if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
       return receipt;
     } catch (error) {
       if ((error as { code?: string }).code === "interruption_pending") {

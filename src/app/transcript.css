@@ -184,3 +184,4 @@
 
 /* Lets a message sent last reach the top of the view while its reply grows into this space. */
 .transcript-end-space { flex: none; }
+.conversation-activity .retry-refused p { margin: 8px 0 0; }

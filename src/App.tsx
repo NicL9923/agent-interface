@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, Preferences } from "./shared/types";
+import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { write } from "./client-api";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
@@ -228,11 +229,15 @@ export function App() {
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
-            onDraft={text => {
+            onDraft={(text, files = []) => {
               // Drafts are known by their text, so one on its way must not change.
               if (sendingDraft(draft, pending, sending)) return false;
-              setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${text}` : text }));
-              return true;
+              // Files join those already there, as many as a message can carry.
+              const missing = files.filter(file => !draft.attachments.some(kept => kept.id === file.id));
+              const added = missing.slice(0, Math.max(0, MAX_ATTACHMENTS - draft.attachments.length - uploads.length));
+              setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${text}` : text,
+                attachments: [...previous.attachments, ...added.filter(file => !previous.attachments.some(kept => kept.id === file.id))] }));
+              return missing.length - added.length;
             }}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}

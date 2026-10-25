@@ -139,10 +139,24 @@ export class StoreDatabase {
     migrate(this.db);
     this.db.exec(additions);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
-    // Events a previous release recorded after a rollback.
-    this.db.exec(`INSERT OR IGNORE INTO run_settlements(bot_id,run_id,ingestion_id) SELECT json_extract(e.value,'$.botId'),json_extract(e.value,'$.runId'),i.id
-      FROM notification_events e JOIN notification_ingestion i ON i.event_id=e.id
-      WHERE json_extract(e.value,'$.kind') IN ('completed','failed','interrupted') AND json_extract(e.value,'$.runId') IS NOT NULL AND json_extract(e.value,'$.botId') IS NOT NULL`);
+    this.backfillSettlements();
+  }
+  /**
+   * Records run outcomes that a previous release, after a rollback, recorded without settlements.
+   * Only events ingested since the last backfill are read: ingestion IDs only grow, so anything
+   * recorded since, by this release or another, is past the watermark.
+   */
+  private backfillSettlements() {
+    this.transaction(() => {
+      const watermark = Number((this.db.prepare("SELECT value FROM metadata WHERE key='settlement_backfill'").get() as { value: string } | undefined)?.value ?? 0);
+      this.db.prepare(`INSERT OR IGNORE INTO run_settlements(bot_id,run_id,ingestion_id) SELECT json_extract(e.value,'$.botId'),json_extract(e.value,'$.runId'),i.id
+        FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id
+        WHERE i.id>? AND json_extract(e.value,'$.kind') IN ('completed','failed','interrupted') AND json_extract(e.value,'$.runId') IS NOT NULL AND json_extract(e.value,'$.botId') IS NOT NULL`)
+        .run(watermark);
+      const latest = (this.db.prepare("SELECT max(id) AS id FROM notification_ingestion").get() as { id: number | null }).id;
+      if (latest !== null && latest > watermark)
+        this.db.prepare("INSERT INTO metadata VALUES('settlement_backfill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(latest));
+    });
   }
   close() {
     this.db.close();

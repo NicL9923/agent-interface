@@ -155,14 +155,18 @@ export class NotificationRepository {
   /**
    * Records as resolved the approvals of this assistant that Hermes's open requests no longer
    * hold, as when someone answered in Hermes's own UI. Nobody is credited with the decision. Only
-   * approvals notified before `notifiedBefore` count, so one opened after the read was taken is
-   * never mistaken for resolved.
+   * approvals raised in `session`, the live session those open requests belong to, count: one
+   * from another session, such as a routine's, is missing from them without being resolved. And
+   * only approvals notified before `notifiedBefore` count, so one opened after the read was taken
+   * is never mistaken for resolved.
    */
-  reconcileApprovals(botId: string, open: Iterable<string>, notifiedBefore: number, now = Date.now()) {
+  reconcileApprovals(botId: string, session: string | undefined, open: Iterable<string>, notifiedBefore: number, now = Date.now()) {
+    if (!session) return 0;
     const still = new Set(open);
     const notified = this.db.prepare(`SELECT DISTINCT json_extract(value,'$.approvalId') AS id FROM notification_events
-      WHERE created_at>? AND created_at<? AND json_extract(value,'$.kind')='approval' AND json_extract(value,'$.botId')=?`)
-      .all(now - 86400000, notifiedBefore, botId) as { id: unknown }[];
+      WHERE created_at>? AND created_at<? AND json_extract(value,'$.kind')='approval' AND json_extract(value,'$.botId')=?
+      AND json_extract(value,'$.sessionId')=?`)
+      .all(now - 86400000, notifiedBefore, botId, session) as { id: unknown }[];
     const resolve = this.db.prepare("INSERT OR IGNORE INTO approval_resolutions(approval_id,bot_id,resolved_at) VALUES(?,?,?)");
     let resolved = 0;
     for (const { id } of notified)
