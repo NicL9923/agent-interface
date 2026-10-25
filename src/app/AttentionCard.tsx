@@ -79,7 +79,8 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
           {questions.map((question, index) => {
             const draft = drafts[question.id] ?? empty;
             const options = question.options ?? [];
-            if (!options.length) return <label className="question-field" key={question.id}>
+            // Every question carries its index, so moving on can focus a free-text one too.
+            if (!options.length) return <label className="question-field" key={question.id} data-question={index}>
               {question.prompt}
               <input required aria-label={question.prompt} maxLength={10000} value={draft.text}
                 onChange={(event) => update(question, current => ({ ...current, text: event.target.value }))} />

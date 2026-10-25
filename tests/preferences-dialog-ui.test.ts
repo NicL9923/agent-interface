@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PreferencesDialog } from "../src/app/PreferencesDialog";
 import { defaultPreferences, type Bootstrap, type Preferences } from "../src/shared/types";
 import type { ComponentProps } from "react";
-import { button, mountRoot, typeInto } from "./ui-harness";
+import { button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -21,6 +21,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   ({ container, root } = mountRoot());
+  stubMatchMedia();
   saved = [];
   props = {
     boot: {
@@ -129,4 +130,29 @@ it("names Hermes by its commit date, or a short hash without one", async () => {
   const date = new Date("2026-10-20T15:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   expect(container.querySelector(".settings-footer small")?.textContent).toBe(`Hermes released ${date}`);
   expect(container.textContent).toContain(`Connected · Hermes released ${date}`);
+});
+
+describe("keyboard shortcuts row", () => {
+  const row = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button.settings-row"))
+    .find(item => item.querySelector(".row-label")?.textContent === "Keyboard shortcuts")!;
+
+  it("hints at the palette shortcut only where a mouse or trackpad suggests a keyboard, and stays reachable", async () => {
+    await render();
+    expect(row().querySelector("small")).toBeNull();
+    await act(async () => row().click());
+    expect(props.onShortcuts).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+    ({ container, root } = mountRoot());
+    stubMatchMedia(query => query === "(any-pointer: fine)");
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    await render();
+    expect(row().querySelector("small")?.textContent).toBe("Press ⌘K for the command palette");
+  });
+
+  it("names Ctrl rather than Command away from Apple platforms", async () => {
+    stubMatchMedia(query => query === "(any-pointer: fine)");
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    await render();
+    expect(row().querySelector("small")?.textContent).toBe("Press Ctrl+K for the command palette");
+  });
 });

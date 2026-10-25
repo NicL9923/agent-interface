@@ -26,7 +26,7 @@ export function Segmented<T extends string>({ label, value, options, busy = fals
   };
   return <div className="segmented-field">
     <span className="segmented-label" id={labelId}>{label}</span>
-    <div ref={group} className="segmented" role="radiogroup" aria-labelledby={labelId} aria-busy={busy || undefined}
+    <div ref={group} className={`segmented${options.length > 4 ? " segmented-many" : ""}`} role="radiogroup" aria-labelledby={labelId} aria-busy={busy || undefined}
       onKeyDown={event => {
         const last = options.length - 1, from = Math.max(index, 0);
         const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (from + 1) % options.length

@@ -1,8 +1,7 @@
 /* A row of equal segments with the chosen one raised, like a native segmented control. */
-.segmented-field { display: grid; gap: 6px; min-width: 0; }
+/* The field is a size container, so a long group can fold by the room it has, not the window's. */
+.segmented-field { display: grid; gap: 6px; min-width: 0; container-type: inline-size; }
 .segmented-label { font-size: 0.75rem; color: var(--muted); }
-/* Eight reasoning levels fit a phone's popover at its narrowest only when the labels shrink a little. */
-@media (max-width: 420px) { .segmented button { padding: 4px 4px; font-size: 0.6875rem; } }
 .segmented {
   display: flex;
   gap: 2px;
@@ -16,7 +15,8 @@
   flex: 1 1 auto;
   min-width: max-content;
   min-height: 32px;
-  padding: 4px 6px;
+  /* In rem like the label, so the width one row needs grows with text size, as the fold assumes. */
+  padding: 0.25rem 0.375rem;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -35,3 +35,12 @@
 .segmented button:focus-visible { outline-offset: -2px; }
 .segmented[aria-busy="true"] button { cursor: progress; }
 @media (prefers-reduced-motion: reduce) { .segmented button { transition: none; } }
+/*
+ * A group of more than four, such as eight reasoning levels, folds into rows of four when one row
+ * would not fit, as on a phone or with larger text. The threshold is in rem, as the labels are, and
+ * arrow keys still move in reading order.
+ */
+@container (max-width: 20rem) {
+  .segmented.segmented-many { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: visible; }
+  .segmented.segmented-many button { min-width: 0; }
+}

@@ -123,6 +123,24 @@ export class NotificationRepository {
     const event = row.value ? JSON.parse(row.value) as RuntimeEvent : undefined;
     return !!read && read.read_at >= eventTime(event?.occurredAt, row.discovered ?? row.created_at);
   }
+  /**
+   * Assistants with an approval this person was notified about in the last day that is still
+   * unresolved as far as this server knows: nobody decided it through the app, and the assistant
+   * reported no finish, failure or interruption since. Hermes's roster can show an unopened
+   * session as idle meanwhile, so this keeps the app badge counting it.
+   */
+  pendingDecisions(userId: string, now = Date.now()): Set<string> {
+    const rows = this.db.prepare(`SELECT DISTINCT json_extract(o.payload,'$.botId') AS bot_id FROM outbox o
+      LEFT JOIN notification_ingestion asked ON asked.event_id=o.event_id
+      WHERE o.user_id=? AND json_extract(o.payload,'$.kind')='approval' AND o.created_at>?
+      AND NOT EXISTS(SELECT 1 FROM approval_attribution a WHERE a.approval_id=json_extract(o.payload,'$.approvalId'))
+      AND NOT EXISTS(SELECT 1 FROM notification_events e JOIN notification_ingestion later ON later.event_id=e.id
+        WHERE json_extract(e.value,'$.botId')=json_extract(o.payload,'$.botId')
+        AND json_extract(e.value,'$.kind') IN ('completed','failed','interrupted')
+        AND (CASE WHEN asked.id IS NULL THEN e.created_at>=o.created_at ELSE later.id>asked.id END))`)
+      .all(userId, now - 86400000) as { bot_id: string | null }[];
+    return new Set(rows.flatMap(row => row.bot_id ? [row.bot_id] : []));
+  }
   /** iOS deliveries of notifications their recipient has since read, with who read them, that no clear was sent for. */
   readOnDevices(now = Date.now()) {
     // A week covers what a lock screen plausibly still shows.

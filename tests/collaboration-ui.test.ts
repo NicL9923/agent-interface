@@ -215,4 +215,30 @@ describe('group conversation',()=>{
     await act(async()=>root.render(createElement('div')));
     expect(FakeEventSource.streams.has(stream)).toBe(false);
   });
+
+  it('reloads a driver status change at the current cursor, sharing one reload between notices that arrive during a load',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    serve([{event_id:'a',seq:1,kind:'message.user',actor:{kind:'user',id:'app'},payload:{text:'Hello'},created_at:1}]);
+    await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length;
+    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room')!;
+    const before=reads();
+    // The cursor is 1; a new pending approval announces the same sequence.
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    expect(reads()).toBe(before+1);
+    let finish!:()=>void;
+    const previous=vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async(path,...rest)=>{
+      if(path==='/groups/room') await new Promise<void>(done=>{finish=done;});
+      return previous(path,...rest);
+    });
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));
+    expect(reads()).toBe(before+2);
+    await act(async()=>finish());
+    expect(reads()).toBe(before+3);
+    await act(async()=>finish());
+    expect(reads()).toBe(before+3);
+  });
 });

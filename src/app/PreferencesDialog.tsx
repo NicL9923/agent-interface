@@ -10,7 +10,7 @@ import { Icon } from "../components/Icon";
 import type { IconName } from "../components/Icon";
 import { NotificationSettings } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
-import type { InstallEvent } from "./use-browser";
+import { useFinePointer, type InstallEvent } from "./use-browser";
 import { hermesVersionLabel, revisionDate } from "./hermes-version";
 import { addSection, checkSectionName, moveSection, newSectionId, removeSection, renameSection, sectionOf, setFollowing, setSectionBots } from "./preferences-editing";
 import type { Section } from "./preferences-editing";
@@ -40,6 +40,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   onShortcuts(): void;
 }) {
   const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
+  const finePointer = useFinePointer();
   const bots = boot.bots;
   const save = (update: Partial<Preferences>) => commit(value => ({ ...value, ...update }));
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -117,7 +118,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
               <option value="">First assistant</option>
               {bots.map(bot => <option value={bot.id} key={bot.id}>{bot.name}</option>)}
             </NativeSelect></label>
-          <NavRow icon="keyboard" label="Keyboard shortcuts" detail={`Press ${formatCombo(shortcuts.palette)} for the command palette`} onClick={onShortcuts} />
+          {/* Reachable everywhere; the key hint only where a keyboard is likely. */}
+          <NavRow icon="keyboard" label="Keyboard shortcuts" detail={finePointer ? `Press ${formatCombo(shortcuts.palette)} for the command palette` : undefined} onClick={onShortcuts} />
         </div>
 
         <h3 className="settings-heading">Notifications</h3>

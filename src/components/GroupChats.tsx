@@ -69,12 +69,22 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const reloadRoom = useRef(room.reload); reloadRoom.current = room.reload;
   useEffect(() => {
     if (!roomId) return;
-    const stream = changeStream(`/events?group=${encodeURIComponent(roomId)}`, () => void reloadRoom.current(), undefined, {
+    // Notices that arrive while the room loads share one more load after it, instead of each
+    // restarting it. This room's own reload does nothing once another room is open.
+    const reload = reloadRoom.current;
+    let loading = false, again = false;
+    const refresh = () => {
+      if (loading) { again = true; return; }
+      loading = true;
+      void reload().finally(() => { loading = false; if (again) { again = false; refresh(); } });
+    };
+    const stream = changeStream(`/events?group=${encodeURIComponent(roomId)}`, refresh, undefined, {
+      // Every notice counts, even one at the cursor: the server also announces driver status
+      // changes, such as a new pending approval, that add no event.
       group: data => {
         try {
-          const notice = JSON.parse(data) as { roomId?: string; latestSeq?: number };
-          if (notice.roomId === roomId && !(typeof notice.latestSeq === 'number' && notice.latestSeq <= cursor.current)) void reloadRoom.current();
-        } catch { void reloadRoom.current(); }
+          if ((JSON.parse(data) as { roomId?: string }).roomId === roomId) refresh();
+        } catch { refresh(); }
       },
     });
     const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.close(); };

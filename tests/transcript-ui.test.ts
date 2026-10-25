@@ -6,6 +6,7 @@ import { App } from "../src/App";
 import { api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation, Message } from "../src/shared/types";
+import { useConversation } from "../src/app/use-conversation";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
@@ -118,6 +119,63 @@ describe("retry a failed turn", () => {
     expect(buttonText("Retry")?.disabled).toBe(false);
   });
 
+  it("keeps the retry's request ID through a lost response and a reload, settling it only by its receipt", async () => {
+    let receipt = "uncertain";
+    const lookups: string[] = [];
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
+      lookups.push(path);
+      return { requestId: path.split("/")[2], status: receipt } as T;
+    });
+    // Hermes may have taken it; only the response was lost.
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
+      return {} as T;
+    });
+    await render();
+    await act(async () => buttonText("Retry")!.click());
+    expect(container.querySelector(".notice.error")?.textContent).toContain("Hermes hasn't confirmed the retry yet");
+    expect(container.textContent).toContain("Checking whether the retry arrived…");
+    const [first] = messagesWritten().map(([, body]) => body as Record<string, unknown>);
+    // Checked by its ID, never sent as a new request.
+    await advance(4100);
+    expect(lookups.filter(path => path === `/submissions/${first.requestId}`).length).toBeGreaterThanOrEqual(2);
+    expect(messagesWritten()).toHaveLength(1);
+    // Retrying again sends the same request, which the server matches to the first.
+    await act(async () => buttonText("Retry")!.click());
+    expect(messagesWritten()[1][1]).toEqual({ ...first, reviewedUncertain: true });
+    // A reload still knows it, and its receipt settles it.
+    await act(async () => root.render(createElement("div")));
+    receipt = "accepted";
+    lookups.length = 0;
+    await render();
+    expect(lookups).toContain(`/submissions/${first.requestId}`);
+    expect(buttonText("Retry")).toBeUndefined();
+    expect(localStorage.getItem("agent-interface:retry:one:shared")).toBeNull();
+    // The draft and the composer's own submission were never part of it.
+    expect(textarea().value).toBe("My saved draft");
+    expect(localStorage.getItem("agent-interface:submission:one:shared")).toBeNull();
+    expect(vi.mocked(write).mock.calls.some(([path]) => String(path).endsWith("/draft"))).toBe(false);
+  });
+
+  it("offers a fresh retry once a receipt check finds the earlier one refused", async () => {
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => (path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: "rejected", message: "The assistant was busy." } : previous(path, ...rest as [])) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => (path === "/bots/shared/messages"
+      ? { requestId: "x", status: "uncertain" } : {}) as T);
+    await render();
+    await act(async () => buttonText("Retry")!.click());
+    await advance(0);
+    expect(container.querySelector(".notice.error")?.textContent).toContain("The assistant was busy.");
+    expect(container.textContent).not.toContain("Checking whether the retry arrived…");
+    await act(async () => buttonText("Retry")!.click());
+    const ids = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
+    expect(new Set(ids).size).toBe(2);
+    expect(messagesWritten()[1][1]).not.toHaveProperty("reviewedUncertain");
+  });
+
   it("is not offered once the assistant replied, or while working", async () => {
     conversation = { ...conversation, messages: [...conversation.messages, answer("a1", "Partly done.")] };
     await render();
@@ -155,6 +213,19 @@ describe("questions", () => {
     expect(submit.disabled).toBe(false);
     await act(async () => submit.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: "Water, Treats, fresh greens" } });
+  });
+
+  it("moves on from an option question to a free-text question", async () => {
+    conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Supplies", detail: "", questions: [
+      { id: "feed", prompt: "Which feed?", options: ["Hay", "Pellets"] },
+      { id: "where", prompt: "Where should it go?" },
+    ] }] };
+    await render();
+    const first = container.querySelector<HTMLInputElement>('[data-question="0"] input')!;
+    first.focus();
+    await act(async () => first.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true })));
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    expect(document.activeElement).toBe(container.querySelector('[aria-label="Where should it go?"]'));
   });
 
   it("keeps a free-text field for a question without options", async () => {
@@ -246,6 +317,31 @@ describe("find in chat", () => {
     expect(document.activeElement).toBe(before);
   });
 
+  it("opens an unloaded match even when a refresh is in flight", async () => {
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+    await typeInto(find(), "gate");
+    await advance(300);
+    let finish!: (value: unknown) => void;
+    const previous = vi.mocked(api).getMockImplementation()!;
+    const older = { ...conversation, earlier: 0, messages: [prompt("old", "Which gate?"), ...conversation.messages] };
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => (path === "/bots/shared/conversation?start=q"
+      ? new Promise(resolve => { finish = resolve; })
+      : path === "/bots/shared/conversation?start=old" ? older : previous(path, ...rest as [])) as T);
+    // A change notice starts a refresh of the loaded window, which stays in flight.
+    await act(async () => FakeEventSource.notifyAll());
+    expect(finish).toBeDefined();
+    await act(async () => find().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () => find().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(count()).toBe("1 of 3");
+    // The refresh answers after the match was asked for: it neither moves the window nor uses up the target.
+    await act(async () => finish({ ...conversation }));
+    await advance(0);
+    expect(api).toHaveBeenCalledWith("/bots/shared/conversation?start=old");
+    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bots/shared/conversation?start=q")).toHaveLength(1);
+    expect(container.querySelector('[data-message-id="old"]')?.hasAttribute("data-found")).toBe(true);
+  });
+
   it("drops a search response for an older query", async () => {
     let first!: (value: unknown) => void;
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/search?q=ga&botId=shared"
@@ -320,5 +416,54 @@ describe("scroll intent", () => {
       expect(transcript.scrollTop).toBe(1500);
       expect(container.querySelector(".jump-latest")).not.toBeNull();
     } finally { height.mockRestore(); view.mockRestore(); }
+  });
+});
+
+describe("send anchor", () => {
+  // Rows sit at fixed offsets in the transcript; the view's scrollTop moves them.
+  const layout = (positions: Record<string, number>) => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const id = (this as HTMLElement).dataset.messageId;
+      const top = id ? positions[id] - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+  };
+  let hook!: ReturnType<typeof useConversation>;
+  const Harness = () => {
+    hook = useConversation("shared", "one");
+    return createElement("div", { className: "transcript", ref: hook.scroll },
+      createElement("div", { ref: hook.content }, hook.conversation?.messages.map(message =>
+        createElement("article", { key: message.id, "data-message-id": message.id, className: `message-${message.role}` }, message.text))),
+      createElement("div", { ref: hook.endSpace }));
+  };
+  const top = (id: string) => container.querySelector(`[data-message-id="${id}"]`)!.getBoundingClientRect().top;
+  const other = (id: string) => prompt(id, "Another member's guidance", { sender: { id: "two", name: "Two" } });
+  const show = (messages: Message[]) => act(async () => hook.setConversation({ ...conversation, messages, draft: null, readPosition: null }));
+
+  it("keeps this person's sent message near the top when another member posts after it", async () => {
+    layout({ q: 400, a: 600, mine: 1800, theirs: 2200 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    // Hermes's copy has its own ID; it is this person's first message since the send.
+    const own = [...conversation.messages, prompt("mine", "My new question")];
+    await show(own);
+    expect(top("mine")).toBe(24);
+    await show([...own, other("theirs")]);
+    expect(top("mine")).toBe(24);
+  });
+
+  it("follows the ID the receipt names, past this person's message from another device and later rows", async () => {
+    layout({ q: 400, a: 600, elsewhere: 1400, mine: 1800, theirs: 2200 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    hook.history.sentAs("request-1", "mine");
+    // A message from this same person on another device lands first; it is not this send.
+    const elsewhere = prompt("elsewhere", "From my phone");
+    await show([...conversation.messages, elsewhere, prompt("mine", "My new question"), other("theirs")]);
+    expect(top("mine")).toBe(24);
   });
 });
