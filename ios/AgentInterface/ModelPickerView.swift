@@ -198,12 +198,12 @@ struct ComposerModelSheet: View {
           if let error { Section { ErrorBanner(message: error) } }
           Section("This conversation") {
             if let settings {
-              Picker("Reasoning", selection: Binding(get: { settings.reasoning }, set: { changeSettings(["reasoning": $0]) })) {
-                ForEach(InferenceSettings.reasoningLevels, id: \.self) { Text($0 == "none" ? "Off" : $0.capitalized).tag($0) }
-              }.accessibilityIdentifier("inferenceReasoning")
-              Picker("Speed", selection: Binding(get: { settings.speed }, set: { changeSettings(["speed": $0]) })) {
-                ForEach(InferenceSettings.speeds, id: \.self) { Text($0.capitalized).tag($0) }
-              }.accessibilityIdentifier("inferenceSpeed")
+              InferenceChoice(title: "Reasoning", options: InferenceSettings.reasoningLevels, identifier: "inferenceReasoning",
+                label: { $0 == "none" ? "Off" : $0.capitalized },
+                selection: Binding(get: { settings.reasoning }, set: { changeSettings(["reasoning": $0]) }))
+              InferenceChoice(title: "Speed", options: InferenceSettings.speeds, identifier: "inferenceSpeed",
+                label: { $0.capitalized },
+                selection: Binding(get: { settings.speed }, set: { changeSettings(["speed": $0]) }))
               Text("Available levels and speeds depend on the model.").font(.caption).foregroundStyle(.secondary)
             } else if settingsError == nil { ProgressView("Loading reasoning and speed…") }
             if let settingsError {
@@ -260,6 +260,36 @@ struct ComposerModelSheet: View {
       case nil: break
       }
     }
+  }
+}
+
+/// One inference setting. A few options read best as a segmented control, which shows every
+/// choice and takes one tap; a long list, or one too wide for the row, stays a menu.
+struct InferenceChoice: View {
+  var title: String
+  var options: [String]
+  var identifier: String
+  var label: (String) -> String
+  @Binding var selection: String
+  static let segmentLimit = 4
+  static func segmented(_ count: Int) -> Bool { count > 1 && count <= segmentLimit }
+  var body: some View {
+    if Self.segmented(options.count) {
+      ViewThatFits(in: .horizontal) {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(title)
+          picker.pickerStyle(.segmented).labelsHidden()
+        }
+        picker.pickerStyle(.menu)
+      }
+    } else {
+      picker.pickerStyle(.menu)
+    }
+  }
+  private var picker: some View {
+    Picker(title, selection: $selection) {
+      ForEach(options, id: \.self) { Text(label($0)).tag($0) }
+    }.accessibilityIdentifier(identifier)
   }
 }
 

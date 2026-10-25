@@ -1741,6 +1741,15 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if let connectionError { dismissedPolls.insert(connectionError) }
     error = nil
   }
+  // MARK: I2 shim, I1 owns. I1's `// MARK: I1 transcript entry points` defines these with the
+  // same signatures; drop this block when merging.
+  /// Asks the open conversation to scroll to its first pending question, secure request or approval.
+  var attentionScrollRequest: UUID?
+  /// Opens an assistant's live conversation, at a message when given.
+  func openConversation(botId: String, atMessage messageId: String?) async {
+    await select(botId)
+  }
+  // MARK: End I2 shim
   func report(_ error: Error) {
     if error is CancellationError { return }
     self.error = error.localizedDescription

@@ -47,6 +47,27 @@
             ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
           ]
         }
+        if environment["AGENT_INTERFACE_UI_RECALL"] == "1" {
+          // Two of this person's messages and one from another household member, for prompt recall.
+          FixtureProtocol.messages = [
+            ["id": "recall-1", "role": "user", "text": "Fixture first note: check the hay", "sender": ["id": "native-test", "name": "Local test member"]],
+            ["id": "recall-1-reply", "role": "assistant", "text": "Hay is stocked."],
+            ["id": "recall-other", "role": "user", "text": "Fixture note from someone else", "sender": ["id": "native-test-two", "name": "Second test member"]],
+            ["id": "recall-2", "role": "user", "text": "Fixture second note: water the garden", "sender": ["id": "native-test", "name": "Local test member"]],
+            ["id": "recall-2-reply", "role": "assistant", "text": "Garden watered."],
+          ]
+        }
+        if environment["AGENT_INTERFACE_UI_GROUP"] == "1" {
+          FixtureProtocol.groupRooms = [["room_id": "fixture-room", "name": "Supper planning", "members": [
+            ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
+            ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]]]
+          FixtureProtocol.groupEvents = [
+            ["event_id": "group-1", "seq": 1, "kind": "message.user", "created_at": 1_790_000_000, "sender": ["id": "native-test-two", "name": "Second test member"],
+             "payload": ["text": "What should we cook on Sunday?", "thread_id": "thread-1"]],
+            ["event_id": "group-2", "seq": 2, "kind": "message.member", "created_at": 1_790_000_060, "actor": ["kind": "member", "id": "kitchen"],
+             "payload": ["text": "Brisket, if the smoker is free.", "thread_id": "thread-1", "member_id": "kitchen"]],
+          ]
+        }
         if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // Enough turns for three history pages, with replies tall enough to scroll.
           FixtureProtocol.messages = (1...60).flatMap { turn -> [[String: Any]] in
@@ -120,6 +141,11 @@
     nonisolated(unsafe) static var trialCount = 0
     nonisolated(unsafe) static var groupRooms: [[String: Any]] = []
     nonisolated(unsafe) static var groupEvents: [[String: Any]] = []
+    /// An assistant's answer to the last group message, announced on the next watching stream.
+    nonisolated(unsafe) static var groupReplyPending = false
+    /// Who has the shared desktop: an assistant until this person takes over.
+    nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
+    nonisolated(unsafe) static var desktopTickets = 0
     static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
     nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
@@ -152,7 +178,7 @@
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
           "model": ranchModel.model,
-          "provider": ranchModel.provider, "shared": true, "activity": "idle", "avatar": avatar,
+          "provider": ranchModel.provider, "shared": true, "activity": "idle", "avatar": avatar, "sessionId": "ranch-canonical",
           "lastMessage": ["text": "The north gate battery needs replacing.", "at": ISO8601DateFormatter().string(from: Date())],
         ],
         [
@@ -201,6 +227,20 @@
       } else {
         body = [:]
       }
+      if path == "/api/events", let room = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "group" })?.value {
+        // A watching stream: one notice when an assistant answered, then the stream ends and the
+        // app reconnects, as after a dropped connection.
+        var stream = ": watching\n\n"
+        if Self.groupReplyPending {
+          Self.groupReplyPending = false
+          Self.groupEvents.append(["event_id": "group-reply-\(Self.groupEvents.count + 1)", "seq": Self.groupEvents.count + 1, "kind": "message.member",
+            "created_at": Date().timeIntervalSince1970, "actor": ["kind": "member", "id": "ranch"],
+            "payload": ["text": "Fixture live reply: the smoker is free Sunday.", "thread_id": "thread-1", "member_id": "ranch"]])
+          stream += "event: group\ndata: {\"roomId\":\"\(room)\",\"latestSeq\":\(Self.groupEvents.count)}\n\n"
+        }
+        respond(raw: Data(stream.utf8), type: "text/event-stream")
+        return
+      }
       if path.hasPrefix("/api/voice/audio/") {
         // Ten seconds of quiet, so a test can stop the reply while it plays.
         respond(raw: Self.silence(seconds: 10), type: "audio/wav")
@@ -213,7 +253,9 @@
       } else if path.hasSuffix("/voice/speak") {
         object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
       } else if path == "/api/search" {
-        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","messageId":"history-saved","offset":0]],"unavailableBots":[]]
+        // The second hit is in Ranch hand's current conversation, so it opens the live chat.
+        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","messageId":"history-saved","offset":0],
+          ["botId":"ranch","botName":"Ranch","sessionId":"ranch-canonical","title":"Your household assistant","snippet":"I can help with everyday questions.","messageId":"welcome","offset":0]],"unavailableBots":[]]
       } else if path.contains("/history/") {
         // A person's Markdown stays literal, an assistant's exchange is its card, and the saved
         // reply sits below the fold so opening it has to scroll there.
@@ -362,8 +404,10 @@
         } else { object = ["supported": true, "canSend": true, "rooms": Self.groupRooms] }
       } else if path.hasPrefix("/api/groups/") {
         if path.hasSuffix("/messages") {
-          let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"]]
+          let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"],
+            "sender": ["id": "native-test", "name": "Local test member"]]
           Self.groupEvents.append(event); object = ["accepted": true]
+          if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP"] == "1" { Self.groupReplyPending = true }
         } else if path.hasSuffix("/log") {
           var page: [String: Any] = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false]
           // Like the app server, `state=1` brings the room state along.
@@ -418,8 +462,16 @@
         let unavailable = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] == "1"
         object = ["available": !unavailable, "running": !unavailable, "browserReady": !unavailable, "label": "Fixture host",
           "reason": unavailable ? "The fixture desktop is stopped." as Any : NSNull(),
-          "control": ["kind": "bot", "name": "Ranch hand"],
+          "control": Self.computerControl,
           "terminal": ["available": false, "target": ""]]
+      } else if path == "/api/computer/desktop", method == "POST" {
+        Self.desktopTickets += 1
+        object = ["path": "/api/computer/desktop/ws?ticket=fixture-\(Self.desktopTickets)",
+          "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), "viewerId": body["viewerId"] ?? "fixture-viewer-000001"]
+      } else if path == "/api/computer/control", method == "POST" {
+        Self.computerControl = body["action"] as? String == "take" ? ["kind": "human", "name": "Local test member", "mine": true] : ["kind": "idle"]
+        object = ["available": true, "running": true, "browserReady": true, "label": "Fixture host", "reason": NSNull(),
+          "control": Self.computerControl, "terminal": ["available": false, "target": ""]]
       } else if path.hasPrefix("/api/hermes/upgrade") {
         if path.hasSuffix("/control") {
           Self.upgradePhase = "recovering"
