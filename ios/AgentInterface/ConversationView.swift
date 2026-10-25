@@ -576,9 +576,11 @@ struct MessageView: View {
     }.padding(message.role == "user" && !message.isAgentExchange ? 14 : 0).background(
       message.role == "user" && !message.isAgentExchange ? Palette.user(scheme) : Color.clear,
       in: RoundedRectangle(cornerRadius: 14)
-    ).padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
+    )
+      // The outline hugs the message itself, inside a person's indent.
+      .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      .padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
       .modifier(SendingMessage(delivery: delivery))
-      .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 10).stroke(Palette.accent, lineWidth: 2) } }
       .background {
         if sentAnchor == message.id {
           GeometryReader { Color.clear.preference(key: SentAnchorTop.self, value: $0.frame(in: .named(SentAnchorTop.space)).minY) }
