@@ -1426,14 +1426,6 @@ dialog[open]::backdrop {
   animation: glass-shimmer-window 2.8s linear infinite;
 }
 .shimmer-band > span { position: absolute; top: 0; left: 0; width: calc(100% / 0.875); color: var(--ink); animation: glass-shimmer-text 2.8s linear infinite; }
-.tool-calls { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
-.tool-calls > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; list-style: none; }
-.tool-calls > summary::-webkit-details-marker { display: none; }
-.tool-calls > summary > .icon:last-child { margin-left: auto; transition: transform 250ms ease; }
-.tool-calls[open] > summary > .icon:last-child { transform: rotate(90deg); }
-.tool-count { padding: 2px 7px; border-radius: 6px; background: var(--rail); font-variant-numeric: tabular-nums; }
-.tool-calls-content { display: grid; gap: 8px; }
-.tool-calls-content pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
 .approval-card .actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .spin { animation: control-spin 1s linear infinite; }
 @keyframes control-spin { to { transform: rotate(360deg); } }
@@ -1443,5 +1435,4 @@ dialog[open]::backdrop {
   .activity-shimmer .shimmer-band { display: none !important; }
   .spin { animation: none; }
 }
-.reasoning-part { margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; background: var(--raised); border-radius: 10px; }
 button.with-progress { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }

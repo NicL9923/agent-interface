@@ -1,0 +1,186 @@
+/* Transcript: folded turn work, reply actions, find, questions and retry. Loads before styles.css,
+   so selectors here are specific enough not to depend on order. */
+
+/* Every disclosure in the transcript uses one chevron: pointing right closed, down open. */
+.transcript-frame details > summary { cursor: pointer; list-style: none; }
+.transcript-frame details > summary::-webkit-details-marker { display: none; }
+.transcript-frame details > summary::after {
+  content: "";
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 3px 2px 9px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+  vertical-align: middle;
+}
+.transcript-frame details[open] > summary::after { transform: translateY(-2px) rotate(45deg); }
+.transcript-frame .tool-calls > summary::after,
+.transcript-frame .turn-work > summary::after { margin: 0 3px; }
+
+/* One quiet row per turn's work; open, the grouped accordions sit under a guide line. */
+.turn-work { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.turn-work > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 2px 8px 2px 0;
+  border-radius: 8px;
+}
+.turn-work > summary:hover { color: var(--ink); }
+.turn-work > summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.turn-work-content { display: grid; gap: 2px; margin: 4px 0 0 3px; padding: 2px 0 4px 14px; border-left: 2px solid var(--line); }
+.tool-calls { margin: 0; color: var(--muted); font-size: 12px; }
+.tool-calls > summary { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.tool-count { padding: 1px 7px; border-radius: 6px; background: var(--rail); font-variant-numeric: tabular-nums; }
+.tool-calls-content { display: grid; gap: 6px; padding: 0 0 8px; }
+.tool-calls-content pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
+.tool-calls-content .message-detail summary { padding: 6px 0; }
+.tool-calls-content .action-receipt { margin: 0; }
+.reasoning-part { margin: 0 0 6px; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; background: var(--raised); border-radius: 10px; }
+@media (pointer: coarse) {
+  .turn-work > summary, .tool-calls > summary { min-height: 44px; }
+}
+
+/* The running turn's live row, beside the working avatar. */
+.activity-live { display: grid; gap: 2px; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.activity-live p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-live-thought { font-style: italic; }
+.conversation-activity .retry-turn { margin-top: 8px; padding: 6px 14px; font-size: 13px; border: 1px solid var(--line); }
+
+/* Reply actions: on hover or focus with a mouse, always with touch. */
+.reply-actions { display: flex; gap: 2px; margin: 6px 0 0 -7px; }
+.message .reply-action {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.message .reply-action:hover:enabled { background: var(--rail); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) {
+  .reply-actions { opacity: 0; transition: opacity 120ms ease; }
+  .message:hover .reply-actions, .reply-actions:focus-within { opacity: 1; }
+}
+@media (pointer: coarse) {
+  .message .reply-action { width: 44px; height: 44px; }
+}
+.quote-selection {
+  position: absolute;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 22px rgb(0 0 0 / 18%);
+}
+.quote-selection:hover:enabled { background: var(--ink); opacity: 0.9; }
+@media (pointer: coarse) { .quote-selection { min-height: 44px; } }
+
+/* A message opened from find or a link glows briefly. */
+.message[data-found] { animation: message-found 2.4s ease-out; border-radius: 12px; }
+@keyframes message-found {
+  0%, 40% { box-shadow: 0 0 0 3px var(--accent); background-color: var(--accent-soft); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .message[data-found] { animation: none; outline: 3px solid var(--accent); outline-offset: 4px; }
+  .transcript-frame details > summary::after, .reply-actions { transition: none; }
+}
+
+/* Find in chat floats over the top of the transcript. */
+.find-bar {
+  position: absolute;
+  top: 10px;
+  right: max(16px, calc((100% - 760px) / 2));
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: min(420px, calc(100% - 32px));
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--raised);
+  color: var(--muted);
+  box-shadow: 0 8px 26px rgb(0 0 0 / 12%);
+}
+.find-bar input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 8px 4px; color: var(--ink); }
+.find-bar input:focus-visible { outline: none; }
+.find-bar:focus-within { border-color: var(--accent); }
+.find-count { flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.find-bar .icon-button { width: 34px; height: 34px; border-radius: 8px; }
+@media (pointer: coarse) { .find-bar .icon-button { width: 44px; height: 44px; } }
+@media (max-width: 620px) { .find-bar { left: 8px; right: 8px; width: auto; } }
+::highlight(find-match) { background-color: color-mix(in srgb, var(--attention) 30%, transparent); color: inherit; }
+::highlight(find-current) { background-color: var(--attention); color: var(--surface); }
+
+/* Questions: tappable option cards with radio or checkbox semantics. */
+.attention-card fieldset.question { margin: 18px 0; padding: 0; border: 0; min-width: 0; }
+.attention-card .question legend { padding: 0; margin-bottom: 10px; font-weight: 600; }
+.attention-card .question legend .muted { font-weight: 400; }
+.option-cards { display: grid; gap: 8px; }
+.attention-card .option-card {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  min-height: 48px;
+  font-size: 15px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.attention-card .option-card:hover { border-color: var(--accent); }
+.attention-card .option-card.checked { border-color: var(--accent); background: var(--accent-soft); }
+.attention-card .option-card:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
+/* The native control keeps the semantics and keyboard behavior; the card draws its state. */
+.attention-card .option-card input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.option-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+  color: var(--surface);
+}
+.option-card input[type="checkbox"] ~ .option-mark { border-radius: 6px; }
+.option-card.checked .option-mark { border-color: var(--accent); background: var(--accent); }
+.option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+.option-key {
+  flex: none;
+  min-width: 22px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font: 11px/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  text-align: center;
+}
+@media not ((hover: hover) and (pointer: fine)) { .option-key { display: none; } }
+.attention-card .own-answer { width: 100%; margin-top: 8px; }
+.attention-card .question-field { display: grid; gap: 8px; margin: 18px 0; }
+
+/* Lets a message sent last reach the top of the view while its reply grows into this space. */
+.transcript-end-space { flex: none; }

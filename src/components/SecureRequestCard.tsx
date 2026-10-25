@@ -3,6 +3,7 @@ import { ApiError, request as apiRequest, write } from "../client-api";
 import type { ExplicitLoginRequest, SecureRequest, SecureRequestAnswer } from "../shared/vault";
 import "./vault.css";
 import { FormMessage } from "./ui/form-message";
+import { attentionAnchor } from "../app/transcript-logic";
 
 // Volatile binding metadata only. Reopening the same native prompt must not turn
 // an uncertain submission into a fresh attempt. Never persist entered values.
@@ -84,7 +85,7 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
   const login = request.method === "vault.save_login";
   const secretLabel = login ? "Password" : request.method === "vault.code" ? "One-time code"
     : request.method === "vault.unlock_prompt" ? `${request.displayName} master password` : "Secret value";
-  return <article className="approval-card secure-request" data-request-id={requestId}>
+  return <article className="approval-card secure-request" data-request-id={requestId} {...attentionAnchor("secure", requestId)}>
     <p className="eyebrow">Secure input for Hermes</p><h2>{title}</h2><p>{detail}</p>
     {login && !explicit && <p className="vault-origin">Website: {request.origin}</p>}
     {login && explicit && <ExplicitLoginDetails origin={request.origin} request={explicit} assistantName={assistantName} />}

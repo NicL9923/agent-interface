@@ -7,8 +7,13 @@ import type { Inflight, Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
-/** Within this distance of the end, the reader is following the latest message. */
+import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
+import type { Intent, ScrollMode } from "./scroll-follow";
+import { clearMessageParam, initialMessage } from "./view";
+/** Within this distance of the end, the reader counts as at the latest message and the jump control hides. */
 const LATEST_DISTANCE = 100;
+/** How long a message opened from find or a link stays highlighted. */
+const FOUND_MS = 2400;
 type PageQuery = ApiQuery<"GET /bots/:id/conversation">;
 const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
 // The cache key of the page an opened conversation reads first.
@@ -27,6 +32,10 @@ export function firstMessageBelow(container: HTMLElement, y: number) {
   }
   return items[low];
 }
+const messageElement = (container: HTMLElement, id: string) =>
+  [...container.querySelectorAll<HTMLElement>("[data-message-id]")].find(item => item.dataset.messageId === id);
+const editable = (target: EventTarget | null) =>
+  target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
@@ -49,8 +58,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (positionTimer.current) clearTimeout(positionTimer.current);
   }, [userId]);
   const scroll = useRef<HTMLDivElement>(null);
-  // Following keeps the latest message in view as replies, images and cards grow.
-  const following = useRef(true);
+  // Empty space after the transcript, so a message sent last can sit near the top of the view.
+  const endSpace = useRef<HTMLDivElement>(null);
+  // Following keeps the latest message in view as replies, images and cards grow. See scroll-follow.ts.
+  const mode = useRef<ScrollMode>("follow");
+  // The person's last message before they sent, so the new one can be told apart; null when no send is anchored.
+  const sendAnchor = useRef<{ before?: string } | null>(null);
+  // Where a scroll event last left the transcript, so reading upward can be told from growth.
+  const lastTop = useRef(0);
   // A smooth jump reports positions short of the end until it lands.
   const jumping = useRef(0);
   // Scroll events count only after the opened conversation is first placed.
@@ -58,30 +73,42 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   // The message at the top of the view, held in place while history above it changes.
   const anchor = useRef<{ id: string; offset: number } | null>(null);
   const reveal = useRef<string | null>(null);
+  // A message to open, from a link or find, and the assistant it belongs to.
+  const [linked] = useState(initialMessage);
+  const target = useRef<{ botId: string; messageId: string } | null>(linked);
+  const found = useRef<{ element: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
   const seen = useRef(new Set<string>());
   const current = useRef(conversation);
   current.current = conversation;
   const requestEarlier = useRef<() => void>(() => {});
+  const requestStart = useRef<(messageId: string) => void>(() => {});
+  const botIdRef = useRef(botId);
+  botIdRef.current = botId;
   useEffect(() => {
     if (!botId || !userId) return;
     let live = true;
+    const opening = target.current?.botId === botId ? target.current.messageId : undefined;
+    if (target.current && !opening) target.current = null;
+    clearMessageParam();
     restored.current = false;
-    following.current = true;
+    mode.current = opening ? "free" : "follow";
+    sendAnchor.current = null;
+    if (endSpace.current) endSpace.current.style.height = "";
     anchor.current = null;
     reveal.current = null;
     seen.current = new Set();
-    setAtLatest(true);
+    setAtLatest(!opening);
     setUnseen(0);
     setEarlier({ loading: false, failed: false });
     setReply(null);
-    // A conversation opened before shows at once while it is checked again.
-    const cached = cachedResponse<SavedConversation>(firstPage(botId));
+    // A conversation opened before shows at once while it is checked again, unless it opens at a message.
+    const cached = opening ? undefined : cachedResponse<SavedConversation>(firstPage(botId));
     setConversation(cached?.botId === botId ? cached : null);
     setDisconnected(false);
     setReviewed(false);
     // The window starts at its oldest loaded message so new turns never push it along.
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
-    let start: string | undefined;
+    let start: string | undefined = opening;
     const cachedStart = cached?.botId === botId ? cached.messages[0]?.id : undefined;
     let latestInflight: Inflight | undefined;
     const patch = (value: SavedConversation, live?: Inflight): SavedConversation => {
@@ -103,7 +130,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       loading = true;
       const earlierPage = more;
       more = false;
-      if (!start && !following.current) start = cachedStart;
+      if (!start && mode.current !== "follow") start = cachedStart;
       const fromStart = !!start;
       const query: PageQuery = start
         ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
@@ -112,7 +139,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         const result = await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
         // The latest page can slide past the cached message a reader scrolled to meanwhile.
-        if (!fromStart && !following.current && cachedStart
+        if (!fromStart && mode.current !== "follow" && cachedStart
           && !result.messages.some(message => message.id === cachedStart)) {
           start = cachedStart;
           again = true;
@@ -122,7 +149,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         const secureRequests = (result.attention ?? []).filter(request => request.kind === "secure");
         const newSecureRequest = secureRequests.find(request => !secureRequestIds.has(request.id));
         secureRequestIds = new Set(secureRequests.map(request => request.id));
-        if (newSecureRequest && (firstConversation || following.current)) reveal.current = newSecureRequest.id;
+        if (newSecureRequest && (firstConversation || mode.current === "follow")) reveal.current = newSecureRequest.id;
         const heard = watchReplies(watch, result, firstConversation);
         watch = heard.watch;
         // An unsaved reply keeps one ID across turns, so each announcement is numbered instead.
@@ -154,6 +181,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       setEarlier({ loading: true, failed: false });
       void load();
     };
+    // Opens the window at a message that is not loaded, such as an older find match.
+    requestStart.current = messageId => {
+      if (!live) return;
+      target.current = { botId, messageId };
+      mode.current = "free";
+      start = messageId;
+      void load();
+    };
     void load();
     const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=1`, () => {
       latestInflight = undefined;
@@ -180,6 +215,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     return () => {
       live = false;
       requestEarlier.current = () => {};
+      requestStart.current = () => {};
       stopPolling();
       stream.close();
       window.removeEventListener("online", wake);
@@ -194,8 +230,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   };
   const returnToPlace = () => {
     const element = scroll.current, held = anchor.current;
-    const target = held && element ? [...element.querySelectorAll<HTMLElement>("[data-message-id]")]
-      .find(item => item.dataset.messageId === held.id) : undefined;
+    const target = held && element ? messageElement(element, held.id) : undefined;
     if (!element || !held || !target) return;
     const shift = target.getBoundingClientRect().top - element.getBoundingClientRect().top - held.offset;
     if (shift) element.scrollTop += shift;
@@ -203,10 +238,54 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   const holdPlace = () => {
     const element = scroll.current;
     anchor.current = null;
-    if (!element || following.current) return;
+    if (!element || mode.current !== "free") return;
     const top = element.getBoundingClientRect().top;
     const target = firstMessageBelow(element, top);
     if (target) anchor.current = { id: target.dataset.messageId!, offset: target.getBoundingClientRect().top - top };
+  };
+  // The person's message a send anchored: the last one of theirs, once it is not the one from before.
+  const sentMessage = () => {
+    const element = scroll.current;
+    if (!element || !sendAnchor.current) return undefined;
+    const last = [...element.querySelectorAll<HTMLElement>(".message-user[data-message-id]")].at(-1);
+    return last && last.dataset.messageId !== sendAnchor.current.before ? last : undefined;
+  };
+  // Keeps enough space at the end for the sent message to reach the top of the view. It never moves
+  // what is above it, and it shrinks as the reply grows into it.
+  const reserveEnd = () => {
+    const element = scroll.current, space = endSpace.current, sent = sentMessage();
+    if (!element || !space) return;
+    const reserve = space.offsetHeight;
+    const next = sent ? endReserve({
+      offset: sent.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop,
+      scrollHeight: element.scrollHeight, clientHeight: element.clientHeight, reserve,
+    }) : 0;
+    if (next !== reserve) space.style.height = next ? `${next}px` : "";
+  };
+  // Brings the opened message into view, a little below the top, and marks it briefly.
+  const showFound = (item: HTMLElement, mark = true) => {
+    const element = scroll.current!;
+    element.scrollTop += item.getBoundingClientRect().top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
+    mode.current = "free";
+    holdPlace();
+    if (!mark) return;
+    if (found.current) { clearTimeout(found.current.timer); delete found.current.element.dataset.found; }
+    item.dataset.found = "";
+    found.current = { element: item, timer: setTimeout(() => { delete item.dataset.found; found.current = null; }, FOUND_MS) };
+  };
+  useEffect(() => () => { if (found.current) clearTimeout(found.current.timer); }, []);
+  // Every layout pass places the transcript by its mode: pinned to the end, the sent message near the
+  // top, or the reader's message where it was.
+  const place = () => {
+    const element = scroll.current;
+    if (!element) return;
+    reserveEnd();
+    if (mode.current === "follow") element.scrollTop = element.scrollHeight;
+    else if (mode.current === "anchored") {
+      const sent = sentMessage();
+      if (sent) element.scrollTop += sent.getBoundingClientRect().top - element.getBoundingClientRect().top - ANCHOR_GAP;
+      else element.scrollTop = element.scrollHeight;
+    } else returnToPlace();
   };
   // Placement runs before paint, so an opened, grown or extended transcript never flickers.
   useLayoutEffect(() => {
@@ -216,15 +295,23 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     reveal.current = null;
     const card = request ? [...element.querySelectorAll<HTMLElement>(".secure-request")]
       .find(item => item.dataset.requestId === request) : undefined;
-    if (card) {
+    const opening = target.current?.botId === botId ? target.current.messageId : undefined;
+    const opened = opening ? messageElement(element, opening) : undefined;
+    if (opening) target.current = null;
+    if (opened) showFound(opened);
+    else if (card) {
       element.scrollTop += card.getBoundingClientRect().top - element.getBoundingClientRect().top;
-      following.current = false;
+      mode.current = "free";
       holdPlace();
-    } else if (following.current) element.scrollTop = element.scrollHeight;
-    else returnToPlace();
+    } else {
+      // A message that could not be found leaves the reader at the latest one.
+      if (opening) mode.current = "follow";
+      place();
+    }
     restored.current = true;
-    setAtLatest(following.current);
-    if (following.current) {
+    lastTop.current = element.scrollTop;
+    setAtLatest(mode.current === "follow" || distanceToEnd(element) < LATEST_DISTANCE);
+    if (mode.current !== "free") {
       markSeen(conversation.messages);
       setUnseen(0);
     } else {
@@ -232,25 +319,57 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       setUnseen(last < 0 ? 0 : conversation.messages.slice(last + 1).filter(countsAsNew).length);
     }
   }, [conversation, botId]);
+  // A reader's own input ends following or an anchor at once. Scroll events alone cannot tell the
+  // reader from growth, so wheel, touch, keys and the scroll bar are heard directly.
+  const intend = (intent: Intent) => {
+    const next = afterIntent(mode.current, intent);
+    if (next === mode.current) return;
+    mode.current = next;
+    jumping.current = 0;
+    holdPlace();
+  };
+  const listen = (element: HTMLElement) => {
+    const input = (event: Event) => {
+      if (event.type === "keydown" && editable(event.target)) return;
+      const intent = scrollIntent(event as WheelEvent & KeyboardEvent);
+      if (intent) intend(intent);
+    };
+    // A press on the scroll bar lands on the container itself, beyond its content box.
+    const press = (event: PointerEvent) => {
+      if (event.target === element && (event.offsetX > element.clientWidth || event.offsetY > element.clientHeight)) intend("drag");
+    };
+    const options = { passive: true };
+    for (const type of ["wheel", "touchmove", "keydown"]) element.addEventListener(type, input, options);
+    element.addEventListener("pointerdown", press, options);
+    return () => {
+      for (const type of ["wheel", "touchmove", "keydown"]) element.removeEventListener(type, input);
+      element.removeEventListener("pointerdown", press);
+    };
+  };
+  const placeLatest = useRef(place);
+  placeLatest.current = place;
+  const listenLatest = useRef(listen);
+  listenLatest.current = listen;
   // The transcript body, observed so late images and cards keep a follower at the end.
   // A freshly shown transcript, such as on return from Today, opens at the latest message.
   const content = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
-    following.current = true;
-    setAtLatest(true);
-    if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-    if (typeof ResizeObserver === "undefined") return;
+    const element = node.parentElement;
+    if (!target.current) {
+      mode.current = "follow";
+      setAtLatest(true);
+    }
+    if (element && mode.current === "follow") element.scrollTop = element.scrollHeight;
+    const stop = element ? listenLatest.current(element) : undefined;
+    if (typeof ResizeObserver === "undefined") return stop;
     // Browser scroll anchoring is off, so late images above the reader are offset here too.
-    const observer = new ResizeObserver(() => {
-      if (following.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-      else returnToPlace();
-    });
+    const observer = new ResizeObserver(() => placeLatest.current());
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); stop?.(); };
   }, []);
   const jumpToLatest = useCallback(() => {
     const element = scroll.current;
-    following.current = true;
+    mode.current = "follow";
     setAtLatest(true);
     setUnseen(0);
     if (current.current) markSeen(current.current.messages);
@@ -262,23 +381,63 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
     } else element.scrollTop = element.scrollHeight;
   }, []);
+  /**
+   * Called as the person sends: their new message moves near the top of the view and the reply
+   * grows below it, instead of the view chasing the end.
+   */
+  const anchorSend = useCallback(() => {
+    const element = scroll.current;
+    jumping.current = 0;
+    sendAnchor.current = { before: element ? [...element.querySelectorAll<HTMLElement>(".message-user[data-message-id]")].at(-1)?.dataset.messageId : undefined };
+    mode.current = "anchored";
+    setAtLatest(true);
+    setUnseen(0);
+    if (current.current) markSeen(current.current.messages);
+    placeLatest.current();
+  }, []);
+  /** Shows a message of this conversation, loading the history window from it when it is not loaded. */
+  const openMessage = useCallback((messageId: string, mark = true) => {
+    const element = scroll.current;
+    const item = element ? messageElement(element, messageId) : undefined;
+    if (item) {
+      showFound(item, mark);
+      setAtLatest(distanceToEnd(element!) < LATEST_DISTANCE);
+    } else requestStart.current(messageId);
+  }, []);
+  /**
+   * Opens an assistant's live conversation at a message, as a search result does. Call it with
+   * the selection change; a different assistant opens there once it loads.
+   */
+  const openAt = useCallback((id: string, messageId: string) => {
+    if (id === botIdRef.current) openMessage(messageId);
+    else target.current = { botId: id, messageId };
+  }, [openMessage]);
   const loadEarlier = useCallback(() => requestEarlier.current(), []);
   const measurePosition = () => {
     // Switching assistants empties the shared transcript, and the browser reports that
     // clamp to the top as a scroll. Only the loaded conversation's own scrolling counts.
     if (!userId || !botId || !scroll.current || !restored.current || conversation?.botId !== botId) return;
-    const top = scroll.current.scrollTop;
-    const latest = scroll.current.scrollHeight - top - scroll.current.clientHeight < LATEST_DISTANCE;
-    if (latest) jumping.current = 0;
-    if (latest || jumping.current < Date.now()) following.current = latest;
-    setAtLatest(following.current);
-    if (latest) {
+    const element = scroll.current;
+    const top = element.scrollTop;
+    const end = atTrueEnd(element);
+    const latest = distanceToEnd(element) < LATEST_DISTANCE;
+    if (end) jumping.current = 0;
+    // Following comes back only at the true end. Moving up away from it while following,
+    // as with a scroll bar the app could not hear, ends following too.
+    if (mode.current !== "anchored") {
+      if (end) mode.current = "follow";
+      else if (mode.current === "follow" && top < lastTop.current - 1 && jumping.current < Date.now()) mode.current = "free";
+    }
+    lastTop.current = top;
+    setAtLatest(mode.current === "follow" || latest);
+    if (mode.current !== "free" || latest) {
       markSeen(conversation.messages);
       setUnseen(0);
-    } else holdPlace();
+    }
+    holdPlace();
     if (positionTimer.current) clearTimeout(positionTimer.current);
     const positionBot = botId;
-    const visibleMessage = latest ? undefined : firstMessageBelow(scroll.current, scroll.current.getBoundingClientRect().top + 8);
+    const visibleMessage = latest ? undefined : firstMessageBelow(element, element.getBoundingClientRect().top + 8);
     const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
     positionTimer.current = setTimeout(
       () =>
@@ -306,6 +465,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     unseen,
     loadEarlier,
     jumpToLatest,
+    anchorSend,
+    openMessage,
+    openAt,
   };
-  return { conversation, setConversation, disconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition };
+  return { conversation, setConversation, disconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition };
 }

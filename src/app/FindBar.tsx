@@ -1,0 +1,125 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
+import type { SearchHit } from "../shared/discovery";
+import { request } from "../client-api";
+import { Icon } from "../components/Icon";
+import type { SavedConversation } from "./storage";
+import { localMatches, mergeFindMatches } from "./transcript-logic";
+import type { FindMatch } from "./transcript-logic";
+
+/** Server search waits for a pause in typing, and needs at least this many characters. */
+const SEARCH_DELAY = 300;
+const SEARCH_MIN = 2;
+const readable = ".message-markdown, .message-text";
+/** The words each shown message reads, without names, times or tool output. */
+function shownMessages(container: HTMLElement) {
+  return [...container.querySelectorAll<HTMLElement>("article[data-message-id]")].map(item => ({
+    id: item.dataset.messageId!,
+    text: [...item.querySelectorAll(readable)].map(node => node.textContent ?? "").join("\n"),
+  }));
+}
+/** Text ranges of each match inside a message, for the CSS highlight registry. */
+function matchRanges(item: HTMLElement, needle: string) {
+  const ranges: Range[] = [];
+  for (const block of item.querySelectorAll(readable)) {
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = (node.textContent ?? "").toLocaleLowerCase();
+      for (let at = text.indexOf(needle); at >= 0 && at + needle.length <= (node.textContent ?? "").length; at = text.indexOf(needle, at + needle.length)) {
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + needle.length);
+        ranges.push(range);
+      }
+    }
+  }
+  return ranges;
+}
+const highlights = () => typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined" ? CSS.highlights : undefined;
+
+/**
+ * Find in this chat. Loaded messages match as the person types; server search then adds matches in
+ * history not loaded yet, which open the conversation at that message. Enter goes to the older match,
+ * Shift+Enter to the newer one, and Escape closes.
+ */
+export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
+  botId: string;
+  conversation: SavedConversation | null;
+  scroll: RefObject<HTMLDivElement | null>;
+  openMessage(messageId: string, mark?: boolean): void;
+  onClose(): void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [local, setLocal] = useState<FindMatch[]>([]);
+  const [remote, setRemote] = useState<{ query: string; hits: SearchHit[] } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const needle = query.trim().toLocaleLowerCase();
+  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
+  // Loaded matches follow what is on screen, including replies still arriving. A new query brings
+  // its newest loaded match into view, without loading anything.
+  const scrolledFor = useRef("");
+  useEffect(() => {
+    const found = scroll.current ? localMatches(shownMessages(scroll.current), query) : [];
+    setLocal(found);
+    const newest = found.at(-1)?.messageId;
+    if (needle && newest && needle !== scrolledFor.current) {
+      scrolledFor.current = needle;
+      openMessage(newest, false);
+    }
+  }, [query, needle, conversation, scroll, openMessage]);
+  // Only the latest query's response counts; an older one that lands late is dropped.
+  const latest = useRef(0);
+  useEffect(() => {
+    const q = query.trim();
+    const ticket = ++latest.current;
+    if (q.length < SEARCH_MIN) return;
+    const timer = setTimeout(() => {
+      request("GET /search", { query: { q, botId } })
+        .then(result => { if (ticket === latest.current) setRemote({ query: q, hits: result.hits }); }, () => { /* Loaded matches still work. */ });
+    }, SEARCH_DELAY);
+    return () => clearTimeout(timer);
+  }, [query, botId]);
+  const matches = useMemo(() => mergeFindMatches(local, remote?.query === query.trim() ? remote.hits : [], {
+    botId, sessionId: conversation?.sessionId, loadedIds: new Set(conversation?.messages.map(message => message.id)),
+  }), [local, remote, query, botId, conversation]);
+  const chosen = selected ? matches.findIndex(match => match.messageId === selected) : -1;
+  const index = chosen >= 0 ? chosen : matches.length - 1;
+  const current = matches[index];
+  useEffect(() => {
+    const registry = highlights(), container = scroll.current;
+    if (!registry || !container || !needle) return;
+    const ranges = (id: string) => {
+      const item = container.querySelector<HTMLElement>(`article[data-message-id="${CSS.escape(id)}"]`);
+      return item ? matchRanges(item, needle) : [];
+    };
+    registry.set("find-match", new Highlight(...local.flatMap(match => ranges(match.messageId))));
+    if (current?.loaded) registry.set("find-current", new Highlight(...ranges(current.messageId)));
+    return () => { registry.delete("find-match"); registry.delete("find-current"); };
+  }, [local, needle, current, scroll]);
+  const go = (delta: number) => {
+    if (!matches.length) return;
+    const next = matches[(index + delta + matches.length) % matches.length];
+    setSelected(next.messageId);
+    openMessage(next.messageId);
+  };
+  const searching = query.trim().length >= SEARCH_MIN && remote?.query !== query.trim();
+  const status = !needle ? "" : matches.length ? `${index + 1} of ${matches.length}` : searching ? "Searching…" : "No matches";
+  return <div className="find-bar" role="search" onKeyDown={event => {
+    if (event.key === "Escape") { event.preventDefault(); onClose(); }
+  }}>
+    <Icon name="search" size={16} />
+    <input ref={input} type="search" aria-label="Find in chat" placeholder="Find in chat" value={query}
+      enterKeyHint="search" autoComplete="off" spellCheck={false}
+      onChange={event => { setQuery(event.target.value); setSelected(null); }}
+      onKeyDown={event => {
+        if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        go(event.shiftKey ? 1 : -1);
+      }} />
+    <span className="find-count" role="status">{status}</span>
+    <button type="button" className="icon-button" aria-label="Older match" title="Older match (Enter)" disabled={!matches.length} onClick={() => go(-1)}><Icon name="up" size={16} /></button>
+    <button type="button" className="icon-button" aria-label="Newer match" title="Newer match (Shift+Enter)" disabled={!matches.length} onClick={() => go(1)}><Icon name="down" size={16} /></button>
+    <button type="button" className="icon-button" aria-label="Close find" title="Close (Escape)" onClick={onClose}><Icon name="close" size={16} /></button>
+  </div>;
+}
