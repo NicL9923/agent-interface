@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
-import type { GroupCatalog, GroupPage, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
+import type { GroupCatalog, GroupEvent, GroupPage, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
@@ -45,6 +45,15 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     if (!accessible(state.room, allowed)) throw httpError(404, 'Group chat not found');
     return state;
   }
+  // Labels each human message with the household member who sent it here, when one is on record.
+  function attributed(roomId: string, page: GroupPage): GroupPage {
+    if (!Array.isArray(page.events)) return page;
+    const senders = store.groupSenders(roomId, page.events.filter(event => event.kind === 'message.user').map(event => event.event_id));
+    return { ...page, events: page.events.map(event => {
+      const user = event.kind === 'message.user' ? store.getUser(senders.get(event.event_id) ?? '') : undefined;
+      return user ? { ...event, sender: { id: user.id, name: user.name } } : event;
+    }) };
+  }
   app.get('/api/groups', async req => {
     if (!runtime.groupRequest) return { supported: false, canSend: false, rooms: [], reason: 'Hosted group chats are unavailable on this Hermes integration.' } satisfies GroupCatalog;
     const allowed = new Set((await bots(signedIn(req).id)).map(bot => bot.id));
@@ -67,8 +76,8 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const { since, state } = z.object({ since: z.coerce.number().int().min(0).default(0), state: z.literal('1').optional() }).strict().parse(req.query);
     // The access check already reads the room, so `state=1` returns it too: one poll, one Hermes state call.
     const current = await room(signedIn(req).id, roomId);
-    const log = await request({ operation: 'log', roomId, since });
-    return state ? { ...log as GroupPage, state: current } : log;
+    const log = attributed(roomId, await request({ operation: 'log', roomId, since }) as GroupPage);
+    return state ? { ...log, state: current } : log;
   });
   app.post('/api/groups/:roomId/messages', async req => {
     const { roomId } = z.object({ roomId: id }).parse(req.params);
@@ -77,7 +86,10 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     await room(userId, roomId);
     // Separate household send keys without inventing a native actor or changing model text.
     const requestId = createHash('sha256').update(JSON.stringify([userId, body.requestId])).digest('hex');
-    return request({ operation: 'send', roomId, ...body, requestId });
+    const sent = await request({ operation: 'send', roomId, ...body, requestId }) as { event?: GroupEvent };
+    // Hermes names the event it appended; a lost or older response leaves the message unattributed.
+    if (typeof sent.event?.event_id === 'string' && sent.event.kind === 'message.user') store.attributeGroupMessage(roomId, sent.event.event_id, userId);
+    return sent;
   });
   app.post('/api/groups/:roomId/stop', async req => {
     const { roomId } = z.object({ roomId: id }).parse(req.params);

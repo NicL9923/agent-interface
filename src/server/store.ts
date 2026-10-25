@@ -138,6 +138,8 @@ export class Store {
   participants(...args: Parameters<SubmissionRepository["participants"]>) { return this.submissions.participants(...args); }
   attributeApproval(...args: Parameters<SubmissionRepository["attributeApproval"]>) { return this.submissions.attributeApproval(...args); }
   approval(...args: Parameters<SubmissionRepository["approval"]>) { return this.submissions.approval(...args); }
+  attributeGroupMessage(...args: Parameters<SubmissionRepository["attributeGroupMessage"]>) { return this.submissions.attributeGroupMessage(...args); }
+  groupSenders(...args: Parameters<SubmissionRepository["groupSenders"]>) { return this.submissions.groupSenders(...args); }
   // routines
   routineRecipients(...args: Parameters<RoutineRepository["routineRecipients"]>) { return this.routines.routineRecipients(...args); }
   getRoutineRecipients(...args: Parameters<RoutineRepository["getRoutineRecipients"]>) { return this.routines.getRoutineRecipients(...args); }
