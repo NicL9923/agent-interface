@@ -64,11 +64,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   const mode = useRef<ScrollMode>("follow");
   /**
    * The message a send anchored, null when none is. It is followed from its echo, named by the
-   * request ID, to Hermes's copy: by that ID, by the ID its receipt names, or as this person's first
-   * message after those `known` when they sent. Once Hermes's copy is found, `id` holds it, so later
-   * rows, such as another member's guidance, never take its place.
+   * request ID, to Hermes's copy: by that ID or the ID its receipt names, which `id` then holds, so
+   * later rows, such as another member's guidance, never take its place. Until a receipt names one,
+   * this person's first message after those `known` when they sent stands in as `guess`, which a
+   * named copy replaces. Once a receipt names the copy, nothing else stands in for it.
    */
-  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string } | null>(null);
+  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string; guess?: string } | null>(null);
   // Where a scroll event last left the transcript, so reading upward can be told from growth.
   const lastTop = useRef(0);
   // A smooth jump reports positions short of the end until it lands.
@@ -273,10 +274,15 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // The echo stands in, named by the request ID, until Hermes's copy replaces it.
     const echo = sent.requestId ? messageElement(element, sent.requestId) : undefined;
     if (echo) return echo;
+    // A named copy that has not arrived yet is waited for, even when another of this person's
+    // messages, such as one from another device, arrives first.
+    if (sent.messageId) return undefined;
+    if (sent.guess && own.some(message => message.id === sent.guess)) return messageElement(element, sent.guess);
     // Only after the newest message known at the send, so an earlier page loaded since never counts.
     const mine = own.slice(own.findLastIndex(message => sent.known.has(message.id)) + 1).find(message => message.role === "user" && !isActivityMessage(message)
       && !message.id.endsWith("-inflight") && (message.sender ? message.sender.id === userId : true));
-    return mine ? lock(mine.id) : undefined;
+    sent.guess = mine?.id;
+    return mine ? messageElement(element, mine.id) : undefined;
   };
   // Keeps enough space at the end for the sent message to reach the top of the view. It never moves
   // what is above it, and it shrinks as the reply grows into it.

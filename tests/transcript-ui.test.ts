@@ -466,4 +466,30 @@ describe("send anchor", () => {
     await show([...conversation.messages, elsewhere, prompt("mine", "My new question"), other("theirs")]);
     expect(top("mine")).toBe(24);
   });
+
+  it("waits for the message the receipt names when another of this person's messages arrives first", async () => {
+    layout({ q: 400, a: 600, elsewhere: 1400, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    hook.history.sentAs("request-1", "mine");
+    const interim = [...conversation.messages, prompt("elsewhere", "From my phone")];
+    await show(interim);
+    await show([...interim, prompt("mine", "My new question")]);
+    expect(top("mine")).toBe(24);
+  });
+
+  it("replaces a guessed message with the one a later receipt names", async () => {
+    layout({ q: 400, a: 600, elsewhere: 1400, mine: 1800 });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    // Before the receipt, this person's first new message is the best guess.
+    const interim = [...conversation.messages, prompt("elsewhere", "From my phone")];
+    await show(interim);
+    expect(top("elsewhere")).toBe(24);
+    hook.history.sentAs("request-1", "mine");
+    await show([...interim, prompt("mine", "My new question")]);
+    expect(top("mine")).toBe(24);
+  });
 });
