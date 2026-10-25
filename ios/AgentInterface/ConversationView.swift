@@ -103,7 +103,7 @@ struct ConversationView: View {
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
     .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false }
-    .onChange(of: findQuery) { _, _ in findTarget = nil; find(0) }
+    .onChange(of: findQuery) { _, _ in findTarget = nil }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     .findShortcut(botId: bot.id, open: openFind)
   }
@@ -196,13 +196,16 @@ struct ConversationView: View {
     findTarget = match.id
     if !match.loaded { Task { await store.openConversation(botId: bot.id, atMessage: match.id) } }
   }
-  /// Asks the server for matches in this chat's history, as the web's find does: after a 300 ms
-  /// pause, for two characters or more. A later query cancels this one, and a late answer is dropped.
+  /// After a 300 ms pause in typing, moves to the first loaded match, so the chat does not jump on
+  /// every keystroke, then asks the server for matches in this chat's history, as the web's find
+  /// does, for two characters or more. A later query cancels this one, and a late answer is dropped.
   private func searchHistory() async {
-    let query = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard findOpen, query.count >= 2, let api = store.api else { findHits = nil; return }
+    guard findOpen, !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { findHits = nil; return }
     try? await Task.sleep(for: .milliseconds(300))
     guard !Task.isCancelled else { return }
+    if findTarget == nil { find(0) }
+    let query = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard query.count >= 2, let api = store.api else { findHits = nil; return }
     let scope = store.scope, typed = findQuery
     let path = "/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")&botId=\(APIClient.component(bot.id))"
     let result: SearchResponse? = try? await api.get(path)
