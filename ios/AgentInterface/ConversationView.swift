@@ -301,7 +301,10 @@ struct ConversationView: View {
       // The keyboard or a rotation resizes the view; a follower stays at the end.
       if following { scrollToLatest(proxy) }
     }
-    .modifier(DragStopsFollowing(following: $following))
+    .modifier(OnDrag {
+      if following { following = false }
+      if !placed && store.conversation != nil { placed = true }
+    })
     .scrollDismissesKeyboard(.interactively)
     // A short chat cannot be dragged, so a tap anywhere on the transcript puts the keyboard away
     // too. It runs beside the transcript's own buttons and links rather than instead of them.
@@ -408,8 +411,9 @@ struct ConversationView: View {
     else { return }
     store.focusedMessage = nil
     following = false
-    // The reader is placed; earlier history pages in as usual from here.
-    placed = true
+    // Earlier history waits for the reader's own scroll (or Show earlier messages), so a page added
+    // above does not move the message away, and the reading position is not saved back here.
+    placed = false
     sentAnchor = nil
     highlight(focus.messageId)
     Task { @MainActor in proxy.scrollTo(focus.messageId, anchor: .center) }
@@ -1119,13 +1123,14 @@ extension EnvironmentValues {
   }
 }
 
-/// A drag stops following at once, so the reader keeps the place they scrolled to while a reply
-/// streams in. iOS 17 has no scroll phase; there the transcript's position decides, as before.
-private struct DragStopsFollowing: ViewModifier {
-  @Binding var following: Bool
+/// The reader's own drag: it stops following at once, so they keep the place they scrolled to while a
+/// reply streams in, and lets history page in after a chat opened at a message. iOS 17 has no scroll
+/// phase; there the transcript's position decides, as before.
+private struct OnDrag: ViewModifier {
+  var action: () -> Void
   func body(content: Content) -> some View {
     if #available(iOS 18.0, *) {
-      content.onScrollPhaseChange { _, phase in if phase == .interacting && following { following = false } }
+      content.onScrollPhaseChange { _, phase in if phase == .interacting { action() } }
     } else { content }
   }
 }
