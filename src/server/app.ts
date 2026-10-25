@@ -352,12 +352,14 @@ export async function createApp(
       cacheControl: true,
       maxAge: "1h",
       setHeaders: (reply, path) => {
-        if (path.endsWith("index.html") || path.endsWith("sw.js"))
+        if (path.endsWith("index.html") || path.endsWith("native-computer.html") || path.endsWith("sw.js"))
           reply.header("Cache-Control", "no-cache");
         else if (isHashedAsset(clientRoot, path))
           reply.header("Cache-Control", immutableCacheControl);
       },
     });
+    // The iOS app's shared desktop viewer. It holds nothing private: the app hands it a ticket in the hash.
+    app.get("/native/computer", (_req, reply) => reply.sendFile("native-computer.html"));
     app.setNotFoundHandler((req, reply) =>
       isApiRequest(req)
         ? reply.code(404).send({ error: "API endpoint not found" })

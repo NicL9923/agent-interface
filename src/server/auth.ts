@@ -32,6 +32,8 @@ export const publicApiRoutes = [
   "/api/csp-report",
   // Its single-use token authorizes it; a service worker has no CSRF token. Origin is still checked.
   "/api/push/actions",
+  // The iOS desktop page has no session of its own; its single-use ticket is checked by the route.
+  "/api/computer/desktop/ws",
 ];
 export async function installAuth(
   app: FastifyInstance,

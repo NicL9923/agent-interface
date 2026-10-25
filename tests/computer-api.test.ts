@@ -202,3 +202,31 @@ it("prunes non-administrator shells at startup only once an administrator is kno
   expect(await start(["two"])).toEqual([]);
   expect(await start(["one", "two"])).toEqual([shellId("two"), shellId("removed")]);
 });
+
+it("lets the iOS app attach with its bearer token and its desktop page connect with the ticket alone", async () => {
+  const s = await setup();
+  const token = randomBytes(32).toString("base64url");
+  s.store.nativeSession(hash(token), "one", Date.now() + 600_000);
+  const bearer = {authorization: `Bearer ${token}`};
+  const issued = await s.app.inject({method: "POST", url: "/api/computer/desktop", headers: bearer, payload: {}});
+  expect(issued.statusCode).toBe(200);
+  const {path, viewerId} = issued.json();
+  expect((await s.app.inject({method: "POST", url: "/api/computer/control", headers: bearer, payload: {action: "take", viewerId}})).statusCode).toBe(200);
+  expect(s.computerRequest).toHaveBeenCalledWith({action: "take", viewerId, actorId: "one", actorName: "one"});
+  // The page's socket carries no bearer and no cookie, only the app's Origin.
+  await expect(s.app.injectWS(path, {headers: {origin: "https://other.invalid"}})).rejects.toThrow("403");
+  await expect(s.app.injectWS(path, {headers: {}})).rejects.toThrow("403");
+  const ws = await s.app.injectWS(path, {headers: {origin}});
+  const output = once(ws, "message"); ws.send(Buffer.from("RFB handshake"));
+  expect((await output)[0].toString()).toBe("RFB handshake");
+  await expect(s.app.injectWS(path, {headers: {origin}})).rejects.toThrow("401");
+  // Signing the app out ends the page's stream like any other.
+  const closed = once(ws, "close");
+  s.store.deleteNativeSession(hash(token));
+  ws.send(Buffer.from("revoked input"));
+  expect((await closed)[0]).toBe(4401);
+  // A browser's ticket still needs its session cookie.
+  const web = (await attachment(s)).json().path;
+  await expect(s.app.injectWS(web, {headers: {origin}})).rejects.toThrow("401");
+  ws.close();
+});
