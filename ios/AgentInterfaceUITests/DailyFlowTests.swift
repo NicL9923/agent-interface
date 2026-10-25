@@ -28,8 +28,7 @@ import XCTest
     XCTAssertTrue(send.waitForExistence(timeout: 10))
     XCTAssertFalse(send.isEnabled)
     try capture(app, "question-suggestions")
-    app.buttons["questionChoice-plan"].tapWhenReady()
-    app.buttons["Write my own answer"].tapWhenReady()
+    app.buttons["questionOwn-plan"].tapWhenReady()
     let input = app.descendants(matching: .any).matching(identifier: "questionAnswer-plan").firstMatch
     input.typeWhenFocused("Handle both tomorrow")
     XCTAssertEqual(input.label, "Your answer: Your plan")

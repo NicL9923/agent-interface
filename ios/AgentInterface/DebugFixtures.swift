@@ -61,6 +61,13 @@
             ["id": "tool-file", "role": "assistant", "text": "", "toolCall": ["id": "file-call", "name": "fixture_file_tool", "status": "completed", "result": "Fixture file result"], "files": [["id": "fixture-file", "name": "Fixture output.txt", "mime": "text/plain"]]],
           ]
         }
+        // Transcript fixtures (chat UX catch-up, I1): a finished turn whose work folds, with
+        // timestamps for its duration, a code block and a table; a failed turn to retry.
+        if environment["AGENT_INTERFACE_UI_WORK"] == "1" {
+          FixtureProtocol.preferences["presentation"] = environment["AGENT_INTERFACE_UI_WORK_PRESENTATION"] ?? "simple"
+          FixtureProtocol.messages = TranscriptFixtures.work
+        }
+        if environment["AGENT_INTERFACE_UI_RETRY"] == "1" { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
           let output = (1...120).map { "Fixture output line \($0): synthetic tool details stay readable and scroll inside this receipt." }.joined(separator: "\n") + "\nEND OF FIXTURE OUTPUT"
@@ -99,6 +106,7 @@
     ]
     nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
     nonisolated(unsafe) static var questionAnswered = false
+    nonisolated(unsafe) static var retried = false
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
     nonisolated(unsafe) static var preferences: [String: Any] = [
@@ -212,6 +220,8 @@
         object = ["text": "Fixture transcript: check the north gate."]
       } else if path.hasSuffix("/voice/speak") {
         object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
+      } else if path == "/api/search", let hits = TranscriptFixtures.searchHits(request.url!, Self.messages) {
+        object = ["hits": hits, "unavailableBots": []]
       } else if path == "/api/search" {
         object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","messageId":"history-saved","offset":0]],"unavailableBots":[]]
       } else if path.contains("/history/") {
@@ -270,11 +280,18 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] == "1" {
+        if let questions = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] {
+          // "2" asks three questions: one choice, several choices, and a written answer.
+          let asked: [[String: Any]] = questions == "2" ? TranscriptFixtures.questions : [["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]]]
           object = ["botId": "ranch", "messages": Self.questionAnswered ? Self.messages : [],
             "activity": ["state": Self.questionAnswered ? "idle" : "blocked"], "approvals": [], "files": [],
-            "attention": Self.questionAnswered ? [] : [["id": "fixture-question", "kind": "clarify", "title": "Which plan?", "detail": "Choose a suggestion or write your own answer.", "questions": [["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]]]]],
+            "attention": Self.questionAnswered ? [] : [["id": "fixture-question", "kind": "clarify", "title": "Which plan?", "detail": "Choose a suggestion or write your own answer.", "questions": asked]],
             "draft": Self.draft]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "1" {
+          var value = object as! [String: Any]
+          value["activity"] = ["state": Self.retried ? "idle" : "failed", "detail": Self.retried ? NSNull() as Any : "The weather service did not answer." as Any]
+          object = value
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // The server's history window (src/shared/history.ts): `start` pins the oldest loaded
@@ -288,6 +305,7 @@
           while from > 0 && turns > 0 { from -= 1; if Self.messages[from]["role"] as? String == "user" { turns -= 1 } }
           var window = object as! [String: Any]
           window["messages"] = Array(Self.messages[from...]); window["earlier"] = from; window["earlierFiles"] = 0
+          window["sessionId"] = TranscriptFixtures.longSession
           object = window
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
@@ -331,7 +349,10 @@
         ]]
       } else if path.hasSuffix("/requests/fixture-question"), method == "POST" {
         Self.questionAnswered = true
-        Self.messages = [["id": "answer-received", "role": "assistant", "text": "Received plan: \((body["answers"] as? [String: String])?["plan"] ?? "")"]]
+        let answers = body["answers"] as? [String: String] ?? [:]
+        Self.messages = [["id": "answer-received", "role": "assistant", "text": answers.count > 1
+          ? answers.keys.sorted().map { "\($0): \(answers[$0] ?? "")" }.joined(separator: "; ")
+          : "Received plan: \(answers["plan"] ?? "")"]]
         object = ["ok": true]
       } else if path.hasSuffix("/vault/logins"), method == "POST" {
         Self.vaultItems.append(["id": "added-login", "kind": "login", "label": body["label"] ?? "", "origin": body["origin"] ?? "", "createdAt": "2026-10-02T12:00:00Z", "identifier": body["identifier"] ?? "", "identifierType": body["identifierType"] ?? "username", "hasOtp": false, "backend": "local", "canRemove": true])
@@ -481,6 +502,15 @@
         object = Self.readPosition
       } else if path == "/api/connection/retry" {
         object = ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"]
+      } else if path.hasSuffix("/messages"), let retryOf = body["retryOf"] as? String {
+        // A retry repeats the person's message and, this time, the assistant answers. The draft stays.
+        let id = body["requestId"] as? String ?? UUID().uuidString
+        Self.retried = true
+        Self.messages += [["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]],
+          ["id": "retry-answer", "role": "assistant", "text": "Retried \(retryOf): the north gate is closed and the battery reads 80%."]]
+        let receipt: [String: Any] = ["requestId": id, "status": "accepted", "messageId": id]
+        Self.receipts[id] = receipt
+        object = receipt
       } else if path.hasSuffix("/messages") {
         let id = body["requestId"] as? String ?? UUID().uuidString
         Self.messages.append([
@@ -622,6 +652,44 @@
       append(UInt32(samples))
       data.append(Data(repeating: 128, count: samples))
       return data
+    }
+  }
+
+  /// Transcript fixtures for the chat UX catch-up (I1). Explicit synthetic content.
+  enum TranscriptFixtures {
+    static let longSession = "fixture-long-session"
+    static var questions: [[String: Any]] { [
+      ["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]],
+      ["id": "extras", "prompt": "What should come along?", "options": ["Hay", "Water", "Feed"], "multiSelect": true],
+      ["id": "note", "prompt": "Anything else?"],
+    ] }
+    static var work: [[String: Any]] { [
+      ["id": "work-prompt", "role": "user", "text": "Check the north gate and show me the battery script.", "createdAt": "2026-10-24T15:00:00.000Z",
+       "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "work-search", "role": "assistant", "text": "", "createdAt": "2026-10-24T15:00:04.000Z",
+       "toolCall": ["id": "work-call", "name": "web_search", "arguments": "{\"query\":\"north gate battery\"}", "status": "completed",
+         "result": "{\"ok\":true}", "startedAt": "2026-10-24T15:00:04.000Z", "completedAt": "2026-10-24T15:00:21.000Z"]],
+      ["id": "work-child", "role": "assistant", "text": "", "createdAt": "2026-10-24T15:01:30.000Z",
+       "toolCall": ["id": "work-delegate", "name": "delegate_task", "arguments": "{\"goal\":\"Review the gate sensor log\"}", "status": "completed",
+         "result": "Gate sensor log reviewed.", "startedAt": "2026-10-24T15:00:30.000Z", "completedAt": "2026-10-24T15:01:30.000Z"]],
+      ["id": "work-answer", "role": "assistant", "createdAt": "2026-10-24T15:02:14.000Z", "reasoning": "The gate log shows a low battery.\nA replacement script is simplest.",
+       "text": "The north gate battery is low. Here is the check script:\n\n```swift\n// Reads the gate battery\nlet level = try await gate.battery()\nif level < 0.2 { print(\"Replace soon: \\(level)\") }\n```\n\n| Gate | Battery |\n| --- | ---: |\n| North | 18% |\n| South, back | 76% |"],
+    ] }
+    static var failed: [[String: Any]] { [
+      ["id": "retry-prompt", "role": "user", "text": "Is the north gate closed?", "sender": ["id": "native-test", "name": "Local test member"]],
+      ["id": "retry-tool", "role": "tool", "text": "Weather service timed out.", "toolCall": ["id": "retry-call", "name": "gate_status", "status": "failed", "error": "Timed out"]],
+    ] }
+    /// `GET /search?q=&botId=` against the long history, as the server matches words. Other
+    /// searches keep the general fixture's answer.
+    static func searchHits(_ url: URL, _ messages: [[String: Any]]) -> [[String: Any]]? {
+      let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+      guard ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1",
+        let botId = query.first(where: { $0.name == "botId" })?.value, let q = query.first(where: { $0.name == "q" })?.value
+      else { return nil }
+      return messages.enumerated().compactMap { index, message in
+        guard let text = message["text"] as? String, text.localizedStandardContains(q), let id = message["id"] as? String else { return nil }
+        return ["botId": botId, "botName": "Ranch hand", "sessionId": longSession, "title": "Fixture history", "snippet": text, "messageId": id, "offset": index]
+      }
     }
   }
 #endif

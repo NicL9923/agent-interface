@@ -30,6 +30,8 @@ import XCTest
     collapsed.name = "Scheduled answer with coordination collapsed"
     collapsed.lifetime = .keepAlways
     add(collapsed)
+    // Each turn folds its work into one row; opened, the groups show as before.
+    app.expandWork()
     for group in ["Bot messages", "Scheduled jobs", "Subagents", "Background processes", "Diagnostics"] {
       XCTAssertTrue(app.buttons[group].exists, "Missing activity group: " + group)
     }
@@ -219,7 +221,14 @@ import XCTest
     XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
     XCTAssertFalse(app.buttons["Listen to reply"].exists, "Replies are offered aloud only while idle")
-    app.buttons["Reasoning"].tap()
+    // The live row beside the working avatar names the current tool and the latest reasoning line.
+    XCTAssertTrue(app.staticTexts["liveReceipt"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["liveReceipt"].label, "Action in progress · web_search")
+    XCTAssertTrue(app.staticTexts["liveReasoning"].exists)
+    let work = app.buttons["turnWork"]
+    XCTAssertTrue(work.waitForExistence(timeout: 5)); XCTAssertTrue(work.label.hasPrefix("Working"), work.label)
+    work.tapWhenReady()
+    app.buttons["Reasoning"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture exposed reasoning: current weather needs a fresh forecast."].waitForExistence(timeout: 5))
     app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tapWhenReady()
     app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "web_search")).firstMatch.tapWhenReady()

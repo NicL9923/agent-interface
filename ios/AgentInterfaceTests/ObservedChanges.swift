@@ -25,6 +25,8 @@ extension AppStore {
       "conversationScreens": \.conversationScreens, "chatCovers": \.chatCovers,
       "connectionError": \.connectionError, "activity": \.activity, "latestReply": \.latestReply,
       "readHere": \.readHere,
+      // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
+      "retrying": \.retrying, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
     ]
   }
   /// The names of the stored properties the Observation macro tracks, read from the backing storage it generates.

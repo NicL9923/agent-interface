@@ -110,6 +110,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var signingIn = false
   var loading = false
   var sending = false { didSet { updateEcho() } }
+  /// The person's message a Retry is sending again, while its request is in flight; see `retry(_:)`.
+  var retrying: String? { didSet { updateEcho() } }
   /// Files on their way into drafts; see `AttachmentUploads.swift`.
   let uploads = AttachmentUploads()
   /// The household's Hermes update; see `HermesUpgrade.swift`.
@@ -1196,7 +1198,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// message that arrived clears that assistant's draft before it is opened again.
   /// Each check waits longer for an answer that stays uncertain, but never resubmits.
   func reconcilePending() async {
-    guard let api, !sending else { return }
+    guard let api, !sending, retrying == nil else { return }
     let currentGeneration = generation
     for pending in pendings.values.sorted(by: { $0.botId < $1.botId }) {
       if let check = submissionChecks[pending.requestId], now() < check.next { continue }
@@ -1244,7 +1246,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if receipts[botId] != value { receipts[botId] = value }
     guard let original = pendings[botId], value.requestId == original.requestId else { return }
     guard value.status != "uncertain" else { return }
-    if value.status == "accepted" {
+    // A retry never touches the draft: it was not sent from it.
+    if value.status == "accepted" && original.retryOf == nil {
       // The server clears its copy for this send, which a later save here must not mistake
       // for a send from another device.
       if selectedBotId == original.botId && draftReady {
@@ -1259,7 +1262,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
         if let cached: Draft = read(draftKey) { save(cached.sent(original), draftKey) }
       }
     }
-    if value.status == "rejected" || value.status == "interrupted" { refused(original) }
+    if (value.status == "rejected" || value.status == "interrupted") && original.retryOf == nil { refused(original) }
     clearPending(botId)
   }
   /// A refused message goes back into its draft, in front of anything that replaced it meanwhile,
@@ -1287,7 +1290,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     // Only a conversation on screen is kept current, so only it can retire an echo or anchor one.
     let current = followedBotId == nil ? nil : conversation
     let next = SentEcho.nextEchoes(
-      echoes, pending: pending, receipt: receipt, sending: sending, conversation: current,
+      echoes, pending: pending, receipt: receipt, sending: sending || retrying != nil, conversation: current,
       sender: bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }, now: now)
     let changed = next != echoes
     if changed { echoes = next }
@@ -1418,6 +1421,81 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     next.attachments = missing + current.attachments
     return next
   }
+  // MARK: I1 transcript entry points
+
+  /// Sends the person's message of a failed turn again, as the web's Retry does (contract C1): a new
+  /// request ID, the same text and files, and `retryOf`. It goes through the normal receipt and
+  /// unconfirmed-send handling, but never reads, saves or clears the draft, and leaves the composer
+  /// as it is. Offered only while `RetryTurn.target` names the message.
+  func retry(_ message: Message) async {
+    guard let api, let id = selectedBotId, !sending, retrying == nil, pendings[id] == nil, connected,
+      supports(.chat), conversation.flatMap(RetryTurn.target)?.id == message.id
+    else { return }
+    let submission = PendingSubmission(
+      requestId: UUID().uuidString.lowercased(), botId: id, text: message.text,
+      attachments: message.files ?? [], reviewedInterruption: false, retryOf: message.id)
+    pendings[id] = submission
+    submissionChecks[submission.requestId] = nil
+    save(submission, key(.pending, id))
+    retrying = message.id
+    let currentGeneration = generation
+    defer { if currentGeneration == generation { retrying = nil } }
+    do {
+      let value: Receipt = try await api.write("/bots/\(APIClient.component(id))/messages", submission)
+      guard currentGeneration == generation else { return }
+      await handleReceipt(value, botId: id)
+      if value.status == "accepted" { buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
+      else if value.status == "rejected" || value.status == "interrupted" { buzz(.failed) }
+    } catch {
+      guard currentGeneration == generation else { return }
+      report(error)
+      if let failure = error as? APIError, (400..<500).contains(failure.status) {
+        clearPending(id)
+        buzz(.failed)
+        receipts[id] = Receipt(requestId: submission.requestId, status: "rejected", message: failure.message)
+      } else {
+        receipts[id] = Receipt(
+          requestId: submission.requestId, status: "uncertain",
+          message: "Checking whether Hermes accepted this message. The original request ID is preserved.")
+      }
+    }
+    await refreshConversation()
+  }
+
+  /// A message the open conversation should scroll to and highlight once it shows it.
+  struct MessageFocus: Equatable {
+    var botId: String
+    var messageId: String
+    var request = UUID()
+  }
+  /// Set by `openConversation(botId:atMessage:)`; the conversation clears it once shown.
+  var focusedMessage: MessageFocus?
+  /// Asks the open conversation to scroll to its first pending question, secure request or approval,
+  /// as the composer's status dock does.
+  var attentionScrollRequest: UUID?
+
+  /// Opens an assistant's live conversation, as a search hit in its canonical session does (contract
+  /// C2). With a message, the conversation loads from that message when it is not loaded yet,
+  /// `GET /bots/:id/conversation?start=`, and the view scrolls to it and highlights it briefly.
+  /// Earlier history then pages in as usual. Without one, the chat opens at its latest message.
+  func openConversation(botId: String, atMessage messageId: String?) async {
+    if selectedBotId != botId || conversation?.botId != botId { await select(botId) } else { conversationRequest = UUID() }
+    guard let messageId, selectedBotId == botId else { return }
+    if conversation?.messages.contains(where: { $0.id == messageId }) != true {
+      // The window now starts at the message; polls keep it, and pages add history above it.
+      historyStarts[botId] = messageId
+      windowGeneration += 1
+      await refreshConversation()
+    }
+    guard selectedBotId == botId else { return }
+    guard conversation?.messages.contains(where: { $0.id == messageId }) == true else {
+      // The message is gone or the read failed: keep the window that did load, at its latest message.
+      historyStarts[botId] = conversation?.messages.first?.id
+      return
+    }
+    focusedMessage = MessageFocus(botId: botId, messageId: messageId)
+  }
+
   func reconnect() async {
     guard let api else { return }
     let currentGeneration = generation

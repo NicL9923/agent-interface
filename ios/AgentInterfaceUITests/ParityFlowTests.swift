@@ -243,6 +243,7 @@ import UIKit
     XCTAssertFalse(app.staticTexts["Fixture tool result"].exists)
     XCTAssertTrue(app.buttons["Fixture output.txt"].exists)
     XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "fixture_file_tool")).firstMatch.exists)
+    app.buttons["turnWork"].tapWhenReady()
     app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tapWhenReady()
     app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_search")).firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
@@ -256,6 +257,7 @@ import UIKit
       app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
       app.launchEnvironment["AGENT_INTERFACE_UI_LONG_TOOL"] = presentation
       app.launch()
+      app.buttons["turnWork"].tapWhenReady()
       let tools = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch
       XCTAssertTrue(tools.waitForExistence(timeout: 10)); tools.tap()
       XCTAssertLessThan(tools.frame.minY, app.staticTexts["Fixture final answer follows the tool results."].frame.minY)
