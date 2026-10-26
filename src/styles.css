@@ -655,6 +655,13 @@ a {
   line-height: 1.5;
   color: var(--muted);
 }
+/* The approval decision layout is separate from the shared request-card shell. */
+.decision-card { display: grid; gap: 12px; font-size: 1rem; }
+.decision-card > p, .decision-card > h2 { margin: 0; }
+.decision-card .eyebrow { font-size: 0.6875rem; letter-spacing: 0.06em; }
+.decision-card .actions { margin: 4px 0 0; }
+.decision-card small, .decision-card .approval-unavailable, .decision-status { font-size: 0.875rem; line-height: 1.5; color: var(--muted); }
+.decision-card .actions button { min-height: 44px; }
 .actions {
   display: flex;
   align-items: center;

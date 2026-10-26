@@ -202,6 +202,18 @@ import XCTest
         XCTAssertFalse(app.staticTexts[error].exists)
         try capture("questions-submitted")
       }
+      if name == "questions-dark" {
+        let transcript = app.scrollViews["conversationTranscript"]
+        let extra = app.buttons["questionOption-extras-0"]
+        scrollUntilHittable(app, extra, in: transcript); extra.tapWhenReady()
+        let note = app.descendants(matching: .any).matching(identifier: "questionAnswer-note").firstMatch
+        scrollUntilHittable(app, note, in: transcript); note.typeWhenFocused("Bring water and leave early.")
+        let submit = app.buttons["Send answers"]
+        scrollUntilHittable(app, submit, in: transcript)
+        XCTAssertTrue(submit.isEnabled)
+        transcript.swipeUp()
+        try capture("questions-dark-enabled")
+      }
       app.terminate()
     }
   }
@@ -241,6 +253,88 @@ import XCTest
     XCTAssertLessThanOrEqual(latest.frame.maxY, transcript.frame.maxY + 1)
     XCTAssertFalse(app.buttons["jumpToLatest"].exists)
     try capture("questions-short-long-reply")
+  }
+
+  func testApprovalsDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_APPROVALS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_APPROVALS_PATH to capture approvals.")
+    let data = try Data(contentsOf: URL(fileURLWithPath: source))
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let error = try XCTUnwrap(original["decisionError"] as? String)
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown approval capture stage: \(stage)"); return }
+    let after = stage == "after"
+    let variants = [
+      ("approvals-loaded", "light", "UICTContentSizeCategoryL"),
+      ("approvals-dark", "dark", "UICTContentSizeCategoryL"),
+      ("approvals-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("approvals-unsupported", "light", "UICTContentSizeCategoryL"),
+      ("approvals-decline", "light", "UICTContentSizeCategoryL"),
+      ("approvals-approved-held", "light", "UICTContentSizeCategoryL"),
+      ("approvals-denied-held", "light", "UICTContentSizeCategoryL"),
+      ("approvals-approved-held-dark", "dark", "UICTContentSizeCategoryL"),
+    ]
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    guard selection.isEmpty || variants.contains(where: { $0.0 == selection }) else {
+      XCTFail("Unknown approval capture variant: \(selection)"); return
+    }
+    for (name, theme, size) in variants where selection.isEmpty || selection == name {
+      var fixture = original
+      if name == "approvals-unsupported" { fixture["approvalSupported"] = false }
+      if name.contains("-held") { fixture["holdDecision"] = true; fixture.removeValue(forKey: "decisionError") }
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
+      let approve = app.buttons["Approve"]
+      XCTAssertTrue(approve.waitForExistence(timeout: 15))
+      if after {
+        let title = app.staticTexts["Add a shared reminder for both of you?"]
+        XCTAssertGreaterThanOrEqual(title.frame.minY, app.navigationBars.firstMatch.frame.maxY - 1)
+        XCTAssertLessThanOrEqual(title.frame.maxY, app.scrollViews["conversationTranscript"].frame.maxY + 1)
+        XCTAssertFalse(app.buttons["jumpToLatest"].exists)
+        if name != "approvals-large-text" {
+          XCTAssertLessThanOrEqual(app.buttons["Decline"].frame.maxY, app.scrollViews["conversationTranscript"].frame.maxY + 1,
+            "The entire approval action must be visible when its card fits in the viewport.")
+        }
+      }
+      try capture(name)
+      if name == "approvals-large-text" {
+        scrollUntilHittable(app, approve, in: app.scrollViews["conversationTranscript"])
+        app.scrollViews["conversationTranscript"].swipeUp()
+        try capture(name + "-bottom")
+      }
+      if name == "approvals-unsupported" {
+        XCTAssertFalse(approve.isEnabled)
+        if after {
+          let reason = app.staticTexts[original["unsupportedReason"] as! String]
+          XCTAssertTrue(reason.exists)
+          XCTAssertLessThanOrEqual(reason.frame.maxY, app.scrollViews["conversationTranscript"].frame.maxY + 1)
+        }
+      }
+      if name.contains("-held") {
+        let denied = name == "approvals-denied-held"
+        (denied ? app.buttons["Decline"] : approve).tapWhenReady()
+        let confirmation = app.staticTexts[denied ? "Decline sent." : "Approval sent."]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons[denied ? "Declined" : "Approved"].isEnabled)
+        scrollUntilHittable(app, confirmation, in: app.scrollViews["conversationTranscript"])
+        try capture(name + "-sent")
+      }
+      if name == "approvals-loaded" || name == "approvals-decline" {
+        let decision = name == "approvals-loaded" ? "approved" : "denied"
+        let button = name == "approvals-loaded" ? approve : app.buttons["Decline"]
+        if after { XCTAssertGreaterThanOrEqual(button.frame.height, 44) }
+        button.tapWhenReady()
+        XCTAssertTrue(app.staticTexts[error].waitForExistence(timeout: 10))
+        try capture(name + "-error")
+        button.tapWhenReady()
+        let response = original[decision == "approved" ? "afterApproved" : "afterDenied"] as! [String: Any]
+        let text = (response["messages"] as! [[String: Any]]).last!["text"] as! String
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
+        if after { XCTAssertFalse(app.staticTexts[error].exists) }
+        try capture("approvals-" + decision)
+      }
+      app.terminate()
+    }
   }
 
   func testScreenshotTour() throws {

@@ -142,8 +142,10 @@ struct ReasoningDisclosure: View {
 struct ApprovalDecisionView: View {
   var approval: Approval
   var botId: String
+  var sendStarted: () -> Void = {}
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var decision: String?
   @State private var settled = false
   var body: some View {
@@ -151,17 +153,24 @@ struct ApprovalDecisionView: View {
       Text("Your decision needed").font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       Text(approval.title).font(.headline)
       Text(approval.detail).textSelection(.enabled)
-      if let expiry = approval.expiresAt, !When.format(expiry).isEmpty { Text("Expires \(When.format(expiry, inline: true))").font(.caption).foregroundStyle(.secondary) }
-      HStack {
-        Button(decision == "approved" ? settled ? "Approved" : "Approving…" : "Approve") { decide("approved") }.buttonStyle(.borderedProminent)
+      if let expiry = approval.expiresAt, !When.format(expiry).isEmpty { Text("Expires \(When.format(expiry, inline: true))").font(.caption).foregroundStyle(Palette.muted) }
+      let layout = typeSize.isAccessibilitySize
+        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+      layout {
+        Button(decision == "approved" ? settled ? "Approved" : "Approving…" : "Approve") { decide("approved") }.buttonStyle(.accentProminent)
         Button(decision == "denied" ? settled ? "Declined" : "Declining…" : "Decline") { decide("denied") }.buttonStyle(.bordered)
-      }.disabled(decision != nil || !store.connected || !store.supports(.approvals))
+      }.controlSize(.large).disabled(decision != nil || !store.connected || !store.supports(.approvals))
+      if settled { Text(confirmation).font(.footnote).foregroundStyle(Palette.muted).accessibilityIdentifier("approvalConfirmation") }
+      if !store.supports(.approvals) { Text(store.reason(.approvals)).font(.footnote).foregroundStyle(Palette.muted) }
     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
       .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
       .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14).fill(Palette.attention).frame(width: 4) }
   }
+  private var confirmation: String { decision == "approved" ? "Approval sent." : "Decline sent." }
   private func decide(_ value: String) {
     guard decision == nil else { return }
+    sendStarted()
+    store.dismissError()
     decision = value
     let scope = store.scope
     Task {
@@ -169,6 +178,7 @@ struct ApprovalDecisionView: View {
         try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), ["decision": value])
         guard scope == store.scope else { return }
         settled = true
+        AccessibilityNotification.Announcement(confirmation).post()
         store.buzz(.decided)
         await store.refreshConversation()
       } catch { if scope == store.scope { decision = nil; store.buzz(.failed); store.report(error) } }

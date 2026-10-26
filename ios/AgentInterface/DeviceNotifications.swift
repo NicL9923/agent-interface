@@ -60,7 +60,7 @@ struct NotificationOnboardingCard: View {
         if let error = state.error { Text(error).font(.footnote).foregroundStyle(Palette.danger) }
         HStack {
           Button(state.busy ? "Enabling…" : "Enable notifications") { Task { await NotificationController.shared.enable() } }
-            .buttonStyle(.borderedProminent).disabled(!state.canEnable || state.busy).accessibilityIdentifier("enableNotifications")
+            .buttonStyle(.accentProminent).disabled(!state.canEnable || state.busy).accessibilityIdentifier("enableNotifications")
           Button("Not now") { NotificationController.shared.dismissPrompt() }
             .buttonStyle(.bordered).disabled(state.busy).accessibilityIdentifier("notNowNotifications")
         }

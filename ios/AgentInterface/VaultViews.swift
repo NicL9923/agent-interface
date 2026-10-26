@@ -472,7 +472,7 @@ struct SecureAttentionView: View {
         if input.blocked { Button("Refresh request") { Task { await store.refreshConversation() } }.disabled(input.busy) }
         else {
           HStack {
-            Button("Send securely") { submit(cancel: false) }.buttonStyle(.borderedProminent).disabled(input.busy || input.value.isEmpty || (secure.method == "vault.save_login" && input.identifier.isEmpty))
+            Button("Send securely") { submit(cancel: false) }.buttonStyle(.accentProminent).disabled(input.busy || input.value.isEmpty || (secure.method == "vault.save_login" && input.identifier.isEmpty))
               .accessibilityIdentifier("secure.submit")
             Button("Cancel request", role: .destructive) { submit(cancel: true) }.disabled(input.busy).accessibilityIdentifier("secure.cancel")
           }

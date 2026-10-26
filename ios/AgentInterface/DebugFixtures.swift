@@ -131,6 +131,8 @@
     nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
     nonisolated(unsafe) static var questionAnswered = false
     nonisolated(unsafe) static var questionFailed = false
+    nonisolated(unsafe) static var approvalFailed = false
+    nonisolated(unsafe) static var approvalChoice: String?
     nonisolated(unsafe) static var retried = false
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
@@ -323,6 +325,12 @@
           "capabilities": Dictionary(
             uniqueKeysWithValues: CapabilityKey.allCases.map { ($0.rawValue, ["supported": true]) }),
         ]
+        if Self.designFixture?["approvalSupported"] as? Bool == false {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["approvals"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Approval decisions are unavailable."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
         // A distributed build newer than any local build, so the update banner shows.
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
           object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
@@ -342,6 +350,9 @@
         if let conversation = Self.designFixture?["conversation"] as? [String: Any] {
           object = Self.questionAnswered && Self.designFixture?["screen"] as? String == "questions"
             ? Self.designFixture?["afterAnswer"] ?? conversation : conversation
+          if Self.designFixture?["screen"] as? String == "approvals", Self.designFixture?["holdDecision"] as? Bool != true, let choice = Self.approvalChoice {
+            object = Self.designFixture?[choice == "approved" ? "afterApproved" : "afterDenied"] ?? conversation
+          }
         }
         if let questions = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] {
           // "2" asks three questions: one choice, several choices, and a written answer.
@@ -411,6 +422,13 @@
           ["name": "onepassword", "displayName": "1Password", "enabled": false, "needsUnlock": true, "unlocked": false, "installed": false, "canToggle": false, "canUnlock": false, "canLock": false],
           ["name": "bitwarden", "displayName": "Bitwarden fixture", "enabled": Self.sourceEnabled, "needsUnlock": true, "unlocked": Self.vaultUnlocked, "installed": true, "canToggle": true, "canUnlock": Self.sourceEnabled && !Self.vaultUnlocked, "canLock": Self.vaultUnlocked]
         ]]
+      } else if path.hasSuffix("/approvals/fixture-approval"), method == "POST", Self.designFixture?["screen"] as? String == "approvals" {
+        if let error = Self.designFixture?["decisionError"] as? String, !Self.approvalFailed {
+          Self.approvalFailed = true; status = 503; object = ["error": error]
+        } else {
+          Self.approvalChoice = body["decision"] as? String
+          object = ["ok": true]
+        }
       } else if path.hasSuffix("/requests/fixture-question"), method == "POST" {
         if let error = Self.designFixture?["answerError"] as? String, !Self.questionFailed {
           Self.questionFailed = true; status = 503; object = ["error": error]

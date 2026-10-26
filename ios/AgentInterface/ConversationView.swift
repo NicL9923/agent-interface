@@ -68,8 +68,8 @@ struct ConversationView: View {
   @State private var held: String?
   /// Initial card placement follows layout until it lands or the reader takes over.
   @State private var openingCard: String?
-  /// Opening at a question is a useful reading position, not unread history.
-  @State private var questionPosition: String?
+  /// Opening at a decision is a useful reading position, not unread history.
+  @State private var attentionPosition: String?
   /// After Send, the next message on its way is held near the top while its reply grows below.
   @State private var anchorNext = false
   @State private var anchorScrollPending = false
@@ -227,6 +227,10 @@ struct ConversationView: View {
     let after = matches.count
     if after != before { AccessibilityNotification.Announcement(after == 1 ? "1 match" : "\(after) matches").post() }
   }
+  private var pendingCardIDs: [String] {
+    (store.conversation?.attention?.map { "attention-" + $0.id } ?? [])
+      + (store.conversation?.approvals.filter { $0.status == "pending" }.map { "approval-" + $0.id } ?? [])
+  }
   private var transcript: some View {
     ScrollViewReader { proxy in
       transcriptScroll(proxy)
@@ -239,14 +243,20 @@ struct ConversationView: View {
         unseen = 0
         visibleMessage = nil
         openingCard = nil
-        questionPosition = nil
+        attentionPosition = nil
         earlierFailed = false
         sentAnchor = nil; anchorNext = false
         if store.focusedMessage?.botId == id { showFocus(proxy) }
         else if let request = store.conversation?.attention?.first, request.kind == "clarify" {
           following = false
           openingCard = "attention-" + request.id
-          questionPosition = openingCard
+          attentionPosition = openingCard
+          placeOpeningCard(proxy)
+        }
+        else if let approval = store.conversation?.approvals.first(where: { $0.status == "pending" }) {
+          following = false
+          openingCard = "approval-" + approval.id
+          attentionPosition = openingCard
           placeOpeningCard(proxy)
         }
         else { scrollToLatest(proxy) }
@@ -254,10 +264,10 @@ struct ConversationView: View {
       .onChange(of: store.focusedMessage, initial: true) { _, _ in showFocus(proxy) }
       .onChange(of: store.transcript?.messages.count) { _, _ in if store.focusedMessage != nil { showFocus(proxy) } }
       .onChange(of: store.attentionScrollRequest) { _, request in if request != nil { showAttention(proxy) } }
-      .onChange(of: store.conversation?.attention?.map(\.id)) { _, ids in
-        if let questionPosition, ids?.contains(where: { "attention-" + $0 == questionPosition }) != true {
+      .onChange(of: pendingCardIDs) { _, ids in
+        if let attentionPosition, !ids.contains(attentionPosition) {
           self.openingCard = nil
-          self.questionPosition = nil
+          self.attentionPosition = nil
           following = true
           scrollToLatest(proxy)
         }
@@ -280,7 +290,7 @@ struct ConversationView: View {
       .onChange(of: store.receipt) { _, receipt in
         if let receipt, receipt.requestId == sentAnchor, let id = receipt.messageId { sentAnchorMessage = id }
       }
-      .overlay(alignment: .bottom) { if !following && !atEnd && questionPosition == nil && store.conversation != nil { jumpButton(proxy) } }
+      .overlay(alignment: .bottom) { if !following && !atEnd && attentionPosition == nil && store.conversation != nil { jumpButton(proxy) } }
       .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
@@ -295,9 +305,9 @@ struct ConversationView: View {
       }
       // After Send, the new message is held near the top and its reply grows below it, instead of
       // the transcript pinning to the bottom. Following resumes once the reader reaches the end.
-      .onChange(of: latestTrigger) { _, _ in openingCard = nil; questionPosition = nil; following = false; anchorNext = true }
+      .onChange(of: latestTrigger) { _, _ in openingCard = nil; attentionPosition = nil; following = false; anchorNext = true }
       .onChange(of: findTarget) { _, id in
-        if let id { openingCard = nil; questionPosition = nil; following = false; proxy.scrollTo(id, anchor: .top) }
+        if let id { openingCard = nil; attentionPosition = nil; following = false; proxy.scrollTo(id, anchor: .top) }
       }
       // VoiceOver reads each settled reply once, as the web's live region does.
       .onChange(of: store.replyAnnouncement) { _, reply in
@@ -313,7 +323,8 @@ struct ConversationView: View {
     ScrollView {
       // Not lazy: like the web's page, every loaded turn has a real height, so the latest
       // message and a held place can be scrolled to exactly.
-      transcriptRows(proxy).scrollTargetLayout().padding(16).frame(maxWidth: 752, alignment: .leading).frame(maxWidth: .infinity)
+      transcriptRows(proxy).scrollTargetLayout().padding(16).coordinateSpace(name: OpeningCardMetrics.contentSpace)
+        .frame(maxWidth: 752, alignment: .leading).frame(maxWidth: .infinity)
         .environment(\.transcriptConnected, store.connected)
         .environment(\.transcriptRecipient, bot.name)
         .environment(\.sentAnchor, anchoredMessage)
@@ -340,11 +351,11 @@ struct ConversationView: View {
     }
     .modifier(OnDrag(action: {
       openingCard = nil
-      questionPosition = nil
+      attentionPosition = nil
       if following { following = false }
       if held != nil { held = nil }
       if !placed && store.conversation != nil { placed = true }
-    }, beganScrolling: { openingCard = nil; questionPosition = nil }))
+    }, beganScrolling: { openingCard = nil; attentionPosition = nil }))
     .scrollDismissesKeyboard(.interactively)
     // A short chat cannot be dragged, so a tap anywhere on the transcript puts the keyboard away
     // too. It runs beside the transcript's own buttons and links rather than instead of them.
@@ -370,21 +381,17 @@ struct ConversationView: View {
           openingCard = nil
           if atEnd { following = true }
         }, sendStarted: {
-          openingCard = nil; questionPosition = nil
+          openingCard = nil; attentionPosition = nil
           following = true
           scrollToLatest(proxy)
         }).id(target)
-          .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("transcript")) } action: { frame in
-            guard openingCard == target else { return }
-            // A short card cannot reach the top because the scroll view clamps at its end.
-            if abs(frame.minY) <= 1 || (frame.minY >= 0 && frame.maxY <= viewportHeight + 1) {
-              openingCard = nil
-              following = atEnd
-            } else { placeOpeningCard(proxy) }
-          }
+          .onGeometryChange(for: OpeningCardMetrics?.self) { OpeningCardMetrics($0) } action: { openingCardMoved($0, target, proxy) }
       }
       ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
-        approval in approvalCard(approval).id("approval-" + approval.id)
+        approval in
+        let target = "approval-" + approval.id
+        approvalCard(approval, proxy).id(target)
+          .onGeometryChange(for: OpeningCardMetrics?.self) { OpeningCardMetrics($0) } action: { openingCardMoved($0, target, proxy) }
       }
       // The end of the real content, then room for a sent message to sit at the top.
       Color.clear.frame(height: 0)
@@ -470,7 +477,7 @@ struct ConversationView: View {
       store.transcript?.messages.contains(where: { $0.id == focus.messageId }) == true
     else { return }
     openingCard = nil
-    questionPosition = nil
+    attentionPosition = nil
     store.focusedMessage = nil
     following = false
     // Earlier history waits for the reader's own scroll (or Show earlier messages), so a page added
@@ -496,7 +503,7 @@ struct ConversationView: View {
   /// Brings the first card waiting on the person into view, as the composer's status dock asks.
   private func showAttention(_ proxy: ScrollViewProxy) {
     openingCard = nil
-    questionPosition = nil
+    attentionPosition = nil
     store.attentionScrollRequest = nil
     let target = store.conversation?.attention?.first.map { "attention-" + $0.id }
       ?? store.conversation?.approvals.first { $0.status == "pending" }.map { "approval-" + $0.id }
@@ -505,6 +512,15 @@ struct ConversationView: View {
     Task { @MainActor in
       if reduceMotion { proxy.scrollTo(target, anchor: .top) } else { withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) } }
     }
+  }
+  private func openingCardMoved(_ metrics: OpeningCardMetrics?, _ target: String, _ proxy: ScrollViewProxy) {
+    guard openingCard == target, let metrics else { return }
+    // All values come from one layout pass. Only landing at the top or the true end
+    // completes placement; a card fitting a stale viewport can cancel the scroll too early.
+    if abs(metrics.top) <= 1 || metrics.contentEnd <= metrics.viewport + 1 {
+      openingCard = nil
+      following = metrics.contentEnd - metrics.viewport < 100
+    } else { placeOpeningCard(proxy) }
   }
   private func placeOpeningCard(_ proxy: ScrollViewProxy) {
     guard let target = openingCard else { return }
@@ -519,7 +535,7 @@ struct ConversationView: View {
   }
   private func jumpToLatest(_ proxy: ScrollViewProxy) {
     openingCard = nil
-    questionPosition = nil
+    attentionPosition = nil
     following = anchorRoom == 0
     unseen = 0
     // A short trip glides; a long one jumps rather than scrolling through pages of history.
@@ -624,8 +640,12 @@ struct ConversationView: View {
       else if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
-  private func approvalCard(_ approval: Approval) -> some View {
-    ApprovalDecisionView(approval: approval, botId: bot.id)
+  private func approvalCard(_ approval: Approval, _ proxy: ScrollViewProxy) -> some View {
+    ApprovalDecisionView(approval: approval, botId: bot.id, sendStarted: {
+      openingCard = nil; attentionPosition = nil
+      following = true
+      scrollToLatest(proxy)
+    })
   }
 }
 /// A conversation row. Tool calls and reasoning render in the turn's groups, not here.
@@ -832,7 +852,7 @@ struct AttentionView: View {
         ForEach(questions) { question in questionView(question).id(questionAnchor(question)).disabled(settled) }
         Text(settled ? "Answers sent." : answers.complete(questions) ? "Ready to send." : "Answer every question to send.")
           .font(.footnote).foregroundStyle(Palette.muted)
-        Button(busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers", action: sendAnswers).buttonStyle(.borderedProminent)
+        Button(busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers", action: sendAnswers).buttonStyle(.accentProminent)
           .controlSize(.large)
           .disabled(busy || settled || !store.connected || !answers.complete(questions))
           .id("answers-" + request.id)
@@ -1126,6 +1146,20 @@ struct CheckboxStyle: ToggleStyle {
 }
 
 /// Where the transcript's content sits in its scroll view, for following and holding a place.
+private struct OpeningCardMetrics: Equatable {
+  static let contentSpace = "paddedTranscript"
+  var top: CGFloat
+  var viewport: CGFloat
+  var contentEnd: CGFloat
+  init?(_ geometry: GeometryProxy) {
+    guard let viewport = geometry.bounds(of: .named("transcript")),
+      let content = geometry.bounds(of: .named(Self.contentSpace)) else { return nil }
+    top = geometry.frame(in: .named("transcript")).minY
+    self.viewport = viewport.height
+    contentEnd = top + content.maxY
+  }
+}
+
 struct TranscriptMetrics: Equatable {
   var top: CGFloat = 0
   var height: CGFloat = 0

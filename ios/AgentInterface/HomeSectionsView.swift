@@ -90,7 +90,7 @@ struct HomeSectionRows: View {
       TextField("New section name", text: $newName, prompt: Text("New section").foregroundStyle(Palette.accent))
         .submitLabel(.done).onSubmit(add).accessibilityIdentifier("newSectionName")
       if !trimmed.isEmpty {
-        Button("Add", action: add).buttonStyle(.borderedProminent).controlSize(.small).tint(Palette.accent)
+        Button("Add", action: add).buttonStyle(.accentProminent).controlSize(.small).tint(Palette.accent)
           .accessibilityIdentifier("addSection")
       }
     }

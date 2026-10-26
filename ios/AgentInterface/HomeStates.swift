@@ -103,7 +103,7 @@ struct LaunchStateView: View {
         Task { await store.restore() }
       } label: {
         Text(store.restoring ? "Checking connection…" : "Try again").frame(maxWidth: 260)
-      }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.restoring).accessibilityIdentifier("retryConnection")
+      }.buttonStyle(.accentProminent).controlSize(.large).disabled(store.restoring).accessibilityIdentifier("retryConnection")
       ChangeServerButton()
     }
   }
@@ -158,7 +158,7 @@ struct HermesConnectionPanel: View {
       if copy.setup { steps }
       Button(action: retry) {
         Text(busy ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now").frame(maxWidth: 260)
-      }.buttonStyle(.borderedProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
+      }.buttonStyle(.accentProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
       details
     }.frame(maxWidth: 520).frame(maxWidth: .infinity).accessibilityElement(children: .contain).accessibilityLabel("Hermes connection")
       .accessibilityIdentifier("connectionPanel")
@@ -229,7 +229,7 @@ struct HomeEmptyDetail: View {
       AvatarView(avatar: AvatarConfig(), size: 100, name: "Assistant", forceReducedMotion: true).accessibilityHidden(true)
       Text("A little less to carry.").font(.title2.bold())
       Text("Return to the same assistants, with the context and conversations you share.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-      Button("Create an assistant", action: create).buttonStyle(.borderedProminent).controlSize(.large)
+      Button("Create an assistant", action: create).buttonStyle(.accentProminent).controlSize(.large)
         .disabled(store.assistantSetupBlock != nil).accessibilityIdentifier("createAssistant")
       if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
     }.frame(maxWidth: 520).frame(maxWidth: .infinity)

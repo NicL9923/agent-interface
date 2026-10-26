@@ -50,7 +50,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Home context menus | Keyboard, touch and native submenus captured | Complete | Web 9.5; native 9.5 |
 | Conversation and composer | Web, iPhone and iPad captured | Complete | Web conversation 9; web composer 9.5; iPhone/iPad conversation and composer 9 |
 | Questions | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
-| Approvals | Pending | Pending | Pending |
+| Approvals | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
 | Failed and interrupted turns | Pending | Pending | Pending |
 | Assistant details and artifacts | Pending | Pending | Pending |
 | Assistant creation and settings | Pending | Pending | Pending |
@@ -171,3 +171,30 @@ fixtures exercise light, dark, narrow widths, large text, written answers,
 failure and retry. Web refreshes its private fixture explicitly after checking
 the accepted local state; this does not establish live server event delivery.
 Native checks use simulators, with no manual VoiceOver or physical-device run.
+
+
+## Approvals review history
+
+Approvals passes at 9/10 on web desktop, web phone, iPhone and iPad. The
+[web recheck](evidence/design-review/approvals-web-review.md) closes its layout,
+opening and confirmation findings. The
+[native recheck](evidence/design-review/approvals-native-review.md) closes the
+last disabled-label regression and permits the next screen.
+
+Decisions now have their own layout class, readable expiry text, consistent
+spacing and 44-point actions. Native actions stack at accessibility text sizes.
+Unavailable decisions explain the next step. Failed submissions keep the intended
+decision for retry, clear the stale error and prevent duplicate sends. A separate
+confirmation stays readable while the server's pending snapshot catches up.
+Native primary actions use 5.91:1 label contrast in light mode and 9.32:1 in dark.
+Disabled actions retain the system treatment.
+
+The native opening fix measures the card, viewport and content end in one layout
+snapshot. It waits until the card reaches the top or the transcript reaches its
+end. Captures and frame assertions cover the complete action and unavailable
+reason. Questions and find-in-chat regressions passed during this work.
+Ten annotated comparisons and the held confirmation captures are staged for the
+PR. The web fixture refreshes explicitly after checking the accepted local state;
+live server events, the expiry race, physical devices and manual VoiceOver were
+not exercised. Later passes retain the Connection spinner, Home empty-state
+opacity and status-dock followups listed by the reviewers.

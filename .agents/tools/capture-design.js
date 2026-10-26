@@ -4,23 +4,26 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
-  const pointer = screen === "questions" ? await context.newCDPSession(tab) : undefined;
+  const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
   const paths = [], geometry = [];
   let state = "loaded";
   let checked = false;
   let releaseLoading;
   let questionConversation = structuredClone(fixture?.conversation);
+  let approvalConversation = structuredClone(fixture?.conversation);
+  const approvalSubmissions = [];
+  let approvalFailed = false;
   const questionSubmissions = [];
   let questionFailed = false;
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions"].includes(screen) || !fixture?.conversation) return route.continue();
-    return route.fulfill({ json: screen === "questions" ? questionConversation : fixture.conversation });
+    if (!["conversation", "questions", "approvals"].includes(screen) || !fixture?.conversation) return route.continue();
+    return route.fulfill({ json: screen === "questions" ? questionConversation : screen === "approvals" ? approvalConversation : fixture.conversation });
   });
   if (screen === "questions") await context.route("**/api/bots/*/requests/fixture-question", async route => {
     questionSubmissions.push(route.request().postDataJSON());
@@ -29,6 +32,17 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       return route.fulfill({ status: 503, json: { error: fixture.answerError } });
     }
     questionConversation = structuredClone(fixture.afterAnswer);
+    return route.fulfill({ json: { ok: true } });
+  });
+  if (screen === "approvals") await context.route("**/api/bots/*/approvals/fixture-approval", async route => {
+    const submission = route.request().postDataJSON();
+    approvalSubmissions.push(submission);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    if (fixture.decisionError && !approvalFailed) {
+      approvalFailed = true;
+      return route.fulfill({ status: 503, json: { error: fixture.decisionError } });
+    }
+    approvalConversation = structuredClone(submission.decision === "approved" ? fixture.afterApproved : fixture.afterDenied);
     return route.fulfill({ json: { ok: true } });
   });
   await context.route("**/api/today", async route => {
@@ -52,6 +66,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
+    if (screen === "approvals" && state === "unsupported") value.capabilities.approvals = { supported: false, reason: fixture.unsupportedReason };
     if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
     if (screen === "home" && state === "three-pins") value.preferences.favorites = ["ranch", "garden", "kitchen"];
     if (screen === "home" && state === "no-pins") value.preferences.favorites = [];
@@ -87,6 +102,72 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     })) });
   };
   try {
+    if (screen === "approvals") {
+      await tab.addInitScript(() => {
+        document.addEventListener("DOMContentLoaded", () => {
+          if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+        });
+      });
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      const card = tab.locator('[data-attention-kind="approval"]');
+      await card.waitFor();
+      const expiryFontSize = await card.locator("small").evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+      if (stage !== "before" && expiryFontSize < 14) throw Error("Approval expiry text is too small.");
+      for (const [name, width, height, theme] of [
+        ["desktop", 1440, 1000, "light"], ["desktop-dark", 1440, 1000, "dark"],
+        ["phone", 390, 844, "light"], ["phone-dark", 390, 844, "dark"],
+        ["narrow", 320, 720, "light"], ["tablet", 768, 1024, "light"],
+      ]) {
+        await tab.setViewportSize({ width, height });
+        await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
+        await tab.emulateMedia({ colorScheme: theme });
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await card.waitFor(); await capture(name, width, height, theme);
+      }
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.evaluate(() => sessionStorage.setItem("design-large-text", "true"));
+      await tab.reload(); await card.waitFor();
+      await capture("large-text", 390, 844);
+      await tab.locator(".transcript").evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await capture("large-text-bottom", 390, 844);
+      await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      state = "unsupported";
+      await tab.goto(`${origin.origin}/?bot=ranch`); await card.waitFor();
+      if (await card.getByRole("button", { name: "Approve", exact: true }).isEnabled()) throw Error("Unsupported decisions must be disabled.");
+      if (stage !== "before") await card.getByText(fixture.unsupportedReason, { exact: true }).waitFor();
+      await capture("unsupported", 390, 844);
+      state = "loaded";
+      const confirmations = [];
+      for (const choice of ["approved", "denied"]) {
+        approvalConversation = structuredClone(fixture.conversation); approvalFailed = false;
+        await tab.goto(`${origin.origin}/?bot=ranch`); await card.waitFor();
+        const action = card.getByRole("button", { name: choice === "approved" ? "Approve" : "Decline", exact: true });
+        if (choice === "approved") {
+          await action.focus(); await tab.keyboard.press("Shift+Tab"); await tab.keyboard.press("Tab");
+          if (!await action.evaluate(el => el.matches(":focus-visible"))) throw Error("Approval needs keyboard focus.");
+          await capture("keyboard-focus", 390, 844);
+        }
+        await action.click();
+        await tab.getByText(fixture.decisionError, { exact: true }).waitFor();
+        await capture(choice + "-error", 390, 844);
+        await action.click();
+        await card.getByRole("button", { name: choice === "approved" ? "Approved" : "Declined", exact: true }).waitFor();
+        if (stage !== "before" && await tab.getByText(fixture.decisionError, { exact: true }).count()) throw Error("Accepted decision kept its old error.");
+        if (stage !== "before") {
+          const status = card.getByRole("status");
+          const expected = choice === "approved" ? "Approval sent." : "Decline sent.";
+          await status.getByText(expected, { exact: true }).waitFor();
+          const style = await status.evaluate(el => ({ fontSize: parseFloat(getComputedStyle(el).fontSize), opacity: getComputedStyle(el).opacity, color: getComputedStyle(el).color }));
+          if (style.fontSize < 14 || style.opacity !== "1") throw Error("The confirmation needs readable, undimmed text.");
+          confirmations.push({ choice, text: expected, ...style });
+        }
+        await capture(choice + "-sent", 390, 844);
+        await tab.reload(); await card.waitFor({ state: "hidden" });
+        await capture(choice, 390, 844);
+      }
+      if (approvalSubmissions.length !== 4 || approvalSubmissions.some((item, i) => item.decision !== (i < 2 ? "approved" : "denied"))) throw Error("Decision retry payload changed.");
+      return { paths, geometry, approvalSubmissions, submittedAfterReload: true, expiryFontSize, confirmations };
+    }
     if (screen === "questions") {
       await tab.addInitScript(() => {
         document.addEventListener("DOMContentLoaded", () => {

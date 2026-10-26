@@ -28,7 +28,19 @@ def render(spec, output):
         scale = max(1, width / 900)
         size = round(18 * scale)
         pad = round(24 * scale)
-        header = round(72 * scale)
+        title_font = font(round(24 * scale), True)
+        title_lines = []
+        line = ''
+        for word in f"{side.capitalize()}  |  {spec['title']}".split():
+            candidate = f'{line} {word}'.strip()
+            if line and title_font.getlength(candidate) > width - 2 * pad:
+                title_lines.append(line)
+                line = word
+            else:
+                line = candidate
+        title_lines.append(line)
+        title_spacing = round(6 * scale)
+        header = max(round(72 * scale), 2 * pad + len(title_lines) * (title_font.size + title_spacing))
         legend = []
         chars = max(30, int((width - 2 * pad) / (size * .54)))
         for number, note in enumerate(info['notes'], 1):
@@ -37,7 +49,7 @@ def render(spec, output):
         panel = Image.new('RGB', (width, header + shot.height + pad + (size + 8) * len(legend)), '#FFFFFF')
         panel.paste(shot, (0, header))
         draw = ImageDraw.Draw(panel)
-        draw.text((pad, round(16 * scale)), f"{side.capitalize()}  |  {spec['title']}", font=font(round(24 * scale), True), fill='#202A24')
+        draw.text((pad, round(16 * scale)), '\n'.join(title_lines), font=title_font, spacing=title_spacing, fill='#202A24')
         for number, note in enumerate(info['notes'], 1):
             x, y = note['point'] if 'point' in note else (note['fraction'][0] * width, note['fraction'][1] * shot.height)
             y += header

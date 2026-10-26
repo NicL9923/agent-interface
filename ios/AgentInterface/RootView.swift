@@ -5,6 +5,23 @@ enum HomeDestination { case conversation, today, groups, find }
 /// A screen pushed over home on iPhone. Home is the stack's root; everything else is one push away.
 enum HomeRoute: Hashable { case chat, today, groups, search }
 
+/// Keeps the system prominent control while pairing its label with the app's accent color.
+struct AccentProminentButtonStyle: PrimitiveButtonStyle {
+  func makeBody(configuration: Configuration) -> some View { AccentProminentButton(configuration: configuration) }
+}
+private struct AccentProminentButton: View {
+  let configuration: PrimitiveButtonStyleConfiguration
+  @Environment(\.isEnabled) private var enabled
+  var body: some View {
+    Button(role: configuration.role, action: configuration.trigger) {
+      if enabled { configuration.label.foregroundStyle(Palette.onAccent) } else { configuration.label }
+    }.buttonStyle(.borderedProminent)
+  }
+}
+extension PrimitiveButtonStyle where Self == AccentProminentButtonStyle {
+  static var accentProminent: AccentProminentButtonStyle { AccentProminentButtonStyle() }
+}
+
 struct RootView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
@@ -280,7 +297,7 @@ struct ConnectionView: View {
         if busy { ProgressView().tint(.white) }
         Text(title).fontWeight(.semibold)
       }.frame(maxWidth: .infinity, minHeight: 30)
-    }.buttonStyle(.borderedProminent).controlSize(.large).buttonBorderShape(.capsule).tint(Palette.accent)
+    }.buttonStyle(.accentProminent).controlSize(.large).buttonBorderShape(.capsule).tint(Palette.accent)
   }
   private var hostEmpty: Bool { store.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
   private func connect() {
@@ -430,7 +447,7 @@ struct BotListView: View {
     } else {
       VStack(spacing: 12) {
         Text("No assistants are available from Hermes yet.").foregroundStyle(.secondary)
-        Button("Create an assistant", action: createOrExplain).buttonStyle(.borderedProminent)
+        Button("Create an assistant", action: createOrExplain).buttonStyle(.accentProminent)
           .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
           .accessibilityIdentifier("createAssistant")
         if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }

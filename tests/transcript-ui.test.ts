@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
-import type { Bootstrap, Conversation, Message } from "../src/shared/types";
+import type { AttentionRequest, Bootstrap, Conversation, Message } from "../src/shared/types";
 import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
 import { retryRequestId } from "../src/shared/retry-id";
@@ -397,6 +397,32 @@ describe("questions", () => {
   });
 });
 
+describe("approval decisions", () => {
+  for (const decision of ["approved", "denied"] as const) {
+    it(`retries a failed ${decision} decision, clears the error and prevents another send`, async () => {
+      conversation = { ...conversation, approvals: [{ id: "gate", title: "Create the reminder?", detail: "Notify both household members.", status: "pending" }] };
+      vi.mocked(write).mockRejectedValueOnce(new Error("Could not send your decision."));
+      await render();
+      const card = container.querySelector(".approval-card")!;
+      const buttons = [...card.querySelectorAll<HTMLButtonElement>("button")];
+      const button = buttons[decision === "approved" ? 0 : 1];
+      await act(async () => button.click());
+      expect(container.querySelector(".notice.error")?.textContent).toContain("Could not send your decision.");
+      expect(button.disabled).toBe(false);
+      await act(async () => button.click());
+      expect(container.querySelector(".notice.error")).toBeNull();
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toContain(decision === "approved" ? "Approved" : "Declined");
+      expect(card.querySelector('[role="status"]')?.textContent).toBe(decision === "approved" ? "Approval sent." : "Decline sent.");
+      expect(card.querySelector(".decision-status.sr-only")).toBeNull();
+      await act(async () => button.click());
+      const calls = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/gate");
+      expect(calls).toHaveLength(2);
+      expect(calls.map(([, body]) => body)).toEqual([{ decision }, { decision }]);
+    });
+  }
+});
+
 describe("reply actions", () => {
   beforeEach(() => {
     conversation = { ...conversation, messages: [prompt("q", "Plan supper"), answer("a", "**Pot roast** tonight.\n\nCarrots too.")] };
@@ -555,6 +581,43 @@ describe("turn work", () => {
 });
 
 describe("scroll intent", () => {
+  const attentionLayout = () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const id = (this as HTMLElement).dataset.attentionId;
+      const offset = id === "first" ? 500 : id === "ask" ? 1000 : id === "gate" ? 1400 : (this as HTMLElement).dataset.messageId ? 200 : 0;
+      const top = offset ? offset - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+  };
+  it("opens a pending approval without a jump and follows after it is removed", async () => {
+    attentionLayout();
+    conversation = { ...conversation, approvals: [{ id: "gate", title: "Create the reminder?", detail: "Notify both members.", status: "pending" }] };
+    await render();
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    expect(transcript.scrollTop).toBe(1400);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+    conversation = { ...conversation, approvals: [], messages: [...conversation.messages, answer("after-approval", "Your decision was received.")] };
+    await changed();
+    expect(transcript.scrollTop).toBe(2600);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+  });
+  for (const kind of ["official", "secure"] as const) {
+    it(kind === "secure" ? "preserves the explicit secure-request reveal ahead of a question" : "opens the question when an official card is listed before it", async () => {
+      attentionLayout();
+      const first: AttentionRequest = { id: "first", kind, title: "Earlier request", detail: "Still waiting." };
+      if (kind === "secure") first.secure = { epoch: "fixture", sessionId: "live", method: "vault.code" };
+      conversation = { ...conversation, attention: [first,
+        { id: "ask", kind: "clarify", title: "A plan", detail: "", questions: [{ id: "plan", prompt: "Your plan?" }] },
+      ] };
+      await render();
+      if (kind === "secure") expect(container.querySelector(".secure-request")).not.toBeNull();
+      expect(container.querySelector<HTMLElement>(".transcript")!.scrollTop).toBe(kind === "secure" ? 500 : 1000);
+      if (kind === "official") expect(container.querySelector(".jump-latest")).toBeNull();
+    });
+  }
+
   it("opens a pending question at its beginning and preserves the reader's position on refresh", async () => {
     vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
     vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);

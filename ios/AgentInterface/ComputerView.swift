@@ -117,7 +117,7 @@ struct ComputerView: View {
         .accessibilityIdentifier("computerStatus")
       Button(desktop.submitting ? "Updating…" : desktop.held ? "Hand back" : "Take over") {
         Task { if desktop.held { await desktop.release(store) } else { await desktop.take(store) } }
-      }.buttonStyle(.borderedProminent).tint(desktop.held ? Palette.muted : Palette.accent)
+      }.buttonStyle(.accentProminent).tint(desktop.held ? Palette.muted : Palette.accent)
         .disabled(desktop.submitting || viewerId == nil || !desktop.held && (phase != .connected || !DesktopLink.canTake(status)))
         .accessibilityIdentifier("computerControl")
     }.padding(12)

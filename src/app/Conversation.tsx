@@ -258,13 +258,13 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")
           .map((approval) => <ApprovalCard key={`${botId}:${approval.id}`} approval={approval} botId={botId}
-            supported={boot.capabilities.approvals.supported} report={setError} />)}
+            supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} />)}
       </div>
       {/* Room for a message just sent to sit near the top while its reply grows; see use-conversation. */}
       <div className="transcript-end-space" ref={endSpace} aria-hidden="true" />
       </div>
       <QuoteSelection frame={frame} scroll={scroll} />
-      {selected && conversation && !history.atLatest && !history.atQuestion && (
+      {selected && conversation && !history.atLatest && !history.atAttention && (
         <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={() => {
           history.jumpToLatest();
           // The button disappears, so keyboard focus continues from the transcript.
@@ -444,18 +444,19 @@ function Reasoning({ parts }: { parts: string[] }) {
     <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
   </details>;
 }
-function ApprovalCard({ approval, botId, supported, report }: { approval: Approval; botId: string; supported: boolean; report(message: string): void }) {
+function ApprovalCard({ approval, botId, supported, unavailableReason, report }: { approval: Approval; botId: string; supported: boolean; unavailableReason?: string; report(message: string): void }) {
   const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
   const [settled, setSettled] = useState(false);
   async function decide(value: "approved" | "denied") {
     if (decision) return;
+    report("");
     setDecision(value);
     try {
       await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
       setSettled(true);
     } catch (error) { setDecision(null); report((error as Error).message); }
   }
-  return <article className="approval-card" aria-busy={!!decision && !settled} {...attentionAnchor("approval", approval.id)}>
+  return <article className="approval-card decision-card" aria-busy={!!decision && !settled} {...attentionAnchor("approval", approval.id)}>
     <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
     <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
@@ -463,7 +464,8 @@ function ApprovalCard({ approval, botId, supported, report }: { approval: Approv
       {decision === value && <Icon name={settled ? "check" : "spinner"} className={settled ? undefined : "spin"} size={16} />}
       {decision === value ? settled ? value === "approved" ? "Approved" : "Declined" : value === "approved" ? "Approving…" : "Declining…" : value === "approved" ? "Approve" : "Decline"}
     </button>)}</div>
-    {decision && <span className="sr-only" role="status">{settled ? "Decision sent" : "Sending decision"}</span>}
+    {!supported && <p className="approval-unavailable">{unavailableReason || "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer."}</p>}
+    {decision && <p className="decision-status" role="status">{settled ? decision === "approved" ? "Approval sent." : "Decline sent." : "Sending decision…"}</p>}
   </article>;
 }
 function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }): ReactNode {

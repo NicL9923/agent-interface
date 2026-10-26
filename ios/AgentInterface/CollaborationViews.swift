@@ -368,7 +368,7 @@ struct GroupConversationView: View {
       if let pending {
         Text(pending.text).font(.footnote).textSelection(.enabled)
         Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption).foregroundStyle(.secondary)
-        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.borderedProminent).disabled(busy || !canSend || !store.connected)
+        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.accentProminent).disabled(busy || !canSend || !store.connected)
       } else {
         if let query = GroupMentions.query(in: draft), canSend {
           let members = GroupMentions.suggestions(for: query, members: room.members)

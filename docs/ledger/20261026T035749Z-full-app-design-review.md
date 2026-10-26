@@ -394,3 +394,204 @@ including this added test is
 `sha256:0086586826dfe59b702aeffe4a116c5b4e88361aff17e8c822e43afb7d74e857`.
 Questions can proceed to Approvals. Seven annotated comparisons and the extra
 first-choice screenshot are staged for the final PR attachments.
+
+
+## Approvals
+
+The shared `.agents/fixtures/approvals-design.json` contains one pending calendar
+reminder, a first-send failure and separate accepted/declined snapshots. It uses
+only synthetic household data. Native baselines passed on iPhone in
+`.private/ios-test-20261026T131709Z-22986.xcresult` and iPad in
+`.private/ios-test-20261026T131858Z-24116.xcresult`. The web baseline has 16 images
+and no overflow in `approvals-before.json`.
+
+Initial changes enlarge and align web approval typography and spacing, make
+native actions at least 44 points, stack them at accessibility text sizes, use
+passing muted text for expiry, and explain disabled unsupported decisions. Retry
+clears the old error, and native announces a confirmed decision. The opening
+placement code now covers approvals as well as questions and retains search and
+reader-scroll priority. The state name changed from question to attention to
+match its broader use; the frame-placement helper is shared by both card types.
+
+The 55 focused web tests and production build passed. New approve and decline
+regressions check preserved decision payloads after failure, stale-error removal
+and duplicate prevention. `approvals-after.json` contains 16 screenshots, no
+overflow and exactly four payloads: approve, approve retry, decline, decline retry.
+The final private fixture snapshot still refreshes explicitly on web, after
+checking the accepted button state. No live event delivery is claimed.
+The web source, tests, capture driver and approval fixture fingerprint is
+`sha256:5852f4b6716c6058e65a6266376deb4be5d7fc0b21a0397885a6c3819b9dff2d`.
+
+The initial native after runs passed on iPhone in
+`.private/ios-test-20261026T132121Z-25889.xcresult` and iPad in
+`.private/ios-test-20261026T132322Z-26777.xcresult`. The iPad run also passed the
+short-question/long-reply and existing multi-question regressions. These runs
+used native fingerprint
+`sha256:f4f2bbe62af93aa95dcf32ffc1f0cb371af99a601c26f41844ea075b4cbc418e`.
+
+Visual inspection then found that normal-size iPhone actions sit below the
+viewport despite the title being visible. The previous capture assertion had
+checked only the title. A new full-action frame assertion failed as expected:
+the button ends at 679 points while the viewport ends at 619.33 points. The
+failure is `.private/ios-test-20261026T132618Z-28344.xcresult` with unchanged app
+code and fingerprint
+`sha256:07c637236041bf3ab847ecbac03d26c5d5112e71680dd66d437a0bb3ed5286ed`,
+which includes the updated harness. An Opus rubber-duck is pressure-testing the
+opening placement before the final native capture and design review.
+
+The annotation renderer now wraps narrow panel titles instead of clipping them.
+Ruff passed, and existing comparisons are being regenerated. This only affects
+review evidence, not app rendering.
+
+
+Opus diagnosed the opening failure without running builds or tests. The old
+"card fits" branch could cancel the queued scroll before it ran because it
+combined values from separate geometry callbacks. The revised
+`OpeningCardMetrics` reads the card top, viewport and padded content end from
+one geometry proxy. Placement completes only at the top or the actual clamped
+end. It derives following from that same snapshot. The padded content has its
+own coordinate-space name, so the check does not duplicate its padding constant.
+
+The targeted phone run now passes the previously failing action assertion in
+`.private/ios-test-20261026T133351Z-32666.xcresult`. The complete request and both
+actions are visible in the updated capture. The harness now also checks Decline
+and the unavailable reason, and rejects misspelled approval capture variants.
+Full phone approval and related question/find regressions are running against
+`sha256:18abe53f0ee1e4d0a849d44f32962257850954d8d15b5454c6fbbb05135402d7`.
+
+A rendered-size check also caught the old web expiry rule overriding its new
+size. Approval styles now live together in `styles.css` with the expiry set to
+14 pixels. The updated production build, font-size check and 16-image browser
+run passed; the report measures 14 pixels. The current web source, tests,
+capture driver and approval fixture fingerprint is
+`sha256:596f0ac87f6604e5fb920962539f50ca0f9f9a9ec9a210df3ff85ba3a5a0c8fe`.
+The earlier 55 behavioral tests remain applicable because only CSS and capture
+assertions changed afterward.
+
+
+The final phone run passed all five selected checks in
+`.private/ios-test-20261026T133602Z-33663.xcresult`: approval captures with full
+button/reason bounds, question captures, the short-question long-reply check,
+multiple-answer submission and find across unloaded history. All use the same
+native fingerprint `18abe53f...` above. The iPad capture and corresponding
+question regressions are running next. No native source changed between them.
+
+
+The final iPad run passed all four checks in
+`.private/ios-test-20261026T133951Z-36765.xcresult`: full approvals and questions
+captures, short-question follow, and multiple-answer submission. Its native
+fingerprint matches the phone exactly. Both final approvals sets cover light,
+dark, accessibility text, unsupported decisions, approve failure/retry and
+decline failure/retry. Button labels and the unavailable explanation fit their
+asserted bounds at normal text size. Native expiry contrast uses the existing
+muted token; VoiceOver announcements remain source-verified only.
+
+Eight annotated approval comparisons cover web card hierarchy, unavailable
+controls, retry cleanup, native opening, large-text actions, unsupported controls,
+retry cleanup and iPad actions. Review 11 is next. Expired-server transitions,
+physical devices and manual VoiceOver were not exercised by these fixtures.
+
+
+### Approvals, review 11 fixes
+
+Opus rated web desktop/phone 8.5 and native iPhone/iPad 8. Three blockers remain:
+the shared `.approval-card` class spread the new layout to questions and secure
+cards; accepted decisions lacked a readable visible confirmation; and native
+prominent buttons used white on mint in dark mode at 1.76:1.
+
+The decision layout now has a dedicated `.decision-card` class. The shared
+request shell has its accepted rules again. Opening selection explicitly matches
+clarify and approval data hooks. New tests cover an opened approval, following
+when it is removed, and an official card before a question. A real secure card
+has its own pre-existing reveal path at `use-conversation.ts:168-171`, which takes
+priority on opening. A new test confirms that behavior. Thus the review's claim
+that a real secure card previously lost to a question was incorrect; its existing
+explicit reveal remains intact. The overly broad ordinary selector is fixed.
+The 58 focused web tests pass.
+
+Both platforms now show a full-contrast sent confirmation separately from the
+disabled action. The browser measures 14-pixel text at opacity 1 for both
+"Approval sent." and "Decline sent.". Native fixtures can hold the old pending
+snapshot after acceptance, and new capture variants cover both confirmations,
+including dark mode.
+
+Native `Palette.onAccent` pairs off-white with the light-mode green and dark ink with
+mint. A shared primitive button style keeps the native prominent control and
+sets the label color. All native app prominent buttons use it, including the
+accepted Questions action and the future screens that had the same defect.
+An actual dark approval capture verifies #1B211E ink on #8BD2B2 at 9.32:1,
+replacing white on the same background at 1.76:1. The targeted dark capture
+passed in `.private/ios-test-20261026T140234Z-50502.xcresult`. The shared style
+preserves control size, tint, role and the button trigger. Full approval and
+question runs will check interaction as well as rendering.
+
+
+The final phone rerun passed three checks in
+`.private/ios-test-20261026T140511Z-51708.xcresult`: approval captures including
+held approved/declined states, Questions including an enabled dark Send action,
+and short-question long-reply following. Its native fingerprint is
+`sha256:bf7df434f1d19287a361ddfeca3a79bb0df7a1395faf32d0bb0f3eaaaf09f917`.
+The same iPad checks passed as recorded below. Control actions still execute through the shared
+style, and existing 44-point and frame assertions pass.
+
+The web production build and 58 tests pass. `approvals-v2-after.json` retains
+16 images with no overflow, measured 14-pixel expiry and confirmations at opacity
+1. `questions-approvals-v2-regression.json` recaptures all 21 question states,
+including desktop/phone openings, with no overflow and no initial jump overlay.
+These are fresh after the shared-shell fix. The current source, tests, capture
+driver and approval fixture fingerprint is
+`sha256:0c07b28281d76e24d57d611cf2fd91f8481aaf488b49a1334cb488ac1da73b5a`.
+
+
+The matching iPad rerun passed all three checks in
+`.private/ios-test-20261026T140949Z-55869.xcresult` with the same native fingerprint.
+Both devices now have held approved/declined confirmations and enabled dark
+Questions actions, in addition to the existing opening, large-text, unavailable,
+failure/retry and follow checks. No manual VoiceOver or physical-device run was
+performed. The native shared style changes only prominent label color; its
+system appearance, role, tint, control size and trigger are retained.
+
+Ten annotated approval comparisons now include the dark-label contrast and the
+visible sent confirmation. All existing comparisons are refreshed from current
+raw captures. Review 12 will recheck M1 to M3 and the newly changed shared style.
+
+
+### Approvals, review 12 disabled-label correction
+
+Opus closed web desktop and phone at 9/10. Native stayed at 8.5 because the new
+shared label color also overrode disabled labels. The helper now observes
+`isEnabled` in a View and applies the accent-pair label only to enabled buttons.
+Disabled controls retain the system label and fill. No other app behavior changed.
+The native fingerprint is
+`sha256:568ea7d82fdee21114b782812e6f6ab45ec2c907dde8d1baec79873ac3d47a12`.
+
+The phone approval and question capture flows passed in
+`.private/ios-test-20261026T143204Z-66530.xcresult`. Pixel sampling of the actual
+held images shows #C2C2C0 on #E9E8E4, 1.45:1 light, and #65696A on #3E4442,
+1.79:1 dark. Both match the baseline system treatment and the sibling disabled
+Decline action. Enabled dark approval stays #1B211E on #8BD2B2, 9.32:1.
+Disabled controls are contrast-exempt; the readable sent-status line still
+carries the confirmation. The iPad matching capture is running. Web checks are
+reused because no web source changed. The contrast annotation's marker now sits
+off the button label.
+
+
+The iPad approval and question rerun passed in
+`.private/ios-test-20261026T143540Z-68274.xcresult` with the same native fingerprint.
+Both devices' held light, held dark, unsupported and disabled dark Questions
+captures now match the system disabled colors. The measured pairs and exact
+sampling regions are retained in `reviews/13-disabled-samples.txt` on DevSSD.
+The enabled approval and Questions colors remain 5.91:1 light and 9.32:1 dark;
+those samples are in `reviews/13-enabled-samples.txt`. The restored disabled
+labels are contrast-exempt, and the full-contrast sent-status text remains.
+No web source or checks changed after its accepted review 12 score of 9/10.
+The final native R1 recheck is next.
+
+
+Review 13 independently reproduced the native pixel samples and closed R1.
+Both native layouts score 9/10; web's accepted 9/10 is unchanged. No obvious
+remaining issue was found within Approvals. The final reports are retained at
+`docs/evidence/design-review/approvals-web-review.md` and
+`docs/evidence/design-review/approvals-native-review.md`. Approvals can proceed
+to Failed and interrupted turns. Existing nonblocking findings remain assigned
+to their later screens, not silently discarded.
