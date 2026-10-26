@@ -361,64 +361,100 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
   for (const block of blocks) if ([...block.tools.values()].some(message => message.toolCall?.status === "running")) block.replyAt = undefined;
   return blocks;
 }
+type TurnProps = {
+  block: Turn; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
+  /** This is the latest turn and it is still working, so its work reads as live rather than finished. */
+  live: boolean;
+  /** The person's sent message still shown from this device, and how far it got. Only the turn that holds it gets these. */
+  outgoingId?: string; outgoing?: SentEcho["status"];
+};
 // Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId, userId, running, outgoingId, outgoing }: {
-  blocks: Turn[]; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
-  /** The latest turn is still working, so its work reads as live rather than finished. */
+const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
+  blocks: Turn[];
+  /** The latest turn is still working. */
   running: boolean;
-  /** The person's sent message still shown from this device, and how far it got. */
   outgoingId?: string; outgoing?: SentEcho["status"];
 }) {
   return <>
     {blocks.map((block, index) => {
-      const work = [...block.tools.values()];
-      // A turn's intermediate work folds into one row: before the reply that follows the work, before the
-      // first reply when there is only reasoning, or at the end.
-      const fold = work.length || block.reasoning.length ? <TurnWork key="turn-work" work={work} reasoning={block.reasoning}
-        messages={block.messages} advanced={advanced} disconnected={disconnected} recipient={name} live={running && index === blocks.length - 1} /> : null;
-      const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
-      // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
-      const rows = block.messages.flatMap((message, position) => {
-        // The conversation is with one assistant, so its replies need no name, and
-        // consecutive reply parts in a turn share the first part's timestamp.
-        const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-        const continued = reply && block.messages[position - 1]?.role === "assistant" && message.id !== block.replyAt;
-        const scheduled = messageOrigin(message)?.kind === "scheduled";
-        const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
-          : reply ? "" : message.toolName || message.role;
-        // Accepted, it reads as any other message until Hermes's own copy takes its place.
-        const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
-        const live = message.id.endsWith("-inflight");
-        const article = <article
-          className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
-          key={message.id}
-          data-message-id={message.id}
-          aria-busy={delivery === "sending" || undefined}
-        >
-          {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
-            {label}
-            {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span>
-              : message.createdAt && <When value={message.createdAt} />}
-          </div>}
-          {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
-            live
-              ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
-              : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
-          ) : message.role !== "tool" && (
-            <div className="message-text">{message.text}</div>
-          )}
-          {message.files?.map((file) => (
-            <FileLink file={file} key={file.id} />
-          ))}
-          {message.role === "assistant" && !live && !isAgentExchange(message) && !!message.text.trim() && <ReplyActions message={message} />}
-        </article>;
-        return message.id === foldAt && fold ? [fold, article] : [article];
-      });
-      if (foldAt === undefined && fold) rows.push(fold);
-      return <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>{rows}</div>;
+      const holdsEcho = outgoingId !== undefined && block.messages.some(message => message.id === outgoingId);
+      return <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
+        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />;
     })}
   </>;
 });
+// A stream changes the latest reply about four times a second, and `turns` rebuilds every block each
+// time. A turn is compared by what it shows, so finished turns, and a reload with the same content, bail out.
+const sameFile = (a: FileRef, b: FileRef) => a === b || a.id === b.id && a.name === b.name && a.mime === b.mime && a.size === b.size && a.url === b.url;
+const sameCall = (a?: ToolCall, b?: ToolCall) => a === b || !!a && !!b && a.id === b.id && a.name === b.name && a.status === b.status
+  && a.arguments === b.arguments && a.result === b.result && a.error === b.error && a.startedAt === b.startedAt && a.completedAt === b.completedAt;
+const sameOrigin = (a?: Message["origin"], b?: Message["origin"]) => a === b || !!a && !!b && a.kind === b.kind && a.visibility === b.visibility
+  && a.title === b.title && a.name === b.name && a.handle === b.handle;
+function sameMessage(a: Message, b: Message) {
+  if (a === b) return true;
+  return a.id === b.id && a.role === b.role && a.text === b.text && a.createdAt === b.createdAt && a.reasoning === b.reasoning
+    && a.toolName === b.toolName && a.runId === b.runId && a.sender?.id === b.sender?.id && a.sender?.name === b.sender?.name
+    && sameOrigin(a.origin, b.origin) && sameCall(a.toolCall, b.toolCall)
+    && (a.files === b.files || !!a.files && !!b.files && a.files.length === b.files.length && a.files.every((file, index) => sameFile(file, b.files![index])));
+}
+const sameMessages = (a: Message[], b: Message[]) => a === b || a.length === b.length && a.every((message, index) => sameMessage(message, b[index]));
+function sameTurn(a: Turn, b: Turn) {
+  if (a === b) return true;
+  if (a.replyAt !== b.replyAt || a.reasoning.length !== b.reasoning.length || a.reasoning.some((part, index) => part !== b.reasoning[index])) return false;
+  if (!sameMessages(a.messages, b.messages) || a.tools.size !== b.tools.size) return false;
+  const left = [...a.tools], right = [...b.tools];
+  return left.every(([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]));
+}
+const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.disconnected === b.disconnected && a.name === b.name
+  && a.botId === b.botId && a.userId === b.userId && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
+  && sameTurn(a.block, b.block);
+const TurnView = memo(function TurnView({ block, advanced, disconnected, name, botId, userId, live: running, outgoingId, outgoing }: TurnProps) {
+  const work = [...block.tools.values()];
+  // A turn's intermediate work folds into one row: before the reply that follows the work, before the
+  // first reply when there is only reasoning, or at the end.
+  const fold = work.length || block.reasoning.length ? <TurnWork key="turn-work" work={work} reasoning={block.reasoning}
+    messages={block.messages} advanced={advanced} disconnected={disconnected} recipient={name} live={running} /> : null;
+  const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
+  // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
+  const rows = block.messages.flatMap((message, position) => {
+    // The conversation is with one assistant, so its replies need no name, and
+    // consecutive reply parts in a turn share the first part's timestamp.
+    const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
+    const continued = reply && block.messages[position - 1]?.role === "assistant" && message.id !== block.replyAt;
+    const scheduled = messageOrigin(message)?.kind === "scheduled";
+    const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
+      : reply ? "" : message.toolName || message.role;
+    // Accepted, it reads as any other message until Hermes's own copy takes its place.
+    const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
+    const streaming = message.id.endsWith("-inflight");
+    const article = <article
+      className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
+      key={message.id}
+      data-message-id={message.id}
+      aria-busy={delivery === "sending" || undefined}
+    >
+      {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
+        {label}
+        {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span>
+          : message.createdAt && <When value={message.createdAt} />}
+      </div>}
+      {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
+        streaming
+          ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+          : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+      ) : message.role !== "tool" && (
+        <div className="message-text">{message.text}</div>
+      )}
+      {message.files?.map((file) => (
+        <FileLink file={file} key={file.id} />
+      ))}
+      {message.role === "assistant" && !streaming && !isAgentExchange(message) && !!message.text.trim() && <ReplyActions message={message} />}
+    </article>;
+    return message.id === foldAt && fold ? [fold, article] : [article];
+  });
+  if (foldAt === undefined && fold) rows.push(fold);
+  return <div className="conversation-turn">{rows}</div>;
+}, sameTurnProps);
 /**
  * One row for a turn's intermediate work: "Worked for 2m 14s · 3 tool calls, 1 subagent". Open, it
  * shows the grouped accordions as before, with reasoning first.
