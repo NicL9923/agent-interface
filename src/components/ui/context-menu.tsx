@@ -12,7 +12,7 @@ type ContentProps = ComponentProps<typeof Menu.Popup> & {
 
 export function ContextMenuContent({ container, positionerProps, ...props }: ContentProps) {
   const inherited = useOverlayContainer();
-  return <Menu.Portal container={container ?? inherited ?? undefined}>
+  return <Menu.Portal className="tw:relative tw:z-30" container={container ?? inherited ?? undefined}>
     <Menu.Positioner className="tw:z-30" positionMethod="fixed" {...positionerProps}>
       <Menu.Popup data-slot="menu-content" {...props} />
     </Menu.Positioner>
@@ -33,7 +33,7 @@ export function ContextMenuSubmenuTrigger(props: ComponentProps<typeof Menu.Subm
 /** A submenu's popup, placed beside its trigger and kept on screen. */
 export function ContextMenuSubmenuContent({ container, positionerProps, ...props }: ContentProps) {
   const inherited = useOverlayContainer();
-  return <Menu.Portal container={container ?? inherited ?? undefined}>
+  return <Menu.Portal className="tw:relative tw:z-30" container={container ?? inherited ?? undefined}>
     <Menu.Positioner className="tw:z-30" positionMethod="fixed" side="inline-end" align="start" alignOffset={-6} collisionPadding={12} {...positionerProps}>
       <Menu.Popup data-slot="menu-content" {...props} />
     </Menu.Positioner>

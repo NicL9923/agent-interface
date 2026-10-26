@@ -46,8 +46,9 @@ References collected October 25, 2026. External artwork is reference material on
 | Screen | Baseline | Implementation | Opus 5.5 High rating |
 | --- | --- | --- | --- |
 | Today, web and iOS | Web, iPhone and iPad captured | Complete | Web 9.2; iPhone 9.1; iPad 9.1 |
-| Assistants home and menus | Web phone and native baseline captured | In progress | Pending |
-| Conversation and composer | Pending | Pending | Pending |
+| Assistants home | Web, iPhone and iPad captured | Complete | Web 9; native 9 |
+| Home context menus | Keyboard, touch and native submenus captured | Complete | Web 9.5; native 9.5 |
+| Conversation and composer | Native baseline captured | In progress | Pending |
 | Questions, approvals and failure states | Pending | Pending | Pending |
 | Assistant details and artifacts | Pending | Pending | Pending |
 | Assistant creation and settings | Pending | Pending | Pending |
@@ -113,3 +114,13 @@ Today passed the second independent review with no obvious remaining issues.
 Scores were 9.2/10 on web and 9.1/10 on iPhone and the loaded iPad view. The
 [review report](evidence/design-review/today-review.md) records the resolved
 findings, accepted decisions and actual coverage.
+
+## Home review history
+
+Home passed the second independent review at 9/10 on web and native, with
+9.5/10 for its context menus. The review covered iPhone and iPad. It confirmed
+that unread indicators stay with dates, pinned labels and activity align, large
+text stays readable, and outside touch dismissal cannot activate assistants
+underneath the menu. The [report](evidence/design-review/home-review.md) records
+the evidence and accepted limits. A stable home-list identifier now lets the
+screenshot tour scroll the sidebar itself on iPad.

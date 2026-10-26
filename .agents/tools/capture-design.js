@@ -4,15 +4,18 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (screen !== "today") throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
   const paths = [], geometry = [];
   let state = "loaded";
   let checked = false;
   let releaseLoading;
+  for (const [path, encoded] of Object.entries(fixture?.images || {})) {
+    await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
+  }
   await context.route("**/api/today", async route => {
-    if (!fixture) return route.continue();
+    if (!fixture?.overview || screen !== "today") return route.continue();
     const value = structuredClone(fixture.overview);
     if (state === "loading") await new Promise(resolve => { releaseLoading = resolve; });
     if (state === "error" && checked) return route.fulfill({ status: 503, json: { error: "The connection was interrupted." } });
@@ -31,7 +34,10 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   await context.route("**/api/bootstrap*", async route => {
     const response = await route.fetch();
     const value = await response.json();
-    if (fixture) value.bots = fixture.bots;
+    if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
+    if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
+    if (screen === "home" && state === "three-pins") value.preferences.favorites = ["ranch", "garden", "kitchen"];
+    if (screen === "home" && state === "no-pins") value.preferences.favorites = [];
     return route.fulfill({ response, json: value });
   });
   const capture = async (name, width, height, theme = "light") => {
@@ -44,8 +50,14 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (innerWidth !== width || innerHeight !== height) throw Error("Viewport did not settle.");
     }, { theme, width, height });
+    if (!/menu|focus/.test(name)) {
+      await tab.mouse.move(width - 1, height - 1);
+      await tab.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
+    }
     const path = `${outputDir}/${prefix}-${screen}-${name}.png`;
-    await tab.screenshot({ path, animations: "disabled" });
+    if (screen === "home" && name.startsWith("desktop") && !name.includes("menu")) {
+      await tab.locator(".bot-rail").screenshot({ path, animations: "disabled" });
+    } else { await tab.screenshot({ path, animations: "disabled" }); }
     paths.push(path);
     geometry.push({ name, width, height, ...await tab.evaluate(() => ({
       overflow: document.documentElement.scrollWidth > innerWidth,
@@ -57,6 +69,51 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     })) });
   };
   try {
+    if (screen === "home") {
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      await tab.locator(".pinned-bot").first().waitFor();
+      await capture("desktop", 1440, 1000);
+      await capture("desktop-dark", 1440, 1000, "dark");
+      await tab.locator(".pinned-bot").first().focus();
+      await tab.keyboard.press("Shift+F10");
+      await tab.getByRole("menu", { name: "Ranch hand", exact: true }).waitFor();
+      await capture("desktop-menu", 1440, 1000);
+      await tab.getByRole("menuitem", { name: "Move to section" }).hover();
+      await tab.getByRole("menu", { name: "Home section", exact: true }).waitFor();
+      await capture("desktop-submenu", 1440, 1000);
+      await tab.keyboard.press("Escape");
+      await tab.keyboard.press("Escape");
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.goto(origin.origin);
+      await tab.locator(".bot-rail.open").waitFor();
+      await capture("phone", 390, 844);
+      await capture("phone-dark", 390, 844, "dark");
+      for (const variant of ["three-pins", "no-pins"]) {
+        state = variant;
+        await tab.goto(origin.origin);
+        await tab.locator(".bot-rail.open").waitFor();
+        await tab.getByRole("button", { name: "Settings", exact: true }).waitFor();
+        await capture(variant, 390, 844);
+      }
+      state = "loaded";
+      await tab.goto(origin.origin);
+      await tab.locator(".pinned-bot").first().waitFor();
+      await capture("narrow", 320, 720);
+      await tab.locator(".pinned-bot").first().click({ button: "right" });
+      await tab.getByRole("menu", { name: "Ranch hand", exact: true }).waitFor();
+      await capture("phone-menu", 390, 844);
+      await tab.keyboard.press("Escape");
+      await tab.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+      await capture("large-text", 390, 844);
+      await tab.locator(".home-scroll").evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await capture("large-text-scrolled", 390, 844);
+      await tab.evaluate(() => { document.documentElement.style.removeProperty("font-size"); });
+      state = "empty";
+      await tab.goto(origin.origin);
+      await tab.locator(".bot-rail").getByRole("button", { name: "Create an assistant", exact: true }).waitFor();
+      await capture("empty", 390, 844);
+      return { paths, geometry };
+    }
     await tab.goto(`${origin.origin}/?view=today`);
     await tab.getByRole("heading", { name: /Needs your attention|Since you were away/ }).first().waitFor();
     await capture("desktop", 1440, 1000);

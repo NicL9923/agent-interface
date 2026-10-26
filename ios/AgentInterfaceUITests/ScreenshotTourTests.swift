@@ -71,6 +71,37 @@ import XCTest
     }
   }
 
+  func testHomeDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_HOME_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_HOME_PATH to capture home.")
+    let fixture = try String(contentsOfFile: source, encoding: .utf8)
+    for (name, theme, size) in [
+      ("home-loaded", "light", "UICTContentSizeCategoryL"),
+      ("home-dark", "dark", "UICTContentSizeCategoryL"),
+      ("home-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+    ] {
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": fixture,
+        "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      goToAssistantList(app)
+      XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 10))
+      try capture(name)
+      if name == "home-loaded" {
+        app.buttons["bot.ranch"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 5))
+        try capture("home-menu")
+        app.buttons["Move to section"].tap()
+        if !app.buttons["None"].waitForExistence(timeout: 2), app.buttons["homeSection"].exists {
+          app.buttons["homeSection"].tap()
+        }
+        XCTAssertTrue(app.buttons["None"].waitForExistence(timeout: 5))
+        try capture("home-submenu")
+      }
+      if size.contains("Accessibility") { app.scrollViews["assistantHome"].swipeUp(); try capture(name + "-scrolled") }
+      app.terminate()
+    }
+  }
+
   func testScreenshotTour() throws {
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))

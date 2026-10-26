@@ -1,0 +1,164 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "Here is what I will set up: reminders for all three gates on Nov 1.",
+        "at": "2026-10-26T03:40:20.662Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "working",
+      "description": "Everyday household help",
+      "instructions": "Explicit fixture instructions.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "kitchen",
+      "unread": true,
+      "lastMessage": {
+        "text": "Pot roast tonight. I added carrots and onions to the shared list.",
+        "at": "2026-10-26T02:12:20.663Z"
+      },
+      "name": "Kitchen companion",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "idle",
+      "avatar": {
+        "mode": "mascot",
+        "family": "bear",
+        "color": "#FF9800",
+        "eyes": "round",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "garden",
+      "lastMessage": {
+        "text": "Frost is likely Thursday night. Cover the peppers.",
+        "at": "2026-10-25T22:42:20.663Z"
+      },
+      "name": "Garden planner",
+      "shared": false,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "thinking",
+      "avatar": {
+        "mode": "mascot",
+        "family": "sprout",
+        "color": "#00BCA6",
+        "eyes": "oval",
+        "accessory": "hat"
+      }
+    },
+    {
+      "id": "homework",
+      "lastMessage": {
+        "text": "Ready to check the fractions worksheet when you are.",
+        "at": "2026-10-25T02:42:20.663Z"
+      },
+      "name": "Homework helper",
+      "shared": false,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "waiting",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "hex",
+        "color": "#9159FE",
+        "eyes": "oval",
+        "accessory": "glasses"
+      }
+    },
+    {
+      "id": "ledger",
+      "lastMessage": {
+        "text": "September is reconciled except for one charge I cannot match.",
+        "at": "2026-10-24T01:42:20.663Z"
+      },
+      "name": "Ledger",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "blocked",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "triangle",
+        "color": "#FF309B",
+        "eyes": "visor",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "fox",
+      "lastMessage": {
+        "text": "Trail options are ready.",
+        "at": "2026-10-26T03:32:20.663Z"
+      },
+      "name": "Trail scout with a long name for wrapping",
+      "shared": false,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "done",
+      "avatar": {
+        "mode": "mascot",
+        "family": "fox",
+        "color": "#FF6700",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "guide",
+      "unread": true,
+      "lastMessage": {
+        "text": "I could not reach the trail conditions service.",
+        "at": "2026-10-26T03:30:20.663Z"
+      },
+      "name": "Trail guide",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "failed",
+      "avatar": {
+        "mode": "portrait",
+        "src": "/api/files/design-portrait",
+        "origin": "uploaded"
+      }
+    }
+  ],
+  "preferences": {
+    "presentation": "simple",
+    "favorites": [
+      "ranch",
+      "garden"
+    ],
+    "sections": [
+      {
+        "id": "house",
+        "name": "Around the house",
+        "botIds": [
+          "ranch",
+          "kitchen",
+          "garden"
+        ]
+      }
+    ],
+    "followBots": [],
+    "modelFavorites": [],
+    "startPage": "assistant",
+    "defaultBotId": "ranch"
+  },
+  "images": {
+    "/api/files/design-portrait": "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"
+  }
+}

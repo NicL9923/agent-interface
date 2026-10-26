@@ -39,7 +39,7 @@ def render(spec, output):
         draw = ImageDraw.Draw(panel)
         draw.text((pad, round(16 * scale)), f"{side.capitalize()}  |  {spec['title']}", font=font(round(24 * scale), True), fill='#202A24')
         for number, note in enumerate(info['notes'], 1):
-            x, y = note['point']
+            x, y = note['point'] if 'point' in note else (note['fraction'][0] * width, note['fraction'][1] * shot.height)
             y += header
             dx, dy = note.get('offset', [30 * scale, -26 * scale])
             cx, cy = x + dx, y + dy

@@ -1,7 +1,9 @@
 # Repository tools
 
-- `capture-design.js` is a Playwright CLI run-code function that captures Today at desktop, tablet and phone widths, including dark, empty, partial, paged and stale-error states. Pass `{ outputDir, prefix, fixture }` with `.agents/fixtures/today-design.json` to use the same populated data as the native design tour. It waits for fonts and responsive layout and reports viewport overflow.
-- `python3 .agents/tools/annotate-design.py SPEC.json OUTPUT.png` combines before/after screenshots with numbered pointers and matching notes. Requires Pillow. The specification has a `title` and `before`/`after` objects with `image` and `notes`, each note supplying `point`, `text`, and an optional `offset`.
+- `check-home-touch.js` is a Playwright CLI run-code function that uses real Chromium touch input to long-press an assistant, checks that the menu backdrop intercepts outside taps, and confirms dismissal keeps home open.
+
+- `capture-design.js` is a Playwright CLI run-code function that captures Today or assistants home at desktop, tablet and phone widths, including dark, empty, partial, paged and stale-error states. Pass `{ outputDir, prefix, fixture }` with `.agents/fixtures/today-design.json` or `.agents/fixtures/home-design.json` to use the same populated data as the native design tour. It waits for fonts and responsive layout and reports viewport overflow.
+- `python3 .agents/tools/annotate-design.py SPEC.json OUTPUT.png` combines before/after screenshots with numbered pointers and matching notes. Requires Pillow. The specification has a `title` and `before`/`after` objects with `image` and `notes`, each note supplying `point` in pixels or `fraction` of image width/height, `text`, and an optional `offset`.
 
 - `automation-preview.mjs` supplies synthetic Work and Learning interactions to the existing loopback preview, including one-time signing-secret display. It never contacts Hermes.
 - `check-automation-browser.js` exercises goals, task creation/start and skill-diff review in the synthetic port-3021 preview at desktop and phone widths.

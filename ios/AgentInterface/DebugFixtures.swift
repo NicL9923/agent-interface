@@ -31,6 +31,9 @@
       }
       // Seeded under the lock its requests take, so no request reads it half written.
       FixtureProtocol.lock.withLock {
+        if let preferences = FixtureProtocol.designFixture?["preferences"] as? [String: Any] {
+          FixtureProtocol.preferences.merge(preferences) { _, new in new }
+        }
         if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
           FixtureProtocol.automation = AutomationDebugFixture()
           FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
@@ -184,11 +187,11 @@
     /// Fixed, so opening the unread chat reads it until a newer reply arrives.
     static let personalReplyAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-600))
     // Immutable JSON, read only by requests while FixtureProtocol.lock is held.
-    nonisolated(unsafe) static let todayDesign = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TODAY_DESIGN"]
+    nonisolated(unsafe) static let designFixture = (ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DESIGN_FIXTURE"] ?? ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TODAY_DESIGN"])
       .flatMap { $0.data(using: .utf8) }
       .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     static var bots: [[String: Any]] {
-      if let bots = todayDesign?["bots"] as? [[String: Any]] { return bots }
+      if let bots = designFixture?["bots"] as? [[String: Any]] { return bots }
       return [
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
@@ -222,6 +225,12 @@
       Self.lock.lock()
       defer { Self.lock.unlock() }
       let path = request.url!.path
+      if let encoded = (Self.designFixture?["images"] as? [String: String])?[path], let data = Data(base64Encoded: encoded) {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+        return
+      }
       let method = request.httpMethod ?? "GET"
       var object: Any = ["ok": true]
       var status = 200
@@ -447,11 +456,11 @@
         object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
       } else if path.contains("/routines/") && path.contains("/results/") {
         object = ["messages": [["id": "fixture-output", "role": "assistant", "text": "Fixture saved routine output: the pasture gate is closed."]], "previewOnly": false]
-      } else if path == "/api/today", let overview = Self.todayDesign?["overview"] {
+      } else if path == "/api/today", let overview = Self.designFixture?["overview"] {
         // Design-only transport states. A pending response lets the tour capture real loading UI.
-        if Self.todayDesign?["mode"] as? String == "loading" { return }
+        if Self.designFixture?["mode"] as? String == "loading" { return }
         Self.todayReads += 1
-        if Self.todayDesign?["mode"] as? String == "stale", Self.todayReads > 1 {
+        if Self.designFixture?["mode"] as? String == "stale", Self.todayReads > 1 {
           status = 503; object = ["error": "Fixture connection interrupted."]
         } else { object = overview }
       } else if path == "/api/today" {

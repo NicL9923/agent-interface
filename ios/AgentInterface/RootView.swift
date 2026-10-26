@@ -325,6 +325,8 @@ struct BotListView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.horizontalSizeClass) private var sizeClass
+  @Environment(\.dynamicTypeSize) private var typeSize
+  @ScaledMetric(relativeTo: .subheadline) private var pinColumn: CGFloat = 100
   var destination: HomeDestination
   var openPreferences: () -> Void
   var edit: (Bot) -> Void
@@ -340,6 +342,7 @@ struct BotListView: View {
   /// Undo for the last pin or section move made from a row here.
   @State private var undo = UndoQueue()
   @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
+  private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
@@ -364,9 +367,9 @@ struct BotListView: View {
         if let bootstrap = store.bootstrap {
           let pinned = bootstrap.preferences.pinnedAssistants(bootstrap.bots)
           if !pinned.isEmpty {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: sizeClass == .compact ? 100 : 76), spacing: 8)], alignment: .center, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: pinnedMinimum), spacing: 8, alignment: .top)], alignment: .center, spacing: 12) {
               ForEach(pinned) { bot in pinnedTile(bot) }
-            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (sizeClass == .compact ? 112 : 86))
+            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (pinnedMinimum + 12))
               .frame(maxWidth: .infinity)
               .accessibilityElement(children: .contain).accessibilityLabel("Pinned assistants")
           }
@@ -377,7 +380,7 @@ struct BotListView: View {
           ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
             VStack(alignment: .leading, spacing: 4) {
               if !group.title.isEmpty {
-                Text(group.title).font(.caption2.weight(.semibold)).tracking(1.1).textCase(.uppercase)
+                Text(group.title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase)
                   .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
               }
               LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
@@ -386,7 +389,7 @@ struct BotListView: View {
           if bootstrap.bots.isEmpty { emptyHome }
         }
       }.padding(16)
-    }.background(homeBackground)
+    }.background(homeBackground).accessibilityIdentifier("assistantHome")
       .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline).homeTitleHidden()
       .toolbarBackground(homeBackground, for: .navigationBar)
       .bareToolbarItem(.topBarLeading) { accountButton }
@@ -461,16 +464,17 @@ struct BotListView: View {
     let unread = store.unread(bot)
     return Button { open(bot) } label: {
       VStack(spacing: 8) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
           size: sizeClass == .compact ? 92 : 60, name: bot.name, botId: bot.id)
           .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "pin.fill").font(.system(size: pinBadge)).padding(5)
+            Image(systemName: "pin.fill").font(.system(size: min(pinBadge, 13))).padding(5)
               .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
-          }
-        HStack(spacing: 5) {
+          }.accessibilityHidden(true)
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
           if unread { UnreadDot() }
-          Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
-            .lineLimit(2).multilineTextAlignment(.center)
+          let label = Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+          if typeSize.isAccessibilitySize { label } else { label.lineLimit(2, reservesSpace: true) }
         }
         if activity != .idle && activity != .done { ActivityLabel(state: activity) }
       }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
@@ -486,24 +490,32 @@ struct BotListView: View {
     let unread = store.unread(bot)
     return Button { open(bot) } label: {
       HStack(spacing: 12) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
-          size: 52, name: bot.name, forceReducedMotion: true)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
+          size: 52, name: bot.name, forceReducedMotion: true).accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 5) {
-          HStack(alignment: .firstTextBaseline) {
-            HStack(spacing: 6) {
+          if typeSize.isAccessibilitySize {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
               if unread { UnreadDot() }
-              Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary).lineLimit(1)
+              Text(bot.name).font(.body.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
             }
-            Spacer(minLength: 8)
             if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+          } else {
+            HStack(alignment: .firstTextBaseline) {
+              HStack(spacing: 6) {
+                if unread { UnreadDot() }
+                Text(bot.name).font(.body.weight(unread ? .bold : .semibold)).foregroundStyle(.primary).lineLimit(2)
+              }
+              Spacer(minLength: 8)
+              if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+            }
           }
           if activity != .idle && activity != .done { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
               .font(unread ? .subheadline.weight(.medium) : .subheadline)
-              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(1)
+              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
           }
-        }
+        }.frame(maxWidth: .infinity, alignment: .leading)
       }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
     }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
@@ -531,8 +543,9 @@ struct BotListView: View {
 }
 /// A chat with a reply this person has not read yet. VoiceOver hears "Unread" from its row instead.
 private struct UnreadDot: View {
+  @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 8
   var body: some View {
-    Circle().fill(Palette.accent).frame(width: 8, height: 8).accessibilityHidden(true)
+    Circle().fill(Palette.accent).frame(width: min(diameter, 12), height: min(diameter, 12)).accessibilityHidden(true)
   }
 }
 private struct HomeLinkStyle: ButtonStyle {
