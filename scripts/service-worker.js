@@ -5,7 +5,7 @@ const CACHE = 'agent-interface-__BUILD_ID__';
 const INSTALL_FILES = __PRECACHE__;
 const INSTALL_PATHS = new Set(INSTALL_FILES);
 // Lazy screens and libraries that most visits never open. They are wanted offline too, but they
-// are fetched in the background after activation instead of racing the first visit.
+// are fetched in the background when the page asks (a WARM message) instead of racing the first visit.
 const WARM_FILES = __WARM__;
 // Admin-only chunks (terminal and remote desktop) that cost every phone nothing until first use.
 const ON_DEMAND_FILES = __ON_DEMAND__;
@@ -37,18 +37,30 @@ async function reuse(cache, older, path) {
   return false;
 }
 
+// The pages are HTML by nature; every other install file is code or an image, so an HTML body
+// there is the app shell answering for a file the server no longer has.
+const acceptable = (path, response) => path.endsWith('.html') ? response.ok : usable(response);
+
 async function install() {
   const cache = await caches.open(CACHE);
   const older = await olderCaches();
   const missing = [];
   for (const path of INSTALL_FILES) if (!await reuse(cache, older, path)) missing.push(path);
-  await cache.addAll(missing);
+  // Like addAll, but a bad answer fails the install too: the browser retries it later and the
+  // previous worker keeps serving until then.
+  const fetched = await Promise.all(missing.map(async (path) => {
+    const response = await fetch(path);
+    if (!acceptable(path, response)) throw new Error('Cannot install ' + path + ': ' + response.status + ' ' + response.headers.get('content-type'));
+    return [path, response];
+  }));
+  for (const [path, response] of fetched) await cache.put(path, response);
   // Lazy files the last release already holds cost nothing to keep.
   for (const path of [...WARM_FILES, ...ON_DEMAND_FILES]) await reuse(cache, older, path);
 }
 
-// Best effort: a file this misses is fetched and kept the first time it is used.
-async function warm() {
+// Best effort, and safe to repeat: files already cached are skipped, so a run the browser cut short
+// is finished by the next one. A file this misses is fetched and kept the first time it is used.
+async function fetchMissing() {
   const cache = await caches.open(CACHE);
   const queue = WARM_FILES.slice();
   const connection = async () => {
@@ -63,6 +75,12 @@ async function warm() {
   await Promise.all(Array.from({ length: WARM_CONNECTIONS }, connection));
 }
 
+// Pages in several tabs ask at once; they share one run.
+let warming;
+function warm() {
+  return warming ??= fetchMissing().finally(() => { warming = undefined; });
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(install());
 });
@@ -74,12 +92,13 @@ self.addEventListener('activate', (event) => {
     }
     await self.clients.claim();
   })());
-  // Started outside waitUntil on purpose: the worker takes over without waiting for the warm-up.
-  warm().catch(() => {});
+  // Warming does not start here: the browser may stop an idle worker once activation ends. It runs
+  // under the WARM message below, which keeps the worker alive without delaying activation.
 });
 
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
 });
 
 self.addEventListener('fetch', (event) => {

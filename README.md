@@ -111,12 +111,16 @@ returns to the entry's static imports.
 `scripts/build-worker.mjs` turns `scripts/service-worker.js` into `sw.js`, and
 `scripts/precache-plan.mjs` sorts the built files into three groups. The install step
 fetches only the pages and the static import graph of both HTML entries, which is enough
-to open offline without racing the first visit. Lazy screens and libraries are fetched in
-the background after the worker activates, three at a time. The terminal and remote
-desktop chunks wait for first use. A file that was never warmed is kept after its first
-use. Nothing is cached that comes back as `text/html` in place of code. Installing a
-release copies every hashed `assets/name-HASH.ext` file already held by an earlier
-release's cache instead of downloading it again. The pages, icons, manifest and
+to open offline without racing the first visit. Install fails, and the browser retries it
+later while the old worker keeps serving, if any of those files is an error or comes back
+as `text/html` in place of code. Lazy screens and libraries are fetched in the background,
+three at a time, when the page posts `{ type: "WARM" }` to the active worker after it goes
+idle. The worker runs that under `waitUntil` so the browser keeps it alive, never delays
+activation for it, and skips files already cached, so any later page load finishes what a
+stopped run missed. The terminal and remote desktop chunks wait for first use. A file that
+was never warmed is kept after its first use, unless it is an error or `text/html`.
+Installing a release copies every hashed `assets/name-HASH.ext` file already held by an
+earlier release's cache instead of downloading it again. The pages, icons, manifest and
 unhashed files are always fetched fresh. The worker's hashed-name rule must match
 `src/server/static-cache.ts`; a test compares them.
 
