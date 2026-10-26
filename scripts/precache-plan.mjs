@@ -13,7 +13,7 @@ const reach = (manifest, keys) => {
   keys.forEach(visit);
   return seen;
 };
-const filesOf = (manifest, keys) => new Set([...keys].flatMap((key) => [manifest[key].file, ...(manifest[key].css ?? [])]));
+const filesOf = (manifest, keys) => new Set([...keys].flatMap((key) => [manifest[key].file, ...(manifest[key].css ?? []), ...(manifest[key].assets ?? [])]));
 /** The files every page load needs: the static import graph of each HTML entry. */
 const eagerFiles = (manifest) => filesOf(manifest, reach(manifest, Object.keys(manifest).filter((key) => manifest[key].isEntry)));
 
@@ -28,17 +28,24 @@ export function assertPopupLibraryIsLazy(manifest, read) {
 }
 
 /**
- * Splits built files into those every device caches at install and those cached on first use.
- * `manifest` is Vite's build manifest. Chunks loaded only through the admin-only dynamic
- * imports, and anything only they import, stay out of the install cache; whatever the entry
- * also needs stays in it.
+ * Sorts built files by when a device fetches them. `manifest` is Vite's build manifest.
+ * - `install`: the pages and the static import graph of each HTML entry, the files needed to open
+ *   offline, plus anything the manifest does not know, such as icons. Fetched while installing.
+ * - `warm`: the other chunks, such as lazy screens. Fetched in the background after activation.
+ * - `onDemand`: chunks loaded only through the admin-only dynamic imports, and anything only they
+ *   import. Fetched when first used.
  */
 export function precachePlan(manifest, files) {
   const roots = Object.keys(manifest).filter((key) => onDemandSources.test(key) && manifest[key].isDynamicEntry);
   // A silent mismatch would put 500 KB back on every phone, so a renamed or removed import fails the build.
   if (!roots.length) throw new Error('The build has no terminal or remote desktop chunks to keep out of the install cache.');
   const eager = eagerFiles(manifest);
-  const onDemand = [...filesOf(manifest, reach(manifest, roots))].filter((file) => !eager.has(file));
-  const excluded = new Set(onDemand);
-  return { precache: files.filter((file) => !excluded.has(file)), onDemand: files.filter((file) => excluded.has(file)) };
+  if (!eager.size) throw new Error('The build has no HTML entries to install.');
+  const adminOnly = new Set([...filesOf(manifest, reach(manifest, roots))].filter((file) => !eager.has(file)));
+  const lazy = new Set([...filesOf(manifest, Object.keys(manifest))].filter((file) => !eager.has(file) && !adminOnly.has(file)));
+  return {
+    install: files.filter((file) => !lazy.has(file) && !adminOnly.has(file)),
+    warm: files.filter((file) => lazy.has(file)),
+    onDemand: files.filter((file) => adminOnly.has(file)),
+  };
 }
