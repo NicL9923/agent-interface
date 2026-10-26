@@ -369,6 +369,34 @@ describe("roster compatibility and household events", () => {
     await events.close();
   });
 
+  it("keeps the newer roster evaluation when an older bootstrap read finishes after it", async () => {
+    const s = await setup();
+    const events = await stream(`${s.base}/api/events`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    // The opening read is held for 1.5 s. Let it expire so the bootstrap below starts its own read.
+    await pass(1600);
+    const row = (activity: Bot["activity"]) => [{ ...s.bots[0], activity }];
+    let releaseCapabilities!: () => void;
+    const capabilitiesHeld = new Promise<void>(resolve => { releaseCapabilities = resolve; });
+    const everything = await s.runtime.capabilities();
+    // The bootstrap's read sees an idle roster, then waits on capabilities. The evaluation's read, begun
+    // later, sees the assistant working and finishes first.
+    s.runtime.listBots = vi.fn().mockResolvedValueOnce(row("idle")).mockResolvedValue(row("working"));
+    s.runtime.capabilities = vi.fn().mockImplementationOnce(async () => { await capabilitiesHeld; return everything; }).mockResolvedValue(everything);
+    const read = async () => (await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })).json() as { bots: Bot[] }).bots[0].activity;
+    const older = read();
+    await events.until(() => vi.mocked(s.runtime.capabilities).mock.calls.length === 1);
+    s.rosterChanged();
+    await events.until(() => events.text.includes("event: roster"));
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
+    releaseCapabilities();
+    expect(await older).toBe("idle");
+    // The older read answered its own caller, but the evaluation's newer read is what the next bootstrap sees.
+    expect(await read()).toBe("working");
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
+    await events.close();
+  });
+
   it("notifies on an app write only when the visible roster changes and ends on sign-out", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/events`, s.cookie);
