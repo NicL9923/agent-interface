@@ -70,6 +70,9 @@ struct ConversationView: View {
   @State private var anchorNext = false
   @State private var anchorScrollPending = false
   @State private var sentAnchor: String?
+  /// The sent words, and the message the receipt names, which the anchor follows once the echo goes.
+  @State private var sentAnchorText: String?
+  @State private var sentAnchorMessage: String?
   @State private var anchorTop: CGFloat?
   @State private var contentEnd: CGFloat = 0
   /// Whether the reader sits at the end, where the jump control has nothing to jump to.
@@ -78,11 +81,11 @@ struct ConversationView: View {
     FindMatches.merge(loaded: store.transcript?.messages ?? [], query: findQuery,
       hits: findHits?.query == findQuery ? findHits?.hits ?? [] : [], botId: bot.id, sessionId: store.conversation?.sessionId)
   }
-  /// The sent message the transcript holds near the top. When Hermes's copy replaces the echo under
-  /// another ID, the person's latest message takes its place.
+  /// The sent message the transcript holds near the top, followed by identity as the web does.
   private var anchoredMessage: String? {
     guard let sentAnchor, let messages = store.transcript?.messages else { return nil }
-    return messages.contains { $0.id == sentAnchor } ? sentAnchor : messages.last { $0.role == "user" }?.id
+    return SendAnchor.resolve(messages, requestId: sentAnchor, messageId: sentAnchorMessage, text: sentAnchorText,
+      senderId: store.bootstrap?.user.id)
   }
   /// Room below the sent message so it can sit at the top before its reply fills the screen.
   private var anchorRoom: CGFloat {
@@ -195,7 +198,8 @@ struct ConversationView: View {
     let match = matches[index]
     following = false
     findTarget = match.id
-    if match.loaded { highlight(match.id) } else { Task { await store.openConversation(botId: bot.id, atMessage: match.id) } }
+    if match.loaded { store.cancelOpeningAtMessage(); highlight(match.id) }
+    else { Task { await store.openConversation(botId: bot.id, atMessage: match.id) } }
   }
   /// After a 300 ms pause in typing, moves to the first loaded match, so the chat does not jump on
   /// every keystroke, then asks the server for matches in this chat's history, as the web's find
@@ -238,6 +242,8 @@ struct ConversationView: View {
         guard anchorNext, let id else { return }
         anchorNext = false
         sentAnchor = id
+        sentAnchorText = store.transcript?.messages.first { $0.id == id }?.text
+        sentAnchorMessage = nil
         anchorScrollPending = true
         scrollToAnchor(proxy)
       }
@@ -247,6 +253,9 @@ struct ConversationView: View {
         if anchorScrollPending && room > 0 && old == 0 { anchorScrollPending = false; scrollToAnchor(proxy) }
       }
       .onChange(of: store.sending) { _, sending in if !sending && store.outgoing == nil { anchorNext = false } }
+      .onChange(of: store.receipt) { _, receipt in
+        if let receipt, receipt.requestId == sentAnchor, let id = receipt.messageId { sentAnchorMessage = id }
+      }
       .overlay(alignment: .bottom) { if !following && !atEnd && store.conversation != nil { jumpButton(proxy) } }
       .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
@@ -1191,5 +1200,21 @@ enum FindMatches {
     if count == 0 { return "0 matches" }
     guard let position else { return count == 1 ? "1 match" : "\(count) matches" }
     return "\(position + 1) of \(count)"
+  }
+}
+
+/// Which row is the sent message the transcript holds near the top, as the web follows it: the echo
+/// under its request ID, then the copy the receipt names, which it waits for rather than taking
+/// another row. Only while no receipt names one does it guess this person's newest message with the
+/// sent words, so another member's newer message, or a scheduled one, never takes the anchor.
+enum SendAnchor {
+  static func resolve(_ messages: [Message], requestId: String, messageId: String?, text: String?, senderId: String?) -> String? {
+    if messages.contains(where: { $0.id == requestId }) { return requestId }
+    if let messageId { return messages.contains { $0.id == messageId } ? messageId : nil }
+    let words = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !words.isEmpty else { return nil }
+    return messages.last {
+      $0.isHumanMessage && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ($0.sender == nil || $0.sender?.id == senderId)
+    }?.id
   }
 }

@@ -11,6 +11,17 @@ struct SavedPointer: Encodable { var botId: String; var kind: String; var sessio
 struct UsageSummary: Decodable { var botId: String; var sessions: Int; var inputTokens: Int; var outputTokens: Int; var actualCost: Double?; var estimatedCost: Double?; var partial: Bool }
 struct AutomationOverview: Decodable { var routines: [Routine]; var usage: [UsageSummary]; var unavailableBots: [String] }
 struct Starter: Decodable, Identifiable { var id: String; var title: String; var prompt: String }
+/// Searches on their way. Any change to the query makes every one still pending stale, and an
+/// answer applies only while the query is still the one it was asked for, success or failure. So a
+/// submitted search overtaken by typing, even back to the query already shown, never replaces it.
+struct SearchRequests: Equatable {
+  private(set) var token = 0
+  mutating func queryChanged() { token += 1 }
+  mutating func start() -> Int { token += 1; return token }
+  func applies(_ request: Int, asked: String, query: String) -> Bool {
+    request == token && asked == DiscoveryView.trimmed(query)
+  }
+}
 struct DiscoveryView: View {
   @Environment(AppStore.self) private var store
   @State private var tab = "search"
@@ -30,7 +41,7 @@ struct DiscoveryView: View {
   @State private var scrollRequest: UUID?
   @FocusState private var searchFocused: Bool
   /// Numbers each search, so only the latest one's results are shown.
-  @State private var searchSeq = 0
+  @State private var requests = SearchRequests()
   /// The query the shown results answer, so a debounce after Enter does not search again.
   @State private var searchedQuery = ""
   @State private var searching = false
@@ -123,11 +134,13 @@ struct DiscoveryView: View {
     }.householdListBackground().viewHeader("Search & saved", "Past answers, saved items and automations")
       .onAppear { Task { await load() } }.onChange(of:tab) { _,_ in page=nil;historyRequest=nil;Task { await load() } }
       // Results follow typing after a short pause, as on the web; Enter still searches at once.
+      // Any change to the query makes a search still on its way stale, typed or submitted.
+      .onChange(of: query) { _, _ in requests.queryChanged(); searching = false }
       .task(id: query) {
         guard tab == "search", page == nil else { return }
         do { try await Task.sleep(for: Self.searchDelay) } catch { return }
         let text = Self.trimmed(query)
-        if text.count < Self.minimumQuery { searchSeq += 1; searching = false; searchedQuery = ""; hits = []; if notice != nil { notice = nil }; return }
+        if text.count < Self.minimumQuery { requests.queryChanged(); searching = false; searchedQuery = ""; hits = []; if notice != nil { notice = nil }; return }
         if text != searchedQuery { await search() }
       }
       .onChange(of:store.scope) { _,_ in loadId=UUID();hits=[];saved=[];overview=nil;page=nil;error=nil;Task { await load() } }
@@ -173,19 +186,18 @@ struct DiscoveryView: View {
   private func search() async {
     let text = Self.trimmed(query)
     guard !text.isEmpty, let api = store.api else { return }
-    searchSeq += 1
-    let seq = searchSeq, scope = store.scope
+    let request = requests.start(), scope = store.scope
     searching = true; error = nil
-    defer { if seq == searchSeq { searching = false } }
+    defer { if request == requests.token { searching = false } }
     do {
       let result: SearchResponse = try await api.get("/search?q=\(text.addingPercentEncoding(withAllowedCharacters:.alphanumerics) ?? "")")
-      guard seq == searchSeq, scope == store.scope else { return }
+      guard !Task.isCancelled, requests.applies(request, asked: text, query: query), scope == store.scope else { return }
       searchedQuery = text
       hits = result.hits
       notice = result.unavailableBots.isEmpty ? (hits.isEmpty ? "No matching conversations." : nil) : "Could not search \(result.unavailableBots.count) assistant(s)."
       AccessibilityNotification.Announcement(Self.resultsAnnouncement(hits.count)).post()
     } catch {
-      guard seq == searchSeq, scope == store.scope else { return }
+      guard !Task.isCancelled, requests.applies(request, asked: text, query: query), scope == store.scope else { return }
       self.error = error.localizedDescription
     }
   }
