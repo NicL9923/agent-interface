@@ -103,6 +103,20 @@ describe("avatar animation loop", () => {
     }
   });
 
+  it("draws several working avatars from one frame callback", async () => {
+    await act(async () => root.render(createElement("div", null,
+      createElement(Avatar, { state: "working", size: 64, name: "Ranch hand" }),
+      createElement(Avatar, { state: "working", size: 64, name: "Foreman" }),
+      createElement(Avatar, { state: "working", size: 64, name: "Wrangler" }))));
+    // Past the silhouette transitions, which have their own frames.
+    await advance(0.5);
+    const poses = [...container.querySelectorAll("svg")].map(node => node.innerHTML);
+    expect(frames.size).toBe(1);
+    await advance(0.5);
+    expect(frames.size).toBe(1);
+    expect([...container.querySelectorAll("svg")].map(node => node.innerHTML)).not.toEqual(poses);
+  });
+
   it("sizes a portrait up front and loads it lazily, since list avatars are tiny copies of a large file", async () => {
     await render("idle", { mode: "portrait", src: "/api/files/portrait" } as AvatarConfig);
     const image = container.querySelector("img.avatar-portrait")!;

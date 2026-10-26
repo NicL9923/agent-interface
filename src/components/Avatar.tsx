@@ -1,5 +1,4 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import type { ActivityState, Avatar as AvatarConfig, AvatarShape } from "../shared/types";
 import {
   animatesAt,
@@ -27,6 +26,7 @@ import {
   type Expression,
   type MotionPlan,
 } from "./avatar-motion";
+import { startFrames } from "./avatar-frames";
 import { avatarConductor } from "./avatar-conductor";
 import "./avatar.css";
 import {
@@ -331,38 +331,33 @@ export function Avatar({
       setFrame((f) => f + 1);
       return;
     }
-    let frame = 0;
-    let wake: ReturnType<typeof setTimeout> | undefined;
     let last = performance.now();
-    const tick = (now: number) => {
-      const dt = Math.min((now - last) / 1000, 0.05);
-      last = now;
-      const clock = motion.current;
-      const cue = avatarConductor.cue(owner, state, clock.since / 1000, clock.entered, !!clock.prop, now / 1000);
-      const { plan } = cue;
-      const t = Math.max(0, now / 1000 - cue.since);
-      const trail = trailsAt(avatarPose(state, t, false, clock.prop, plan), t, clock.carry, clock.carrySweep);
-      motion.current = { ...clock, elapsed: t, now, plan, ...trail };
-      expression.current = approach(expression.current, expressionFor(state, t, plan), dt);
-      const targets = morphTargets(state);
-      const k = 1 - Math.exp(-dt / 0.13);
-      morph.current = {
-        bang: morph.current.bang + (targets.bang - morph.current.bang) * k,
-      };
-      const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
-      // Committed inside this frame's callback; scheduled React work would land in a second frame, and each costs a restyle.
-      flushSync(() => setFrame((f) => f + 1));
-      if (!animatesAt(state, t, plan) && !settling) return;
-      // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
-      // asking for every display refresh makes the page restyle on each one even when nothing paints.
-      // An idle avatar that is only breathing sleeps longer, until just before its next blink or glance.
-      const pause = state === "idle" && !settling && idleQuietAt(t, plan, (IDLE_FRAME_MS + 20) / 1000) ? IDLE_FRAME_MS
-        : size >= 56 ? 0 : 24;
-      if (!pause) frame = requestAnimationFrame(tick);
-      else wake = setTimeout(() => { frame = requestAnimationFrame(tick); }, pause);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => { cancelAnimationFrame(frame); clearTimeout(wake); };
+    return startFrames({
+      advance: (now) => {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        const clock = motion.current;
+        const cue = avatarConductor.cue(owner, state, clock.since / 1000, clock.entered, !!clock.prop, now / 1000);
+        const { plan } = cue;
+        const t = Math.max(0, now / 1000 - cue.since);
+        const trail = trailsAt(avatarPose(state, t, false, clock.prop, plan), t, clock.carry, clock.carrySweep);
+        motion.current = { ...clock, elapsed: t, now, plan, ...trail };
+        expression.current = approach(expression.current, expressionFor(state, t, plan), dt);
+        const targets = morphTargets(state);
+        const k = 1 - Math.exp(-dt / 0.13);
+        morph.current = {
+          bang: morph.current.bang + (targets.bang - morph.current.bang) * k,
+        };
+        const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
+        if (!animatesAt(state, t, plan) && !settling) return null;
+        // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
+        // asking for every display refresh makes the page restyle on each one even when nothing paints.
+        // An idle avatar that is only breathing sleeps longer, until just before its next blink or glance.
+        return state === "idle" && !settling && idleQuietAt(t, plan, (IDLE_FRAME_MS + 20) / 1000) ? IDLE_FRAME_MS
+          : size >= 56 ? 0 : 24;
+      },
+      commit: () => setFrame((f) => f + 1),
+    });
   }, [state, still, size, owner]);
 
   // A state that has not committed yet renders from its first frame.
