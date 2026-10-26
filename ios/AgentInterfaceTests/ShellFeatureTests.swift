@@ -180,12 +180,15 @@ import XCTest
     XCTAssertNil(try event(#","sender":"Kim""#).sender, "A sender of another shape is left out, not fatal")
     XCTAssertEqual(GroupConversationView.memberName(try event(#","sender":{"id":"u","name":" "}"#)), "Household member")
   }
-  func testOnlyANoticeOfNewEventsInThisRoomLoads() {
+  func testAnyNoticeForThisRoomLoadsIncludingAStatusOnlyChange() {
     let notice = GroupNotice.parse(event: "group", data: #"{"roomId":"r1","latestSeq":7}"#)
     XCTAssertEqual(notice, GroupNotice(roomId: "r1", latestSeq: 7))
-    XCTAssertTrue(GroupNotice.news(notice, room: "r1", cursor: 6))
-    XCTAssertFalse(GroupNotice.news(notice, room: "r1", cursor: 7), "Already loaded")
-    XCTAssertFalse(GroupNotice.news(notice, room: "r2", cursor: 0), "Another room")
+    XCTAssertTrue(GroupNotice.news(notice, room: "r1"))
+    // The server also announces driver status changes, such as a decision becoming pending, at the
+    // latest sequence already loaded, or 0 in a room with no events yet.
+    XCTAssertTrue(GroupNotice.news(GroupNotice(roomId: "r1", latestSeq: 0), room: "r1"), "A status-only change")
+    XCTAssertFalse(GroupNotice.news(notice, room: "r2"), "Another room")
+    XCTAssertFalse(GroupNotice.news(GroupNotice(roomId: "r1", latestSeq: -1), room: "r1"), "Not a valid notice")
     XCTAssertNil(GroupNotice.parse(event: "", data: "roster"), "Roster notices share the stream")
     XCTAssertNil(GroupNotice.parse(event: "group", data: "{bad"))
   }
@@ -218,15 +221,16 @@ import XCTest
     XCTAssertEqual(DesktopLink.fragment(path: "/p", control: true), "path=%2Fp&control=1")
     XCTAssertEqual(DesktopWebView.literal("a'b\"c</script>"), #""a'b\"c<\/script>""#)
   }
-  func testATicketIsUsableOnlyBeforeItExpires() {
+  /// The screen waits this long for the page to connect with a ticket before getting a fresh one.
+  func testThePageHasUntilItsTicketExpiresToConnect() {
     let now = Date(timeIntervalSince1970: 1_000_000)
     func ticket(_ offset: TimeInterval) -> DesktopTicket {
       DesktopTicket(path: "/p", expiresAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(offset)), viewerId: nil)
     }
-    XCTAssertTrue(DesktopLink.usable(ticket(30), now: now))
-    XCTAssertFalse(DesktopLink.usable(ticket(0.5), now: now), "Too close to expiry to connect")
-    XCTAssertFalse(DesktopLink.usable(ticket(-5), now: now))
-    XCTAssertFalse(DesktopLink.usable(DesktopTicket(path: "/p", expiresAt: "soon", viewerId: nil), now: now))
+    XCTAssertEqual(DesktopLink.connectWait(ticket(30), now: now), .seconds(30))
+    XCTAssertEqual(DesktopLink.connectWait(ticket(0.5), now: now), .seconds(1), "At least a second, even close to expiry")
+    XCTAssertEqual(DesktopLink.connectWait(ticket(-5), now: now), .seconds(1), "An expired ticket is replaced after a second")
+    XCTAssertNil(DesktopLink.connectWait(DesktopTicket(path: "/p", expiresAt: "soon", viewerId: nil), now: now))
   }
   func testReconnectsBackOffThenStopForAManualReconnect() {
     XCTAssertEqual((0..<6).map { DesktopLink.retryDelay(attempt: $0) }, [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(8), nil])
@@ -250,6 +254,8 @@ import XCTest
     XCTAssertFalse(DesktopLink.allows(URL(string: "https://evil.example.test/native/computer")!, base: base))
     XCTAssertFalse(DesktopLink.allows(URL(string: "http://agentui.example.test/native/computer")!, base: base))
     XCTAssertTrue(DesktopLink.allows(URL(string: "about:blank")!, base: base))
+    XCTAssertFalse(DesktopLink.allows(URL(string: "about:srcdoc")!, base: base), "Only the blank page a web view starts on")
+    XCTAssertFalse(DesktopLink.allows(URL(string: "about:blank#x")!, base: base))
   }
 
   // MARK: Search, switcher, sheets and pickers

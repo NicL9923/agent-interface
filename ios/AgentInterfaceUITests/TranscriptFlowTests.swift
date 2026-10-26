@@ -21,6 +21,15 @@ import XCTest
       try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
   }
+  /// Chooses a context menu item. A menu can ignore a tap while it is still opening, so the choice
+  /// is repeated only while the menu stays open, as `selectSettingsTab` does.
+  private func choose(_ item: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+    for _ in 0..<3 {
+      item.tapWhenReady(file: file, line: line)
+      if item.waitForDisappearance(timeout: 3) { return }
+    }
+    XCTFail("\(item) stayed open after three taps", file: file, line: line)
+  }
   /// Waits until `condition` holds, for values a predicate on the element cannot read, such as its frame.
   private func waitFor(_ timeout: TimeInterval = 10, _ condition: @escaping () -> Bool) -> Bool {
     let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
@@ -132,8 +141,7 @@ import XCTest
     XCTAssertTrue(app.buttons["Copy as Markdown"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["Copy as CSV"].exists)
     try capture(app, "table-copy-menu")
-    app.buttons["Copy as CSV"].tapWhenReady()
-    XCTAssertTrue(app.buttons["Copy as CSV"].waitForDisappearance())
+    choose(app.buttons["Copy as CSV"])
   }
 
   func testAdvancedWorkKeepsReasoningInsideTheFold() throws {
@@ -164,7 +172,7 @@ import XCTest
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 15))
     app.staticTexts["Your household assistant"].press(forDuration: 1)
-    app.buttons["Quote in reply"].tapWhenReady()
+    choose(app.buttons["Quote in reply"])
     XCTAssertTrue(composer.wait(until: "value BEGINSWITH %@", "> # Your household assistant\n>\n> I can help"), String(describing: composer.value))
     try capture(app, "quote-in-draft")
   }
