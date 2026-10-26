@@ -37,25 +37,33 @@ async function reuse(cache, older, path) {
   return false;
 }
 
-// The pages are HTML by nature; every other install file is code or an image, so an HTML body
-// there is the app shell answering for a file the server no longer has.
-const acceptable = (path, response) => path.endsWith('.html') ? response.ok : usable(response);
+// Only a bundle can be missing from a release: the server answers a path it does not have with the
+// app shell, so an HTML body under assets/ is a retired chunk. Pages, icons and the manifest ship
+// in every release and only need to load; judging them by content type would let one unexpected
+// header block every install.
+const acceptable = (path, response) => path.startsWith('/assets/') ? usable(response) : response.ok;
 
 async function install() {
   const cache = await caches.open(CACHE);
-  const older = await olderCaches();
-  const missing = [];
-  for (const path of INSTALL_FILES) if (!await reuse(cache, older, path)) missing.push(path);
-  // Like addAll, but a bad answer fails the install too: the browser retries it later and the
-  // previous worker keeps serving until then.
-  const fetched = await Promise.all(missing.map(async (path) => {
-    const response = await fetch(path);
-    if (!acceptable(path, response)) throw new Error('Cannot install ' + path + ': ' + response.status + ' ' + response.headers.get('content-type'));
-    return [path, response];
-  }));
-  for (const [path, response] of fetched) await cache.put(path, response);
-  // Lazy files the last release already holds cost nothing to keep.
-  for (const path of [...WARM_FILES, ...ON_DEMAND_FILES]) await reuse(cache, older, path);
+  try {
+    const older = await olderCaches();
+    // Each body is stored as soon as it arrives, as addAll does. A response held unread keeps its
+    // connection busy, and over HTTP/1.1 the browser's few connections per host would all be held
+    // while the rest of the list waited for one forever.
+    await Promise.all(INSTALL_FILES.map(async (path) => {
+      if (await reuse(cache, older, path)) return;
+      const response = await fetch(path);
+      if (!acceptable(path, response)) throw new Error('Cannot install ' + path + ': ' + response.status + ' ' + response.headers.get('content-type'));
+      await cache.put(path, response);
+    }));
+    // Lazy files the last release already holds cost nothing to keep.
+    for (const path of [...WARM_FILES, ...ON_DEMAND_FILES]) await reuse(cache, older, path);
+  } catch (error) {
+    // A bad answer fails the install, and its half-filled cache must never pass for this release.
+    // The browser retries the install later, and the previous worker keeps serving until then.
+    await caches.delete(CACHE);
+    throw error;
+  }
 }
 
 // Best effort, and safe to repeat: files already cached are skipped, so a run the browser cut short

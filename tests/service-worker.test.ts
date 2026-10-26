@@ -94,14 +94,35 @@ describe('service worker privacy and return path', () => {
     sw.fetch.mockImplementation((path: string) => path === '/assets/app-a1234567.js' ? Promise.resolve(html()) : healthy(path));
     await expect(sw.tryInstall()).rejects.toThrow('/assets/app-a1234567.js');
     // Nothing from the failed attempt is left looking like a finished release.
-    expect(sw.put).not.toHaveBeenCalled();
+    expect(sw.stores.has('agent-interface-test')).toBe(false);
   });
 
   it.each([['an error status', () => new Response('gone', { status: 404 })], ['a failed fetch', () => { throw new Error('offline'); }]])('refuses to install on %s', async (_name, bad) => {
     const sw = worker();
     sw.fetch.mockImplementation((path: string) => path === '/icon-192.png' ? Promise.resolve().then(bad) : healthy(path));
     await expect(sw.tryInstall()).rejects.toThrow();
-    expect(sw.put).not.toHaveBeenCalled();
+    expect(sw.stores.has('agent-interface-test')).toBe(false);
+  });
+
+  it('stores each install file as it arrives, so a limit on connections cannot stall the install', async () => {
+    const sw = worker();
+    // Two connections, each busy until its response body is read, as when the cache stores it.
+    let free = 2;
+    const queued: (() => void)[] = [];
+    sw.fetch.mockImplementation(async (path: string) => {
+      if (free) free--; else await new Promise<void>(resolve => queued.push(resolve));
+      return healthy(path);
+    });
+    sw.put.mockImplementation(() => { const next = queued.shift(); if (next) next(); else free++; });
+    const stalled = new Promise(resolve => setTimeout(() => resolve('stalled'), 300));
+    await expect(Promise.race([sw.tryInstall().then(() => 'installed'), stalled])).resolves.toBe('installed');
+  });
+
+  it('installs a page-level file whatever its content type, since only bundles can be missing', async () => {
+    const sw = worker();
+    // A server without a manifest type answers it as HTML; that must not block every install.
+    sw.fetch.mockImplementation((path: string) => path === '/icon-192.png' ? Promise.resolve(html()) : healthy(path));
+    await expect(sw.tryInstall()).resolves.toBeUndefined();
   });
 
   it('still installs the HTML pages as HTML', async () => {
