@@ -240,10 +240,11 @@ struct ComputerView: View {
 /// and account it was opened with, is captured once the desktop attaches. `held` is the server's
 /// word: a takeover it confirmed sets it, and a hand back or an available status that says this
 /// person no longer holds the desktop clears it. An unavailable status only stops input. Leaving
-/// does not trust any of that: it waits for a takeover still on its way to settle, whatever its
-/// result, then always hands back that viewer through that same client, so assistants are never
-/// left paused by a screen that is gone. The server ignores a release for a viewer that holds
-/// nothing and refuses one that would touch anyone else's control.
+/// does not trust `held` either: once this screen has asked to take over, it waits for that
+/// takeover to settle, whatever its result, then hands the viewer back through that same client,
+/// so assistants are never left paused by a screen that is gone. A screen that only watched sends
+/// nothing: the person's viewer identity is shared with their other screens, such as Safari, and a
+/// release would take control away from the one they are using.
 @MainActor @Observable final class DesktopControl {
   struct Viewer: Equatable {
     var id: String
@@ -258,6 +259,8 @@ struct ComputerView: View {
   private(set) var error: String?
   @ObservationIgnored private(set) var viewer: Viewer?
   @ObservationIgnored private var pendingTake: Task<Result<ComputerStatus, Error>, Never>?
+  /// This screen asked to take over and has not handed back since: leaving owes a release.
+  @ObservationIgnored private(set) var attempted = false
   @ObservationIgnored private(set) var left = false
   /// Whether the viewer takes the person's input now.
   var input: Bool { held && !unavailable && !submitting }
@@ -268,11 +271,12 @@ struct ComputerView: View {
     guard let client = store.api else { return }
     let next = Viewer(id: viewerId, client: client, account: store.scope)
     guard next != viewer else { return }
-    if let earlier = viewer {
+    if let earlier = viewer, attempted {
       let pending = pendingTake
       Task { if let pending { _ = await pending.value }; await Self.handBack(store, earlier) }
-      held = false
     }
+    held = false
+    attempted = false
     viewer = next
   }
   private static func handBack(_ store: AppStore, _ viewer: Viewer) async {
@@ -284,6 +288,7 @@ struct ComputerView: View {
     guard !submitting, !left, let viewer else { return }
     submitting = true
     error = nil
+    attempted = true
     let task = Task { [weak self] () -> Result<ComputerStatus, Error> in
       let result = await store.controlComputer("take", viewerId: viewer.id, through: viewer.client, scope: viewer.account) {
         self?.left == false
@@ -316,6 +321,7 @@ struct ComputerView: View {
     switch result {
     case .success:
       held = false
+      attempted = false
       AccessibilityNotification.Announcement("You are watching the desktop.").post()
     case .failure(let failure): error = failure.localizedDescription
     }
@@ -328,15 +334,22 @@ struct ComputerView: View {
     if status.available && held && !DesktopLink.controlling(status) { held = false }
   }
   func returned() { left = false }
-  /// The screen is gone: after any takeover still on its way settles, hands back this viewer
-  /// through the client it was opened with. Skipped only when that client's sign-in is gone, since
-  /// another account's client must never send it.
+  /// The screen is gone: once this screen asked to take over, after that takeover settles, hands
+  /// back this viewer through the client it was opened with. Skipped when that client's sign-in is
+  /// gone, since another account's client must never send it; sign-out waits for this, briefly,
+  /// before it revokes the session.
   func leave(_ store: AppStore) async {
     left = true
-    if let pendingTake { _ = await pendingTake.value }
-    guard let viewer else { return }
-    await Self.handBack(store, viewer)
-    held = false
+    let cleanup = Task { [self] in
+      if let pendingTake { _ = await pendingTake.value }
+      guard attempted, let viewer else { return }
+      await Self.handBack(store, viewer)
+      held = false
+      attempted = false
+    }
+    store.desktopCleanup = cleanup
+    await cleanup.value
+    if store.desktopCleanup == cleanup { store.desktopCleanup = nil }
   }
 }
 

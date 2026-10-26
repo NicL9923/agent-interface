@@ -767,6 +767,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private static func missing(_ error: Error) -> Bool { (error as? APIError)?.code == "assistant_not_found" }
   func select(_ id: String?, navigate: Bool = true) async {
     selections += 1
+    // A window an open-at asked for belongs to the selection it was made in.
+    requestedWindow = nil
     if id != nil { stayHome = false; notice = nil }
     persistDraft()
     flushDraft()
@@ -1614,7 +1616,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     guard let messageId, current() else { return }
     if conversation?.messages.contains(where: { $0.id == messageId }) != true {
       // The window now starts at the message; polls keep it, and pages add history above it.
-      requestedWindow = (botId, messageId, historyStarts[botId])
+      requestedWindow = (botId, messageId, historyStarts[botId], selections, account)
       historyStarts[botId] = messageId
       windowGeneration += 1
       await refreshConversation()
@@ -1638,11 +1640,12 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     openRequests += 1
     guard let requested = requestedWindow else { return }
     requestedWindow = nil
-    guard historyStarts[requested.botId] == requested.start else { return }
+    // Only the selection and account that asked for it, so matching message IDs alone never roll back.
+    guard requested.selection == selections, requested.account == scope, historyStarts[requested.botId] == requested.start else { return }
     historyStarts[requested.botId] = requested.previous
     windowGeneration += 1
   }
-  @ObservationIgnored private var requestedWindow: (botId: String, start: String, previous: String?)?
+  @ObservationIgnored private var requestedWindow: (botId: String, start: String, previous: String?, selection: Int, account: String?)?
 
   func reconnect() async {
     guard let api else { return }
@@ -1879,6 +1882,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// server-side session stays valid until it expires.
   @discardableResult func signOut(localOnly: Bool = false) async -> Bool {
     persistDraft()
+    await awaitDesktopCleanup()
     if let api, api.token != nil {
       var revoked = true
       do { let _: EmptyResponse = try await api.write("/auth/logout", [String: String]()) } catch {
@@ -1962,6 +1966,20 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     } catch { return .failure(error) }
   }
   @ObservationIgnored private var computerEpoch = 0
+  /// The native desktop screen's exit cleanup still on its way. Sign-out waits for it, up to
+  /// `desktopCleanupWait`, before revoking the session the cleanup's release needs.
+  @ObservationIgnored var desktopCleanup: Task<Void, Never>?
+  static let desktopCleanupWait: Duration = .seconds(5)
+  private func awaitDesktopCleanup() async {
+    guard let cleanup = desktopCleanup else { return }
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { await cleanup.value }
+      // Timer: sign-out never waits longer than this for the desktop's hand back.
+      group.addTask { try? await Task.sleep(for: Self.desktopCleanupWait) }
+      await group.next()
+      group.cancelAll()
+    }
+  }
   @ObservationIgnored private var computerWrites = 0
   /// Returns false when the server could not be reached to revoke the session. The caller
   /// then asks before repeating with `localOnly`, which still lets the person leave.

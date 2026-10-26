@@ -163,6 +163,8 @@ import XCTest
     try await until { host.heldCount("take") == 1 }
     // The screen closes while the takeover is on its way.
     let leave = Task { await control.leave(value) }
+    try await until { control.left }
+    XCTAssertEqual(releases(host), [], "Nothing is handed back before the takeover settles")
     host.release("take")
     await take.value
     await leave.value
@@ -192,16 +194,42 @@ import XCTest
     XCTAssertEqual(releases(host), ["viewer-1"])
   }
 
-  func testLeavingAlwaysHandsBackTheViewerEvenWithNothingConfirmed() async throws {
+  func testAScreenThatOnlyWatchedLeavesAnotherScreensControlAlone() async throws {
+    // The person took control in Safari; their viewer identity is the same on every screen.
     let desktop = Desktop()
+    desktop.owner = #"{"kind":"human","mine":true,"name":"Tester"}"#
     let host = desktopHost(desktop) { _, _ in false }
     let value = try store(host)
     let control = DesktopControl()
     control.opened(value, viewerId: "viewer-1")
-    // Nothing confirmed here; leaving does not trust that and hands the viewer back anyway.
+    await value.refreshComputer()
+    control.statusChanged(value.computerStatus)
+    XCTAssertFalse(control.held, "Control held elsewhere is not this screen's")
     await control.leave(value)
-    XCTAssertEqual(releases(host), ["viewer-1"], "Sent whatever this screen believes")
-    XCTAssertNil(control.error, "A release for a viewer holding nothing is not an error to show")
+    XCTAssertEqual(releases(host), [], "Watching and leaving never hands back Safari's control")
+  }
+
+  func testSignOutWaitsForTheDesktopsHandBackBeforeRevoking() async throws {
+    let desktop = Desktop()
+    let host = desktopHost(desktop) { key, _ in key == "take" }
+    let value = try store(host)
+    let control = DesktopControl()
+    control.opened(value, viewerId: "viewer-1")
+    let take = Task { await control.take(value) }
+    try await until { host.heldCount("take") == 1 }
+    let leave = Task { await control.leave(value) }
+    try await until { control.left }
+    // The person goes back to Settings and signs out while the takeover is still on its way.
+    let signOut = Task { await value.signOut() }
+    try await until { value.desktopCleanup != nil }
+    XCTAssertFalse(host.requests.contains { $0.url?.path == "/api/auth/logout" }, "Sign-out waits for the hand back")
+    host.release("take")
+    await take.value
+    await leave.value
+    _ = await signOut.value
+    let paths = host.requests.map { $0.url?.path ?? "" }.filter { $0 == "/api/computer/control" || $0 == "/api/auth/logout" }
+    XCTAssertEqual(paths, ["/api/computer/control", "/api/computer/control", "/api/auth/logout"], "Take, release, then revoke")
+    XCTAssertEqual(releases(host), ["viewer-1"])
   }
 
   func testATakeoverThatLandsAfterAnAccountSwitchIsHandedBackThroughItsOwnClient() async throws {
@@ -214,6 +242,8 @@ import XCTest
     let take = Task { await control.take(value) }
     try await until { host.heldCount("take") == 1 }
     let leave = Task { await control.leave(value) }
+    try await until { control.left }
+    XCTAssertEqual(releases(host), [])
     // Another member signs in before the takeover answers.
     value.api = otherHost.api(); hosts.append(otherHost)
     value.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"""
@@ -296,6 +326,12 @@ import XCTest
     host.release("m3")
     await older.value
     XCTAssertNil(value.focusedMessage, "The abandoned open never jumps the newly opened chat")
+    // Choosing loaded m4 now must not roll this window back to the abandoned open's m5.
+    await value.openConversation(botId: "bot", atMessage: "m4")
+    XCTAssertEqual(value.focusedMessage?.messageId, "m4")
+    await value.refreshConversation()
+    XCTAssertEqual(value.conversation?.messages.map(\.id), ["m3", "m4", "m5", "m6"], "m4 stays loaded after the next poll")
+    XCTAssertNotEqual(lastStart(host), "start=m5")
   }
 
   func testANewerOpenOfALoadedMessageDropsTheOlderWindow() async throws {
@@ -383,6 +419,8 @@ import XCTest
     owner.cancel()
     // The reconnected watch asks for a fresh snapshot while the cancelled load still runs.
     let live = Task { await refresh.run { applied.append(Task.isCancelled ? "skipped" : "fresh snapshot") } }
+    // The live caller is queued behind the cancelled load before it finishes.
+    try await until { refresh.waiting == 1 }
     gate.open()
     await owner.value
     await live.value
