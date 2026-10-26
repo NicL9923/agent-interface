@@ -15,6 +15,9 @@ let loaded: Popup | undefined;
 let scheduled = false;
 // A swap replaces the row under a finger, which would orphan the touch, so it waits for the lift.
 let touches = 0;
+// One gesture waits for the menu code across every row, and the latest replaces any before it,
+// so rows right-clicked in turn while it loads open a single menu, for the last one.
+let pendingGesture: object | undefined;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach(listener => listener());
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
@@ -76,9 +79,13 @@ export function BotMenu({ children, ...props }: Omit<BotMenuProps, "opensAt" | "
     touchEnded();
   };
   const open = (at: Point) => {
+    const gesture = pendingGesture = {};
     const show = (Popup: Popup) => {
       if (!mounted.current) return;
       release();
+      // A later gesture, on this row or another, has taken over.
+      if (pendingGesture !== gesture) return;
+      pendingGesture = undefined;
       setOpened(current => current ?? { Popup, at });
     };
     if (loaded) show(loaded);

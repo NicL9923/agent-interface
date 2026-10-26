@@ -290,6 +290,34 @@ describe('setup and recovery interface',()=>{
       expect(reads()).toBe(initial+3);
     });
 
+    it('reads on the next focus after a read that failed, even right after an earlier success',async()=>{
+      const original=vi.mocked(api).getMockImplementation()!;
+      let failing=false;
+      vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>{
+        if(path==='/bootstrap?roster=lean'&&failing)throw new Error('network');
+        return await original(path,init) as T;
+      });
+      await renderApp();const initial=reads();
+      // Coming back online always reads; this one fails, so what the app shows is no longer trusted.
+      failing=true;
+      await act(async()=>window.dispatchEvent(new Event('online')));
+      expect(reads()).toBe(initial+1);
+      failing=false;
+      await advance(1_000);await returnTo();
+      expect(reads()).toBe(initial+2);
+    });
+
+    it('reads on the next focus after a read that found Hermes down, even right after an earlier success',async()=>{
+      await renderApp();const initial=reads();
+      const healthy=boot;
+      boot={...boot,bots:[],connection:{connected:false,code:'unreachable'}};
+      await act(async()=>window.dispatchEvent(new Event('online')));
+      expect(reads()).toBe(initial+1);
+      boot=healthy;
+      await advance(1_000);await returnTo();
+      expect(reads()).toBe(initial+2);
+    });
+
     it('still reads for a roster change the server announces, however recent the last read',async()=>{
       await renderApp();await advance(0);const initial=reads();
       await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==='/api/events')stream.emit('roster','roster');});

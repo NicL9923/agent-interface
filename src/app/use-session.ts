@@ -48,8 +48,8 @@ export function useSession(events: SessionEvents) {
       try {
         const next = await apiRequest("GET /bootstrap", { query: { roster: "lean" } });
         if (epoch !== identityEpoch.current) return null;
-        // A bootstrap that found Hermes down is no reason to hold back the next look.
-        if (next.connection.connected) lastSuccess.current = Date.now();
+        // A bootstrap that found Hermes down, like a failed one, is no reason to hold back the next look.
+        lastSuccess.current = next.connection.connected ? Date.now() : 0;
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           nextIdentity();
           handlers.current.onIdentityChange();
@@ -88,6 +88,7 @@ export function useSession(events: SessionEvents) {
           handlers.current.onIdentityChange();
           setAuth(true); setBoot(null); setCsrf("");
         } else {
+          lastSuccess.current = 0;
           setDisconnected(true); setAppUnavailable(true);
         }
         return null;
@@ -107,6 +108,7 @@ export function useSession(events: SessionEvents) {
       await refresh();
       window.dispatchEvent(new Event("agent-interface:reconnect"));
     } catch {
+      lastSuccess.current = 0;
       setDisconnected(true); setAppUnavailable(true);
     } finally {
       setCheckingConnection(false);
