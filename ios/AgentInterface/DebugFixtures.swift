@@ -132,7 +132,7 @@
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
     nonisolated(unsafe) static var preferences: [String: Any] = [
-      "startPage": "assistant", "presentation": "simple", "theme": "system", "favorites": [], "sections": [],
+      "startPage": "assistant", "presentation": "simple", "theme": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_THEME"] ?? "system", "favorites": [], "sections": [],
       "followBots": [],
     ]
     nonisolated(unsafe) static var items: [[String: Any]] = [
@@ -161,6 +161,7 @@
     nonisolated(unsafe) static var secureIndex = 0
     nonisolated(unsafe) static var vaultUnlocked = false
     nonisolated(unsafe) static var sourceEnabled = true
+    nonisolated(unsafe) static var todayReads = 0
     nonisolated(unsafe) static var todayFrontier = "0"
     nonisolated(unsafe) static var todaySince = "2026-09-30T13:30:00Z"
     nonisolated(unsafe) static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
@@ -182,8 +183,13 @@
     nonisolated(unsafe) static var ranchModel = (provider: "openrouter", model: "configured-model")
     /// Fixed, so opening the unread chat reads it until a newer reply arrives.
     static let personalReplyAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-600))
+    // Immutable JSON, read only by requests while FixtureProtocol.lock is held.
+    nonisolated(unsafe) static let todayDesign = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TODAY_DESIGN"]
+      .flatMap { $0.data(using: .utf8) }
+      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     static var bots: [[String: Any]] {
-      [
+      if let bots = todayDesign?["bots"] as? [[String: Any]] { return bots }
+      return [
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
           "model": ranchModel.model,
@@ -441,6 +447,13 @@
         object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
       } else if path.contains("/routines/") && path.contains("/results/") {
         object = ["messages": [["id": "fixture-output", "role": "assistant", "text": "Fixture saved routine output: the pasture gate is closed."]], "previewOnly": false]
+      } else if path == "/api/today", let overview = Self.todayDesign?["overview"] {
+        // Design-only transport states. A pending response lets the tour capture real loading UI.
+        if Self.todayDesign?["mode"] as? String == "loading" { return }
+        Self.todayReads += 1
+        if Self.todayDesign?["mode"] as? String == "stale", Self.todayReads > 1 {
+          status = 503; object = ["error": "Fixture connection interrupted."]
+        } else { object = overview }
       } else if path == "/api/today" {
         let events: [[String: Any]] = Self.todayFrontier == "0" ? [["id": "fixture-completed", "botId": "ranch", "kind": "completed", "title": "Fixture routine completed", "occurredAt": "2026-10-01T13:00:00Z"]] : Self.todayFrontier == "1" ? [["id": "fixture-late-import", "botId": "ranch", "kind": "completed", "title": "Fixture late imported completion", "occurredAt": "2026-09-28T13:00:00Z"]] : []
         object = ["generatedAt": "2026-10-01T13:30:00Z", "since": Self.todaySince, "frontier": Self.todayFrontier == "0" ? "1" : "2", "hasMore": Self.todayFrontier == "0", "items": [["botId": "ranch", "botName": "Ranch hand", "activity": ["state": "done"], "approvals": [], "attention": [], "files": [], "latestMessage": ["id": "fixture-today", "text": "Fixture: pasture inspection finished.", "createdAt": "2026-10-01T13:00:00Z"]]], "events": events, "unavailableBots": []]

@@ -30,9 +30,9 @@ it("shows every loaded recap event, opens the right assistant and marks only the
     events: Array.from({ length: 40 }, (_, index) => ({ id: `e${index}`, botId: "ranch", kind: "completed", title: `Result ${index}`, occurredAt: generatedAt })) };
   vi.mocked(api).mockResolvedValue(overview); vi.mocked(write).mockResolvedValue({ ok: true }); const onOpen = vi.fn();
   await render(createElement(TodayPanel, { bootstrap, onOpen }));
-  expect(container.textContent).toContain("0 at work"); expect(container.textContent).toContain("Couldn't check 1 assistant");
+  expect(container.textContent).toContain("0 at work"); expect(container.textContent).toContain("Offline · Disconnected");
   expect(container.textContent).toContain("Result 0"); expect(container.textContent).toContain("Result 39");
-  await act(async () => Array.from(container.querySelectorAll(".today-row")).find(row => row.querySelector("small")?.textContent?.startsWith("Result 0"))!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await act(async () => Array.from(container.querySelectorAll(".today-row")).find(row => row.querySelector("strong")?.textContent?.startsWith("Result 0"))!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
   expect(onOpen).toHaveBeenCalledWith("ranch"); await click("Mark this page caught up");
   expect(write).toHaveBeenCalledWith("/today/seen", { seenAt: generatedAt, frontier: "40" }, "PUT");
 });
@@ -49,7 +49,46 @@ it("shows when this client last checked, since an unchanged recap keeps its orig
   // A 304 hands back the body loaded earlier, generated 20 minutes ago.
   vi.mocked(api).mockResolvedValue({ generatedAt: "2026-10-02T02:00:00Z", frontier: "0", hasMore: false, since: "2026-10-01T02:00:00Z", unavailableBots: [], items: [], events: [] });
   await render(createElement(TodayPanel, { bootstrap, onOpen: vi.fn() }));
-  expect(container.querySelector(".today-timestamp")?.textContent).toBe("Checked just now · updates every 30 seconds");
+  expect(container.querySelector(".today-timestamp")?.textContent).toBe("Checked just now");
+});
+it("leads with each request, distinguishes secure requests and lists an active assistant only once", async () => {
+  const overview: TodayOverview = { generatedAt: "2026-10-02T02:00:00Z", frontier: "0", hasMore: false,
+    since: "2026-10-01T02:00:00Z", unavailableBots: [], events: [], items: [
+      { botId: "ranch", botName: "Ranch", activity: { state: "working" }, files: [], attention: [],
+        approvals: [{ id: "approval", title: "Add the gate reminder?", detail: "Notify the household", status: "pending" }] },
+      { botId: "secure", botName: "Bookkeeper", activity: { state: "blocked" }, files: [], approvals: [],
+        attention: [{ id: "login", kind: "secure", title: "Sign in to your bank", detail: "Use a secure request" }] },
+      { botId: "garden", botName: "Garden planner", activity: { state: "thinking" }, files: [], approvals: [], attention: [] },
+    ] };
+  vi.mocked(api).mockResolvedValue(overview);
+  const onOpen = vi.fn();
+  await render(createElement(TodayPanel, { bootstrap, onOpen }));
+  const requests = container.querySelectorAll<HTMLButtonElement>(".today-attention-list .today-row");
+  expect(requests).toHaveLength(2);
+  expect(requests[0].querySelector("strong")?.textContent).toBe("Add the gate reminder?");
+  expect(requests[0].textContent).toContain("Ranch · Approval");
+  expect(requests[1].textContent).toContain("Bookkeeper · Secure request");
+  expect(requests[1].querySelector(".today-row-action")?.textContent).toBe("Review");
+  expect(container.querySelectorAll(".today-row")).toHaveLength(3);
+  expect(container.querySelector(".today-summary")?.textContent).toContain("1 at work");
+  await act(async () => requests[1].click());
+  expect(onOpen).toHaveBeenCalledWith("secure");
+});
+it("keeps disconnected assistants named and opens their conversation to reconnect", async () => {
+  vi.mocked(api).mockResolvedValue({ generatedAt: "2026-10-02T02:00:00Z", frontier: "0", hasMore: false,
+    since: "2026-10-01T02:00:00Z", unavailableBots: ["ranch"], events: [], items: [
+      { botId: "ranch", botName: "Ranch", activity: { state: "disconnected" }, files: [], approvals: [], attention: [],
+        error: "Could not read this Hermes conversation. Open it to reconnect." },
+    ] });
+  const onOpen = vi.fn();
+  await render(createElement(TodayPanel, { bootstrap, onOpen }));
+  expect(container.querySelector(".today-summary")?.textContent).toContain("1 need you");
+  const row = container.querySelector<HTMLButtonElement>(".today-attention-list .today-row")!;
+  expect(row.querySelector("strong")?.textContent).toContain("Open it to reconnect");
+  expect(row.textContent).toContain("Ranch · Disconnected");
+  expect(row.querySelector(".today-row-action")?.textContent).toBe("Reconnect");
+  await act(async () => row.click());
+  expect(onOpen).toHaveBeenCalledWith("ranch");
 });
 it("preserves another document's draft and original revision when saving profile memory", async () => {
   const memory: ProfileMemory = { botId: "ranch", profile: "ranch", scope: "profile", owner: "Hermes", notice: "Existing conversations keep their snapshot.", documents: [

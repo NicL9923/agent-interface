@@ -156,7 +156,7 @@ import XCTest
     XCTAssertTrue(app.staticTexts["Fixture routine completed"].waitForExistence(timeout: 5))
     let marker = app.buttons["markTodaySeen"]
     XCTAssertEqual(marker.label, "Mark this page caught up")
-    XCTAssertTrue(app.staticTexts["More recorded results are waiting. Mark this page caught up to load the next page."].exists)
+    XCTAssertTrue(app.staticTexts["More results are waiting. Mark this page caught up to see them."].exists)
     app.collectionViews["todayOverview"].swipeUp(); marker.tap()
     XCTAssertTrue(app.staticTexts["Fixture late imported completion"].waitForExistence(timeout: 5))
     XCTAssertTrue(marker.wait(until: "label == %@", "Mark caught up"), marker.label)

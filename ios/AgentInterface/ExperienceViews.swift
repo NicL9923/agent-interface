@@ -85,127 +85,168 @@ struct TodayView: View {
   @State private var applied: String?
   /// When this device last confirmed the overview. A 304 keeps the overview's own generatedAt.
   @State private var checkedAt: Date?
+  @Environment(\.dynamicTypeSize) private var typeSize
   var body: some View {
     List {
-      Group {
       if let error {
         Section {
           ErrorBanner(message: TodayCopy.failure(error))
-          if value == nil { Text("Today is unavailable right now.").foregroundStyle(.secondary); Button("Retry overview") { Task { await load(manual: true) } } }
-        }
+          if value == nil {
+            Text("Today is unavailable right now.").foregroundStyle(.secondary)
+            Button("Retry overview") { Task { await load(manual: true) } }
+          }
+        }.listRowBackground(Color.clear)
       }
-      if value == nil && error == nil { Section { ProgressView("Checking your assistants…") } }
+      if value == nil && error == nil {
+        Section { ProgressView("Checking your assistants…") }.listRowBackground(Color.clear)
+      }
       if let value {
         Section {
-          HStack(alignment: .top, spacing: 14) {
-            WrapLayout(spacing: 14, lineSpacing: 6) { counts(value) }.frame(maxWidth: .infinity, alignment: .leading)
-            Button("Refresh") { Task { await load(manual: true) } }.buttonStyle(.bordered).controlSize(.small)
-              .disabled(busy).accessibilityIdentifier("refreshToday")
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) { counts(value) }
+            VStack(alignment: .leading, spacing: 8) { counts(value) }
           }
-        }
-        Section("Needs your attention") {
-          if attention(value).isEmpty { Text("No pending requests in the assistants we could check.").foregroundStyle(.secondary) }
-          ForEach(attention(value)) { item in
-            assistantRow(item, detail: item.approvals.first { $0.status == "pending" }?.title ?? item.attention.first?.title ?? item.activity.detail ?? item.activity.state.label)
-          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        } footer: {
+          Text("Checked \(checkedAt.map { When.format($0, inline: true) } ?? When.format(value.generatedAt, inline: true))")
+            .font(.caption).foregroundStyle(Palette.muted)
+        }.listRowBackground(Color.clear)
+        if !attention(value).isEmpty {
+          Section {
+            ForEach(attention(value)) { item in attentionRow(item) }
+          } header: { sectionTitle("Needs your attention") }
+            .listRowBackground(Palette.raised(scheme))
         }
         Section {
-          if let since = ServerDate.parse(value.since) { Text("Since \(When.format(since, inline: true))").font(.footnote).foregroundStyle(Palette.muted) }
-          if value.events.isEmpty { Text("No new recorded results yet.").foregroundStyle(.secondary) }
+          if value.events.isEmpty { Text("You're caught up. New results will appear here.").font(.subheadline).foregroundStyle(Palette.muted) }
           ForEach(value.events) { event in
+            let name = botName(event.botId)
             Button { open(event.botId, routine: event.routineId) } label: {
-              chevronRow {
-                Text(store.bootstrap?.bots.first { $0.id == event.botId }?.name ?? "Assistant").font(.headline).foregroundStyle(Color.primary)
-                Text(EventCopy.headline(event)).font(.subheadline).foregroundStyle(Palette.muted).lineLimit(3)
-                Text(When.format(event.occurredAt)).font(.caption).foregroundStyle(Palette.muted)
-              }
+              recapRow(event.botId, name: name, title: EventCopy.headline(event), detail: name + " · " + When.format(event.occurredAt))
             }.accessibilityIdentifier("today.event." + event.id)
           }
-          if value.hasMore { Text("More recorded results are waiting. Mark this page caught up to load the next page.").font(.footnote).foregroundStyle(Palette.muted) }
+          if value.hasMore {
+            Text("More results are waiting. Mark this page caught up to see them.").font(.caption).foregroundStyle(Palette.muted)
+          }
           Button(value.hasMore ? "Mark this page caught up" : "Mark caught up") { markCaughtUp(value) }
+            .font(.subheadline.weight(.medium)).tint(Palette.accent)
             .disabled(busy || !store.connected).accessibilityIdentifier("markTodaySeen")
-        } header: { Text("Since you were away") }
-        if let upcoming = value.upcoming, !upcoming.isEmpty {
-          Section("Scheduled next") {
-            ForEach(upcoming) { row in
+        } header: {
+          VStack(alignment: .leading, spacing: 4) {
+            sectionTitle("Since you were away")
+            Text("Since \(When.format(value.since, inline: true))").font(.caption).textCase(nil).foregroundStyle(Palette.muted)
+          }
+        }.listRowBackground(Color.clear)
+        let working = active(value).filter { item in !attention(value).contains { $0.botId == item.botId } }
+        if !working.isEmpty || !(value.upcoming ?? []).isEmpty {
+          Section {
+            ForEach(working) { item in
+              Button { open(item.botId) } label: {
+                recapRow(item.botId, name: item.botName, title: item.activity.detail ?? item.botName, detail: item.activity.detail == nil ? item.activity.state.label : item.botName + " · " + item.activity.state.label)
+              }.accessibilityIdentifier("today.bot." + item.botId)
+            }
+            ForEach(value.upcoming ?? []) { row in
               Button { open(row.botId, routine: row.id) } label: {
-                chevronRow {
-                  Text(row.name).font(.headline).foregroundStyle(Color.primary)
-                  Text([store.bootstrap?.bots.first { $0.id == row.botId }?.name, row.nextRunAt.map { When.format($0) }].compactMap { $0 }.joined(separator: " · "))
-                    .font(.subheadline).foregroundStyle(Palette.muted)
-                }
+                recapRow(row.botId, name: botName(row.botId), title: row.name,
+                  detail: [botName(row.botId), "Scheduled", row.nextRunAt.map { When.format($0) }].compactMap { $0 }.joined(separator: " · "))
               }
             }
-          }
-        }
-        if !active(value).isEmpty {
-          Section("At work") { ForEach(active(value)) { item in assistantRow(item, detail: item.activity.detail ?? item.activity.state.label) } }
+          } header: { sectionTitle("Up next") }.listRowBackground(Color.clear)
         }
         if value.items.contains(where: { !$0.files.isEmpty }) {
-          Section("Recent files") {
+          Section {
             ForEach(value.items.filter { !$0.files.isEmpty }) { item in
               Button { open(item.botId) } label: {
-                chevronRow {
-                  Text(item.botName).font(.headline).foregroundStyle(Color.primary)
-                  Text(item.files.suffix(3).map(\.name).joined(separator: " · ")).font(.subheadline).foregroundStyle(Palette.muted)
-                }
+                recapRow(item.botId, name: item.botName, title: item.files.suffix(3).map(\.name).joined(separator: " · "), detail: item.botName)
               }
             }
-          }
+          } header: { sectionTitle("Recent files") }.listRowBackground(Color.clear)
         }
-        ForEach(value.items.filter { $0.error != nil }) { item in
-          Section(item.botName) { ErrorBanner(message: item.error!) }
-        }
-        if !value.unavailableBots.isEmpty {
-          Section { Text("Couldn't check \(value.unavailableBots.count) assistant\(value.unavailableBots.count == 1 ? "" : "s"). Their current activity is unknown.").foregroundStyle(.secondary) }
-        }
-        Section {
-          Text("Checked \(checkedAt.map { When.format($0, inline: true) } ?? When.format(value.generatedAt, inline: true)) · updates every 30 seconds").font(.caption).foregroundStyle(.secondary)
+        let unchecked = value.unavailableBots.filter { id in !value.items.contains { $0.botId == id && $0.error != nil } }
+        if !unchecked.isEmpty {
+          Section {
+            Text("Couldn't check \(unchecked.count) assistant\(unchecked.count == 1 ? "" : "s"). Their current activity is unknown.")
+              .font(.subheadline).foregroundStyle(Palette.muted)
+          }.listRowBackground(Color.clear)
         }
       }
-      }.listRowBackground(Palette.raised(scheme))
-    }.listSectionSpacing(18).householdListBackground().accessibilityIdentifier("todayOverview").viewHeader("Today", "Your assistants, at a glance")
-      .refreshable { await load(manual: true) }
-      // Split-view reparenting can cancel a view task during a phone push. The initial
-      // read belongs to this account/load ID and may finish across that transition.
-      .onAppear { Task { await load() } }
-      .onChange(of: store.scope) { _, _ in value = nil; applied = nil; checkedAt = nil; Task { await load() } }
-      .pollWhileActive(id: store.scope ?? "", every: .seconds(30)) { await load() }
+    }
+    .listSectionSpacing(24).householdListBackground().accessibilityIdentifier("todayOverview")
+    .viewHeader("Today", "Your assistants, at a glance")
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Refresh", systemImage: "arrow.clockwise") { Task { await load(manual: true) } }
+          .labelStyle(.iconOnly).disabled(busy).accessibilityIdentifier("refreshToday")
+      }
+    }
+    .refreshable { await load(manual: true) }
+    // A split-view transition can cancel the view task while its first read is pending.
+    .onAppear { Task { await load() } }
+    .onChange(of: store.scope) { _, _ in value = nil; applied = nil; checkedAt = nil; Task { await load() } }
+    .pollWhileActive(id: store.scope ?? "", every: .seconds(30)) { await load() }
+  }
+  private func sectionTitle(_ title: String) -> some View {
+    Text(title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase).foregroundStyle(Palette.muted)
   }
   @ViewBuilder private func counts(_ value: TodayOverview) -> some View {
-    count(attention(value).count, "need you")
-    count(active(value).count, "at work")
-    count(value.events.filter { $0.kind == "completed" }.count, value.hasMore ? "finished on this page" : "finished since your last visit")
+    if attention(value).isEmpty {
+      Label(value.unavailableBots.isEmpty ? "All clear" : "No requests in checked assistants", systemImage: "checkmark")
+        .font(.subheadline.weight(.medium)).foregroundStyle(Palette.accent)
+    } else { count(attention(value).count, "need you") }
+    count(active(value).filter { item in !attention(value).contains { $0.botId == item.botId } }.count, "at work")
+    count(value.events.filter { $0.kind == "completed" }.count, "finished")
   }
   private func count(_ number: Int, _ label: String) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Text("\(number)").font(.title2.bold())
-      Text(label).font(.footnote).foregroundStyle(Palette.muted)
-    }.accessibilityElement(children: .combine)
+    HStack(alignment: .firstTextBaseline, spacing: 4) {
+      Text("\(number)").fontWeight(.semibold).monospacedDigit().foregroundStyle(Color.primary)
+      Text(label).foregroundStyle(Palette.muted)
+    }.font(.subheadline).accessibilityElement(children: .combine)
   }
-  private func chevronRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+  private func botName(_ id: String) -> String { store.bootstrap?.bots.first { $0.id == id }?.name ?? "Assistant" }
+  private func avatar(_ id: String, name: String) -> some View {
+    AvatarView(avatar: store.bootstrap?.bots.first { $0.id == id }?.avatar ?? AvatarConfig(), state: .idle, size: 36, name: name, forceReducedMotion: true)
+      .accessibilityHidden(true)
+  }
+  private func recapRow(_ id: String, name: String, title: String, detail: String) -> some View {
     HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 4) { content() }.frame(maxWidth: .infinity, alignment: .leading)
+      avatar(id, name: name)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+          .lineLimit(typeSize.isAccessibilitySize ? nil : 3)
+        Text(detail).font(.footnote).foregroundStyle(Palette.muted)
+      }.frame(maxWidth: .infinity, alignment: .leading)
       Image(systemName: "chevron.right").font(.caption).foregroundStyle(Palette.muted)
-    }
+    }.padding(.vertical, 4).accessibilityElement(children: .combine)
   }
   private func attention(_ value: TodayOverview) -> [TodayItem] {
-    value.items.filter { $0.error == nil && ($0.approvals.contains { $0.status == "pending" } || !$0.attention.isEmpty || [.blocked, .interrupted, .failed].contains($0.activity.state)) }
+    value.items.filter { $0.error != nil || ($0.approvals.contains { $0.status == "pending" } || !$0.attention.isEmpty || [.blocked, .interrupted, .failed].contains($0.activity.state)) }
   }
   private func active(_ value: TodayOverview) -> [TodayItem] {
     value.items.filter { $0.error == nil && [.thinking, .working, .waiting].contains($0.activity.state) }
   }
-  private func assistantRow(_ item: TodayItem, detail: String) -> some View {
-    Button { open(item.botId) } label: {
+  private func attentionRow(_ item: TodayItem) -> some View {
+    let approval = item.approvals.first { $0.status == "pending" }
+    let question = item.attention.first
+    let failed = item.error != nil || [.failed, .interrupted].contains(item.activity.state)
+    let title = item.error ?? approval?.title ?? question?.title ?? item.activity.detail ?? item.activity.state.label
+    let reason = item.error != nil ? "Disconnected" : approval != nil ? "Approval" : question != nil ? (question?.kind == "clarify" ? "Question" : question?.kind == "secure" ? "Secure request" : "Needs your help") : item.activity.state.label
+    let verb = item.error != nil ? "Reconnect" : approval != nil ? "Review" : question != nil ? (question?.kind == "clarify" ? "Answer" : "Review") : failed ? "View error" : "Review"
+    return Button { open(item.botId) } label: {
       HStack(spacing: 12) {
-        AvatarView(avatar: store.bootstrap?.bots.first { $0.id == item.botId }?.avatar ?? AvatarConfig(), state: item.activity.state, size: 42, name: item.botName, forceReducedMotion: true)
+        avatar(item.botId, name: item.botName)
         VStack(alignment: .leading, spacing: 4) {
-          Text(item.botName).font(.headline).foregroundStyle(Color.primary)
-          Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+          Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+            .lineLimit(typeSize.isAccessibilitySize ? nil : 3)
+          (Text(item.botName + " · ").foregroundStyle(Palette.muted) + Text(reason).foregroundStyle(failed ? Palette.danger : Palette.attention))
+            .font(.footnote)
+          if typeSize.isAccessibilitySize { Text(verb).font(.footnote.weight(.semibold)).foregroundStyle(Palette.accent) }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+        if !typeSize.isAccessibilitySize {
+          Text(verb).font(.caption.weight(.semibold)).foregroundStyle(Palette.accent)
+            .padding(.horizontal, 9).padding(.vertical, 6).background(Palette.accentSoft, in: Capsule())
         }
-        Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-      }
-    }.accessibilityIdentifier("today.bot.\(item.botId)")
+      }.padding(.vertical, 4)
+    }.accessibilityIdentifier("today.bot.\(item.botId)").accessibilityElement(children: .combine)
   }
   private func open(_ bot: String, routine: String? = nil) {
     openBot()

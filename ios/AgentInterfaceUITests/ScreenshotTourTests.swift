@@ -14,6 +14,63 @@ import XCTest
     continueAfterFailure = false
   }
 
+  /// Focused captures for the screen-by-screen design gate, using the same data as the web.
+  func testTodayDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_TODAY_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_TODAY_PATH to the shared design fixture.")
+    let fixture = try Data(contentsOf: URL(fileURLWithPath: source))
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    for (name, theme, size, dense) in [
+      ("today-loaded", "light", "UICTContentSizeCategoryL", true),
+      ("today-dark", "dark", "UICTContentSizeCategoryL", true),
+      ("today-large-text", "light", "UICTContentSizeCategoryAccessibilityXL", true),
+      ("today-all-clear", "light", "UICTContentSizeCategoryL", false),
+      ("today-partial", "light", "UICTContentSizeCategoryL", true),
+      ("today-stale-error", "light", "UICTContentSizeCategoryL", true),
+      ("today-loading", "light", "UICTContentSizeCategoryL", true),
+    ] where selection.isEmpty || selection == name {
+      var environment = ["AGENT_INTERFACE_UI_THEME": theme]
+      if dense {
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        if name == "today-partial" {
+          var overview = try XCTUnwrap(payload["overview"] as? [String: Any])
+          var items = try XCTUnwrap(overview["items"] as? [[String: Any]])
+          let index = try XCTUnwrap(items.firstIndex { $0["botId"] as? String == "guide" })
+          items[index]["activity"] = ["state": "disconnected"]
+          items[index]["error"] = "Could not read this Hermes conversation. Open it to reconnect."
+          overview["items"] = items; overview["unavailableBots"] = ["guide"]
+          payload["overview"] = overview
+        }
+        if name == "today-stale-error" { payload["mode"] = "stale" }
+        if name == "today-loading" { payload["mode"] = "loading" }
+        environment["AGENT_INTERFACE_UI_TODAY_DESIGN"] = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+      }
+      let app = launch(textSize: size, environment: environment)
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      goToAssistantList(app)
+      app.buttons["openToday"].tap()
+      XCTAssertTrue(app.buttons["refreshToday"].waitForExistence(timeout: 10))
+      if name == "today-loading" {
+        XCTAssertTrue(app.staticTexts["Checking your assistants…"].waitForExistence(timeout: 5))
+      } else {
+        XCTAssertTrue(app.buttons[dense ? "today.bot.ranch" : "today.event.fixture-completed"].waitForExistence(timeout: 10))
+      }
+      if name == "today-stale-error" {
+        app.buttons["refreshToday"].tap()
+        XCTAssertTrue(app.staticTexts["Fixture connection interrupted. Loaded results may be out of date."].waitForExistence(timeout: 10))
+      }
+      try capture(name)
+      if size.contains("Accessibility") || name == "today-loaded" {
+        app.swipeUp(); try capture(name + "-scrolled")
+      }
+      if name == "today-partial" {
+        app.buttons["today.bot.guide"].tap()
+        XCTAssertTrue(app.chatHeader("Trail guide").waitForExistence(timeout: 10))
+      }
+      app.terminate()
+    }
+  }
+
   func testScreenshotTour() throws {
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))

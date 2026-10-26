@@ -25,7 +25,7 @@ export function ChatHeader({ view, selected, avatarState, railOpen, onOpenRail, 
 }) {
   const identity = view === "conversation" && selected;
   return (
-    <header className={`chat-header${identity ? " chat-header-identity" : ""}`}>
+    <header className={`chat-header${identity ? " chat-header-identity" : view === "today" ? " chat-header-today" : ""}`}>
       <button
         className="mobile-only icon-button chat-back"
         aria-label="Back to assistants"
