@@ -103,3 +103,160 @@ that the large-text iPad screenshot swiped the conversation instead of the
 sidebar. A stable `assistantHome` identifier now directs that capture to the
 correct scroll view. The updated iPad capture passed in
 `.private/ios-test-20261026T044254Z-67044.xcresult`.
+
+## Conversation and composer, revision 1
+
+The web fingerprint is
+`sha256:bf173710ea98fb8b7bc53ee2f1c126208d00d9c695c44c2db68284ccadead157`
+for `src/`. The native fingerprint is
+`sha256:71a941c1f94e05cfc6fc1b171b1b21c56080ee61b8e9f5818cd236c0cde1abdf`
+for `ios/`. Web message text and the composer use 16 px at the default text size,
+with 12 px sender labels, 11 px timestamps and 14 px code. The desktop reading
+column is capped at 720 px. Native transcript and composer frames are capped at
+752 points, including their padding, and the composer placeholder uses the
+existing muted palette color. All text still follows browser text sizing or
+Dynamic Type.
+
+All 76 focused web tests passed across Markdown, transcript rendering and logic,
+composer model selection and relative font sizing. The production build passed.
+The browser capture checks verified draft-enabled Send and the actual copied code
+on the clipboard. Screenshots cover 320, 390, 768 and 1440 px, dark appearance,
+200% text, code copy feedback and keyboard focus. The geometry report found no
+horizontal page overflow.
+
+Baseline native captures passed on iPhone in
+`.private/ios-test-20261026T044608Z-69332.xcresult` and iPad in
+`.private/ios-test-20261026T045023Z-73221.xcresult`. The shared synthetic fixture
+contains user messages, paragraphs, headings, lists, a table and a code block.
+Native capture tests do not establish physical-device keyboard behavior.
+
+The first independent Conversation review scored web conversation 8.5, iPhone
+conversation 7.5, and both composers 9. The iPad remained unscored without current
+captures. It found low-contrast metadata on both platforms and native code
+rendering with proportional glyphs despite its requested monospaced font.
+
+### Conversation revision 2, native capture pending
+
+The web fingerprint is
+`sha256:6a12ac82746b7525e0b94030b86d7271c7051d88bb3057d418cd0ba5c2604c1d`.
+The native fingerprint is
+`sha256:51c9f10ff40dea854431627986f9cdf30fc733cceb9c635811e4e61f0ae8e7f2`.
+Message metadata now uses a dedicated color on both platforms, including delivery
+labels. Browser checks read computed colors and measured 4.891:1 in light mode
+and 5.569:1 in dark mode against the actual user bubble. The production build
+and conversation capture checks passed. The code-focus check uses actual Tab
+navigation and asserts `:focus-visible`. The composer minimum height now scales
+with text, and the 200% capture shows the full placeholder.
+
+Native code blocks, tool output and raw agent responses explicitly override the
+app's rounded font design. The native capture helper now waits for input focus
+and keyboard layout, and checks visible code-copy feedback. Fresh native
+captures are pending the shared Mac build slot requested by SteadLog's urgent
+fix task. No additional native build has started during that hold.
+
+The web recheck passed at 9/10 for Conversation and 9.5/10 for Composer. The
+[report](../evidence/design-review/conversation-web-review.md) records the resolved
+contrast and focus findings. Native remains gated.
+
+Before resuming native work, process and simulator inspection found no active
+`xcodebuild`, no remaining SteadLog test simulators, and only the user-owned
+iPhone 17 booted. Memory pressure reported 53% free. The incremental native
+build resumed with two jobs under this repository's validation lock, with phone
+and tablet captures kept sequential.
+
+The revision 2 native capture tests passed on iPhone in
+`.private/ios-test-20261026T050734Z-89740.xcresult` and iPad in
+`.private/ios-test-20261026T050938Z-91988.xcresult`. The captures confirmed
+darker metadata and the iPad width limit, but code still rendered with
+proportional glyphs. Passing the capture test did not establish the visual fix.
+The next revision moves the monospaced request from the surrounding `Group`
+onto both code `Text` branches, using Apple's
+[`Text.monospaced`](https://developer.apple.com/documentation/swiftui/text/monospaced(_:)).
+Its native fingerprint is
+`sha256:0f8ebc3ae06d2ec5bd84c7c5453a7385ecc2b89da200cd3b617e7ef60bf92654`.
+
+The new `capture-design.py` driver replaces repeated manual wrapper generation.
+Its end-to-end run captured all 18 conversation images and saved the browser
+report with no overflow. It requires an existing owned browser session, existing
+artifact directory and an HTTP loopback origin without credentials.
+
+The direct `Text.monospaced()` attempt also left the glyphs proportional.
+An Opus rubber-duck compared the actual conversation crop with the existing
+working revision hashes in `HermesUpgradeView`. That screen applies
+`monospaced()` to the `Font` value rather than specifying a font design.
+
+A rendering regression first failed on the old font. Under the rounded app
+design, eight `i` characters measured 26 points while eight `M` characters
+measured 91. At AX3 they measured 57 and 223. The failed run is
+`.private/ios-test-20261026T051630Z-95711.xcresult`.
+The replacement uses `Font.footnote.monospaced()` for code. Tool output applies
+the same transformation to its inherited font so each caller keeps its semantic
+text size. The regression checks equal glyph widths and actual Dynamic Type
+growth, rather than just comparing font declarations.
+
+The current native fingerprint is
+`sha256:5d3eab870c3b705b4431286433c89aa90b9a7a25e5491a9ed3638d96802f31a6`.
+All 13 native Markdown tests and the iPhone conversation capture test passed
+in `.private/ios-test-20261026T051720Z-96128.xcresult`. The new glyph-width
+regression passed, including AX3 growth. The fresh screenshot visibly uses
+fixed-width glyphs and preserves syntax colors, italic comments, and copy
+feedback. The code-font change reuses the same font-value transformation as
+the existing revision hashes in the native updates screen.
+
+The iPad font-fix capture passed in
+`.private/ios-test-20261026T051856Z-97895.xcresult`. A final styling adjustment
+uses `Palette.muted` for the visible code-language label, copy confirmation and
+folded work summary, replacing the same low-contrast system secondary style.
+The final native fingerprint is
+`sha256:b744ec46c542c0d61b881831868f005815a6e228ef9b2fa04656c16301eb8226`.
+The updated iPhone capture passed in
+`.private/ios-test-20261026T052237Z-98983.xcresult`. The 13 successful Markdown
+checks are reused because only these three colors changed afterward.
+
+The final iPad capture passed in
+`.private/ios-test-20261026T052407Z-205.xcresult` with the same native fingerprint.
+Both final native runs cover light, dark, AX3, earlier history, a typed draft
+that enables Send, and visible code-copy confirmation. The final native
+before/after annotations are staged for iPhone and iPad. Ruff passed on the new
+capture driver.
+
+The native review scored both conversations 8.5 and both composers 9. It
+confirmed fixed-width glyphs and passing metadata colors, but found the
+start-of-conversation notice at 3.37:1. That notice and its related surface
+captions now use `Palette.muted`, which measures 4.7:1 on the surface and
+4.91:1 on the raised card. User-bubble metadata retains its separate darker
+color. The updated native fingerprint is
+`sha256:a2e96d0e115a2ede6d7f09f258e188ac42e5a7e13b4a29a2a1ee44cad147928d`.
+The targeted iPad loaded-state capture passed in
+`.private/ios-test-20261026T053457Z-4791.xcresult`. It now captures earlier
+history before the copy and draft actions, then returns to the latest reply.
+The review explicitly allowed source verification for the shared iPhone notice.
+
+The capture driver now prefers PATH, pins its npm fallback to Playwright CLI
+0.1.22, limits screen names to existing shared fixtures, and atomically replaces
+a report only after a successful run and valid JSON. A fake CLI failure
+preserved a seeded good report; a successful response replaced it. The real
+CLI version and cached package metadata both report 0.1.22. The initial pinned
+invocation could not find the browser because an npx package specification has
+a different session namespace. The existing browser was still open under its
+original cached CLI, so the driver reused that installation through PATH.
+No browser was restarted. The real before and after runs then passed, with
+18 screenshots each and no viewport overflow. Baselines record low contrast
+instead of failing the post-change contrast gate. The shared sidebar preview
+now uses the actual last reply and timestamp from its transcript.
+
+The final native recheck passed iPhone and iPad Conversation at 9/10, with
+both composers remaining at 9/10. The fresh start notice measures 4.70:1.
+The [native report](../evidence/design-review/conversation-native-review.md)
+records the closed findings and the uncaptured states still assigned to
+later screens. No obvious issues remain in the reviewed conversation states.
+
+Two capture safeguards were then completed without changing app rendering.
+A successful run deletes its stale failure log, confirmed by a real driver
+rerun. Invalid Today and Conversation variant names now fail instead of
+passing with zero captures. The native build succeeded and an intentional
+negative run failed with both expected `Unknown ... capture variant` messages
+in `.private/ios-test-20261026T054849Z-11453.xcresult`. The resulting native
+fingerprint is
+`sha256:a2c96d3608635c4154cc06dccbbf6aa19b1a8e05c200b47b0144675c2092e6c0`.
+These are test-harness changes; the reviewed app rendering is unchanged.

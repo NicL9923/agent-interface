@@ -20,7 +20,7 @@ import XCTest
     try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_TODAY_PATH to the shared design fixture.")
     let fixture = try Data(contentsOf: URL(fileURLWithPath: source))
     let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
-    for (name, theme, size, dense) in [
+    let variants = [
       ("today-loaded", "light", "UICTContentSizeCategoryL", true),
       ("today-dark", "dark", "UICTContentSizeCategoryL", true),
       ("today-large-text", "light", "UICTContentSizeCategoryAccessibilityXL", true),
@@ -28,7 +28,11 @@ import XCTest
       ("today-partial", "light", "UICTContentSizeCategoryL", true),
       ("today-stale-error", "light", "UICTContentSizeCategoryL", true),
       ("today-loading", "light", "UICTContentSizeCategoryL", true),
-    ] where selection.isEmpty || selection == name {
+    ]
+    guard selection.isEmpty || variants.contains(where: { $0.0 == selection }) else {
+      XCTFail("Unknown Today capture variant: \(selection)"); return
+    }
+    for (name, theme, size, dense) in variants where selection.isEmpty || selection == name {
       var environment = ["AGENT_INTERFACE_UI_THEME": theme]
       if dense {
         var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
@@ -98,6 +102,40 @@ import XCTest
         try capture("home-submenu")
       }
       if size.contains("Accessibility") { app.scrollViews["assistantHome"].swipeUp(); try capture(name + "-scrolled") }
+      app.terminate()
+    }
+  }
+
+  func testConversationDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_CONVERSATION_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_CONVERSATION_PATH to capture conversation.")
+    let fixture = try String(contentsOfFile: source, encoding: .utf8)
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = [
+      ("conversation-loaded", "light", "UICTContentSizeCategoryL"),
+      ("conversation-dark", "dark", "UICTContentSizeCategoryL"),
+      ("conversation-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+    ]
+    guard selection.isEmpty || variants.contains(where: { $0.0 == selection }) else {
+      XCTFail("Unknown conversation capture variant: \(selection)"); return
+    }
+    for (name, theme, size) in variants where selection.isEmpty || selection == name {
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": fixture, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      XCTAssertTrue(app.buttons["Copy code"].waitForExistence(timeout: 10))
+      try capture(name)
+      app.scrollViews["conversationTranscript"].swipeDown(); try capture(name + "-earlier")
+      if name == "conversation-loaded" {
+        let latest = app.buttons["Jump to latest"]
+        if latest.waitForExistence(timeout: 2) { latest.tapWhenReady() }
+        app.buttons["Copy code"].tap()
+        XCTAssertTrue(app.staticTexts["Code copied."].waitForExistence(timeout: 5))
+        try capture("conversation-code-copied")
+        app.textViews["messageComposer"].typeWhenFocused("Make the picnic vegetarian. Keep the walk under two miles.")
+        XCTAssertTrue(app.buttons["sendMessage"].isEnabled)
+        try capture("conversation-draft")
+        app.buttons["hideKeyboard"].tap()
+      }
       app.terminate()
     }
   }

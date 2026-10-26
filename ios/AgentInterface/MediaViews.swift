@@ -331,6 +331,8 @@ struct MarkdownTableView: View {
 }
 /// A code block with the web's header: the language or "Code", and a copy button with a status.
 struct MarkdownCodeBlock: View {
+  // Apply the design to the Font value so the app's rounded design cannot replace it.
+  static let codeFont: Font = .footnote.monospaced()
   var code: String
   var language: String?
   @Environment(\.colorScheme) private var scheme
@@ -339,7 +341,7 @@ struct MarkdownCodeBlock: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 12) {
-        Text(language ?? "Code").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(language ?? "Code").font(.caption).foregroundStyle(Palette.muted).lineLimit(1)
         Spacer()
         Button("Copy code", systemImage: "doc.on.doc", action: copy).font(.caption)
       }.padding(.horizontal, 12).padding(.vertical, 8)
@@ -350,10 +352,10 @@ struct MarkdownCodeBlock: View {
           if let colored = MarkdownCache.shared.highlighted(code, language: language, settled: settled, style: CodeTheme.style) {
             Text(colored)
           } else { Text(code) }
-        }.font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(14)
+        }.font(Self.codeFont).textSelection(.enabled).padding(14)
       }.accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
       if copied {
-        Text("Code copied.").font(.caption).foregroundStyle(.secondary).padding([.horizontal, .bottom], 14)
+        Text("Code copied.").font(.caption).foregroundStyle(Palette.muted).padding([.horizontal, .bottom], 14)
       }
     }.background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
       .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line))

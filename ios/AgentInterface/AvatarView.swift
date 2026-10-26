@@ -22,6 +22,7 @@ enum Palette {
   static let attention = Color.adaptive(light: "#9B6733", dark: "#EBC188")
   static let danger = Color.adaptive(light: "#A33C32", dark: "#FAAFA0")
   static let muted = Color.adaptive(light: "#697268", dark: "#A6B4A7")
+  static let messageMetadata = Color.adaptive(light: "#5F685E", dark: "#A6B4A7")
   static let line = Color.adaptive(light: "#D9DED2", dark: "#3A483D")
   static func surface(_ scheme: ColorScheme) -> Color {
     Color(hex: scheme == .dark ? "#1B211E" : "#FAF8F2")

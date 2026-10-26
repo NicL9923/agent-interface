@@ -48,7 +48,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Today, web and iOS | Web, iPhone and iPad captured | Complete | Web 9.2; iPhone 9.1; iPad 9.1 |
 | Assistants home | Web, iPhone and iPad captured | Complete | Web 9; native 9 |
 | Home context menus | Keyboard, touch and native submenus captured | Complete | Web 9.5; native 9.5 |
-| Conversation and composer | Native baseline captured | In progress | Pending |
+| Conversation and composer | Web, iPhone and iPad captured | Complete | Web conversation 9; web composer 9.5; iPhone/iPad conversation and composer 9 |
 | Questions, approvals and failure states | Pending | Pending | Pending |
 | Assistant details and artifacts | Pending | Pending | Pending |
 | Assistant creation and settings | Pending | Pending | Pending |
@@ -74,6 +74,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Apple device connections | Pending | Pending | Pending |
 | Offline library | Pending | Pending | Pending |
 | iOS quick switcher | Pending | Pending | Pending |
+| Empty conversation | Pending | Pending | Pending |
 | Empty household, app loading and load failure | Pending | Pending | Pending |
 | iOS share extension | Pending | Pending | Pending |
 | Widgets, Live Activity and notification content | Pending | Pending | Pending |
@@ -124,3 +125,23 @@ text stays readable, and outside touch dismissal cannot activate assistants
 underneath the menu. The [report](evidence/design-review/home-review.md) records
 the evidence and accepted limits. A stable home-list identifier now lets the
 screenshot tour scroll the sidebar itself on iPad.
+
+## Conversation review history
+
+Conversation passes at 9/10 on web, iPhone and iPad. The web composer scores
+9.5/10 and both native composers score 9/10. The
+[web review](evidence/design-review/conversation-web-review.md) and
+[native review](evidence/design-review/conversation-native-review.md) retain
+the ratings, resolved findings and actual coverage.
+
+Web messages use a consistent reading size, with a narrower desktop column
+and larger metadata and code. Native chat uses a matching width limit and
+a readable composer placeholder. Message metadata now passes contrast on
+the user bubble. Native code uses real fixed-width glyphs despite the rounded
+app font, verified by a rendering regression that first failed on the old font.
+The start notice and related captions now use the app's muted text color.
+
+Review 08 also found low-contrast captions in states not shown by these
+conversation captures. Those remain assigned to their own screens, including
+the empty conversation, reduced-motion activity, approvals, assistant handoffs
+and stop confirmation. The final full-app review must include those states.

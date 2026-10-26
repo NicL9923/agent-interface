@@ -1,10 +1,10 @@
 // Playwright CLI run-code function. Screenshots and a geometry report for a design gate.
-async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", fixture } = {}) => {
+async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", fixture } = {}) => {
   const origin = new URL(page.url());
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
   const paths = [], geometry = [];
@@ -14,6 +14,10 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
+  await context.route("**/api/bots/*/conversation*", async route => {
+    if (screen !== "conversation" || !fixture?.conversation) return route.continue();
+    return route.fulfill({ json: fixture.conversation });
+  });
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
     const value = structuredClone(fixture.overview);
@@ -69,6 +73,58 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     })) });
   };
   try {
+    if (screen === "conversation") {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      await tab.locator(".message-markdown").last().waitFor();
+      const metadataContrast = [];
+      const checkMetadata = async name => {
+        const ratio = await tab.locator(".message-user .message-attribution").first().evaluate(el => {
+          const luminance = color => {
+            const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => value / 255)
+              .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+            return channels.reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index], 0);
+          };
+          const values = [getComputedStyle(el).color, getComputedStyle(el.closest(".message-user")).backgroundColor].map(luminance).sort((a, b) => a - b);
+          return (values[1] + 0.05) / (values[0] + 0.05);
+        });
+        if (stage !== "before" && ratio < 4.5) throw Error(`Message metadata contrast ${ratio.toFixed(2)}:1 in ${name}`);
+        metadataContrast.push({ name, ratio });
+      };
+      const edge = async end => tab.locator(".transcript").evaluate((el, end) => { el.scrollTop = end ? el.scrollHeight : 0; }, end);
+      for (const [name, width, height, theme] of [
+        ["desktop", 1440, 1000, "light"], ["desktop-dark", 1440, 1000, "dark"],
+        ["phone", 390, 844, "light"], ["phone-dark", 390, 844, "dark"],
+        ["narrow", 320, 720, "light"], ["tablet", 768, 1024, "light"],
+      ]) {
+        await tab.setViewportSize({ width, height });
+        await edge(false); await capture(name, width, height, theme);
+        await checkMetadata(name);
+        await edge(true); await capture(name + "-latest", width, height, theme);
+      }
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.locator(".composer textarea").fill("Make the picnic vegetarian. Keep the walk under two miles.");
+      await capture("draft", 390, 844);
+      if (!await tab.getByRole("button", { name: "Send message", exact: true }).isEnabled()) throw Error("A draft did not enable Send.");
+      await tab.locator(".composer textarea").focus();
+      await capture("composer-focus", 390, 844);
+      await tab.locator(".composer textarea").fill("");
+      await edge(true);
+      await tab.getByRole("button", { name: "Copy code", exact: true }).click();
+      await tab.getByText("Code copied.", { exact: true }).waitFor();
+      const copied = await tab.evaluate(() => navigator.clipboard.readText());
+      if (!copied.includes("for gate in north east barn")) throw Error("Copy code lost content.");
+      await capture("copied-code", 390, 844);
+      await tab.getByRole("button", { name: "Copy code", exact: true }).focus();
+      await tab.keyboard.press("Shift+Tab");
+      await tab.keyboard.press("Tab");
+      if (!await tab.getByRole("button", { name: "Copy code", exact: true }).evaluate(el => el.matches(":focus-visible"))) throw Error("Copy code did not show keyboard focus.");
+      await capture("code-focus", 390, 844);
+      await tab.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+      await edge(false); await capture("large-text", 390, 844);
+      await edge(true); await capture("large-text-latest", 390, 844);
+      return { paths, geometry, metadataContrast, codeCopied: true, draftEnabledSend: true, codeKeyboardFocus: true };
+    }
     if (screen === "home") {
       await tab.goto(`${origin.origin}/?bot=ranch`);
       await tab.locator(".pinned-bot").first().waitFor();

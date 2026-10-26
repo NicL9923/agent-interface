@@ -289,7 +289,7 @@ struct ConversationView: View {
     ScrollView {
       // Not lazy: like the web's page, every loaded turn has a real height, so the latest
       // message and a held place can be scrolled to exactly.
-      transcriptRows(proxy).scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
+      transcriptRows(proxy).scrollTargetLayout().padding(16).frame(maxWidth: 752, alignment: .leading).frame(maxWidth: .infinity)
         .environment(\.transcriptConnected, store.connected)
         .environment(\.transcriptRecipient, bot.name)
         .environment(\.sentAnchor, anchoredMessage)
@@ -328,7 +328,7 @@ struct ConversationView: View {
       if (store.conversation?.earlier ?? 0) > 0 { earlierButton(proxy) }
       // The transcript includes a message still on its way.
       if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.transcript?.messages.isEmpty == false {
-        Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+        Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(Palette.muted).frame(maxWidth: .infinity)
       }
       emptyState
       TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing,
@@ -502,10 +502,10 @@ struct ConversationView: View {
           text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),
           moving: [.thinking, .working, .waiting].contains(store.activity))
         if working, let receipt = live.receipt {
-          Text(receipt).font(.caption).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("liveReceipt")
+          Text(receipt).font(.caption).foregroundStyle(Palette.muted).lineLimit(1).accessibilityIdentifier("liveReceipt")
         }
         if working && advanced, let line = live.reasoning {
-          Text(line).font(.caption).italic().foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier("liveReasoning")
+          Text(line).font(.caption).italic().foregroundStyle(Palette.muted).lineLimit(2).accessibilityIdentifier("liveReasoning")
         }
         if let offer = store.retryOffer { retryControls(offer) }
         if let refusal = store.retryRefusal { refusedRetry(refusal) }
@@ -515,7 +515,7 @@ struct ConversationView: View {
   }
   /// A retry Hermes refused, which stays refused: the reason, and the message back in the composer.
   @ViewBuilder private func refusedRetry(_ refusal: AppStore.RetryRefusal) -> some View {
-    Text(refusal.text).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("retryRefused")
+    Text(refusal.text).font(.caption).foregroundStyle(Palette.muted).accessibilityIdentifier("retryRefused")
     Button("Put my message in the message box") {
       guard let left = store.putRetriedMessageInDraft(refusal.message) else {
         AccessibilityNotification.Announcement("Your message is still sending. Try again once it has gone.").post()
@@ -532,7 +532,7 @@ struct ConversationView: View {
   /// Retry for a failed turn, and while its outcome is unknown, what is being done about it.
   @ViewBuilder private func retryControls(_ offer: AppStore.RetryOffer) -> some View {
     if offer.checking {
-      Text(offer.resendable ? RetryTurn.checkingNotice : RetryTurn.unconfirmedNotice).font(.caption).foregroundStyle(.secondary)
+      Text(offer.resendable ? RetryTurn.checkingNotice : RetryTurn.unconfirmedNotice).font(.caption).foregroundStyle(Palette.muted)
         .accessibilityIdentifier("retryChecking")
     }
     Button { Task { await store.retry() } } label: {
@@ -612,9 +612,8 @@ struct MessageView: View {
       if !label.isEmpty { Text(label).font(.caption.weight(.semibold)) }
       if let delivery {
         Text(delivery == .sending ? "Sending…" : "Not confirmed yet").font(.caption2)
-          .foregroundStyle(delivery == .unconfirmed ? AnyShapeStyle(Palette.attention) : AnyShapeStyle(.secondary))
       } else if let date = message.createdAt { WhenText(value: date).font(.caption2) }
-    }.foregroundStyle(.secondary)
+    }.foregroundStyle(Palette.messageMetadata)
   }
   private var label: String {
     message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
@@ -663,7 +662,7 @@ struct AgentExchangeView: View {
         DisclosureGroup(handoff.summary) {
           VStack(alignment: .leading, spacing: 8) {
             if !handoff.body.isEmpty { Text(handoff.body).textSelection(.enabled) }
-            Text(handoff.response).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            Text(handoff.response).font(.caption.monospaced()).textSelection(.enabled)
           }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
         }.font(.subheadline)
       }
@@ -704,14 +703,14 @@ struct ToolActivityView: View {
     message.toolCall?.result ?? (message.toolResult.isEmpty ? nil : message.toolResult)
   }
   @ViewBuilder private func times(_ call: ToolCall) -> some View {
-    LabeledContent("Call") { Text(call.id).font(.system(.caption, design: .monospaced)) }.font(.caption).textSelection(.enabled)
+    LabeledContent("Call") { Text(call.id).font(.caption.monospaced()) }.font(.caption).textSelection(.enabled)
     if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
     if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
   }
   private func section(_ title: String, _ text: String, danger: Bool = false) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title).font(.caption.bold()).accessibilityAddTraits(.isHeader)
-      ToolOutputView(text: text, label: "\(title) for \(message.displayToolName)").font(.system(.caption, design: .monospaced))
+      ToolOutputView(text: text, label: "\(title) for \(message.displayToolName)").font(.caption)
     }.foregroundStyle(danger ? Palette.danger : Color.primary)
   }
   static func status(_ status: String, connected: Bool) -> String {
@@ -727,10 +726,11 @@ struct ToolActivityView: View {
 struct ToolOutputView: View {
   var text: String
   var label: String = "Tool output"
+  @Environment(\.font) private var font
   @State private var contentHeight: CGFloat = 1
   var body: some View {
     ScrollView(.vertical) {
-      Text(text).textSelection(.enabled)
+      Text(text).font((font ?? .body).monospaced()).textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .background(GeometryReader { geometry in

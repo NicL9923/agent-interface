@@ -338,6 +338,7 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if let conversation = Self.designFixture?["conversation"] as? [String: Any] { object = conversation }
         if let questions = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] {
           // "2" asks three questions: one choice, several choices, and a written answer.
           let asked: [[String: Any]] = questions == "2" ? TranscriptFixtures.questions : [["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]]]

@@ -90,9 +90,9 @@ struct ConversationTurnView: View, Equatable {
     } label: {
       HStack(spacing: 8) {
         Text(group.id)
-        Text("\(group.messages.count)").font(.caption).foregroundStyle(.secondary)
+        Text("\(group.messages.count)").font(.caption).foregroundStyle(Palette.muted)
         if group.messages.contains(where: { $0.toolCall?.status == "running" }) {
-          Text(connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(.secondary)
+          Text(connected ? "Running" : "Last seen running").font(.caption).foregroundStyle(Palette.muted)
         }
       }
     }.disclosureIdentifier(group.id)
@@ -106,7 +106,7 @@ struct ConversationTurnView: View, Equatable {
     } else {
       DisclosureGroup(activityTitle(message)) {
         ToolOutputView(text: message.text.isEmpty ? "No result was exposed by Hermes." : message.text)
-          .font(.system(.footnote, design: .monospaced))
+          .font(.footnote)
       }
     }
   }
@@ -126,14 +126,14 @@ struct ReasoningDisclosure: View {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 10) {
         ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-          Text(part).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+          Text(part).font(.footnote).foregroundStyle(Palette.muted).textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
       }.padding(.top, 4)
     } label: {
       HStack(spacing: 8) {
         Text("Reasoning")
-        if parts.count > 1 { Text("\(parts.count)").font(.caption).foregroundStyle(.secondary) }
+        if parts.count > 1 { Text("\(parts.count)").font(.caption).foregroundStyle(Palette.muted) }
       }
     }.disclosureIdentifier("Reasoning")
   }
@@ -262,7 +262,7 @@ private struct WorkLabel: View {
     }
   }
   private func text(_ value: String) -> some View {
-    Text(value).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+    Text(value).foregroundStyle(Palette.muted).frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

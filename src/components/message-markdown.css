@@ -1,7 +1,7 @@
 .message-markdown {
   min-width: 0;
   max-width: 100%;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -130,7 +130,7 @@
   line-height: 1.6;
 }
 .message-markdown pre code {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 .markdown-copy-status {
   display: block;
@@ -174,9 +174,6 @@
   outline-offset: 3px;
 }
 @media (max-width: 620px) {
-  .message-markdown {
-    font-size: 1rem;
-  }
   .message-markdown pre {
     padding: 12px;
   }

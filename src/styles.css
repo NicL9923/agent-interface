@@ -14,6 +14,7 @@
   --raised: #fffdf7;
   --ink: #282c27;
   --muted: #697268;
+  --message-meta: #5f685e;
   --line: #d9ded2;
   --accent: #246f59;
   --accent-soft: #dce9df;
@@ -28,6 +29,7 @@
   --raised: #222c25;
   --ink: #f1efdf;
   --muted: #a6b4a7;
+  --message-meta: #a6b4a7;
   --line: #3a483d;
   --accent: #8bd2b2;
   --accent-soft: #2a4435;
@@ -43,6 +45,7 @@
     --raised: #222c25;
     --ink: #f1efdf;
     --muted: #a6b4a7;
+    --message-meta: #a6b4a7;
     --line: #3a483d;
     --accent: #8bd2b2;
     --accent-soft: #2a4435;
@@ -420,7 +423,7 @@ a {
   min-height: 0;
   overflow: auto;
   flex: 1;
-  padding: 30px max(32px, calc((100% - 760px) / 2));
+  padding: 30px max(32px, calc((100% - 720px) / 2));
   scrollbar-gutter: stable;
   outline-offset: -4px;
   /* The app holds the reader's place itself; browser anchoring would move it twice. */
@@ -546,16 +549,16 @@ a {
   overflow-wrap: anywhere;
   align-items: center;
   gap: 12px;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--message-meta);
   margin-bottom: 9px;
 }
 .message-continued {
   margin-top: -16px;
 }
 .message-attribution time {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 400;
 }
 /* A sent message rises into the transcript at once, faint until Hermes accepts it. */
@@ -570,11 +573,8 @@ a {
   opacity: 0.66;
 }
 .message-delivery {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 400;
-}
-.message-unconfirmed .message-delivery {
-  color: var(--attention);
 }
 @keyframes message-send {
   from {
@@ -590,7 +590,7 @@ a {
 .message-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.7;
 }
 .message-system {
@@ -664,7 +664,7 @@ a {
 }
 .composer-area {
   flex-shrink: 0;
-  padding: 8px max(28px, calc((100% - 780px) / 2)) max(15px, env(safe-area-inset-bottom));
+  padding: 8px max(28px, calc((100% - 752px) / 2)) max(15px, env(safe-area-inset-bottom));
 }
 .activity-status {
   display: flex;
@@ -728,9 +728,9 @@ a {
   background: transparent;
   padding: 0;
   resize: none;
-  min-height: 48px;
+  min-height: 3rem;
   max-height: 200px;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.55;
 }
 .composer textarea:focus-visible {
@@ -1196,9 +1196,6 @@ a {
   }
   .empty-state h2 {
     font-size: 1.5625rem;
-  }
-  .message-text {
-    font-size: 0.875rem;
   }
   .composer-area {
     padding: 8px 14px max(12px, env(safe-area-inset-bottom));
