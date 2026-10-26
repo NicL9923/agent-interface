@@ -46,7 +46,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
       navigator: { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
-    caches: { open, keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
+    caches: { open, has: async (name: string) => stores.has(name), keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
     URL, Response, fetch,
   };
   vm.runInNewContext(script(), context);
@@ -91,15 +91,29 @@ describe('service worker privacy and return path', () => {
 
   it('refuses to install when a code file comes back as HTML, so the browser retries and the old worker stays', async () => {
     const sw = worker();
+    // A new release: no cache of its own yet.
+    sw.stores.delete('agent-interface-test');
     sw.fetch.mockImplementation((path: string) => path === '/assets/app-a1234567.js' ? Promise.resolve(html()) : healthy(path));
     await expect(sw.tryInstall()).rejects.toThrow('/assets/app-a1234567.js');
     // Nothing from the failed attempt is left looking like a finished release.
     expect(sw.stores.has('agent-interface-test')).toBe(false);
   });
 
+  it('keeps the serving cache when a reinstall of the same release fails, as after a rollback', async () => {
+    const sw = worker();
+    // The harness starts with this release's cache holding its shell, as when its worker is active.
+    sw.fetch.mockImplementation((path: string) => path === '/index.html' ? Promise.reject(new Error('offline')) : healthy(path));
+    await expect(sw.tryInstall()).rejects.toThrow();
+    sw.fetch.mockRejectedValue(new Error('offline'));
+    let response: Promise<unknown> | undefined;
+    sw.handlers.fetch({ request: { method: 'GET', mode: 'navigate', url: 'https://app.example/' }, respondWith: (value: Promise<unknown>) => { response = value; } });
+    expect(await response).toBe('static shell');
+  });
+
   it.each([['an error status', () => new Response('gone', { status: 404 })], ['a failed fetch', () => { throw new Error('offline'); }]])('refuses to install on %s', async (_name, bad) => {
     const sw = worker();
     sw.fetch.mockImplementation((path: string) => path === '/icon-192.png' ? Promise.resolve().then(bad) : healthy(path));
+    sw.stores.delete('agent-interface-test');
     await expect(sw.tryInstall()).rejects.toThrow();
     expect(sw.stores.has('agent-interface-test')).toBe(false);
   });
@@ -131,7 +145,7 @@ describe('service worker privacy and return path', () => {
     const stored = new Map<string, Response>();
     vm.runInNewContext(script(install), {
       self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; } },
-      caches: { keys: async () => [], open: async () => ({ match: async () => undefined, put: async (key: string, value: Response) => { stored.set(key, value); } }) },
+      caches: { has: async () => false, keys: async () => [], open: async () => ({ match: async () => undefined, put: async (key: string, value: Response) => { stored.set(key, value); } }) },
       URL, Response, fetch: healthy,
     });
     let installed: Promise<unknown> | undefined;
@@ -324,7 +338,7 @@ describe('service worker release updates', () => {
     const handlers: Record<string, (event: any) => void> = {};
     vm.runInNewContext(script(), {
       self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; } },
-      caches: { open, keys: async () => ['agent-interface-previous', 'agent-interface-test'] }, URL, Response, fetch,
+      caches: { open, has: async () => true, keys: async () => ['agent-interface-previous', 'agent-interface-test'] }, URL, Response, fetch,
     });
     let installed: Promise<unknown> | undefined;
     handlers.install({ waitUntil: (value: Promise<unknown>) => { installed = value; } });

@@ -37,13 +37,16 @@ async function reuse(cache, older, path) {
   return false;
 }
 
-// Only a bundle can be missing from a release: the server answers a path it does not have with the
-// app shell, so an HTML body under assets/ is a retired chunk. Pages, icons and the manifest ship
-// in every release and only need to load; judging them by content type would let one unexpected
-// header block every install.
+// Bundles are what a release retires by name: the server answers a path it does not have with the
+// app shell, so an HTML body under assets/ is a chunk that is gone. Pages, icons and the manifest
+// keep their names across releases and only need to load; judging them by content type would let
+// one unexpected header block every install.
 const acceptable = (path, response) => path.startsWith('/assets/') ? usable(response) : response.ok;
 
 async function install() {
+  // A rollback while a newer worker waits can install this same release again, beside the worker
+  // already serving from this cache. A failed attempt must leave that cache alone.
+  const existed = await caches.has(CACHE);
   const cache = await caches.open(CACHE);
   try {
     const older = await olderCaches();
@@ -59,9 +62,9 @@ async function install() {
     // Lazy files the last release already holds cost nothing to keep.
     for (const path of [...WARM_FILES, ...ON_DEMAND_FILES]) await reuse(cache, older, path);
   } catch (error) {
-    // A bad answer fails the install, and its half-filled cache must never pass for this release.
-    // The browser retries the install later, and the previous worker keeps serving until then.
-    await caches.delete(CACHE);
+    // A bad answer fails the install, and a half-filled cache it created must never pass for this
+    // release. The browser retries the install later, and the previous worker keeps serving until then.
+    if (!existed) await caches.delete(CACHE);
     throw error;
   }
 }
