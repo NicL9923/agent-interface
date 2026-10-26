@@ -8,7 +8,8 @@ import { mountRoot } from "./ui-harness";
 
 class Target extends EventTarget {}
 let container: HTMLDivElement, root: Root, reload: ReturnType<typeof vi.fn>;
-let worker: Target & { controller: object | null; register: ReturnType<typeof vi.fn> };
+let active: { postMessage: ReturnType<typeof vi.fn> };
+let worker: Target & { controller: object | null; register: ReturnType<typeof vi.fn>; ready: Promise<{ active: typeof active }> };
 let registration: Target & { waiting: { postMessage: ReturnType<typeof vi.fn> } | null; installing: (Target & { state: string }) | null; update: ReturnType<typeof vi.fn> };
 
 function Harness() {
@@ -24,7 +25,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("PROD", true);
   registration = Object.assign(new Target(), { waiting: null, installing: null, update: vi.fn(async () => undefined) });
-  worker = Object.assign(new Target(), { controller: {}, register: vi.fn(async () => registration) });
+  active = { postMessage: vi.fn() };
+  worker = Object.assign(new Target(), { controller: {}, register: vi.fn(async () => registration), ready: Promise.resolve({ active }) });
   vi.stubGlobal("navigator", { serviceWorker: worker });
   reload = vi.fn();
   vi.stubGlobal("location", { reload });
@@ -32,6 +34,18 @@ beforeEach(() => {
 });
 
 describe("app update notice", () => {
+  it("asks the active worker to cache the lazy screens once the page is idle, and not if it closes first", async () => {
+    await render();
+    expect(active.postMessage).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(active.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "WARM" });
+    active.postMessage.mockClear();
+    await render();
+    await act(async () => root.unmount());
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(active.postMessage).not.toHaveBeenCalled();
+  });
+
   it("shows a build already waiting and switches to it before reloading", async () => {
     registration.waiting = { postMessage: vi.fn() };
     await render();

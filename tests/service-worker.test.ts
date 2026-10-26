@@ -13,6 +13,8 @@ const script = (install = INSTALL, warm = WARM, onDemand = ON_DEMAND) => readFil
   .replace('__ON_DEMAND__', JSON.stringify(onDemand));
 const js = (body = 'export {}') => new Response(body, { headers: { 'content-type': 'text/javascript' } });
 const html = () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } });
+// A healthy server: pages are HTML and everything else is code or an image.
+const healthy = (path: string) => Promise.resolve(path.endsWith('.html') ? html() : js(path));
 
 function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>> } = {}) {
   const handlers: Record<string, (event: any) => void> = {};
@@ -21,19 +23,18 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
   const fetch = vi.fn().mockRejectedValue(new Error('offline'));
+  // Installing needs the network; tests of later steps keep the default of being offline.
   // Cache storage by name. The current release's cache starts with its app shell, as after an install.
   const stores = new Map<string, Map<string, unknown>>([['agent-interface-test', new Map([['/index.html', 'static shell']])]]);
   for (const [name, entries] of Object.entries(options.older ?? {})) stores.set(name, new Map(Object.entries(entries)));
   const match = vi.fn();
   const put = vi.fn();
-  const addAll = vi.fn();
   const open = async (name: string) => {
     if (!stores.has(name)) stores.set(name, new Map());
     const store = stores.get(name)!;
     return {
       match: async (key: string) => { if (name === 'agent-interface-test') match(key); return store.get(key); },
       put: async (key: string, value: unknown) => { put(key, value); store.set(key, value); },
-      addAll: async (keys: string[]) => { addAll(keys); for (const key of keys) store.set(key, js()); },
     };
   };
   const context = {
@@ -54,7 +55,14 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     handlers[type]({ waitUntil: (value: Promise<unknown>) => { waited = value; } });
     await waited;
   };
-  return { handlers, fetch, match, put, addAll, stores, claim, install: () => run('install'), activate: () => run('activate'), showNotification, openWindow, setAppBadge, clearAppBadge };
+  // The page's request to warm. Returns what the worker handed to waitUntil, or undefined when it did not.
+  const warm = () => {
+    let waited: Promise<unknown> | undefined;
+    handlers.message({ data: { type: 'WARM' }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    return waited;
+  };
+  const install = () => { fetch.mockImplementation(healthy); return run('install'); };
+  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, showNotification, openWindow, setAppBadge, clearAppBadge };
 }
 
 describe('service worker privacy and return path', () => {
@@ -74,12 +82,42 @@ describe('service worker privacy and return path', () => {
   });
 
   it('installs only the app shell and the entry code, leaving lazy and admin-only code to later', async () => {
-    const { install, addAll, fetch, stores } = worker();
+    const { install, fetch, stores } = worker();
     await install();
-    expect(addAll).toHaveBeenCalledExactlyOnceWith(INSTALL);
-    expect(fetch).not.toHaveBeenCalled();
-    expect([...stores.get('agent-interface-test')!.keys()]).not.toEqual(expect.arrayContaining([WARM[0]]));
-    expect([...stores.get('agent-interface-test')!.keys()]).not.toContain(ON_DEMAND[0]);
+    expect(fetch.mock.calls.map(([path]) => path).sort()).toEqual([...INSTALL].sort());
+    const kept = [...stores.get('agent-interface-test')!.keys()];
+    expect(kept.sort()).toEqual([...INSTALL].sort());
+  });
+
+  it('refuses to install when a code file comes back as HTML, so the browser retries and the old worker stays', async () => {
+    const sw = worker();
+    sw.fetch.mockImplementation((path: string) => path === '/assets/app-a1234567.js' ? Promise.resolve(html()) : healthy(path));
+    await expect(sw.tryInstall()).rejects.toThrow('/assets/app-a1234567.js');
+    // Nothing from the failed attempt is left looking like a finished release.
+    expect(sw.put).not.toHaveBeenCalled();
+  });
+
+  it.each([['an error status', () => new Response('gone', { status: 404 })], ['a failed fetch', () => { throw new Error('offline'); }]])('refuses to install on %s', async (_name, bad) => {
+    const sw = worker();
+    sw.fetch.mockImplementation((path: string) => path === '/icon-192.png' ? Promise.resolve().then(bad) : healthy(path));
+    await expect(sw.tryInstall()).rejects.toThrow();
+    expect(sw.put).not.toHaveBeenCalled();
+  });
+
+  it('still installs the HTML pages as HTML', async () => {
+    const install = ['/index.html', '/native-computer.html', '/assets/app-a1234567.js'];
+    const handlers: Record<string, (event: any) => void> = {};
+    const stored = new Map<string, Response>();
+    vm.runInNewContext(script(install), {
+      self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; } },
+      caches: { keys: async () => [], open: async () => ({ match: async () => undefined, put: async (key: string, value: Response) => { stored.set(key, value); } }) },
+      URL, Response, fetch: healthy,
+    });
+    let installed: Promise<unknown> | undefined;
+    handlers.install({ waitUntil: (value: Promise<unknown>) => { installed = value; } });
+    await installed;
+    expect([...stored.keys()].sort()).toEqual([...install].sort());
+    expect(stored.get('/native-computer.html')!.headers.get('content-type')).toBe('text/html');
   });
 
   it.each([['a lazy screen', WARM[0]], ['an admin-only chunk', ON_DEMAND[0]]])('keeps %s after its first use so it works offline later', async (_name, path) => {
@@ -219,29 +257,29 @@ describe('service worker badge and approval actions', () => {
 describe('service worker release updates', () => {
   const older = (entries: Record<string, Response>) => ({ older: { 'agent-interface-previous': entries } });
   const current = (sw: ReturnType<typeof worker>) => sw.stores.get('agent-interface-test')!;
+  const fetched = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.map(([path]) => path).sort();
 
   it('copies a hashed file the last release already holds instead of fetching it', async () => {
     const kept = js('old body');
     const sw = worker(older({ '/assets/app-a1234567.js': kept, '/assets/panel-b1234567.js': js() }));
     await sw.install();
-    expect(sw.addAll).toHaveBeenCalledExactlyOnceWith(['/index.html', '/icon-192.png', '/assets/vendor.js']);
+    expect(fetched(sw)).toEqual(['/assets/vendor.js', '/icon-192.png', '/index.html']);
     expect(current(sw).get('/assets/app-a1234567.js')).toBe(kept);
     // Lazy files carry over too, since copying costs nothing, but nothing absent is invented.
     expect(current(sw).has('/assets/panel-b1234567.js')).toBe(true);
     expect(current(sw).has('/assets/panel-c1234567.css')).toBe(false);
-    expect(sw.fetch).not.toHaveBeenCalled();
   });
 
   it('fetches the pages, icons and unhashed files fresh even when the last release holds them', async () => {
     const sw = worker(older({ '/index.html': html(), '/icon-192.png': js(), '/assets/vendor.js': js(), '/assets/app-a1234567.js': js() }));
     await sw.install();
-    expect(sw.addAll).toHaveBeenCalledExactlyOnceWith(['/index.html', '/icon-192.png', '/assets/vendor.js']);
+    expect(fetched(sw)).toEqual(['/assets/vendor.js', '/icon-192.png', '/index.html']);
   });
 
   it('refetches a hashed file whose old copy is the app shell or an error rather than code', async () => {
     const sw = worker(older({ '/assets/app-a1234567.js': html(), '/assets/panel-b1234567.js': new Response('gone', { status: 404 }) }));
     await sw.install();
-    expect(sw.addAll).toHaveBeenCalledExactlyOnceWith(INSTALL);
+    expect(fetched(sw)).toEqual([...INSTALL].sort());
     expect(current(sw).has('/assets/panel-b1234567.js')).toBe(false);
   });
 
@@ -258,34 +296,74 @@ describe('service worker release updates', () => {
   });
 
   it('falls back to fetching when an older cache cannot be read', async () => {
-    const addAll = vi.fn();
+    const fetch = vi.fn(healthy);
     const open = async (name: string) => name === 'agent-interface-previous'
       ? { match: async () => { throw new Error('storage'); } }
-      : { match: async () => undefined, put: async () => {}, addAll };
+      : { match: async () => undefined, put: async () => {} };
     const handlers: Record<string, (event: any) => void> = {};
     vm.runInNewContext(script(), {
       self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; } },
-      caches: { open, keys: async () => ['agent-interface-previous', 'agent-interface-test'] }, URL, Response, fetch: vi.fn(),
+      caches: { open, keys: async () => ['agent-interface-previous', 'agent-interface-test'] }, URL, Response, fetch,
     });
     let installed: Promise<unknown> | undefined;
     handlers.install({ waitUntil: (value: Promise<unknown>) => { installed = value; } });
     await installed;
-    expect(addAll).toHaveBeenCalledExactlyOnceWith(INSTALL);
+    expect(fetch.mock.calls.map(([path]) => path).sort()).toEqual([...INSTALL].sort());
   });
 
-  it('warms lazy files after activating, without holding activation back or touching admin-only chunks', async () => {
+  it('does not warm on activation, so activation never waits on downloads or leaves them unprotected', async () => {
+    const sw = worker();
+    await sw.activate();
+    expect(sw.claim).toHaveBeenCalledOnce();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sw.fetch).not.toHaveBeenCalled();
+  });
+
+  it('warms lazy files when the page asks, under waitUntil, and never touches admin-only chunks', async () => {
     const sw = worker();
     const release: Array<() => void> = [];
     sw.fetch.mockImplementation((path: string) => new Promise<Response>((resolve) => { release.push(() => resolve(js(path))); }));
-    await sw.activate();
-    expect(sw.claim).toHaveBeenCalledOnce();
-    // Activation finished while the warm-up fetches are still waiting on the network.
+    const waited = sw.warm();
+    // The browser is told to keep the worker alive for the whole download.
+    expect(typeof waited?.then).toBe('function');
     await vi.waitFor(() => expect(sw.fetch).toHaveBeenCalledTimes(WARM.length));
     expect(sw.fetch.mock.calls.map(([path]) => path).sort()).toEqual([...WARM].sort());
-    expect(current(sw).has(WARM[0])).toBe(false);
+    let settled = false;
+    void waited!.then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(settled).toBe(false);
     release.forEach((resolve) => resolve());
-    await vi.waitFor(() => expect(WARM.every((path) => current(sw).has(path))).toBe(true));
+    await waited;
+    expect(WARM.every((path) => current(sw).has(path))).toBe(true);
     expect(current(sw).has(ON_DEMAND[0])).toBe(false);
+  });
+
+  it('ignores messages that are not requests to warm or skip waiting', () => {
+    const sw = worker();
+    const waitUntil = vi.fn();
+    sw.handlers.message({ data: { type: 'OTHER' }, waitUntil });
+    sw.handlers.message({ data: undefined, waitUntil });
+    expect(waitUntil).not.toHaveBeenCalled();
+  });
+
+  it('resumes after a cut-short run: a second warm fetches only what is still missing', async () => {
+    const sw = worker();
+    // The first run is stopped by the browser after one file; the rest never arrived.
+    sw.fetch.mockResolvedValueOnce(js(WARM[0])).mockRejectedValue(new Error('terminated'));
+    await sw.warm();
+    expect(current(sw).has(WARM[0])).toBe(true);
+    expect(current(sw).has(WARM[1])).toBe(false);
+    sw.fetch.mockReset().mockImplementation(healthy);
+    await sw.warm();
+    expect(sw.fetch).toHaveBeenCalledExactlyOnceWith(WARM[1], expect.anything());
+    expect(WARM.every((path) => current(sw).has(path))).toBe(true);
+  });
+
+  it('shares one run between pages that ask at the same time', async () => {
+    const sw = worker();
+    sw.fetch.mockImplementation(healthy);
+    await Promise.all([sw.warm(), sw.warm()]);
+    expect(sw.fetch).toHaveBeenCalledTimes(WARM.length);
   });
 
   it('warms only a few files at once and skips those already cached', async () => {
@@ -302,18 +380,19 @@ describe('service worker release updates', () => {
       },
       URL, Response, fetch,
     });
-    handlers.activate({ waitUntil: () => {} });
-    await vi.waitFor(() => expect(warm.every((path) => stored.has(path))).toBe(true));
+    let waited: Promise<unknown> | undefined;
+    handlers.message({ data: { type: 'WARM' }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    await waited;
+    expect(warm.every((path) => stored.has(path))).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(warm.length - 1);
-    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBe(3);
   });
 
   it('never keeps a warmed file that came back as the app shell, an error or nothing', async () => {
     const sw = worker();
     sw.fetch.mockResolvedValueOnce(html()).mockResolvedValueOnce(new Response('gone', { status: 404 }));
-    await sw.activate();
-    await vi.waitFor(() => expect(sw.fetch).toHaveBeenCalledTimes(WARM.length));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await sw.warm();
+    expect(sw.fetch).toHaveBeenCalledTimes(WARM.length);
     expect(sw.put).not.toHaveBeenCalled();
     expect(WARM.some((path) => current(sw).has(path))).toBe(false);
   });
