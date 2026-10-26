@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { precachePlan } from './precache-plan.mjs';
+import { assertPopupLibraryIsLazy, precachePlan } from './precache-plan.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = join(root, 'dist/client');
@@ -27,6 +28,7 @@ hash.update(template);
 const version = hash.digest('hex').slice(0, 16);
 const names = files.map((file) => relative(output, file).split('\\').join('/'));
 const manifest = JSON.parse(await readFile(join(output, '.vite/manifest.json'), 'utf8'));
+assertPopupLibraryIsLazy(manifest, (file) => readFileSync(join(output, file), 'utf8'));
 const plan = precachePlan(manifest, names);
 // Nothing serves or needs it after this, so it does not ship.
 await rm(join(output, '.vite'), { recursive: true });

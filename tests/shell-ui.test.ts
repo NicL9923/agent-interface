@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
@@ -171,6 +172,8 @@ describe("keyboard shortcuts", () => {
 
 describe("undo toast", () => {
   const pinFromMenu = async (name: string, item: string) => {
+    // Rows swap to the real menu once its code has loaded, which would replace a row found earlier.
+    await act(async () => { await preloadBotMenu(); });
     const row = [...mount.container.querySelectorAll<HTMLElement>(".bot-item")].find(button => button.textContent?.includes(name))!;
     await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 20, clientY: 20 })));
     await act(async () => [...document.body.querySelectorAll<HTMLElement>('.bot-menu [role="menuitem"]')].find(entry => entry.textContent === item)!.click());

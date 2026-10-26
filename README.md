@@ -100,6 +100,12 @@ Shared controls live in `src/components/ui`, with shadcn configuration in
 `components.json` and Base UI handling context menus and popovers. Keep the
 existing WildBots colors, typography and spacing when adding controls.
 
+Base UI is not part of the first load. Import its components only from modules the
+entry reaches through `import()`, such as the assistant menu in `src/app/BotMenuPopup.tsx`.
+Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches the first
+right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
+returns to the entry's static imports.
+
 Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
 prefix so they cannot collide with existing semantic class names. Preflight is
 omitted to preserve native control styling. Keep custom layout, avatar and
