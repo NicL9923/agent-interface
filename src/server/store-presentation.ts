@@ -32,7 +32,9 @@ export class PresentationRepository {
   }
   /** Advances whenever an assistant's sharing or owner changes, so a request can tell it changed meanwhile. */
   privacyVersion = 0;
-  private privacyChanges: { version: number; botId: string }[] = [];
+  /** Deleting an assistant removes its record without a write here, so this advances the version for it. */
+  noteRemoved() { this.privacyVersion++; }
+  private privacyChanges:{ version: number; botId: string }[] = [];
   /** Assistants whose sharing or owner changed after this version. */
   changedSince(version: number) {
     return this.privacyChanges.filter(change => change.version > version).map(change => change.botId);

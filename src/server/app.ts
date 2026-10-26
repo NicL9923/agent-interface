@@ -143,23 +143,48 @@ export async function createApp(
     const revisionDate = upgrades.revisionDate(status.version);
     return revisionDate ? { ...status, revisionDate } : status;
   };
-  let snapshot: Promise<Pick<Bootstrap, "bots" | "capabilities" | "connection">> | undefined;
-  const runtimeSnapshot = () => {
-    if (snapshot) return snapshot;
-    snapshot = (async () => {
-      // Share only runtime reads. Identity, preferences and CSRF remain request-scoped.
-      const [bots, capabilities] = await Promise.all([
-        runtime.listBots(), runtime.capabilities(),
-      ]);
-      return { bots: bots.map(bot => directory.decorate(bot, capabilities.avatarMetadata.supported)), capabilities, connection: dated(await runtime.status()) };
-    })().finally(() => { snapshot = undefined; });
-    return snapshot;
+  // Runtime reads shared by every bootstrap and event stream. A roster notice sends every open
+  // client here within a few milliseconds, and polls and focus events arrive in clusters across
+  // household devices, so a resolved read is reused briefly. 1.5 s is longer than the roster
+  // stream's 1 s evaluation floor, so a read refreshed by one evaluation outlives the bootstraps
+  // it triggers, and it is the longest a disconnect can go unreported to a fresh bootstrap.
+  const SNAPSHOT_TTL_MS = 1500;
+  type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connection">;
+  let snapshotRead: Promise<RuntimeSnapshot> | undefined;
+  let snapshotKept: { value: RuntimeSnapshot; at: number } | undefined;
+  // Counts invalidations, so a read that began before one is never kept.
+  let snapshotEpoch = 0;
+  /**
+   * Keeps a read only while the runtime is connected and answering, so an outage is never served
+   * from memory: Hermes reports a failed roster read as disconnected rows, and a lost socket as
+   * a disconnected status. Either replaces what was kept, so the outage shows at once.
+   */
+  const keepSnapshot = (value: RuntimeSnapshot, startedAt: number, epoch: number) => {
+    if (epoch !== snapshotEpoch) return;
+    snapshotKept = value.connection.connected && !value.bots.some(bot => bot.activity === "disconnected") ? { value, at: startedAt } : undefined;
+  };
+  /** Forgets the snapshot after this app changed runtime state, so the next read sees the change. */
+  const invalidateSnapshot = () => { snapshotEpoch++; snapshotKept = undefined; snapshotRead = undefined; };
+  const runtimeSnapshot = (): Promise<RuntimeSnapshot> => {
+    if (snapshotKept && Date.now() - snapshotKept.at < SNAPSHOT_TTL_MS) return Promise.resolve(snapshotKept.value);
+    if (snapshotRead) return snapshotRead;
+    const startedAt = Date.now(), epoch = snapshotEpoch;
+    // Share only runtime reads, undecorated: presentation, identity, preferences and CSRF stay request-scoped.
+    const read: Promise<RuntimeSnapshot> = (async () => {
+      const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
+      return { bots, capabilities, connection: await runtime.status() };
+    })();
+    snapshotRead = read;
+    // A rejected read is never kept: the next caller reads again.
+    read.then(value => { if (snapshotRead === read) snapshotRead = undefined; keepSnapshot(value, startedAt, epoch); },
+      () => { if (snapshotRead === read) snapshotRead = undefined; });
+    return read;
   };
   apiRoute(app, "GET /bootstrap", {}, async req => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: preferencesFor(signedIn(req).id),
-    ...await runtimeSnapshot().then(async value => ({ ...value,
+    ...await runtimeSnapshot().then(async value => ({ ...value, connection: dated(value.connection),
       bots: await directory.rosterFor(signedIn(req).id, value.bots, value.capabilities.avatarMetadata.supported,
         (req.query as { roster?: string }).roster === "lean"),
     })),
@@ -167,9 +192,12 @@ export async function createApp(
     vapidPublicKey: config.vapidPublicKey || undefined,
     nativeApp: config.nativeApp,
   }));
-  apiRoute(app, "POST /connection/retry", {}, async () =>
-    dated(await (runtime.reconnect ? runtime.reconnect() : runtime.status())),
-  );
+  apiRoute(app, "POST /connection/retry", {}, async () => {
+    invalidateSnapshot();
+    const status = dated(await (runtime.reconnect ? runtime.reconnect() : runtime.status()));
+    invalidateSnapshot();
+    return status;
+  });
   apiRoute(app, "PATCH /preferences", { body: preferences }, async (req, value) => {
     const previous = store.preferences(signedIn(req).id);
     value.modelFavorites ??= previous.modelFavorites;
@@ -208,8 +236,11 @@ export async function createApp(
       rosterPending = undefined;
       rosterEvaluating = true;
       rosterLast = Date.now();
-      void Promise.all([runtime.listBots(), runtime.capabilities()]).then(([bots, capabilities]) => {
+      const startedAt = Date.now(), epoch = snapshotEpoch;
+      void Promise.all([runtime.listBots(), runtime.capabilities(), runtime.status().catch(() => undefined)]).then(([bots, capabilities, status]) => {
         roster.note(bots);
+        // The bootstrap each client sends on the notice below reuses this read.
+        if (status) keepSnapshot({ bots, capabilities, connection: status }, startedAt, epoch);
         for (const changed of rosterListeners) changed(bots, capabilities.avatarMetadata.supported);
       }).catch(() => { /* The fallback bootstrap retries unavailable runtime reads. */ })
         .finally(() => {
@@ -218,10 +249,21 @@ export async function createApp(
         });
     }, Math.max(0, rosterLast + 1000 - Date.now()));
   };
-  app.addHook("onResponse", async (req, reply) => {
+  // Writes to assistants that can change the roster. Drafts, read positions, presence and uploads
+  // touch only this app's own state.
+  const changesRoster = (path: string) => path.startsWith("/api/bots") && !/\/(draft|read-position|presence|uploads)$/.test(path);
+  // The next bootstrap must show what this app just changed, whether or not the write succeeded:
+  // a failed create or save may still have reached Hermes. Dropped before the response is sent,
+  // so a client's very next read cannot find the old snapshot. Upgrades, connections, routines
+  // and notification actions change runtime state too.
+  app.addHook("onSend", async (req, _reply, payload) => {
     const path = routePattern(req);
-    if (req.method !== "GET" && reply.statusCode < 400 && path.startsWith("/api/bots")
-      && !/\/(draft|read-position|presence|uploads)$/.test(path)) evaluateRoster();
+    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)
+      && (changesRoster(path) || /^\/api\/(hermes|integrations|routines|push\/actions)(\/|$)/.test(path))) invalidateSnapshot();
+    return payload;
+  });
+  app.addHook("onResponse", async (req, reply) => {
+    if (req.method !== "GET" && reply.statusCode < 400 && changesRoster(routePattern(req))) evaluateRoster();
   });
   app.addHook("preClose", async () => {
     clearTimeout(rosterPending);
