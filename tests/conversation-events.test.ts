@@ -7,9 +7,9 @@ import { hash } from "../src/server/auth.js";
 import type { Activity, Bot, Inflight, Message, Runtime, ToolCall } from "../src/shared/types.js";
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): Promise<unknown>; server: { closeAllConnections(): void } }[] = [];
-// Node's fetch client schedules work with the global setTimeout, so switching back to real timers can drop a
-// step of a connection it just opened. Node 24 does not count a connection that never sent a request as idle,
-// and closing would wait for it. Every client here belongs to the test, so close them all first.
+// Under concurrent load on Node 24, app.close() waited on an accepted socket that had sent no request, which
+// Node 24 does not count as idle. Every connection here belongs to the test, so cleanup closes them first. The
+// shutdown test below calls app.close() directly, with a stream open, so preClose stays covered.
 afterEach(async () => {
   vi.useRealTimers();
   for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); }
