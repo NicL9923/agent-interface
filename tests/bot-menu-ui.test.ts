@@ -7,8 +7,7 @@ import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import { mountRoot } from "./ui-harness";
 
 // The menu code is held back to play a slow network, so these are gestures that beat it.
-const gate = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined }));
-vi.mock("../src/app/BotMenuPopup", async original => { await gate.hold; return original(); });
+const gate = { hold: undefined as Promise<void> | undefined };
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: () => null,
@@ -26,6 +25,11 @@ beforeEach(async () => {
   // A fresh copy of the menu loader, which otherwise remembers having loaded.
   vi.resetModules();
   gate.hold = new Promise<void>(resolve => { release = resolve; });
+  // Registered afresh each time, because a mock factory's module is remembered once it has resolved.
+  vi.doMock("../src/app/BotMenuPopup", async () => {
+    await gate.hold;
+    return vi.importActual<typeof import("../src/app/BotMenuPopup")>("../src/app/BotMenuPopup");
+  });
   ({ Sidebar } = await import("../src/app/Sidebar"));
   props = {
     boot: {
@@ -85,6 +89,19 @@ it("opens the first right-click menu once the code arrives, without ever showing
   await act(async () => items()[0].click());
   expect(props.onPin).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
+});
+
+it("opens one menu, for the last row right-clicked, when several rows are right-clicked while the code loads", async () => {
+  await render();
+  const rightClick = (row: Element, x: number, y: number) => act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: x, clientY: y, button: 2, bubbles: true, cancelable: true })));
+  await rightClick(rows()[0], 50, 60);
+  await rightClick(rows()[1], 100, 180);
+  expect(menu()).toBeNull();
+  await arrive();
+  await opened("Garden planner");
+  await wait(50);
+  expect(document.body.querySelectorAll('[role="menu"]')).toHaveLength(1);
+  expect(menu()?.getAttribute("aria-label")).toBe("Garden planner");
 });
 
 it("opens the first menu-key press once the code arrives, anchored to its row", async () => {
