@@ -34,13 +34,16 @@ beforeEach(() => {
 });
 
 describe("app update notice", () => {
-  it("asks the active worker to cache the lazy screens once the page is idle, and not if it closes first", async () => {
+  it("asks the active worker to cache the lazy screens once the page is idle", async () => {
     await render();
     expect(active.postMessage).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTimeAsync(2000));
     expect(active.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "WARM" });
-    active.postMessage.mockClear();
+  });
+
+  it("does not ask once the page closes before it is idle", async () => {
     await render();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
     await act(async () => root.unmount());
     await act(async () => vi.advanceTimersByTimeAsync(2000));
     expect(active.postMessage).not.toHaveBeenCalled();
