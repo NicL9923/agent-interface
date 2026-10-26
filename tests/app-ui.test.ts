@@ -139,16 +139,58 @@ describe("conversation state", () => {
     await render();
     const reads = vi.mocked(api).mock.calls.length;
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
     });
     expect(container.textContent).toContain("Growing reply");
     expect(vi.mocked(api).mock.calls).toHaveLength(reads);
+  });
+  describe("inflight growth notices", () => {
+    const run = { state: "thinking" as const, runId: "run" };
+    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=2"))!;
+    const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
+    const whole = (text: string) => JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text }, activity: run, toolCalls: [] });
+    const growth = (changes: object) => JSON.stringify({ botId: "shared", messageId: "sid-inflight", baseTextLength: 7, baseReasoningLength: 0, activity: run, ...changes });
+    it("opts in to growth notices and applies one that continues the reply it holds", async () => {
+      conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
+      await render();
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2");
+      await act(async () => open().emit("inflight", whole("Growing")));
+      const before = vi.mocked(api).mock.calls.length;
+      await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
+      expect(container.textContent).toContain("Growing reply");
+      await act(async () => open().emit("inflight-delta", growth({ baseTextLength: 13, appendText: " grows" })));
+      expect(container.textContent).toContain("Growing reply grows");
+      expect(vi.mocked(api).mock.calls).toHaveLength(before);
+    });
+    it.each([
+      ["another message", { messageId: "other-inflight", appendText: "!" }],
+      ["a base it does not hold", { baseTextLength: 3, appendText: "!" }],
+    ])("reloads and reconnects instead of applying growth of %s", async (_name, change) => {
+      conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
+      await render();
+      await act(async () => open().emit("inflight", whole("Growing")));
+      const before = reads(), streams = FakeEventSource.created.length;
+      await act(async () => open().emit("inflight-delta", growth(change)));
+      await advance(0);
+      expect(container.textContent).not.toContain("Growing!");
+      expect(reads()).toBeGreaterThan(before);
+      // A new stream starts the server again from a whole event.
+      expect(FakeEventSource.created.length).toBe(streams + 1);
+    });
+    it("reloads when there is no reply held to grow", async () => {
+      conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
+      await render();
+      const before = reads();
+      await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
+      await advance(0);
+      expect(reads()).toBeGreaterThan(before);
+    });
   });
   it.each(["done", "new-run"])("does not reapply an old live tail over a %s fetch", async mode => {
     conversation = { ...conversation, activity: { state: "thinking", runId: "run" }, messages: [] };
     await render();
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
     });
     expect(container.textContent).toContain("Old tail");
     conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };

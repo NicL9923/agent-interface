@@ -1,6 +1,6 @@
 import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type ApiResponse, type ApiRoute } from "./shared/api";
 import type { ErrorCode } from "./shared/errors";
-import type { Inflight } from "./shared/types";
+import type { Inflight, InflightDelta } from "./shared/types";
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
@@ -164,7 +164,8 @@ const STREAM_SILENCE = 60_000;
  * itself but never a refusal, so `open` replaces a closed or silent stream. `named` handles other
  * named events by their data, such as group chat notices.
  */
-export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {}) {
+export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
+  onInflightDelta?: (value: InflightDelta) => boolean) {
   let source: EventSource | undefined, heard = 0;
   const close = () => {
     source?.close();
@@ -183,6 +184,17 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (onInflight) current.addEventListener("inflight", event => {
       heard = Date.now();
       try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
+    });
+    // A growth notice the caller cannot apply means this stream and the caller disagree about the
+    // live reply. Reload, and reconnect so the server starts again from a whole `inflight` event.
+    if (onInflightDelta) current.addEventListener("inflight-delta", event => {
+      heard = Date.now();
+      let applied = false;
+      try { applied = onInflightDelta(JSON.parse((event as MessageEvent).data) as InflightDelta); } catch { /* Reloads below. */ }
+      if (applied) return;
+      onChange();
+      close();
+      open();
     });
     current.addEventListener("roster", () => { heard = Date.now(); onChange(); });
     for (const [name, handle] of Object.entries(named))

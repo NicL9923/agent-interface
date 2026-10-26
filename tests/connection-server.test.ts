@@ -9,7 +9,7 @@ import { fakeRuntime } from "./helpers/server.js";
 const origin='http://127.0.0.1:3000';
 const capabilities=Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Awaited<ReturnType<Runtime['capabilities']>>;
 const apps:Awaited<ReturnType<typeof createApp>>['app'][]=[];
-afterEach(async()=>{await Promise.all(apps.splice(0).map(app=>app.close()));});
+afterEach(async()=>{vi.useRealTimers();await Promise.all(apps.splice(0).map(app=>app.close()));});
 async function installation(overrides:Partial<Runtime>={}){
   const runtime=fakeRuntime({
     listBots:vi.fn(async()=>[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle' as const},{id:'other',name:'Other',shared:true,model:'test',activity:'idle' as const}]),
@@ -58,6 +58,77 @@ describe('connection recovery API',()=>{
     expect(listBots).toHaveBeenCalledTimes(2);
   });
 
+  describe('shared runtime snapshot',()=>{
+    type TestApp=Awaited<ReturnType<typeof createApp>>['app'];
+    const rows=(activity:'idle'|'disconnected'='idle')=>[{id:'shared',name:'Shared',shared:true,model:'test',activity}];
+    const bootstrap=(app:TestApp,headers:Record<string,string>)=>app.inject({url:'/api/bootstrap',headers});
+    const write=(app:TestApp,headers:Record<string,string>,method:'POST'|'PATCH'|'DELETE',url:string,payload?:object)=>app.inject({method,url,headers,payload});
+    const ids=(response:{json:()=>{bots:{id:string}[]}})=>response.json().bots.map(bot=>bot.id);
+    it('serves the next bootstraps from one read until it expires',async()=>{
+      vi.useFakeTimers({toFake:['Date']});
+      const {app,runtime}=await installation();
+      const one=await identity(app),two=await identity(app,'two');
+      expect((await bootstrap(app,one)).statusCode).toBe(200);
+      expect((await bootstrap(app,two)).statusCode).toBe(200);
+      vi.setSystemTime(Date.now()+1400);
+      expect((await bootstrap(app,one)).statusCode).toBe(200);
+      for(const read of [runtime.listBots,runtime.capabilities,runtime.status])expect(read).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now()+200);
+      expect((await bootstrap(app,one)).statusCode).toBe(200);
+      for(const read of [runtime.listBots,runtime.capabilities,runtime.status])expect(read).toHaveBeenCalledTimes(2);
+    });
+    it('keeps each person\'s view of this app\'s own presentation current while the read is held',async()=>{
+      const {app,store,runtime}=await installation();
+      const one=await identity(app),two=await identity(app,'two');
+      expect(ids(await bootstrap(app,one))).toEqual(['shared','other']);
+      store.savePresentation('other',{shared:false,ownerId:'local-one'});
+      expect(ids(await bootstrap(app,two))).toEqual(['shared']);
+      expect(ids(await bootstrap(app,one))).toEqual(['shared','other']);
+      expect(runtime.listBots).toHaveBeenCalledTimes(1);
+    });
+    it.each([
+      ['an assistant save','PATCH','/api/bots/shared',{name:'Shared',model:'test',shared:true,instructions:'New'}],
+      ['an assistant delete','DELETE','/api/bots/shared',undefined],
+      ['a connection retry','POST','/api/connection/retry',{}],
+    ] as const)('re-reads after %s',async(_name,method,url,payload)=>{
+      const {app,runtime}=await installation({saveBot:vi.fn(async(input:any,id='shared')=>({...input,id,activity:'idle' as const})),deleteBot:vi.fn(async()=>{})});
+      const headers=await identity(app);
+      expect((await bootstrap(app,headers)).statusCode).toBe(200);
+      expect((await bootstrap(app,headers)).statusCode).toBe(200);
+      expect(runtime.status).toHaveBeenCalledTimes(1);
+      const result=await write(app,headers,method,url,payload);
+      expect(result.statusCode).toBeLessThan(400);
+      expect((await bootstrap(app,headers)).statusCode).toBe(200);
+      expect(runtime.status).toHaveBeenCalledTimes(2);
+    });
+    it('does not keep a read that began before a write',async()=>{
+      let release!:()=>void;
+      const stale=new Promise<void>(resolve=>{release=resolve;});
+      const listBots=vi.fn().mockImplementationOnce(async()=>{await stale;return rows();}).mockImplementation(async()=>rows());
+      const status=vi.fn(async()=>({connected:true,code:'ready' as const}));
+      const {app}=await installation({listBots,status,deleteBot:vi.fn(async()=>{})});
+      const headers=await identity(app);
+      const first=bootstrap(app,headers);
+      await vi.waitFor(()=>expect(listBots).toHaveBeenCalledTimes(1));
+      expect((await write(app,headers,'DELETE','/api/bots/shared')).statusCode).toBeLessThan(400);
+      release();
+      expect((await first).statusCode).toBe(200);
+      expect((await bootstrap(app,headers)).statusCode).toBe(200);
+      expect(status).toHaveBeenCalledTimes(2);
+    });
+    it('never holds a disconnected runtime',async()=>{
+      vi.useFakeTimers({toFake:['Date']});
+      let connected=false;
+      const {app,runtime}=await installation({status:vi.fn(async()=>({connected,code:connected?'ready' as const:'unreachable' as const})),
+        listBots:vi.fn(async()=>rows(connected?'idle':'disconnected'))});
+      const headers=await identity(app);
+      expect((await bootstrap(app,headers)).json().connection.connected).toBe(false);
+      connected=true;
+      expect((await bootstrap(app,headers)).json().connection.connected).toBe(true);
+      expect(runtime.status).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('requires authentication, matching Origin and the current session CSRF before reconnecting',async()=>{
     const {app,runtime}=await installation();const headers=await identity(app);
     const attempts=[
@@ -89,9 +160,13 @@ describe('connection recovery API',()=>{
     const headers=await identity(app);
     expect((await app.inject({method:'PUT',url:'/api/bots/shared/avatar',headers,payload:saved})).statusCode).toBe(200);
     expect(setAvatar).toHaveBeenCalledTimes(1);
+    // External edits show once the shared runtime read, held briefly, has expired.
+    vi.useFakeTimers({toFake:['Date']});
     avatar=external;
+    vi.setSystemTime(Date.now()+2000);
     expect((await app.inject({url:'/api/bootstrap',headers})).json().bots[0].avatar).toEqual(external);
     avatar=undefined;
+    vi.setSystemTime(Date.now()+2000);
     expect((await app.inject({url:'/api/bootstrap',headers})).json().bots[0].avatar).toBeUndefined();
   });
 

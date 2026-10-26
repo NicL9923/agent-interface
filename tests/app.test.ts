@@ -143,6 +143,7 @@ describe("default roster detail fallback", () => {
       url === "/api/bootstrap" ? response.json<{ bots: Bot[] }>().bots : response.json<Bot[]>();
 
     it(`${url} preserves last-good configuration during outages and leaves lean reads alone`, async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
       const fake = runtimeDouble();
       let bots = [row("shared"), row("second")];
       fake.runtime.listBots = async () => bots;
@@ -155,6 +156,8 @@ describe("default roster detail fallback", () => {
         expect(initial.statusCode).toBe(200);
         for (const bot of botsFrom(initial)) expect(bot).toMatchObject(configuration);
 
+        // Hermes going down after the shared runtime read expires, which the bootstrap snapshot only holds briefly.
+        vi.setSystemTime(Date.now() + 2000);
         bots = [...bots, row("never-detailed")].map(bot => ({
           ...bot, activity: "disconnected", lastMessage: { text: "Current preview" },
         }));
@@ -176,7 +179,7 @@ describe("default roster detail fallback", () => {
         expect(lean.statusCode).toBe(200);
         expect(botsFrom(lean)).toEqual(JSON.parse(JSON.stringify(bots)));
         expect(detail).not.toHaveBeenCalled();
-      } finally { await app.close(); }
+      } finally { vi.useRealTimers(); await app.close(); }
     });
 
     it(`${url} isolates profile failures and drops a bot deleted between reads`, async () => {

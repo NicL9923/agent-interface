@@ -93,6 +93,25 @@ Structural events still send `data: change`, meaning refetch. Clients fetch on
 stream open and reconnect; the server sends no initial notice. Streams without the parameter retain their
 one-change-per-second streaming cadence.
 
+`?inflight=2` opts in to the same stream with growth sent as deltas, so a long
+reply is not resent whole every 250 ms. `?inflight=1` is unchanged, and the iOS
+app and cached web bundles keep using it. A `?inflight=2` stream sends the first
+`event: inflight` whole and then, while the same reply only grows, `event:
+inflight-delta` with JSON `{botId, messageId, baseTextLength, baseReasoningLength,
+appendText?, appendReasoning?, activity, toolCalls?}`. The lengths count UTF-16
+code units of the `message.text` and `message.reasoning` the stream last sent, an
+absent `reasoning` counting as zero. Append the suffixes to the live reply you
+hold, replace `activity`, and replace `toolCalls` only when the event carries it.
+An event that sends nothing new is omitted. The server sends a whole `inflight`
+event, and a delta never follows it, when the message `id` changed, when text or
+reasoning changed any way except by growing at the end, when any other message
+field changed, after any `data: change` notice, and on a new stream. Deltas are
+computed on the redacted reply, so redaction applies exactly as for `?inflight=1`.
+If a delta's `messageId` or base lengths do not match the reply you hold, or you
+hold none, discard it, refetch the conversation and reconnect the stream, which
+restarts from a whole event. A server that predates `?inflight=2` treats it as no
+opt-in and sends only change notices, which clients already handle.
+
 `GET /api/bootstrap?roster=lean` and `GET /api/bots?roster=lean` opt in to
 roster fields only: `id`,
 `name`, `description`, `model`, `provider`, `shared`, `ownerId`, `avatar`,
@@ -116,7 +135,12 @@ notifies each viewer only when their visible roster changes. Private activity
 does not notify other household members. Clients fetch on open; there is no
 initial roster notice. The stream pings every 25 seconds and ends on sign-out. Refresh on
 reconnect and foreground as well. A 45-second bootstrap poll covers missed
-notices and changes made outside this app.
+notices and changes made outside this app. The server shares one read of the
+assistant list, capabilities and connection status among bootstraps for 1.5
+seconds, so many devices answering one notice cost one Hermes round trip. It drops
+that read when this app writes an assistant, a routine, an integration, a Hermes
+upgrade or a connection retry, and never keeps a disconnected one, so a change
+made outside this app can take up to 1.5 seconds longer to show.
 
 `GET /api/events?group=ROOM_ID` also watches one group chat. The server checks the
 room like `GET /api/groups/:id`, answering 404 for a room the person cannot see,
