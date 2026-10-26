@@ -51,7 +51,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Conversation and composer | Web, iPhone and iPad captured | Complete | Web conversation 9; web composer 9.5; iPhone/iPad conversation and composer 9 |
 | Questions | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
 | Approvals | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
-| Failed and interrupted turns | Pending | Pending | Pending |
+| Failed and interrupted turns | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone 9.2; iPad 9.1 |
 | Assistant details and artifacts | Pending | Pending | Pending |
 | Assistant creation and settings | Pending | Pending | Pending |
 | Avatar editor | Pending | Pending | Pending |
@@ -198,3 +198,19 @@ PR. The web fixture refreshes explicitly after checking the accepted local state
 live server events, the expiry race, physical devices and manual VoiceOver were
 not exercised. Later passes retain the Connection spinner, Home empty-state
 opacity and status-dock followups listed by the reviewers.
+
+## Failed and interrupted turns review history
+
+[Initial review](evidence/design-review/recovery-review.md) identified a replaced
+web live region, weak web action hierarchy and an undersized native accessibility
+frame. The status region now retains the title and failure reason through the
+working-to-failed transition. Both clients use primary recovery actions, and the
+native acknowledgment owns its padding and full 44-point target.
+
+[The scoped recheck](evidence/design-review/recovery-recheck.md) accepted web
+desktop/phone and iPhone at 9.2, iPad at 9.1, with no remaining blockers. All 105
+focused web tests pass, including an independent rerun on the final source.
+Native tests tap padding and trailing whitespace in normal, dark and AX3 layouts.
+[Acceptance evidence](evidence/design-review/recovery-acceptance.md) records
+captures, source fingerprints and limits. Twelve annotated comparisons are ready
+for the final PR. The refused-retry marker was moved off its text after review.

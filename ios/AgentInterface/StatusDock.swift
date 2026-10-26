@@ -101,8 +101,9 @@ struct StatusDock: View {
       Text("This submission was interrupted. Review its last actions before trying again.")
         .font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
     case .interruptionReview:
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: Bindable(store).interruptionReviewed)
-        .toggleStyle(CheckboxStyle()).font(.footnote)
+      Toggle("I've reviewed the task's last actions.", isOn: Bindable(store).interruptionReviewed)
+        .toggleStyle(CheckboxStyle()).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("interruptionReview")
     case .decisions(let count):
       let layout = typeSize.isAccessibilitySize
         ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))

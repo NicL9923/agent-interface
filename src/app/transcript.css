@@ -191,3 +191,15 @@
 /* Lets a message sent last reach the top of the view while its reply grows into this space. */
 .transcript-end-space { flex: none; }
 .conversation-activity .retry-refused p { margin: 8px 0 0; }
+
+/* Recovery explains the failed task beside its next action without another card. */
+.conversation-activity.recovery-activity { align-items: flex-start; }
+.recovery-activity .activity-copy { min-width: 0; }
+.recovery-activity .recovery-title { margin: 0; color: var(--ink); font-size: 1rem; font-weight: 600; line-height: 1.5; }
+.recovery-activity .recovery-detail,
+.recovery-activity .recovery-guidance,
+.recovery-activity .retry-refused p { margin: 8px 0 0; color: var(--muted); font-size: 0.875rem; line-height: 1.55; overflow-wrap: anywhere; }
+.conversation-activity.recovery-activity .retry-turn { min-height: 44px; margin-top: 12px; padding: 10px 16px; font-size: 0.875rem; line-height: 1.5; white-space: normal; text-align: start; }
+.recovery-activity .retry-turn:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+
+.conversation-activity .retry-turn.primary { border-color: var(--accent); }

@@ -4,7 +4,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
   const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
@@ -16,14 +16,19 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   let approvalConversation = structuredClone(fixture?.conversation);
   const approvalSubmissions = [];
   let approvalFailed = false;
+  let recoveryConversation = structuredClone(fixture?.conversation);
+  let recoveryDraft = { text: "", attachments: [] };
+  let recoveryMode = "accepted";
+  const recoverySubmissions = [];
+  let recoveryReceipt;
   const questionSubmissions = [];
   let questionFailed = false;
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals"].includes(screen) || !fixture?.conversation) return route.continue();
-    return route.fulfill({ json: screen === "questions" ? questionConversation : screen === "approvals" ? approvalConversation : fixture.conversation });
+    if (!["conversation", "questions", "approvals", "recovery"].includes(screen) || !fixture?.conversation) return route.continue();
+    return route.fulfill({ json: screen === "questions" ? questionConversation : screen === "approvals" ? approvalConversation : screen === "recovery" ? { ...recoveryConversation, draft: recoveryDraft } : fixture.conversation });
   });
   if (screen === "questions") await context.route("**/api/bots/*/requests/fixture-question", async route => {
     questionSubmissions.push(route.request().postDataJSON());
@@ -45,6 +50,22 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     approvalConversation = structuredClone(submission.decision === "approved" ? fixture.afterApproved : fixture.afterDenied);
     return route.fulfill({ json: { ok: true } });
   });
+  if (screen === "recovery") {
+    await context.route("**/api/bots/*/draft", route => {
+      if (route.request().method() === "PUT") recoveryDraft = route.request().postDataJSON();
+      return route.fulfill({ json: recoveryDraft });
+    });
+    await context.route("**/api/bots/*/messages", async route => {
+      const body = route.request().postDataJSON(); recoverySubmissions.push(body);
+      if (!body.retryOf || "draftBaseRevision" in body) throw Error("A retry must name its turn and leave the draft alone.");
+      recoveryReceipt = { requestId: body.requestId, status: recoveryMode === "refused" ? "rejected" : recoveryMode === "checking" ? "uncertain" : "accepted",
+        ...(recoveryMode === "refused" ? { message: fixture.refusalReason } : {}) };
+      if (recoveryMode === "accepted") recoveryConversation = structuredClone(fixture.afterRetry);
+      else recoveryConversation.retry = { ...recoveryReceipt, retryOf: body.retryOf };
+      return route.fulfill({ json: recoveryReceipt });
+    });
+    await context.route("**/api/submissions/*", route => route.fulfill({ json: recoveryReceipt || { requestId: "fixture", status: "uncertain" } }));
+  }
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
     const value = structuredClone(fixture.overview);
@@ -66,6 +87,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
+    if (screen === "recovery" && state === "unsupported-retry") value.capabilities.idempotency = { supported: false, reason: "This Hermes connection cannot look up requests." };
     if (screen === "approvals" && state === "unsupported") value.capabilities.approvals = { supported: false, reason: fixture.unsupportedReason };
     if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
     if (screen === "home" && state === "three-pins") value.preferences.favorites = ["ranch", "garden", "kitchen"];
@@ -102,6 +124,72 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     })) });
   };
   try {
+    if (screen === "recovery") {
+      await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+        if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+      }));
+      const retry = tab.getByRole("button", { name: "Retry", exact: true });
+      const open = async () => { await tab.goto(`${origin.origin}/?bot=ranch`); await tab.locator("#message").waitFor(); };
+      for (const [name, width, height, theme] of [
+        ["failed-desktop",1440,1000,"light"], ["failed-desktop-dark",1440,1000,"dark"],
+        ["failed-phone",390,844,"light"], ["failed-phone-dark",390,844,"dark"],
+        ["failed-narrow",320,720,"light"], ["failed-tablet",768,1024,"light"],
+      ]) { await tab.setViewportSize({width,height}); await open(); await retry.waitFor();
+        if (stage !== "before") {
+          await tab.locator(".recovery-detail").filter({hasText:fixture.conversation.activity.detail}).waitFor();
+          if (await retry.evaluate(el => el.getBoundingClientRect().height) < 44) throw Error("Retry target is smaller than 44px.");
+        }
+        await capture(name,width,height,theme); }
+      await tab.evaluate(() => sessionStorage.setItem("design-large-text", "true")); await open(); await retry.waitFor();
+      await capture("failed-large-text",390,844); await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      const composer = tab.locator("#message");
+      for (const mode of ["accepted", "refused", "checking", "unsupported"]) {
+        state = mode === "unsupported" ? "unsupported-retry" : "loaded";
+        recoveryMode = mode === "unsupported" ? "checking" : mode; recoveryConversation = structuredClone(fixture.conversation); recoveryDraft = {text:"",attachments:[]};
+        await open(); await retry.waitFor();
+        const saved = tab.waitForResponse(response => response.url().endsWith("/draft") && response.request().method() === "PUT");
+        await composer.fill("Keep this draft"); await saved;
+        if (mode === "accepted") {
+          await retry.focus(); await tab.keyboard.press("Shift+Tab"); await tab.keyboard.press("Tab");
+          if (!await retry.evaluate(el => el.matches(":focus-visible"))) throw Error("Retry keyboard focus missing.");
+          await capture("retry-focus",390,844);
+        }
+        await retry.click();
+        if (mode === "refused") {
+          await tab.getByText(`Hermes didn't take the retry. ${fixture.refusalReason}`, {exact:true}).waitFor();
+          await capture("retry-refused",390,844);
+          await tab.getByRole("button", {name:"Put my message in the message box",exact:true}).click();
+          if (await composer.inputValue() !== "Keep this draft\n\nIs the north gate closed?") throw Error("Put back lost the existing draft.");
+          await capture("retry-put-back",390,844);
+        } else if (mode === "checking" || mode === "unsupported") {
+          await (stage === "before" ? tab.getByText("Checking whether the retry arrived…", {exact:true}) : tab.locator(".recovery-guidance").filter({hasText:mode === "unsupported" ? "Hermes hasn't confirmed the retry yet." : "Checking whether the retry arrived…"})).waitFor(); await capture(mode === "unsupported" ? "retry-unsupported" : "retry-checking",390,844);
+          if (mode === "unsupported") {
+            if (await retry.isEnabled()) throw Error("Unsupported retry must not resend.");
+            continue;
+          }
+          await retry.click();
+          const last = recoverySubmissions.slice(-2);
+          if (last[0].requestId !== last[1].requestId || last[1].reviewedUncertain !== true) throw Error("Unconfirmed retry must keep its request ID.");
+        } else {
+          // The private snapshot cannot emit SSE. Reload to inspect the accepted server snapshot.
+          await tab.waitForFunction(() => ![...document.querySelectorAll("button")].some(el => el.textContent === "Retrying…"));
+          await tab.reload(); await tab.getByText(fixture.answer, {exact:true}).waitFor();
+          if (await composer.inputValue() !== "Keep this draft") throw Error("Retry changed the saved draft.");
+          await capture("retry-accepted",390,844);
+        }
+      }
+      state = "loaded"; recoveryConversation = structuredClone(fixture.interrupted); recoveryDraft = {text:"",attachments:[]}; await open();
+      const review = tab.getByRole("checkbox", {name:stage === "before" ? "I reviewed the interrupted task and its last actions before continuing." : "I've reviewed the task's last actions.",exact:true});
+      await review.waitFor(); await composer.fill("Continue with the east gate.");
+      if (await tab.getByRole("button", {name:"Send message",exact:true}).isEnabled()) throw Error("Interruption review must gate Send.");
+      await capture("interrupted-phone",390,844); await capture("interrupted-desktop",1440,1000); await capture("interrupted-dark",390,844,"dark");
+      await tab.evaluate(() => sessionStorage.setItem("design-large-text", "true")); await open(); await review.waitFor();
+      await capture("interrupted-large-text",390,844);
+      await tab.locator(".transcript").evaluate(el => { el.scrollTop = 0; }); await capture("interrupted-large-text-top",390,844); await tab.evaluate(() => sessionStorage.removeItem("design-large-text")); await open(); await review.waitFor();
+      await review.check(); if (!await tab.getByRole("button",{name:"Send message",exact:true}).isEnabled()) throw Error("Reviewed task must allow continuation.");
+      await capture("interrupted-reviewed",390,844);
+      return {paths,geometry,recoverySubmissions,draftPreserved:true,reviewGate:true};
+    }
     if (screen === "approvals") {
       await tab.addInitScript(() => {
         document.addEventListener("DOMContentLoaded", () => {

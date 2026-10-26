@@ -331,6 +331,12 @@
           capabilities["approvals"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Approval decisions are unavailable."]
           bootstrap["capabilities"] = capabilities; object = bootstrap
         }
+        if Self.designFixture?["retrySupported"] as? Bool == false {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["idempotency"] = ["supported": false, "reason": "This Hermes connection cannot look up requests."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
         // A distributed build newer than any local build, so the update banner shows.
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
           object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
@@ -353,6 +359,12 @@
           if Self.designFixture?["screen"] as? String == "approvals", Self.designFixture?["holdDecision"] as? Bool != true, let choice = Self.approvalChoice {
             object = Self.designFixture?[choice == "approved" ? "afterApproved" : "afterDenied"] ?? conversation
           }
+        }
+        if Self.designFixture?["screen"] as? String == "recovery" {
+          var value = (Self.retried ? Self.designFixture?["afterRetry"] : Self.designFixture?["conversation"]) as! [String: Any]
+          value["draft"] = Self.draft
+          if let claim = Self.retryClaim { value["retry"] = claim }
+          object = value
         }
         if let questions = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] {
           // "2" asks three questions: one choice, several choices, and a written answer.
@@ -609,11 +621,14 @@
         // A retry repeats the person's message and, this time, the assistant answers. The draft stays.
         let id = body["requestId"] as? String ?? UUID().uuidString
         // "refused": Hermes refuses the retry, which the conversation then records as its claim.
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "refused" {
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "refused" || Self.designFixture?["retryMode"] as? String == "refused" {
           let receipt: [String: Any] = ["requestId": id, "status": "rejected", "message": "The gate service is offline."]
           Self.retryClaim = receipt.merging(["retryOf": retryOf]) { $1 }
           Self.receipts[id] = receipt
           object = receipt
+        } else if Self.designFixture?["retryMode"] as? String == "checking" {
+          let receipt: [String: Any] = ["requestId": id, "status": "uncertain"]
+          Self.retryClaim = receipt.merging(["retryOf": retryOf]) { $1 }; Self.receipts[id] = receipt; object = receipt
         } else {
           Self.retried = true
           Self.messages += [["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]],

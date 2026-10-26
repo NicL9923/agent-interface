@@ -569,13 +569,25 @@ struct ConversationView: View {
   private var liveActivity: some View {
     let live = LiveWork(turn: store.turns.last, toolCalls: store.conversation?.toolCalls)
     let working = store.connected && [.thinking, .working].contains(store.activity)
-    return HStack(alignment: .center, spacing: 12) {
+    let recovering = store.activity == .failed || store.activity == .interrupted
+    return HStack(alignment: recovering ? .top : .center, spacing: 12) {
       AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity == .blocked ? .idle : store.activity, size: 52, name: bot.name, botId: bot.id,
         prop: store.connected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
       VStack(alignment: .leading, spacing: 4) {
-        ShimmerText(
-          text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),
-          moving: [.thinking, .working, .waiting].contains(store.activity))
+        if recovering {
+          Text(store.activity == .failed ? "\(bot.name) couldn't finish." : "\(bot.name)'s task was interrupted.")
+            .font(.body.weight(.semibold)).accessibilityIdentifier("recoveryTitle")
+          if let detail = store.conversation?.activity.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+            Text(detail).font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4).accessibilityIdentifier("recoveryDetail")
+          }
+          if store.activity == .interrupted {
+            Text("Review the last actions above before continuing.").font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4)
+          }
+        } else {
+          ShimmerText(
+            text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),
+            moving: [.thinking, .working, .waiting].contains(store.activity))
+        }
         if working, let receipt = live.receipt {
           Text(receipt).font(.caption).foregroundStyle(Palette.muted).lineLimit(1).accessibilityIdentifier("liveReceipt")
         }
@@ -590,7 +602,7 @@ struct ConversationView: View {
   }
   /// A retry Hermes refused, which stays refused: the reason, and the message back in the composer.
   @ViewBuilder private func refusedRetry(_ refusal: AppStore.RetryRefusal) -> some View {
-    Text(refusal.text).font(.caption).foregroundStyle(Palette.muted).accessibilityIdentifier("retryRefused")
+    Text(refusal.text).font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4).accessibilityIdentifier("retryRefused")
     Button("Put my message in the message box") {
       guard let left = store.putRetriedMessageInDraft(refusal.message) else {
         AccessibilityNotification.Announcement("Your message is still sending. Try again once it has gone.").post()
@@ -600,22 +612,25 @@ struct ConversationView: View {
       AccessibilityNotification.Announcement(left > 0
         ? "Your message is in the message box, without \(left) of its files: a message can carry only \(UploadRules.maxAttachments)."
         : "Your message is in the message box.").post()
-    }.buttonStyle(.bordered).font(.subheadline)
+    }.buttonStyle(.accentProminent).controlSize(.large).font(.subheadline).padding(.top, 8)
       .disabled(store.sendingDraft || !store.draftReady)
       .accessibilityIdentifier("retryPutBack")
   }
   /// Retry for a failed turn, and while its outcome is unknown, what is being done about it.
   @ViewBuilder private func retryControls(_ offer: AppStore.RetryOffer) -> some View {
     if offer.checking {
-      Text(offer.resendable ? RetryTurn.checkingNotice : RetryTurn.unconfirmedNotice).font(.caption).foregroundStyle(Palette.muted)
-        .accessibilityIdentifier("retryChecking")
+      Text(offer.resendable ? "Checking whether the retry arrived… Retry sends the same request again, so it can't run twice." : RetryTurn.unconfirmedNotice)
+        .font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4).accessibilityIdentifier("retryChecking")
+    } else {
+      Text("Retry sends your last message again. Your draft stays as it is.")
+        .font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4)
     }
     Button { Task { await store.retry() } } label: {
       HStack(spacing: 6) {
         if offer.busy { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise").accessibilityHidden(true) }
         Text(offer.busy ? "Retrying…" : "Retry")
       }
-    }.buttonStyle(.bordered).font(.subheadline)
+    }.buttonStyle(.accentProminent).controlSize(.large).font(.subheadline).padding(.top, 8)
       .disabled(!offer.enabled || !store.connected || !store.supports(.chat))
       .accessibilityHint(offer.checking ? "Sends the same request again, so it can't run twice. Your draft stays as it is."
         : "Sends your last message again. Your draft stays as it is.")
@@ -1140,7 +1155,7 @@ struct CheckboxStyle: ToggleStyle {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square").foregroundStyle(configuration.isOn ? Palette.accent : Palette.muted)
         configuration.label.multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-      }
+      }.padding(.vertical, 6).frame(minHeight: 44).contentShape(Rectangle())
     }.buttonStyle(.plain).accessibilityAddTraits(.isToggle).accessibilityValue(configuration.isOn ? "1" : "0")
   }
 }

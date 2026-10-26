@@ -595,3 +595,116 @@ remaining issue was found within Approvals. The final reports are retained at
 `docs/evidence/design-review/approvals-native-review.md`. Approvals can proceed
 to Failed and interrupted turns. Existing nonblocking findings remain assigned
 to their later screens, not silently discarded.
+
+### Failed and interrupted turns, in progress
+
+Baseline app source is accepted Approvals commit `098c9b1`. The shared recovery
+fixture covers a failed gate check, its refused or unconfirmed retry, and an
+interrupted two-gate check whose last completed action remains visible. Browser
+baselines were regenerated against an archived build of that commit at loopback
+port 3043. `recovery-final-before.json` records 19 distinct captures with no overflow.
+The separate original-branch experiment is superseded by that accepted baseline.
+
+Both clients now show the actual failure/interruption reason, a distinct task
+heading, readable recovery guidance, and larger retry controls. Recovery keeps
+the existing retry implementation and submission contract. The fixture driver
+checks draft preservation, append-on-request after refusal, the same request ID
+for an unconfirmed retry, and the required interruption acknowledgment. Browser
+accepted-state capture uses an explicit reload because the private snapshot
+route cannot stream events. This is not live Hermes acceptance evidence.
+
+Web: 104 focused transcript and app interaction tests passed in
+`recovery-tests-v2.log`. The production build passed. The first native baseline
+failed on a test locator that treated the custom toggle as a button; the actual
+accessibility control is a switch. Corrected baseline runs passed on iPhone
+`.private/ios-test-20261026T151404Z-94637.xcresult` and iPad
+`.private/ios-test-20261026T151651Z-96265.xcresult`.
+
+Native first after run passed 28 tests, including all 27 transcript feature
+tests and the recovery capture flow, in
+`.private/ios-test-20261026T151942Z-97921.xcresult`. Source fingerprint was
+`f8bb9f354c3d7185e3aa552c0b6e1fc107abe25dc2ca7cabb6fbea765b9b0741`.
+Visual inspection then found the long acknowledgment truncated at AX3. A shorter
+acknowledgment and native wrapping fix require fresh captures before review.
+
+No physical-device, VoiceOver, hardware-keyboard or real provider run is claimed.
+
+The final web build and all 104 focused tests pass in `recovery-v3-build.log`
+and `recovery-v3-tests.log`. `recovery-final-after.json` has 19 distinct images
+with no document overflow at 320, 390, 768 and 1440 px, light/dark and 200% text.
+It records five retry submissions, draft preservation, request ID reuse for an
+unconfirmed retry, disabled resend without idempotency support, keyboard focus,
+and the interruption review gate. The web fingerprint is
+`9026d15f926e44d7863866c9baf92c1acd33d28828cf47d3bff55967329fc72d`.
+
+The native acknowledgment now reads "I've reviewed the task's last actions."
+and grows vertically. Its full label is visible at AX3 on iPhone. The final
+iPhone capture flow passes all nine variants in
+`.private/ios-test-20261026T152555Z-1366.xcresult`. Native fingerprint is
+`6d9b25f32695d7c85296b152dab146c704ebe82cdac9ae641363274ccf4f3e6d`.
+The 27 transcript feature tests passed before the subsequent acknowledgment-only
+change and remain applicable to the unchanged retry/store implementation.
+
+The iPad acknowledgment run also passed, in
+`.private/ios-test-20261026T152846Z-2989.xcresult`, on the same `6d9b25f3`
+native inputs. A subsequent pixel check found the native bordered Retry label
+was 4.38:1 in light mode, below the 4.5:1 target. Recovery actions now use the
+already-reviewed accent-prominent button style. New native inputs are
+`f4bfe94e17660cc83d0759d732c369bc67e64adbc2706a458bca1c12b50fffb8`;
+final iPhone/iPad reruns and button pixel checks are required before sign-off.
+
+Final native v4 capture flows passed on iPhone
+`.private/ios-test-20261026T153244Z-4851.xcresult` and iPad
+`.private/ios-test-20261026T153524Z-7345.xcresult`, each on the exact `f4bfe94e`
+inputs. Each flow covers nine variants and writes 16 images. The acknowledgment
+wraps fully at AX3 on both layouts. The enabled recovery action measures 5.91:1
+in light mode and 9.32:1 in dark on both devices. The sampled regions, colors
+and ratios are in `recovery-final-button-samples.txt`, with four label crops.
+Twelve annotated before/after comparisons are staged. Opus review is pending.
+
+### Recovery review 14 and recheck preparation
+
+Opus rated web desktop/phone 8.5 and native iPhone/iPad 8.8. The gate remains
+closed. It requested a stable web activity status region including the reason,
+primary web recovery actions, and the native acknowledgment target inside the
+button label. The first two are implemented. All 105 focused web tests and the
+production build pass in `recovery-v5-tests.log` and `recovery-v5-build.log`. A
+working-to-failed regression checks that the same live-region DOM node retains
+the failure heading and reason. `recovery-v5-after.json` has 19 fresh distinct
+captures with no overflow, including the filled primary action and keyboard ring.
+
+The native baseline edge tap and a tap five points below the text both passed
+on iPhone. Thus the reported dead area was not reproduced, and no failed tap is
+claimed. The baseline geometry does confirm an 18 pt accessibility frame:
+`REVIEW_PADDING row=(14.0, 646.0, 261.6667, 18.0)` in
+`ios-recovery-padding-baseline-below-text.log`. Both baseline probes passed in
+`.private/ios-test-20261026T154703Z-13512.xcresult` and
+`.private/ios-test-20261026T154902Z-14495.xcresult`.
+
+The label now owns its padding, 44 pt minimum and rectangular content shape.
+The native test asserts the accessible row is at least 44 pt tall, then taps
+trailing whitespace five points below the caption and checks Send becomes enabled.
+Full capture reruns verify that check in light, dark and AX3 on both layouts.
+One invalid-destination launch was stopped before tests and is not counted.
+
+The exact post-review code diff is staged at
+`reviews/15-recovery-delta.patch` in the artifact directory, with reviewed source
+snapshots under `reviews/14-reviewed-source/`. Current web fingerprint is
+`3ba66376ceaeb0b58aa03aea189da79dbc87c588c48a5411f06af40e6917c296`;
+native is `565807ca2d5ccb5a5f942f1bc35fa5a8bc53bb6ede2aff7ea6abe3bfa341af53`.
+
+The final M1-M3 native runs passed:
+iPhone `.private/ios-test-20261026T155048Z-15908.xcresult` and
+iPad `.private/ios-test-20261026T155320Z-17266.xcresult`, both exact `565807ca`
+inputs. Normal/dark row frames are 44 pt on both layouts. AX3 row heights are
+98 pt on iPhone and 55 pt on iPad. Every padding/blank-space tap enables Send.
+All nine fixture variants passed on both devices. All twelve annotations were
+regenerated after the final captures. Web primary labels sample at 5.66:1 light
+and 9.32:1 dark. Opus M1-M3 recheck remains pending; no screen advancement.
+
+Opus review 15 accepted web desktop/phone and iPhone at 9.2, iPad at 9.1, with
+no blockers. It independently reconstructed the six-file patch, recomputed both
+fingerprints and reran all 105 focused web tests on the final source. That run
+passed in `reviews/15-opus-vitest.log`. It withdrew the predicted dead-tap claim
+for the old native control. The refused-retry annotation marker was moved clear
+of the text. No app code changed after the passing recheck.

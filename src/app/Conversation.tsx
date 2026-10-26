@@ -220,21 +220,30 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           </div>
         ) : null}
         {selected && showActivity && (
-          <div className={`activity-status conversation-activity message-activity state-${state}`}>
+          <div className={`activity-status conversation-activity message-activity state-${state}${state === "failed" || state === "interrupted" ? " recovery-activity" : ""}`}>
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
             <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy">
-              <div role="status"><Shimmer text={`${selected.name} is ${action}...`} /></div>
+              <div role="status" aria-atomic="true">
+                {state === "failed" || state === "interrupted" ? <>
+                  <p className="recovery-title">{state === "failed" ? `${selected.name} couldn't finish.` : `${selected.name}'s task was interrupted.`}</p>
+                  {conversation?.activity.detail?.trim() && <p className="recovery-detail">{conversation.activity.detail}</p>}
+                  {state === "interrupted" && <p className="recovery-guidance">Review the last actions above before continuing.</p>}
+                </> : <Shimmer text={`${selected.name} is ${action}...`} />}
+              </div>
               {running && (liveTool || liveThought) && <div className="activity-live">
                 {liveTool && <p className="activity-live-tool">{liveTool}</p>}
                 {liveThought && <p className="activity-live-thought">{liveThought}</p>}
               </div>}
-              {retry.message && retry.checking && <p className="muted" role="status">Checking whether the retry arrived…</p>}
+              {retry.message && <p className="recovery-guidance" role={retry.checking ? "status" : undefined}>{retry.checking
+                ? retry.resendable ? "Checking whether the retry arrived… Retry sends the same request again, so it can't run twice."
+                  : "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
+                : "Retry sends your last message again. Your draft stays as it is."}</p>}
               {retry.refusal && <div className="retry-refused">
                 <p role="status">{retry.refusal.text}</p>
-                <button type="button" className="retry-turn" onClick={() => putBack(retry.refusal!.message)}>Put my message in the message box</button>
+                <button type="button" className="primary retry-turn" onClick={() => putBack(retry.refusal!.message)}>Put my message in the message box</button>
               </div>}
-              {retry.message && <button type="button" className="with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
+              {retry.message && <button type="button" className="primary with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
                 title={retry.checking ? retry.resendable ? "Sends the same request again, so it can't run twice" : boot.capabilities.idempotency.reason : undefined}
                 onClick={() => void retry.run(retry.message!)}>
                 {retry.busy ? <Icon name="spinner" className="spin" size={16} /> : <Icon name="refresh" size={16} />}

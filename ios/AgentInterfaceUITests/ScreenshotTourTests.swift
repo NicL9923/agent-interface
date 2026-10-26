@@ -337,6 +337,78 @@ import XCTest
     }
   }
 
+  func testRecoveryDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_RECOVERY_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_RECOVERY_PATH to capture recovery.")
+    let data = try Data(contentsOf: URL(fileURLWithPath: source))
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown recovery stage: \(stage)"); return }
+    let variants = [
+      ("recovery-failed", "light", "UICTContentSizeCategoryL"),
+      ("recovery-failed-dark", "dark", "UICTContentSizeCategoryL"),
+      ("recovery-failed-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("recovery-refused", "light", "UICTContentSizeCategoryL"),
+      ("recovery-checking", "light", "UICTContentSizeCategoryL"),
+      ("recovery-unsupported", "light", "UICTContentSizeCategoryL"),
+      ("recovery-interrupted", "light", "UICTContentSizeCategoryL"),
+      ("recovery-interrupted-dark", "dark", "UICTContentSizeCategoryL"),
+      ("recovery-interrupted-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+    ]
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    guard selection.isEmpty || variants.contains(where: { $0.0 == selection }) else { XCTFail("Unknown recovery variant: \(selection)"); return }
+    for (name, theme, size) in variants where selection.isEmpty || selection == name {
+      var fixture = original
+      if name.contains("interrupted") { fixture["conversation"] = original["interrupted"] }
+      if name == "recovery-unsupported" { fixture["retrySupported"] = false }
+      fixture["retryMode"] = name == "recovery-refused" ? "refused" : (name == "recovery-checking" || name == "recovery-unsupported") ? "checking" : "accepted"
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
+      let composer = app.textViews["messageComposer"]
+      XCTAssertTrue(composer.waitForExistence(timeout: 15))
+      if name.contains("interrupted") {
+        let review = app.switches[stage == "after" ? "interruptionReview" : "I reviewed the interrupted task and its last actions before continuing."]
+        XCTAssertTrue(review.waitForExistence(timeout: 10), app.debugDescription)
+        composer.typeWhenFocused("Continue with the east gate.")
+        app.buttons["hideKeyboard"].tapWhenReady()
+        XCTAssertFalse(app.buttons["sendMessage"].isEnabled)
+        try capture(name)
+        // Tap below the text itself, in the row's vertical padding and trailing whitespace.
+        let caption = review.staticTexts["I've reviewed the task's last actions."].firstMatch
+        XCTAssertGreaterThanOrEqual(review.frame.height, 44, "The accessible control includes the padded 44-point target")
+        let point = CGVector(dx: review.frame.maxX - 2, dy: caption.frame.maxY + 5)
+        print("REVIEW_PADDING row=\(review.frame) text=\(caption.frame) point=\(point)")
+        app.coordinate(withNormalizedOffset: .zero).withOffset(point).tap()
+        XCTAssertTrue(app.buttons["sendMessage"].wait(until: "isEnabled == true"), "The whole review row must be tappable, including its padding")
+        try capture(name + "-reviewed")
+      } else {
+        let retry = app.buttons["retryTurn"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        if stage == "after" {
+          XCTAssertTrue(app.staticTexts["recoveryDetail"].exists)
+          XCTAssertGreaterThanOrEqual(retry.frame.height, 44)
+        }
+        try capture(name)
+        if name == "recovery-failed" || name == "recovery-refused" || name == "recovery-checking" || name == "recovery-unsupported" {
+          composer.typeWhenFocused("Keep this draft")
+          app.buttons["hideKeyboard"].tapWhenReady()
+          retry.tapWhenReady()
+          if name == "recovery-failed" { XCTAssertTrue(app.staticTexts[original["answer"] as! String].waitForExistence(timeout: 10)) }
+          if name == "recovery-refused" { XCTAssertTrue(app.staticTexts["retryRefused"].waitForExistence(timeout: 10)) }
+          if name == "recovery-checking" || name == "recovery-unsupported" { XCTAssertTrue(app.staticTexts["retryChecking"].waitForExistence(timeout: 10)) }
+          if name == "recovery-unsupported" { XCTAssertFalse(retry.isEnabled) }
+          XCTAssertEqual(composer.value as? String, "Keep this draft")
+          try capture(name + "-result")
+          if name == "recovery-refused" {
+            app.buttons["retryPutBack"].tapWhenReady()
+            XCTAssertTrue(composer.wait(until: "value == %@", "Keep this draft\n\nIs the north gate closed?"))
+          }
+        }
+      }
+      app.terminate()
+    }
+  }
+
   func testScreenshotTour() throws {
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))

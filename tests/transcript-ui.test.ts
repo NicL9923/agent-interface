@@ -90,6 +90,29 @@ describe("retry a failed turn", () => {
     conversation = { ...conversation, activity: { state: "failed", runId: "run-1" },
       messages: [prompt("q1", "Check the gate", { files: [file] })] };
   });
+  it("shows the failure reason and explains what Retry sends before the person acts", async () => {
+    conversation.activity.detail = "The gate service did not answer.";
+    await render();
+    const recovery = container.querySelector(".recovery-activity")!;
+    expect(recovery.textContent).toContain("Shared couldn't finish.");
+    expect(recovery.textContent).toContain("The gate service did not answer.");
+    expect(recovery.textContent).toContain("Retry sends your last message again. Your draft stays as it is.");
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("updates the mounted activity status with the failure title and reason", async () => {
+    conversation.activity = { state: "working", runId: "run-1" };
+    await render();
+    const live = container.querySelector('.activity-copy > [role="status"]')!;
+    expect(live.textContent).toContain("Shared is working");
+    conversation = { ...conversation, activity: { state: "failed", runId: "run-1", detail: "The gate service did not answer." } };
+    await changed();
+    expect(container.querySelector('.activity-copy > [role="status"]')).toBe(live);
+    expect(live.textContent).toContain("Shared couldn't finish.");
+    expect(live.textContent).toContain("The gate service did not answer.");
+    expect(live.getAttribute("aria-atomic")).toBe("true");
+  });
+
   // The ID every device derives for retrying q1 after run-1 failed.
   const turnId = () => retryRequestId("shared", "q1", "run-1");
   // The ID is derived with Web Crypto, which settles outside fake timers.
