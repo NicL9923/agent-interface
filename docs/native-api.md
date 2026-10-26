@@ -102,10 +102,11 @@ appendText?, appendReasoning?, activity, toolCalls?}`. The lengths count UTF-16
 code units of the `message.text` and `message.reasoning` the stream last sent, an
 absent `reasoning` counting as zero. Append the suffixes to the live reply you
 hold, replace `activity`, and replace `toolCalls` only when the event carries it.
-An event that sends nothing new is omitted. The server sends a whole `inflight`
-event, and a delta never follows it, when the message `id` changed, when text or
+An event that sends nothing new is omitted. The server sends the update as a whole
+`inflight` event instead of a delta when the message `id` changed, when text or
 reasoning changed any way except by growing at the end, when any other message
-field changed, after any `data: change` notice, and on a new stream. Deltas are
+field changed, after any `data: change` notice, and on a new stream. Later growth
+of that reply may be sent as deltas on the whole event's text and reasoning. Deltas are
 computed on the redacted reply, so redaction applies exactly as for `?inflight=1`.
 If a delta's `messageId` or base lengths do not match the reply you hold, or you
 hold none, discard it, refetch the conversation and reconnect the stream, which

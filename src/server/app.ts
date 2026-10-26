@@ -152,23 +152,29 @@ export async function createApp(
   type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connection">;
   let snapshotRead: Promise<RuntimeSnapshot> | undefined;
   let snapshotKept: { value: RuntimeSnapshot; at: number } | undefined;
-  // Counts invalidations, so a read that began before one is never kept.
-  let snapshotEpoch = 0;
+  // Every read, from a bootstrap or a roster evaluation, takes the next number when it starts. Only
+  // a read that started after the last publication may publish, so a slow read never overwrites
+  // what a newer one saw. An invalidation counts as a publication: reads begun before it are dropped.
+  let readsStarted = 0, readPublished = 0;
+  const beginRead = () => ({ startedAt: Date.now(), order: ++readsStarted });
   /**
    * Keeps a read only while the runtime is connected and answering, so an outage is never served
    * from memory: Hermes reports a failed roster read as disconnected rows, and a lost socket as
    * a disconnected status. Either replaces what was kept, so the outage shows at once.
    */
-  const keepSnapshot = (value: RuntimeSnapshot, startedAt: number, epoch: number) => {
-    if (epoch !== snapshotEpoch) return;
+  const keepSnapshot = (value: RuntimeSnapshot, { startedAt, order }: ReturnType<typeof beginRead>) => {
+    if (order < readPublished) return;
+    readPublished = order;
     snapshotKept = value.connection.connected && !value.bots.some(bot => bot.activity === "disconnected") ? { value, at: startedAt } : undefined;
+    // Callers that arrive now take this read, not an older one still in flight.
+    snapshotRead = undefined;
   };
   /** Forgets the snapshot after this app changed runtime state, so the next read sees the change. */
-  const invalidateSnapshot = () => { snapshotEpoch++; snapshotKept = undefined; snapshotRead = undefined; };
+  const invalidateSnapshot = () => { readPublished = readsStarted + 1; snapshotKept = undefined; snapshotRead = undefined; };
   const runtimeSnapshot = (): Promise<RuntimeSnapshot> => {
     if (snapshotKept && Date.now() - snapshotKept.at < SNAPSHOT_TTL_MS) return Promise.resolve(snapshotKept.value);
     if (snapshotRead) return snapshotRead;
-    const startedAt = Date.now(), epoch = snapshotEpoch;
+    const began = beginRead();
     // Share only runtime reads, undecorated: presentation, identity, preferences and CSRF stay request-scoped.
     const read: Promise<RuntimeSnapshot> = (async () => {
       const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
@@ -176,7 +182,7 @@ export async function createApp(
     })();
     snapshotRead = read;
     // A rejected read is never kept: the next caller reads again.
-    read.then(value => { if (snapshotRead === read) snapshotRead = undefined; keepSnapshot(value, startedAt, epoch); },
+    read.then(value => { if (snapshotRead === read) snapshotRead = undefined; keepSnapshot(value, began); },
       () => { if (snapshotRead === read) snapshotRead = undefined; });
     return read;
   };
@@ -236,11 +242,11 @@ export async function createApp(
       rosterPending = undefined;
       rosterEvaluating = true;
       rosterLast = Date.now();
-      const startedAt = Date.now(), epoch = snapshotEpoch;
+      const began = beginRead();
       void Promise.all([runtime.listBots(), runtime.capabilities(), runtime.status().catch(() => undefined)]).then(([bots, capabilities, status]) => {
         roster.note(bots);
         // The bootstrap each client sends on the notice below reuses this read.
-        if (status) keepSnapshot({ bots, capabilities, connection: status }, startedAt, epoch);
+        if (status) keepSnapshot({ bots, capabilities, connection: status }, began);
         for (const changed of rosterListeners) changed(bots, capabilities.avatarMetadata.supported);
       }).catch(() => { /* The fallback bootstrap retries unavailable runtime reads. */ })
         .finally(() => {
