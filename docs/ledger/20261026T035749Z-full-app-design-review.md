@@ -260,3 +260,137 @@ in `.private/ios-test-20261026T054849Z-11453.xcresult`. The resulting native
 fingerprint is
 `sha256:a2c96d3608635c4154cc06dccbbf6aa19b1a8e05c200b47b0144675c2092e6c0`.
 These are test-harness changes; the reviewed app rendering is unchanged.
+
+## Questions
+
+The shared fixture is `.agents/fixtures/questions-design.json`. It contains
+one route choice, several optional preparations and a written note. The first
+submission fails, then the retry accepts the same answer payload. The web
+fixture has a private snapshot, so its accepted view is refreshed explicitly
+after checking the local "Answers sent" state. Native refreshes its snapshot
+after the response. Neither fixture executes Hermes or any household action.
+
+The web fingerprint is
+`sha256:fb603c0bb3c1db8d0c58c514efa8f32a7d27362060a6d71f066cbce64e627b90`.
+All 52 focused tests and the production build passed. Regression cases cover
+multiline answers, typed number keys, duplicate-submit prevention, preserved
+answers after failure, stale-error removal, initial question placement and
+keeping the reader's position during refresh. The browser run captured 20
+images with no viewport overflow, including actual coarse-pointer media,
+320/390/768/1440 widths, dark, 200% text, own answers, failure, retry and
+acceptance. Its two submissions contain identical payloads.
+
+The native baseline passed on iPhone in
+`.private/ios-test-20261026T060323Z-17299.xcresult`. The first iPad baseline
+failed because the general screen swipe hit the composer while the keyboard
+was visible. Targeting `conversationTranscript` fixed the capture; the iPad
+baseline passed in `.private/ios-test-20261026T061547Z-26820.xcresult`.
+
+The first native placement attempt opened above the card, leaving its first
+choice clipped. A new frame assertion caught that despite successful builds
+and the earlier capture run. Binding the scroll position did not fix it. An
+Opus rubber-duck identified the missing layout repeat. The initial card now
+has pending placement that follows geometry and viewport changes, and releases
+on input, search, send, navigation or request removal. It does not persist a
+card ID as a message read position. The frame assertion and question interaction
+regression passed on iPhone in
+`.private/ios-test-20261026T115749Z-81896.xcresult`, and the iPad capture passed
+in `.private/ios-test-20261026T120230Z-83709.xcresult`.
+
+Larger text then exposed a truncated decision count and an oversized stop glyph.
+The dock now stacks its action at accessibility sizes, and the glyph scales to
+a maximum of 24 points within its 44-point target. The current native fingerprint
+is
+`sha256:7f8837f3a69bce01c1ba58b0517a0c392748a115539ad35ef0e00c2e7ccbddc4`.
+The final iPhone capture and existing question interaction test passed in
+`.private/ios-test-20261026T120958Z-88331.xcresult`. The separate iPad capture
+passed in `.private/ios-test-20261026T121559Z-91256.xcresult` with the same inputs.
+
+
+The final question UI also explains the required answers and uses a large native
+Send button. Its measured target is at least 44 points. The common native error
+banner now uses the passing danger token, has a 44-point dismiss target, and
+posts accessibility announcements. No manual VoiceOver session was performed.
+Invalid question capture variants now fail explicitly.
+
+A later capture attempt failed because its blind return swipe did not reliably
+select the own-answer row. The harness now uses the real Review action, asserts
+the row is selected, and waits for its field before typing. One retry used a
+mistyped destination UUID and failed before execution. Neither failure is counted
+as a passing check. The final iPhone capture passed in
+`.private/ios-test-20261026T124147Z-6227.xcresult`. It executed one capture test;
+an extra nonexistent test selector selected no test. The final iPad run passed
+both the capture and the correctly named existing question regression in
+`.private/ios-test-20261026T124334Z-7695.xcresult`.
+Both final runs have native fingerprint
+`sha256:ed92637fb65dd54e3dd16fe9391fbdc1756772e4ba77dfee0a0d9c03bfb6c29f`.
+They include light, dark, accessibility text, custom writing, failed submission,
+kept answers and successful retry. The iPad failure capture includes the software
+keyboard. These are simulator fixture checks, not physical-device acceptance.
+
+The latest browser run retains 20 screenshots with no overflow, passing initial
+choice visibility and actual coarse-pointer media. Its accepted button state is
+checked before explicitly refreshing the synthetic snapshot. The 52 focused web
+tests and production build passed after the required-answer guidance change.
+The fingerprint for `src/`, `tests/`, `.agents/tools/capture-design.js` and the
+question fixture is
+`sha256:4cc69dd7ed8ff46d89de393d1a234de75c5165cf3b3ca623840cba2ca413f4f4`.
+Six annotated comparisons cover web opening and writing, native opening, large
+text, retry cleanup, and iPad fields. Independent review 09 is next.
+
+
+### Questions, review 09 fixes
+
+Opus rated web desktop 8.5, web phone 7.5, iPhone 8 and iPad 8.5.
+The jump control covered opening choices, native could stop following after an
+answer, and the web failure instruction was 11 pixels. Questions remains gated.
+
+The web hook now distinguishes opening at a question from reading older messages.
+Scroll intent clears that position and restores the normal jump control. Removing
+the opened question resumes following. The regression checks no jump on opening
+and its return after a wheel gesture. Web validation passed 51 transcript tests
+plus the separate font-size test, 52 in total. The production build passed.
+The browser driver now reloads for each opening, including the 200% state before
+answering or failing. All eight openings have no jump control, and the first
+choice fits at every normal text size. The current report
+`questions-v2-after.json` has 21 screenshots with no overflow, preserved identical
+retry payloads and a measured 14-pixel error instruction. Its first attempt caught
+a wrong parent selector on the error rule; the corrected rule and rerun passed.
+
+Native separates pending placement from the opened question's reading position.
+A card that fits in the viewport can finish placement even when it cannot reach
+the top. Submission resumes following before the refresh. Scroll phases release
+pending placement for keyboard or accessibility scrolling as well as dragging.
+This is source coverage, not a manual VoiceOver acceptance claim. Success now has
+an announcement on both platforms, and the helper changes to "Ready to send."
+Old errors no longer announce whenever the common banner reappears; conversation
+announcements observe newly changed errors instead.
+
+The new short-question regression answers by tap, receives a reply taller than
+the viewport and asserts its final message is fully visible without a jump.
+It and the full iPad question capture passed in
+`.private/ios-test-20261026T130042Z-14068.xcresult`. Native fingerprint:
+`sha256:6011156a75c1708ecfbfdf746607ea729ba8341570d655c15194e1a6eca17c92`.
+The same two iPhone checks passed in
+`.private/ios-test-20261026T130242Z-15275.xcresult`. Web source, tests, capture driver and fixture
+fingerprint:
+`sha256:9e574d794e07a81f659c95eb5fb537d8a6556bcd11d5623540688259c105a17a`.
+
+
+Opus recheck 10 closed all three must-fix findings and scored web desktop,
+web phone and iPad 9/10. iPhone was conditional on a first-choice capture.
+That capture passed without app changes in
+`.private/ios-test-20261026T131110Z-19892.xcresult`. The choice is selected and no
+jump button covers it. The updated native harness fingerprint is
+`sha256:19572e5e4c3eb115b90e0f340e85bb98444f1c74ced5ba0ce13a85e9ade87274`.
+The conditional iPhone score is therefore 9/10. The original report and the
+implementer's acceptance note are kept separately under `docs/evidence/design-review/`.
+
+The recheck's small web coverage gap now has a regression: removing the opened
+question resumes following the new reply. The focused suite passed 53 tests in
+`questions-final-tests.log`. No app source changed after the passing production
+build or browser run. The source, tests, capture driver and fixture fingerprint
+including this added test is
+`sha256:0086586826dfe59b702aeffe4a116c5b4e88361aff17e8c822e43afb7d74e857`.
+Questions can proceed to Approvals. Seven annotated comparisons and the extra
+first-choice screenshot are staged for the final PR attachments.

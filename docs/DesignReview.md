@@ -49,7 +49,9 @@ References collected October 25, 2026. External artwork is reference material on
 | Assistants home | Web, iPhone and iPad captured | Complete | Web 9; native 9 |
 | Home context menus | Keyboard, touch and native submenus captured | Complete | Web 9.5; native 9.5 |
 | Conversation and composer | Web, iPhone and iPad captured | Complete | Web conversation 9; web composer 9.5; iPhone/iPad conversation and composer 9 |
-| Questions, approvals and failure states | Pending | Pending | Pending |
+| Questions | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
+| Approvals | Pending | Pending | Pending |
+| Failed and interrupted turns | Pending | Pending | Pending |
 | Assistant details and artifacts | Pending | Pending | Pending |
 | Assistant creation and settings | Pending | Pending | Pending |
 | Avatar editor | Pending | Pending | Pending |
@@ -145,3 +147,27 @@ Review 08 also found low-contrast captions in states not shown by these
 conversation captures. Those remain assigned to their own screens, including
 the empty conversation, reduced-motion activity, approvals, assistant handoffs
 and stop confirmation. The final full-app review must include those states.
+
+
+## Questions review history
+
+Questions passes at 9/10 on web desktop, web phone, iPhone and iPad. The
+[Opus recheck](evidence/design-review/questions-review.md) gave iPhone a conditional
+9 pending a first-choice capture. That check passed without changing app code in
+`.private/ios-test-20261026T131110Z-19892.xcresult`. The selected choice remained
+visible with no jump control over the card. The
+[acceptance note](evidence/design-review/questions-acceptance.md) records this
+last check separately from the independent review.
+
+The screen now opens at the question, keeps its first choice visible at normal
+text sizes, and provides multiline writing with readable prompts. Failed answers
+stay intact for retry. Accepted answers cannot submit twice. Both platforms clear
+the old error and announce success. Web error instructions use 14-pixel text.
+Native follows the next reply after submission, including a reply taller than
+the iPad viewport. The decision count wraps at accessibility text sizes.
+
+Seven annotated before/after comparisons are staged for attachment. The shared
+fixtures exercise light, dark, narrow widths, large text, written answers,
+failure and retry. Web refreshes its private fixture explicitly after checking
+the accepted local state; this does not establish live server event delivery.
+Native checks use simulators, with no manual VoiceOver or physical-device run.

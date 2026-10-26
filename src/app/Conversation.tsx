@@ -222,7 +222,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}`}>
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
-            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} botId={selected.id} prop={state === "working" ? prop : undefined} />
+            <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy">
               <div role="status"><Shimmer text={`${selected.name} is ${action}...`} /></div>
               {running && (liveTool || liveThought) && <div className="activity-live">
@@ -264,7 +264,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
       <div className="transcript-end-space" ref={endSpace} aria-hidden="true" />
       </div>
       <QuoteSelection frame={frame} scroll={scroll} />
-      {selected && conversation && !history.atLatest && (
+      {selected && conversation && !history.atLatest && !history.atQuestion && (
         <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={() => {
           history.jumpToLatest();
           // The button disappears, so keyboard focus continues from the transcript.

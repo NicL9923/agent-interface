@@ -327,7 +327,7 @@ describe("questions", () => {
     await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true })));
     await act(async () => boxes[0].click());
     await act(async () => boxes[3].click());
-    await typeInto(second.querySelector<HTMLInputElement>('[aria-label="Your answer: Anything else?"]')!, "fresh greens");
+    await typeInto(second.querySelector<HTMLTextAreaElement>('[aria-label="Your answer: Anything else?"]')!, "fresh greens");
     expect(submit.disabled).toBe(false);
     await act(async () => submit.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: "Water, Treats, fresh greens" } });
@@ -349,7 +349,7 @@ describe("questions", () => {
   it("keeps a free-text field for a question without options", async () => {
     conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Name", detail: "", questions: [{ id: "name", prompt: "Gate name?" }] }] };
     await render();
-    await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Gate name?"]')!, "North");
+    await typeInto(container.querySelector<HTMLTextAreaElement>('[aria-label="Gate name?"]')!, "North");
     await act(async () => container.querySelector<HTMLButtonElement>('[data-attention-id="ask"] button[type="submit"]')!.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { name: "North" } });
   });
@@ -358,6 +358,42 @@ describe("questions", () => {
     conversation = { ...conversation, approvals: [{ id: "gate", title: "Open the gate?", detail: "", status: "pending" }] };
     await render();
     expect(container.querySelector('[data-attention-id="gate"]')?.id).toBe("attention-approval-gate");
+  });
+
+  it("keeps line breaks and number keys in a written answer without selecting another option", async () => {
+    conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Packing", detail: "", questions: [
+      { id: "items", prompt: "What should come along?", options: ["Water", "Snacks"], multiple: true },
+    ] }] };
+    await render();
+    const boxes = [...container.querySelectorAll<HTMLInputElement>('.question input[type="checkbox"]')];
+    await act(async () => boxes[2].click());
+    const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Your answer: What should come along?"]')!;
+    await typeInto(field, "2 bottles of water\nA warm layer");
+    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
+    expect(boxes[1].checked).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { items: "2 bottles of water\nA warm layer" } });
+    await act(async () => container.querySelector<HTMLFormElement>('.attention-card form')!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/requests/ask")).toHaveLength(1);
+    expect(container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')?.textContent).toBe("Answers sent");
+  });
+
+  it("keeps written answers after a failure and clears the old error when retrying", async () => {
+    conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Plan", detail: "", questions: [{ id: "note", prompt: "Your plan?" }] }] };
+    vi.mocked(write).mockRejectedValueOnce(new Error("The connection was interrupted."));
+    await render();
+    const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Your plan?"]')!;
+    await typeInto(field, "A slow morning\nBring water");
+    const submit = container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!;
+    await act(async () => submit.click());
+    expect(container.querySelector(".notice.error")?.textContent).toContain("The connection was interrupted.");
+    expect(field.value).toBe("A slow morning\nBring water");
+    await act(async () => submit.click());
+    expect(container.querySelector(".notice.error")).toBeNull();
+    const payloads = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/requests/ask");
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0][1]).toEqual(payloads[1][1]);
+    expect(submit.disabled).toBe(true);
   });
 });
 
@@ -519,6 +555,49 @@ describe("turn work", () => {
 });
 
 describe("scroll intent", () => {
+  it("opens a pending question at its beginning and preserves the reader's position on refresh", async () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const offset = this.matches(".attention-card") ? 1000 : (this as HTMLElement).dataset.messageId ? 200 : 0;
+      const top = offset ? offset - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+    conversation = { ...conversation, activity: { state: "blocked" }, attention: [
+      { id: "ask", kind: "clarify", title: "A plan", detail: "", questions: [{ id: "plan", prompt: "Your plan?" }] },
+    ] };
+    await render();
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    expect(transcript.scrollTop).toBe(1000);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+    await act(async () => { transcript.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 })); });
+    expect(container.querySelector(".jump-latest")).not.toBeNull();
+    transcript.scrollTop = 850;
+    conversation = { ...conversation, activity: { state: "blocked", detail: "Still waiting" } };
+    await changed();
+    expect(transcript.scrollTop).toBe(850);
+  });
+
+  it("follows the reply when the opened question is removed", async () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const offset = this.matches(".attention-card") ? 1000 : (this as HTMLElement).dataset.messageId ? 200 : 0;
+      const top = offset ? offset - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+    conversation = { ...conversation, activity: { state: "blocked" }, attention: [
+      { id: "ask", kind: "clarify", title: "A plan", detail: "", questions: [{ id: "plan", prompt: "Your plan?" }] },
+    ] };
+    await render();
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    expect(transcript.scrollTop).toBe(1000);
+    conversation = { ...conversation, attention: [], messages: [...conversation.messages, answer("after-question", "Here is the plan.")] };
+    await changed();
+    expect(transcript.scrollTop).toBe(2600);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+  });
+
   it("stops following the end at once when the reader wheels up", async () => {
     const height = vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? 2000 : 0; });
     const view = vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? 300 : 0; });

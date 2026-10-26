@@ -297,10 +297,11 @@ struct ErrorBanner: View {
       Text(message).font(.footnote).frame(maxWidth: .infinity, alignment: .leading).textSelection(
         .enabled)
       if let dismiss {
-        Button(action: dismiss) { Image(systemName: "xmark") }.accessibilityLabel("Dismiss error")
+        Button(action: dismiss) { Image(systemName: "xmark").frame(width: 44, height: 44).contentShape(Rectangle()) }
+          .accessibilityLabel("Dismiss error")
       }
-    }.foregroundStyle(.red).padding(12).background(
-      Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 10)
+    }.foregroundStyle(Palette.danger).padding(12).background(
+      Palette.danger.opacity(0.07), in: RoundedRectangle(cornerRadius: 10)
     ).accessibilityElement(children: .contain)
   }
 }

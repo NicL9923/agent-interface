@@ -130,6 +130,7 @@
     ]
     nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
     nonisolated(unsafe) static var questionAnswered = false
+    nonisolated(unsafe) static var questionFailed = false
     nonisolated(unsafe) static var retried = false
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
@@ -338,7 +339,10 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
-        if let conversation = Self.designFixture?["conversation"] as? [String: Any] { object = conversation }
+        if let conversation = Self.designFixture?["conversation"] as? [String: Any] {
+          object = Self.questionAnswered && Self.designFixture?["screen"] as? String == "questions"
+            ? Self.designFixture?["afterAnswer"] ?? conversation : conversation
+        }
         if let questions = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] {
           // "2" asks three questions: one choice, several choices, and a written answer.
           let asked: [[String: Any]] = questions == "2" ? TranscriptFixtures.questions : [["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]]]
@@ -408,12 +412,16 @@
           ["name": "bitwarden", "displayName": "Bitwarden fixture", "enabled": Self.sourceEnabled, "needsUnlock": true, "unlocked": Self.vaultUnlocked, "installed": true, "canToggle": true, "canUnlock": Self.sourceEnabled && !Self.vaultUnlocked, "canLock": Self.vaultUnlocked]
         ]]
       } else if path.hasSuffix("/requests/fixture-question"), method == "POST" {
-        Self.questionAnswered = true
-        let answers = body["answers"] as? [String: String] ?? [:]
-        Self.messages = [["id": "answer-received", "role": "assistant", "text": answers.count > 1
-          ? answers.keys.sorted().map { "\($0): \(answers[$0] ?? "")" }.joined(separator: "; ")
-          : "Received plan: \(answers["plan"] ?? "")"]]
-        object = ["ok": true]
+        if let error = Self.designFixture?["answerError"] as? String, !Self.questionFailed {
+          Self.questionFailed = true; status = 503; object = ["error": error]
+        } else {
+          Self.questionAnswered = true
+          let answers = body["answers"] as? [String: String] ?? [:]
+          Self.messages = [["id": "answer-received", "role": "assistant", "text": answers.count > 1
+            ? answers.keys.sorted().map { "\($0): \(answers[$0] ?? "")" }.joined(separator: "; ")
+            : "Received plan: \(answers["plan"] ?? "")"]]
+          object = ["ok": true]
+        }
       } else if path.hasSuffix("/vault/logins"), method == "POST" {
         Self.vaultItems.append(["id": "added-login", "kind": "login", "label": body["label"] ?? "", "origin": body["origin"] ?? "", "createdAt": "2026-10-02T12:00:00Z", "identifier": body["identifier"] ?? "", "identifierType": body["identifierType"] ?? "username", "hasOtp": false, "backend": "local", "canRemove": true])
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT_ADD_CANCELLED"] == "1" {

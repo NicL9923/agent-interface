@@ -130,9 +130,11 @@
 ::highlight(find-current) { background-color: var(--attention); color: var(--surface); }
 
 /* Questions: tappable option cards with radio or checkbox semantics. */
-.attention-card fieldset.question { margin: 18px 0; padding: 0; border: 0; min-width: 0; }
-.attention-card .question legend { padding: 0; margin-bottom: 10px; font-weight: 600; }
-.attention-card .question legend .muted { font-weight: 400; }
+.attention-card .eyebrow { font-size: 0.6875rem; letter-spacing: 0.06em; }
+.conversation-panel .notice.error { font-size: 0.875rem; line-height: 1.5; }
+.attention-card fieldset.question { margin: 24px 0; padding: 0; border: 0; min-width: 0; }
+.attention-card .question legend { padding: 0; margin-bottom: 10px; font-size: 1rem; font-weight: 600; }
+.attention-card .question legend .muted { display: block; margin-top: 4px; font-size: 0.875rem; font-weight: 400; }
 .option-cards { display: grid; gap: 8px; }
 .attention-card .option-card {
   position: relative;
@@ -142,7 +144,7 @@
   gap: 12px;
   margin: 0;
   min-height: 48px;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   padding: 10px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -174,13 +176,17 @@
   padding: 1px 6px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  color: var(--muted);
+  color: var(--message-meta);
   font: 0.6875rem/1.6 ui-monospace, "SFMono-Regular", Consolas, monospace;
   text-align: center;
 }
 @media not ((hover: hover) and (pointer: fine)) { .option-key { display: none; } }
 .attention-card .own-answer { width: 100%; margin-top: 8px; }
-.attention-card .question-field { display: grid; gap: 8px; margin: 18px 0; }
+.attention-card .question-field { display: grid; gap: 8px; margin: 24px 0; font-size: 1rem; font-weight: 600; }
+.attention-card textarea { min-height: 3.1rem; line-height: 1.55; resize: vertical; font-size: 1rem; font-weight: 400; }
+.attention-card textarea::placeholder { color: var(--muted); opacity: 1; }
+.attention-card .question-guidance { margin: 0 0 10px; font-size: 0.875rem; font-weight: 400; color: var(--muted); }
+.notice.error button { min-width: 44px; min-height: 44px; }
 
 /* Lets a message sent last reach the top of the view while its reply grows into this space. */
 .transcript-end-space { flex: none; }

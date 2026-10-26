@@ -14,6 +14,7 @@ struct ComposerView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scenePhase) private var scenePhase
+  @ScaledMetric(relativeTo: .headline) private var sendGlyphSize = 18.0
   @State private var voice = VoiceController()
   @State private var importFiles = false
   @State private var importPhotos = false
@@ -149,7 +150,7 @@ struct ComposerView: View {
     } label: {
       Group {
         if store.sending || store.pending != nil || (stopVisible && stopping) { ProgressView().tint(Palette.muted) }
-        else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.headline) }
+        else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.system(size: min(sendGlyphSize, 24), weight: .semibold)) }
       }.frame(width: 44, height: 44)
         .foregroundStyle(enabled ? Palette.raised(scheme) : Palette.muted)
         .background(enabled ? Palette.accent : Palette.line, in: Circle())

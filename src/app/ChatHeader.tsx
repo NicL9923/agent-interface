@@ -39,7 +39,7 @@ export function ChatHeader({ view, selected, avatarState, railOpen, onOpenRail, 
         <h1 className="chat-identity-heading">
           <button className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
             title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>
-            <Avatar avatar={selected.avatar} state={avatarState} size={42} name={selected.name} botId={selected.id} />
+            <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} name={selected.name} botId={selected.id} />
             <span className="chat-title">
               <span className="chat-name">{selected.name}</span>
               <span className="chat-summary">{botSummary(selected)}</span>

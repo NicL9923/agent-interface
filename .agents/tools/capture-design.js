@@ -4,19 +4,32 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
+  const pointer = screen === "questions" ? await context.newCDPSession(tab) : undefined;
   const paths = [], geometry = [];
   let state = "loaded";
   let checked = false;
   let releaseLoading;
+  let questionConversation = structuredClone(fixture?.conversation);
+  const questionSubmissions = [];
+  let questionFailed = false;
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (screen !== "conversation" || !fixture?.conversation) return route.continue();
-    return route.fulfill({ json: fixture.conversation });
+    if (!["conversation", "questions"].includes(screen) || !fixture?.conversation) return route.continue();
+    return route.fulfill({ json: screen === "questions" ? questionConversation : fixture.conversation });
+  });
+  if (screen === "questions") await context.route("**/api/bots/*/requests/fixture-question", async route => {
+    questionSubmissions.push(route.request().postDataJSON());
+    if (fixture.answerError && !questionFailed) {
+      questionFailed = true;
+      return route.fulfill({ status: 503, json: { error: fixture.answerError } });
+    }
+    questionConversation = structuredClone(fixture.afterAnswer);
+    return route.fulfill({ json: { ok: true } });
   });
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
@@ -46,6 +59,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   });
   const capture = async (name, width, height, theme = "light") => {
     await tab.setViewportSize({ width, height });
+    if (pointer) await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
     await tab.emulateMedia({ colorScheme: theme });
     // Await the React media-query update, fonts and at least two painted frames.
     await tab.evaluate(async ({ theme, width, height }) => {
@@ -73,6 +87,85 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     })) });
   };
   try {
+    if (screen === "questions") {
+      await tab.addInitScript(() => {
+        document.addEventListener("DOMContentLoaded", () => {
+          if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+        });
+      });
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      const card = tab.locator(".attention-card");
+      const openings = [];
+      const open = async (name, width, height, theme = "light", large = false) => {
+        await tab.setViewportSize({ width, height });
+        await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
+        await tab.emulateMedia({ colorScheme: theme });
+        await tab.evaluate(large => sessionStorage.setItem("design-large-text", String(large)), large);
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await card.waitFor();
+        await capture(name, width, height, theme);
+        const firstChoiceVisible = await card.locator(".option-card").first().evaluate(el => {
+          const choice = el.getBoundingClientRect(), viewport = document.querySelector(".transcript").getBoundingClientRect();
+          const header = document.querySelector(".chat-header").getBoundingClientRect();
+          return choice.top >= Math.max(viewport.top, header.bottom) - 1 && choice.bottom <= viewport.bottom + 1;
+        });
+        const jumpVisible = await tab.locator(".jump-latest").count() > 0;
+        openings.push({ name, firstChoiceVisible, jumpVisible });
+        if (stage !== "before" && (jumpVisible || (!large && !firstChoiceVisible))) throw Error(`Question opening failed at ${name}.`);
+      };
+      await open("initial-phone", 390, 844);
+      const initialChoiceVisible = openings[0].firstChoiceVisible;
+      for (const [name, width, height, theme] of [
+        ["desktop", 1440, 1000, "light"], ["desktop-dark", 1440, 1000, "dark"],
+        ["phone", 390, 844, "light"], ["phone-dark", 390, 844, "dark"],
+        ["narrow", 320, 720, "light"], ["tablet", 768, 1024, "light"],
+      ]) {
+        await open(name, width, height, theme);
+        await tab.locator(".transcript").evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await capture(name + "-bottom", width, height, theme);
+      }
+      await open("large-text", 390, 844, "light", true);
+      await tab.locator(".transcript").evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await capture("large-text-bottom", 390, 844);
+      await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      await card.waitFor();
+      const route = card.locator("fieldset").first();
+      await route.getByText("Write my own answer", { exact: true }).click();
+      await route.getByRole("textbox").fill("A shaded loop under two miles, with a place to rest.");
+      await card.getByText("A picnic packing list", { exact: true }).click();
+      await card.getByText("An offline route map", { exact: true }).click();
+      await card.getByRole("textbox", { name: "Anything else I should know?", exact: true }).fill("One child tires easily. Plan a slow morning.");
+      const submit = card.getByRole("button", { name: "Send answers", exact: true });
+      if (!await submit.isEnabled()) throw Error("Complete answers did not enable Send.");
+      await capture("answers", 390, 844);
+      await route.getByRole("textbox").focus();
+      await capture("own-answer-focus", 390, 844);
+      await submit.click();
+      await tab.getByText(fixture.answerError, { exact: true }).waitFor();
+      if (await route.getByRole("textbox").inputValue() !== "A shaded loop under two miles, with a place to rest.") throw Error("A failed submission lost the answer.");
+      await capture("submit-error", 390, 844);
+      const errorFontSize = await tab.locator(".notice.error").evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+      if (stage !== "before" && errorFontSize < 14) throw Error("The error recovery text is too small.");
+      await capture("submit-error-narrow", 320, 720);
+      await tab.setViewportSize({ width: 390, height: 844 });
+      const accepted = tab.waitForResponse(response => response.url().endsWith("/requests/fixture-question") && response.status() === 200);
+      await submit.click();
+      await accepted;
+      if (stage !== "before") {
+        const settled = card.getByRole("button", { name: "Answers sent", exact: true });
+        await settled.waitFor();
+        if (await settled.isEnabled() || await tab.getByText(fixture.answerError, { exact: true }).count()) throw Error("An accepted answer kept a stale error or allowed duplicate submission.");
+      }
+      await capture("answers-sent", 390, 844);
+      // The synthetic server cannot push an event for this context's private fixture snapshot.
+      await tab.reload();
+      await card.waitFor({ state: "hidden", timeout: 15000 });
+      await capture("submitted", 390, 844);
+      if (questionSubmissions.length !== 2 || JSON.stringify(questionSubmissions[0]) !== JSON.stringify(questionSubmissions[1])) throw Error("Retry changed the question answers.");
+      return { paths, geometry, questionSubmissions, answersPreserved: true, submittedAfterReload: true, initialChoiceVisible, openings, errorFontSize,
+        touchMedia: await tab.evaluate(() => matchMedia("(pointer: coarse)").matches) };
+    }
     if (screen === "conversation") {
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
       await tab.goto(`${origin.origin}/?bot=ranch`);

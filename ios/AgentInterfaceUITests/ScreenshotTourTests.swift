@@ -140,6 +140,109 @@ import XCTest
     }
   }
 
+  func testQuestionsDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_QUESTIONS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to capture questions.")
+    let data = try Data(contentsOf: URL(fileURLWithPath: source))
+    let fixture = String(decoding: data, as: UTF8.self)
+    let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let error = try XCTUnwrap(payload["answerError"] as? String)
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = [
+      ("questions-loaded", "light", "UICTContentSizeCategoryL"),
+      ("questions-dark", "dark", "UICTContentSizeCategoryL"),
+      ("questions-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+    ]
+    guard selection.isEmpty || variants.contains(where: { $0.0 == selection }) else {
+      XCTFail("Unknown questions capture variant: \(selection)"); return
+    }
+    for (name, theme, size) in variants where selection.isEmpty || selection == name {
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": fixture, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.buttons["questionOption-plan-0"].waitForExistence(timeout: 15))
+      XCTAssertFalse(app.buttons["jumpToLatest"].exists, "Opening at the newest question must not cover it with a jump control.")
+      if name != "questions-large-text" {
+        XCTAssertGreaterThanOrEqual(app.buttons["questionOption-plan-0"].frame.minY,
+          app.navigationBars.firstMatch.frame.maxY - 1, "The first choice must be below the navigation bar.")
+        XCTAssertLessThanOrEqual(app.buttons["questionOption-plan-0"].frame.maxY,
+          app.scrollViews["conversationTranscript"].frame.maxY + 1, "The first choice must be visible on opening.")
+      }
+      try capture(name)
+      if name != "questions-large-text" {
+        app.buttons["questionOption-plan-0"].tapWhenReady()
+        try capture(name + "-first-choice")
+        XCTAssertFalse(app.buttons["jumpToLatest"].exists, "Moving to the next question must not cover an answer with a jump control.")
+      }
+      scrollUntilHittable(app, app.buttons["Send answers"], in: app.scrollViews["conversationTranscript"])
+      app.scrollViews["conversationTranscript"].swipeUp(); try capture(name + "-bottom")
+      if name == "questions-loaded" {
+        app.buttons["reviewDecisions"].tapWhenReady()
+        let own = app.buttons["questionOwn-plan"]
+        scrollUntilHittable(app, own, in: app.scrollViews["conversationTranscript"])
+        own.tapWhenReady()
+        XCTAssertTrue(own.wait(until: "isSelected == true"))
+        let route = app.descendants(matching: .any).matching(identifier: "questionAnswer-plan").firstMatch
+        XCTAssertTrue(route.waitForExistence(timeout: 5))
+        route.typeWhenFocused("A shaded loop under two miles, with a place to rest.")
+        for index in [0, 1] {
+          let option = app.buttons["questionOption-extras-\(index)"]
+          scrollUntilHittable(app, option, in: app.scrollViews["conversationTranscript"]); option.tapWhenReady()
+        }
+        let note = app.descendants(matching: .any).matching(identifier: "questionAnswer-note").firstMatch
+        scrollUntilHittable(app, note, in: app.scrollViews["conversationTranscript"]); note.typeWhenFocused("One child tires easily. Plan a slow morning.")
+        try capture("questions-answers")
+        let submit = app.buttons["Send answers"]
+        scrollUntilHittable(app, submit, in: app.scrollViews["conversationTranscript"])
+        XCTAssertGreaterThanOrEqual(submit.frame.height, 44)
+        XCTAssertTrue(submit.isEnabled); submit.tapWhenReady()
+        XCTAssertTrue(app.staticTexts[error].waitForExistence(timeout: 10))
+        try capture("questions-submit-error")
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "questionAnswer-plan").firstMatch.value as? String, "A shaded loop under two miles, with a place to rest.")
+        submit.tapWhenReady()
+        XCTAssertTrue(app.buttons["questionOption-plan-0"].waitForNonExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts[error].exists)
+        try capture("questions-submitted")
+      }
+      app.terminate()
+    }
+  }
+
+  func testShortQuestionFollowsItsLongReply() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_QUESTIONS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to exercise the question fixture.")
+    var fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    var conversation = try XCTUnwrap(fixture["conversation"] as? [String: Any])
+    var request = try XCTUnwrap((conversation["attention"] as? [[String: Any]])?.first)
+    request["title"] = "Choose a route"
+    request["detail"] = "A short question before I prepare the plan."
+    request["questions"] = [["id": "plan", "prompt": "Which route?", "options": ["River loop", "Cedar trail"]]]
+    conversation["attention"] = [request]
+    fixture["conversation"] = conversation
+    fixture.removeValue(forKey: "answerError")
+    var reply = conversation
+    reply["attention"] = []
+    reply["activity"] = ["state": "idle"]
+    var messages = try XCTUnwrap(conversation["messages"] as? [[String: Any]])
+    let paragraph = Array(repeating: "Follow the shaded river path, stop for water at the bench, and turn back whenever the children need a rest.", count: 5).joined(separator: " ")
+    messages += (0..<8).map { ["id": "route-detail-\($0)", "role": "assistant", "text": paragraph] }
+    messages.append(["id": "route-finished", "role": "assistant", "text": "Your Saturday plan is ready."])
+    reply["messages"] = messages
+    fixture["afterAnswer"] = reply
+    let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+    let app = launch(environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded])
+    let transcript = app.scrollViews["conversationTranscript"]
+    app.buttons["questionOption-plan-0"].tapWhenReady()
+    XCTAssertFalse(app.buttons["jumpToLatest"].exists)
+    try capture("questions-short-loaded")
+    app.buttons["Send answers"].tapWhenReady()
+    let latest = app.staticTexts["Your Saturday plan is ready."]
+    XCTAssertTrue(latest.waitForExistence(timeout: 10))
+    XCTAssertTrue(latest.wait(until: "isHittable == true"), "The reply's end must follow into view without a manual jump.")
+    XCTAssertGreaterThanOrEqual(latest.frame.minY, transcript.frame.minY - 1)
+    XCTAssertLessThanOrEqual(latest.frame.maxY, transcript.frame.maxY + 1)
+    XCTAssertFalse(app.buttons["jumpToLatest"].exists)
+    try capture("questions-short-long-reply")
+  }
+
   func testScreenshotTour() throws {
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
@@ -338,10 +441,11 @@ import XCTest
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
   }
 
-  private func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
+  private func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true, in scroller: XCUIElement? = nil) {
+    let area = scroller ?? app
     for _ in 0..<8 {
       if element.exists && element.canTap { return }
-      if up { app.swipeUp() } else { app.swipeDown() }
+      if up { area.swipeUp() } else { area.swipeDown() }
     }
     XCTAssertTrue(element.canTap, "\(element) never became hittable")
   }
