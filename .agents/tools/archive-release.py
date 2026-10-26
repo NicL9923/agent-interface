@@ -14,8 +14,9 @@ output = Path(sys.argv[1]).resolve()
 names = subprocess.check_output(
     ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root
 ).decode().split("\0")
-top = {"package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "vitest.config.ts", "index.html", ".node-version", ".env.example"}
-files = sorted({name for name in names if name in top or name.startswith(
+top = {"package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "vitest.config.ts", ".node-version", ".env.example"}
+# Every top-level HTML file is a Vite entry, so a new entry ships without editing this list.
+files = sorted({name for name in names if name in top or ("/" not in name and name.endswith(".html")) or name.startswith(
     ("src/", "scripts/", "tests/", "public/", ".agents/tools/")
 )})
 output.parent.mkdir(parents=True, exist_ok=True)
