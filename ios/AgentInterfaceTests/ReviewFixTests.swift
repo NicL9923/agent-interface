@@ -221,7 +221,7 @@ import XCTest
     try await until { control.left }
     // The person goes back to Settings and signs out while the takeover is still on its way.
     let signOut = Task { await value.signOut() }
-    try await until { value.desktopCleanup != nil }
+    try await until { value.awaitingDesktopCleanup }
     XCTAssertFalse(host.requests.contains { $0.url?.path == "/api/auth/logout" }, "Sign-out waits for the hand back")
     host.release("take")
     await take.value
@@ -230,6 +230,31 @@ import XCTest
     let paths = host.requests.map { $0.url?.path ?? "" }.filter { $0 == "/api/computer/control" || $0 == "/api/auth/logout" }
     XCTAssertEqual(paths, ["/api/computer/control", "/api/computer/control", "/api/auth/logout"], "Take, release, then revoke")
     XCTAssertEqual(releases(host), ["viewer-1"])
+  }
+
+  func testSignOutStopsWaitingForASlowHandBackAtItsDeadline() async throws {
+    let desktop = Desktop()
+    let host = desktopHost(desktop) { key, _ in key == "take" }
+    let value = try store(host)
+    value.desktopCleanupWait = .milliseconds(200)
+    let control = DesktopControl()
+    control.opened(value, viewerId: "viewer-1")
+    let take = Task { await control.take(value) }
+    try await until { host.heldCount("take") == 1 }
+    let leave = Task { await control.leave(value) }
+    try await until { control.left }
+    // The takeover stays on its way well past the deadline.
+    let signOut = Task { await value.signOut() }
+    try await until { value.awaitingDesktopCleanup }
+    try await until { host.requests.contains { $0.url?.path == "/api/auth/logout" } }
+    _ = await signOut.value
+    XCTAssertNil(value.bootstrap, "Sign-out finished while the hand back was still waiting")
+    XCTAssertEqual(host.heldCount("take"), 1)
+    // Drain: the takeover lands after sign-out, whose revoked client sends no release.
+    host.release("take")
+    await take.value
+    await leave.value
+    XCTAssertEqual(releases(host), [], "The documented limit: a takeover admitted after sign-out stays for the server to settle")
   }
 
   func testATakeoverThatLandsAfterAnAccountSwitchIsHandedBackThroughItsOwnClient() async throws {
@@ -267,7 +292,10 @@ import XCTest
     /// How many messages the latest page holds.
     var latest = 2
   }
+  /// Holds only the first conversation read that starts at `hold`; later ones, such as polls of
+  /// the window it opened, answer at once.
   private func historyHost(hold: String?, history: History = History()) -> HoldingHost {
+    let held = History()
     return HoldingHost(answer: { request, _ in
       if request.url?.path == "/api/bots/b/conversation" {
         return .init(body: Self.json(["botId": "b", "sessionId": "other", "messages": [["id": "b1", "role": "user", "text": "Hi"]],
@@ -282,7 +310,12 @@ import XCTest
         "activity": ["state": "idle"], "approvals": [], "files": [], "draft": ["text": "", "attachments": [], "revision": 1]]))
     }, holding: { request, _ in
       let start = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "start" }?.value
-      return start != nil && start == hold ? start : nil
+      guard start != nil, start == hold else { return nil }
+      return held.lock.withLock { () -> String? in
+        guard held.latest > 0 else { return nil }
+        held.latest = 0
+        return start
+      }
     })
   }
   private func openStore(_ host: HoldingHost) async throws -> AppStore {
@@ -329,9 +362,12 @@ import XCTest
     // Choosing loaded m4 now must not roll this window back to the abandoned open's m5.
     await value.openConversation(botId: "bot", atMessage: "m4")
     XCTAssertEqual(value.focusedMessage?.messageId, "m4")
+    let before = value.conversationRefreshedAt, reads = host.requests.count
     await value.refreshConversation()
+    XCTAssertGreaterThan(host.requests.count, reads)
+    XCTAssertNotEqual(value.conversationRefreshedAt, before, "The poll answered and applied")
+    XCTAssertEqual(lastStart(host), "start=m3")
     XCTAssertEqual(value.conversation?.messages.map(\.id), ["m3", "m4", "m5", "m6"], "m4 stays loaded after the next poll")
-    XCTAssertNotEqual(lastStart(host), "start=m5")
   }
 
   func testANewerOpenOfALoadedMessageDropsTheOlderWindow() async throws {

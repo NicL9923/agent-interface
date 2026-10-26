@@ -1969,15 +1969,28 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The native desktop screen's exit cleanup still on its way. Sign-out waits for it, up to
   /// `desktopCleanupWait`, before revoking the session the cleanup's release needs.
   @ObservationIgnored var desktopCleanup: Task<Void, Never>?
-  static let desktopCleanupWait: Duration = .seconds(5)
+  @ObservationIgnored var desktopCleanupWait: Duration = .seconds(5)
+  /// Set while sign-out waits for that cleanup.
+  @ObservationIgnored private(set) var awaitingDesktopCleanup = false
+  /// Waits for the cleanup or the deadline, whichever comes first. The cleanup keeps running past
+  /// the deadline; only this wait ends, so a slow hand back never holds sign-out up.
   private func awaitDesktopCleanup() async {
     guard let cleanup = desktopCleanup else { return }
-    await withTaskGroup(of: Void.self) { group in
-      group.addTask { await cleanup.value }
-      // Timer: sign-out never waits longer than this for the desktop's hand back.
-      group.addTask { try? await Task.sleep(for: Self.desktopCleanupWait) }
-      await group.next()
-      group.cancelAll()
+    let wait = desktopCleanupWait
+    awaitingDesktopCleanup = true
+    defer { awaitingDesktopCleanup = false }
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let once = ResumeOnce(continuation)
+      let deadline = Task { @MainActor in
+        // Timer: sign-out never waits longer than this for the desktop's hand back.
+        try? await Task.sleep(for: wait)
+        once.resume()
+      }
+      Task { @MainActor in
+        await cleanup.value
+        deadline.cancel()
+        once.resume()
+      }
     }
   }
   @ObservationIgnored private var computerWrites = 0
@@ -2016,6 +2029,15 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       stopPolling()
       sessionExpired = true
     }
+  }
+}
+/// Resumes a continuation exactly once, for whichever of several racing waits finishes first.
+@MainActor final class ResumeOnce {
+  private var continuation: CheckedContinuation<Void, Never>?
+  init(_ continuation: CheckedContinuation<Void, Never>) { self.continuation = continuation }
+  func resume() {
+    continuation?.resume()
+    continuation = nil
   }
 }
 struct PreviewFile: Identifiable {
