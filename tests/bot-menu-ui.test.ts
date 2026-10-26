@@ -67,19 +67,21 @@ it("opens the first right-click menu once the code arrives, without ever showing
   await arrive();
   await opened("Garden planner");
   // Where the real trigger puts the same right-click is where the replayed one must have put it.
-  const placement = () => menu()!.parentElement!.getAttribute("style");
-  const replayed = placement();
-  expect(replayed).toContain("--transform-origin: 1px 168px");
-  await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  const origin = () => /--transform-origin: ([^;]+)/.exec(menu()?.parentElement?.getAttribute("style") ?? "")?.[1];
+  const closeMenu = async () => {
+    await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    await vi.waitFor(() => expect(menu()).toBeNull());
+  };
+  const rightClick = (x: number, y: number) => act(async () => rows()[1].dispatchEvent(new MouseEvent("contextmenu", { clientX: x, clientY: y, button: 2, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(origin()).toBe("1px 168px"));
+  await closeMenu();
+  await rightClick(100, 180);
+  await vi.waitFor(() => expect(origin()).toBe("1px 168px"));
+  await closeMenu();
+  await rightClick(300, 400);
+  await vi.waitFor(() => expect(origin()).toBeDefined());
   await wait(30);
-  expect(menu()).toBeNull();
-  await act(async () => rows()[1].dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
-  await wait(30);
-  expect(placement()).toBe(replayed);
-  await act(async () => rows()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-  await act(async () => rows()[1].dispatchEvent(new MouseEvent("contextmenu", { clientX: 300, clientY: 400, button: 2, bubbles: true, cancelable: true })));
-  await wait(30);
-  expect(placement()).not.toBe(replayed);
+  expect(origin()).not.toBe("1px 168px");
   await act(async () => items()[0].click());
   expect(props.onPin).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
