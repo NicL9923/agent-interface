@@ -247,6 +247,56 @@ describe('setup and recovery interface',()=>{
     expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
   });
 
+  describe('bootstrap reads when returning to the app',()=>{
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean').length;
+    const returnTo=async()=>{await act(async()=>{window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));});};
+
+    it('skips a focus or visibility read right after a successful one, and reads once that is stale',async()=>{
+      await renderApp();const initial=reads();
+      await returnTo();await advance(4_000);await returnTo();
+      expect(reads()).toBe(initial);
+      await advance(1_000);await returnTo();
+      expect(reads()).toBe(initial+1);
+      // The read just made is fresh in turn.
+      await returnTo();
+      expect(reads()).toBe(initial+1);
+    });
+
+    it('reads at once when the connection comes back, however recent the last read',async()=>{
+      await renderApp();const initial=reads();
+      Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
+      await act(async()=>window.dispatchEvent(new Event('offline')));
+      await returnTo();
+      expect(reads()).toBe(initial);
+      Object.defineProperty(navigator,'onLine',{configurable:true,value:true});
+      await act(async()=>window.dispatchEvent(new Event('online')));
+      expect(reads()).toBe(initial+1);
+    });
+
+    it('does not hold back the next look after a read that failed or found Hermes down',async()=>{
+      const original=vi.mocked(api).getMockImplementation()!;
+      let failing=true;
+      vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>{
+        if(path==='/bootstrap?roster=lean'&&failing)throw new Error('network');
+        return await original(path,init) as T;
+      });
+      await renderApp();const initial=reads();
+      await returnTo();
+      expect(reads()).toBe(initial+1);
+      failing=false;hermesDown=true;boot={...boot,bots:[],connection:{connected:false,code:'unreachable'}};
+      await returnTo();
+      expect(reads()).toBe(initial+2);
+      await returnTo();
+      expect(reads()).toBe(initial+3);
+    });
+
+    it('still reads for a roster change the server announces, however recent the last read',async()=>{
+      await renderApp();await advance(0);const initial=reads();
+      await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==='/api/events')stream.emit('roster','roster');});
+      expect(reads()).toBe(initial+1);
+    });
+  });
+
   it('falls back to an existing bot when a saved default and deep link no longer exist',async()=>{
     boot.preferences.defaultBotId='removed';history.replaceState(null,'','/?bot=removed');
     await renderApp();
@@ -265,6 +315,8 @@ describe('setup and recovery interface',()=>{
     const requestId=(admission[1] as {requestId:string}).requestId;
     expect(requestId).toBeDefined();
     expect(clearResponseCache).not.toHaveBeenCalled();
+    // A focus right after a bootstrap is skipped, so the second member's account is seen on a later one.
+    await advance(5_000);
     boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
     await act(async()=>window.dispatchEvent(new Event('focus')));
     expect(clearResponseCache).toHaveBeenCalledTimes(1);
@@ -289,6 +341,8 @@ describe('setup and recovery interface',()=>{
     await renderApp();
     const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Retry this saved message')!;
     await act(async()=>button.click());
+    // A focus right after a bootstrap is skipped, so the second member's account is seen on a later one.
+    await advance(5_000);
     boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
     await act(async()=>window.dispatchEvent(new Event('focus')));
     await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());

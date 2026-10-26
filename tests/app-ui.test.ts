@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
 import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
@@ -649,6 +650,7 @@ describe("conversation state", () => {
       await render();
       const pinned = () => [...container.querySelectorAll(".home-pinned .pinned-name")].map(item => item.textContent);
       expect(pinned()).toEqual(["Shared"]);
+      await act(async () => { await preloadBotMenu(); });
       const row = container.querySelector<HTMLButtonElement>(".home-list .bot-row")!;
       expect(row.textContent).toContain("Pot roast tonight.");
       expect(row.querySelector("time")?.getAttribute("dateTime")).toBe(other.lastMessage.at);
@@ -671,6 +673,7 @@ describe("conversation state", () => {
 
   it("opens the pin menu on a held touch but not while the list scrolls", async () => {
     await render();
+    await act(async () => { await preloadBotMenu(); });
     const row = container.querySelector<HTMLButtonElement>(".bot-row")!;
     const touch = (type: string, x: number, y: number) => {
       const event = new Event(type, { bubbles: true, cancelable: true });

@@ -1,12 +1,70 @@
 /* Build placeholders are replaced by build-worker.mjs. No private data belongs in this cache. */
 const CACHE = 'agent-interface-__BUILD_ID__';
-const STATIC_FILES = __PRECACHE__;
-const STATIC_PATHS = new Set(STATIC_FILES);
+// What the app needs to open offline: the pages, and the code each page imports on load. Fetched
+// while installing, so it is kept to what the first visit loads anyway.
+const INSTALL_FILES = __PRECACHE__;
+const INSTALL_PATHS = new Set(INSTALL_FILES);
+// Lazy screens and libraries that most visits never open. They are wanted offline too, but they
+// are fetched in the background after activation instead of racing the first visit.
+const WARM_FILES = __WARM__;
 // Admin-only chunks (terminal and remote desktop) that cost every phone nothing until first use.
-const ON_DEMAND_PATHS = new Set(__ON_DEMAND__);
+const ON_DEMAND_FILES = __ON_DEMAND__;
+// Anything here is served from the cache when it is there, and kept after its first use when not.
+const LAZY_PATHS = new Set([...WARM_FILES, ...ON_DEMAND_FILES]);
+// Vite names bundles assets/name-HASH.ext after their content, so one URL is one body forever.
+// Nothing else qualifies: the pages, sw.js, the manifest and the icons keep one name across
+// releases. Mirrors hashedAsset in src/server/static-cache.ts.
+const HASHED_ASSET = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/;
+const WARM_CONNECTIONS = 3;
+
+// A retired chunk falls through to the app shell with a 200, which must never be kept as code.
+const usable = (response) => response.ok && !(response.headers.get('content-type') || '').startsWith('text/html');
+
+async function olderCaches() {
+  const keys = (await caches.keys()).filter((key) => key.startsWith('agent-interface-') && key !== CACHE);
+  return Promise.all(keys.map((key) => caches.open(key)));
+}
+
+// Carries a hashed file over from an earlier release's cache, so a release downloads only what changed.
+async function reuse(cache, older, path) {
+  if (!HASHED_ASSET.test(path)) return false;
+  try {
+    for (const previous of older) {
+      const kept = await previous.match(path);
+      if (kept && usable(kept)) { await cache.put(path, kept); return true; }
+    }
+  } catch { /* An unreadable old cache only means fetching the file. */ }
+  return false;
+}
+
+async function install() {
+  const cache = await caches.open(CACHE);
+  const older = await olderCaches();
+  const missing = [];
+  for (const path of INSTALL_FILES) if (!await reuse(cache, older, path)) missing.push(path);
+  await cache.addAll(missing);
+  // Lazy files the last release already holds cost nothing to keep.
+  for (const path of [...WARM_FILES, ...ON_DEMAND_FILES]) await reuse(cache, older, path);
+}
+
+// Best effort: a file this misses is fetched and kept the first time it is used.
+async function warm() {
+  const cache = await caches.open(CACHE);
+  const queue = WARM_FILES.slice();
+  const connection = async () => {
+    for (let path = queue.shift(); path; path = queue.shift()) {
+      try {
+        if (await cache.match(path)) continue;
+        const response = await fetch(path, { priority: 'low' });
+        if (usable(response)) await cache.put(path, response);
+      } catch { /* Offline, or a newer release replaced the file. */ }
+    }
+  };
+  await Promise.all(Array.from({ length: WARM_CONNECTIONS }, connection));
+}
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC_FILES)));
+  event.waitUntil(install());
 });
 
 self.addEventListener('activate', (event) => {
@@ -16,6 +74,8 @@ self.addEventListener('activate', (event) => {
     }
     await self.clients.claim();
   })());
+  // Started outside waitUntil on purpose: the worker takes over without waiting for the warm-up.
+  warm().catch(() => {});
 });
 
 self.addEventListener('message', (event) => {
@@ -35,20 +95,18 @@ self.addEventListener('fetch', (event) => {
     }));
     return;
   }
-  if (ON_DEMAND_PATHS.has(url.pathname)) {
+  if (LAZY_PATHS.has(url.pathname)) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match(url.pathname);
       if (cached) return cached;
       const response = await fetch(request);
-      // A retired chunk falls through to the app shell with a 200, which must never be kept as code.
-      if (response.ok && !(response.headers.get('content-type') || '').startsWith('text/html'))
-        event.waitUntil(cache.put(url.pathname, response.clone()));
+      if (usable(response)) event.waitUntil(cache.put(url.pathname, response.clone()));
       return response;
     })());
     return;
   }
-  if (!STATIC_PATHS.has(url.pathname) || url.pathname === '/index.html') return;
+  if (!INSTALL_PATHS.has(url.pathname) || url.pathname === '/index.html') return;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
     return (await cache.match(url.pathname)) || fetch(request);

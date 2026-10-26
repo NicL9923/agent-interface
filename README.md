@@ -100,6 +100,26 @@ Shared controls live in `src/components/ui`, with shadcn configuration in
 `components.json` and Base UI handling context menus and popovers. Keep the
 existing WildBots colors, typography and spacing when adding controls.
 
+Base UI is not part of the first load. Import its components only from modules the
+entry reaches through `import()`, such as the assistant menu in `src/app/BotMenuPopup.tsx`.
+Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches the first
+right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
+returns to the entry's static imports.
+
+### Offline cache
+
+`scripts/build-worker.mjs` turns `scripts/service-worker.js` into `sw.js`, and
+`scripts/precache-plan.mjs` sorts the built files into three groups. The install step
+fetches only the pages and the static import graph of both HTML entries, which is enough
+to open offline without racing the first visit. Lazy screens and libraries are fetched in
+the background after the worker activates, three at a time. The terminal and remote
+desktop chunks wait for first use. A file that was never warmed is kept after its first
+use. Nothing is cached that comes back as `text/html` in place of code. Installing a
+release copies every hashed `assets/name-HASH.ext` file already held by an earlier
+release's cache instead of downloading it again. The pages, icons, manifest and
+unhashed files are always fetched fresh. The worker's hashed-name rule must match
+`src/server/static-cache.ts`; a test compares them.
+
 Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
 prefix so they cannot collide with existing semantic class names. Preflight is
 omitted to preserve native control styling. Keep custom layout, avatar and
