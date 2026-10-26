@@ -19,13 +19,17 @@ describe('iOS publishing fences', () => {
       const reply = (status: number) => ({ ok: status === 200, status, text: async () => JSON.stringify(status === 200 ? { data: [] } : { errors: [{ code: 'UNEXPECTED_ERROR' }] }) });
       const transport = vi.fn().mockResolvedValueOnce(reply(500)).mockRejectedValueOnce(new Error('connection reset')).mockResolvedValueOnce(reply(200));
       const api = appleApi({ keyId: 'test', issuerId: 'test', keyFile }, transport);
-      await expect(api('GET', '/apps')).resolves.toEqual({ data: [] });
+      // Each of the two retries waits 2 s, which a virtual clock skips.
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      const read = expect(api('GET', '/apps')).resolves.toEqual({ data: [] });
+      await vi.advanceTimersByTimeAsync(4000);
+      await read;
       expect(transport).toHaveBeenCalledTimes(3);
       transport.mockReset().mockResolvedValue(reply(500));
       await expect(api('POST', '/profiles', { data: {} })).rejects.toThrow('HTTP 500');
       expect(transport).toHaveBeenCalledTimes(1);
-    } finally { rmSync(directory, { recursive: true }); }
-  }, 10000);
+    } finally { vi.useRealTimers(); rmSync(directory, { recursive: true }); }
+  });
   it('does not echo signing credentials when a subprocess fails', () => {
     try {
       runPrivate(process.execPath, ['-e', 'console.error(process.argv[1]); process.exit(1)', 'private-signing-password']);

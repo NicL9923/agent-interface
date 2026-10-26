@@ -68,6 +68,9 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
   let reconnecting: Promise<RuntimeStatus> | undefined;
   let serial = 0;
   let closed = false;
+  // Aborts the setup fetches that run before a socket exists, so close() does not wait on them.
+  const shutdown = new AbortController();
+  const bounded = (ms: number) => AbortSignal.any([AbortSignal.timeout(ms), shutdown.signal]);
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -151,7 +154,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     try {
       const response = await fetch(new URL(servicePath('/api/profiles'), origin), {
         headers: authHeaders(),
-        signal: AbortSignal.timeout(5_000), redirect: 'error',
+        signal: bounded(5_000), redirect: 'error',
       });
       await response.body?.cancel();
       if (response.status === 401 || response.status === 403)
@@ -182,9 +185,9 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       let response: Response;
       try {
         response = await fetch(new URL('/api/agent-interface/service-ticket', origin), {
-          method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(5_000), redirect: 'error',
+          method: 'POST', headers: authHeaders(), signal: bounded(5_000), redirect: 'error',
         });
-      } catch { throw unavailable(); }
+      } catch { throw closed ? closedError() : unavailable(); }
       if (!response.ok) {
         const refused = response.status === 401 || response.status === 403;
         throw new TransportError(refused ? 'unauthorized' : 'unreachable',
@@ -193,7 +196,6 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       const body = await response.json() as Wire;
       if (typeof body.ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.ticket))
         throw new TransportError('incompatible', 'Hermes returned an invalid service upgrade ticket.');
-      if (closed) throw closedError();
       url.searchParams.set('ticket', body.ticket);
     } else url.searchParams.set('token', options.token!);
     return url;
@@ -261,7 +263,10 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       try {
         if (!current || current.ws.readyState !== WebSocket.OPEN) {
           if (current) disconnect(current, unavailable(), false);
-          current = adopt(await socketUrl());
+          const url = await socketUrl();
+          // close() may have run while the URL was being prepared. Never open a socket after it.
+          if (closed) throw closedError();
+          current = adopt(url);
           await opened(current);
           announced = rawRpc(current, 'client.capabilities', {server_requests: true});
         }
@@ -447,6 +452,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
   }
   function close(): void {
     closed = true;
+    shutdown.abort();
     clearInterval(heartbeat);
     retryAt = 0;
     diagnostic = {connected: false, code: 'closed', detail: 'The Hermes connection is closed.'};
