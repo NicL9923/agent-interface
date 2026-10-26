@@ -9,6 +9,8 @@ type SessionEvents = {
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
 };
+/** A bootstrap this recent already answers a focus or visibility change, such as alt-tabbing back. */
+const FRESH_MS = 5_000;
 export function useSession(events: SessionEvents) {
   const handlers = useRef(events);
   handlers.current = events;
@@ -25,9 +27,11 @@ export function useSession(events: SessionEvents) {
   const bootstrapRequest = useRef<Promise<Bootstrap | null> | null>(null);
   const lastBootstrap = useRef<Bootstrap | null>(null);
   const identityEpoch = useRef(0);
+  const lastSuccess = useRef(0);
   // Responses cached for one account must never answer for the next.
   const nextIdentity = () => {
     identityEpoch.current++;
+    lastSuccess.current = 0;
     clearResponseCache();
   };
   const bootRef = useRef(boot);
@@ -44,6 +48,8 @@ export function useSession(events: SessionEvents) {
       try {
         const next = await apiRequest("GET /bootstrap", { query: { roster: "lean" } });
         if (epoch !== identityEpoch.current) return null;
+        // A bootstrap that found Hermes down is no reason to hold back the next look.
+        if (next.connection.connected) lastSuccess.current = Date.now();
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           nextIdentity();
           handlers.current.onIdentityChange();
@@ -111,21 +117,25 @@ export function useSession(events: SessionEvents) {
     const id = setInterval(() => {
       if (!authRef.current && document.visibilityState !== "hidden" && navigator.onLine !== false) void refresh();
     }, 45_000);
-    const wake = () => {
+    // Coming back online always reads; focus and visibility changes skip a read the last few seconds already made.
+    const wake = (skipIfFresh: boolean) => () => {
       setOffline(navigator.onLine === false);
-      if (navigator.onLine !== false && document.visibilityState !== "hidden") void refresh();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      if (skipIfFresh && Date.now() - lastSuccess.current < FRESH_MS) return;
+      void refresh();
     };
+    const online = wake(false), returned = wake(true);
     const lost = () => { setOffline(true); };
-    window.addEventListener("online", wake);
+    window.addEventListener("online", online);
     window.addEventListener("offline", lost);
-    window.addEventListener("focus", wake);
-    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", returned);
+    document.addEventListener("visibilitychange", returned);
     return () => {
       clearInterval(id);
-      window.removeEventListener("online", wake);
+      window.removeEventListener("online", online);
       window.removeEventListener("offline", lost);
-      window.removeEventListener("focus", wake);
-      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", returned);
+      document.removeEventListener("visibilitychange", returned);
     };
   }, [refresh]);
   useEffect(() => {

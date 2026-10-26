@@ -219,6 +219,8 @@ describe("undo toast", () => {
     await render();
     await pinFromMenu("Private ledger", "Pin to top");
     expect(toast()?.textContent).toContain("Pinned Private ledger");
+    // A focus right after a bootstrap is skipped, so the other account is seen on a later one.
+    await advance(5_000);
     boot = { ...boot, user: { id: "two", name: "Two", email: "two@example.test" }, bots: [boot.bots[1]], preferences: { ...defaultPreferences, startPage: "assistant" } };
     await act(async () => window.dispatchEvent(new Event("focus")));
     await advance(0);
