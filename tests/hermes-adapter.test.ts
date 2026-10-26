@@ -916,14 +916,39 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(sockets[1].readyState).toBe(WireSocket.CLOSED);
   });
 
-  it('rejects outstanding connection work immediately when the runtime is closed', async () => {
+  it('rejects a handshake waiting on its socket as soon as the runtime is closed', async () => {
     opening = 'hang';
     const status = runtime.status();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
     await runtime.close();
     expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
     expect(await runtime.reconnect!()).toMatchObject({connected: false, code: 'closed'});
     expect(sockets).toHaveLength(1);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('never opens a socket for a connection attempt that was still starting when the runtime closed', async () => {
+    const status = runtime.status();
+    await runtime.close();
+    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(sockets).toHaveLength(0);
+  });
+
+  it('aborts a pending service ticket request when the runtime is closed', async () => {
+    await runtime.close();
+    let aborted = false;
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
+    })));
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    const status = runtime.status();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await runtime.close();
+    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(aborted).toBe(true);
+    expect(sockets).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('backs off repeated failed polls and automatically recovers after the retry deadline', async () => {
