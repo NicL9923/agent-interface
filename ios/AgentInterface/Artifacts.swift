@@ -48,6 +48,16 @@ enum ArtifactKind: String, CaseIterable, Identifiable {
     case .other: "Other files"
     }
   }
+  var typeName: String {
+    switch self {
+    case .all, .other: "File"
+    case .image: "Image"
+    case .text: "Text"
+    case .document: "PDF"
+    case .audio: "Audio"
+    case .video: "Video"
+    }
+  }
   private static let rasterTypes: Set<String> = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "image/bmp"]
   private static let textTypes: Set<String> = ["text/plain", "text/markdown", "text/csv", "application/json"]
   private static let audioTypes: Set<String> = ["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm", "audio/flac"]
@@ -112,6 +122,11 @@ struct ConversationFilesView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var kind = ArtifactKind.all
   @State private var search = ""
+  @State private var searchPresented = false
+  @State private var preview: PreviewFile?
+  @State private var previewTask: Task<Void, Never>?
+  @State private var openingFile: FileRef?
+  @State private var previewError: String?
   var body: some View {
     let artifacts = store.conversationArtifacts
     let filtered = Artifacts.filter(artifacts, query: search, kind: kind)
@@ -120,25 +135,35 @@ struct ConversationFilesView: View {
         Section {
           Picker("File type", selection: $kind) { ForEach(ArtifactKind.allCases) { Text($0.label).tag($0) } }
           notices(artifacts)
+          if let openingFile { ProgressView("Opening \(openingFile.name)…").font(.subheadline).foregroundStyle(Palette.muted) }
         }
         content(artifacts, filtered)
-      }.householdListBackground().searchable(text: $search, prompt: "Find a filename")
+      }.householdListBackground().accessibilityIdentifier("artifactsList").searchable(text: $search, isPresented: $searchPresented, prompt: "Find a filename")
         .navigationTitle("Artifacts").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         .task { await store.loadEarlierFiles() }
-    }
+    }.sheet(item: $preview) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
+      .alert("Couldn't open file", isPresented: Binding(get: { previewError != nil }, set: { if !$0 { previewError = nil } })) {
+        Button("OK", role: .cancel) { previewError = nil }
+      } message: { Text(previewError ?? "") }
+      .onDisappear { previewTask?.cancel() }
+  }
+  private func openPreview(_ file: FileRef) {
+    previewError = nil; openingFile = file
+    previewTask = store.open(file, present: { value in preview = value; openingFile = nil },
+      onError: { error in previewError = error.localizedDescription; openingFile = nil })
   }
   @ViewBuilder private func notices(_ artifacts: [Artifact]) -> some View {
     if !store.connected {
       Text(artifacts.isEmpty ? "Files are unavailable until your assistant reconnects."
         : "The connection is unavailable. These are the last reported files; opening one may need a reconnect.")
-        .font(.footnote).foregroundStyle(.secondary)
+        .font(.footnote).foregroundStyle(Palette.muted)
     }
     if store.loadingEarlierFiles {
       ProgressView("Loading files from earlier in the conversation…")
     } else if store.earlierFilesFailed {
       Text("Files from earlier in the conversation could not be loaded. Close and reopen this list to try again.")
-        .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("earlierFilesFailed")
+        .font(.footnote).foregroundStyle(Palette.muted).accessibilityIdentifier("earlierFilesFailed")
     }
   }
   @ViewBuilder private func content(_ artifacts: [Artifact], _ filtered: [Artifact]) -> some View {
@@ -146,47 +171,53 @@ struct ConversationFilesView: View {
       ProgressView("Loading your conversation’s files…").frame(maxWidth: .infinity)
     } else if artifacts.isEmpty {
       if !store.loadingEarlierFiles {
-        ContentUnavailableView("No artifacts yet", systemImage: "doc", description: Text("Generated outputs and files shared in this conversation will appear here."))
+        ContentUnavailableView { Label("No artifacts yet", systemImage: "doc") } description: {
+          Text("Generated outputs and files shared in this conversation will appear here.").foregroundStyle(Palette.muted)
+        }
       }
     } else if filtered.isEmpty {
       ContentUnavailableView {
         Text("No matching files")
       } description: {
-        Text("Try another filename or file type.")
+        Text("Try another filename or file type.").foregroundStyle(Palette.muted)
       } actions: {
-        Button("Clear filters") { search = ""; kind = .all }.buttonStyle(.bordered)
+        Button("Clear filters") { search = ""; kind = .all; searchPresented = false }.buttonStyle(.accentProminent).controlSize(.large)
       }
     } else {
-      ForEach(filtered) { ArtifactRow(artifact: $0) }
+      ForEach(filtered) { ArtifactRow(artifact: $0, openManaged: openPreview, opening: openingFile?.id == $0.id) }
     }
   }
 }
 /// One file: its name, then source, type and size as the web's list and detail show them.
 struct ArtifactRow: View {
   var artifact: Artifact
+  var openManaged: (FileRef) -> Void
+  var opening = false
+  @Environment(\.dynamicTypeSize) private var typeSize
   @Environment(AppStore.self) private var store
   @Environment(\.openURL) private var openURL
   var body: some View {
     let location = artifact.file.location(origin: store.api?.baseURL)
     Button { open(location) } label: {
-      HStack(spacing: 12) {
-        Image(systemName: icon(location)).foregroundStyle(.secondary).accessibilityHidden(true)
+      HStack(alignment: .top, spacing: 12) {
+        if opening { ProgressView().controlSize(.small).frame(width: 24, height: 24).accessibilityHidden(true) }
+        else { Image(systemName: icon(location)).font(.system(size: 20)).frame(width: 24, height: 24).foregroundStyle(Palette.muted).accessibilityHidden(true) }
         VStack(alignment: .leading, spacing: 3) {
-          Text(artifact.file.name).lineLimit(2).foregroundStyle(Color.primary)
-          Text(detail).font(.caption).foregroundStyle(.secondary)
-          if let note = note(location) { Text(note).font(.caption).foregroundStyle(.secondary) }
+          Text(artifact.file.name).lineLimit(typeSize.isAccessibilitySize ? nil : 2).foregroundStyle(Color.primary)
+          Text(detail).font(.footnote).foregroundStyle(Palette.muted)
+          if let note = note(location) { Text(note).font(.footnote).foregroundStyle(Palette.muted) }
         }.frame(maxWidth: .infinity, alignment: .leading)
-      }
+      }.frame(minHeight: 44).contentShape(Rectangle())
     }.disabled(location == .unsupported).accessibilityIdentifier("artifact-" + artifact.file.id)
-      .accessibilityHint(hint(location))
+      .accessibilityHint(hint(location)).accessibilityValue(opening ? "Opening file" : "")
   }
   private var detail: String {
     let size = Artifacts.size(artifact.file.size)
-    return "\(artifact.source.rawValue) · \(artifact.file.mime)" + (size.isEmpty ? "" : " · \(size)")
+    return "\(artifact.source.rawValue) · \(ArtifactKind.of(artifact.file).typeName)" + (size.isEmpty ? "" : " · \(size)")
   }
   private func open(_ location: FileLocation) {
     switch location {
-    case .managed: store.open(artifact.file)
+    case .managed: openManaged(artifact.file)
     case .external(let url): openURL(url)
     case .unsupported: break
     }

@@ -45,7 +45,7 @@ const pick = (value: string) => act(async () => {
 
 it("shows a live avatar, who it is, and the per-assistant choices", async () => {
   await render();
-  expect(container.querySelector("[data-avatar-size='112']")?.hasAttribute("data-still")).toBe(false);
+  expect(container.querySelector("[data-avatar-size='88']")?.hasAttribute("data-still")).toBe(false);
   expect(container.querySelector("h2")?.textContent).toBe("Ranch hand");
   expect(container.querySelector(".bot-details-hero")?.textContent).toContain("Shared with your household");
   expect(facts()).toEqual({ Model: "p / m", Now: "Working", "Last message": "No messages yet" });
@@ -81,11 +81,12 @@ it("opens ready to name a new section when the home menu asks for one", async ()
 });
 
 it("says when the assistant last spoke and opens Find in its chat", async () => {
-  props.bot = { ...props.bot, lastMessage: { text: "Gate battery replaced", at: new Date(Date.now() - 5 * 60_000).toISOString() } };
+  props.bot = { ...props.bot, lastMessage: { text: "**Gate battery replaced**\n\n- Check next month.", at: new Date(Date.now() - 5 * 60_000).toISOString() } };
   props.avatarState = "idle";
   await render();
   const last = facts()["Last message"]!;
-  expect(last).toContain("Gate battery replaced");
+  expect(last).toContain("Gate battery replaced Check next month.");
+  expect(last).not.toContain("**");
   expect(container.querySelector(".bot-details-facts time")).not.toBeNull();
   expect(facts().Now).toBeUndefined();
   await act(async () => Array.from(container.querySelectorAll("button")).find(item => item.textContent === "Find")!.click());

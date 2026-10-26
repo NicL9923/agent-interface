@@ -409,6 +409,109 @@ import XCTest
     }
   }
 
+  func testDetailsDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DETAILS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_DETAILS_PATH to capture assistant details.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown details stage: \(stage)"); return }
+    let variants = [
+      ("details-loaded", "light", "UICTContentSizeCategoryL"),
+      ("details-dark", "dark", "UICTContentSizeCategoryL"),
+      ("details-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("details-empty", "light", "UICTContentSizeCategoryL"),
+      ("details-earlier-error", "light", "UICTContentSizeCategoryL"),
+    ]
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    guard selection.isEmpty || variants.contains(where: { $0.0 == selection }) else { XCTFail("Unknown details variant: \(selection)"); return }
+    for (name, theme, size) in variants where selection.isEmpty || selection == name {
+      var fixture = original
+      var conversation = fixture["conversation"] as! [String: Any]
+      if name == "details-empty" {
+        conversation["files"] = [] as [String]
+        conversation["messages"] = (conversation["messages"] as! [[String: Any]]).map { message in var value=message;value["files"]=[] as [String];return value }
+      }
+      if name == "details-earlier-error" { conversation["earlierFiles"] = 1; fixture["earlierFilesError"] = true }
+      fixture["conversation"] = conversation
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      app.chatHeader("Ranch hand").tapWhenReady()
+      XCTAssertTrue(app.staticTexts["profileRole"].waitForExistence(timeout: 5))
+      try capture(name + "-profile")
+      let profile = app.descendants(matching: .any)["botProfileList"].firstMatch
+      if name == "details-large-text" {
+        scrollUntilHittable(app,app.buttons["homeSection"],in:profile);profile.swipeUp()
+        try capture(name + "-profile-bottom")
+      }
+      if name == "details-loaded" {
+        let pin = app.buttons["profilePin"]; scrollUntilHittable(app,pin,in:profile); pin.tapWhenReady()
+        XCTAssertTrue(pin.wait(until: "label == %@", "Unpin"))
+        let follow = app.switches["followBot"]; scrollUntilHittable(app,follow,in:profile)
+        follow.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        XCTAssertTrue(follow.wait(until: "value == %@", "1"))
+        try capture("details-profile-pinned-following")
+      }
+      let files = app.buttons["conversationFiles"]
+      for _ in 0..<8 {
+        if !files.hasFrame || files.frame.minY < profile.frame.minY + 60 { profile.swipeDown() }
+        else if files.frame.maxY > profile.frame.maxY - 8 { profile.swipeUp() }
+        else { break }
+      }
+      XCTAssertGreaterThanOrEqual(files.frame.minY, profile.frame.minY + 60)
+      XCTAssertLessThanOrEqual(files.frame.maxY, profile.frame.maxY - 8)
+      files.tapWhenReady()
+      let list = app.descendants(matching: .any)["artifactsList"].firstMatch
+      XCTAssertTrue(list.waitForExistence(timeout: 10))
+      if name == "details-empty" { XCTAssertTrue(app.staticTexts["No artifacts yet"].waitForExistence(timeout: 5)) }
+      else { XCTAssertTrue(app.buttons["artifact-design-plan"].waitForExistence(timeout: 5)) }
+      if name == "details-earlier-error" { XCTAssertTrue(app.staticTexts["earlierFilesFailed"].waitForExistence(timeout: 10)) }
+      try capture(name + "-artifacts")
+      if name != "details-empty" {
+        scrollUntilHittable(app, app.buttons["artifact-design-unavailable"], in: list)
+        list.swipeUp()
+        try capture(name + "-artifacts-bottom")
+      }
+      if name == "details-loaded" {
+        let search = app.searchFields.firstMatch
+        if !search.canTap { list.swipeDown() }
+        search.typeWhenFocused("no-matching-file")
+        XCTAssertTrue(app.staticTexts["No matching files"].waitForExistence(timeout: 5))
+        try capture("details-artifacts-no-results")
+        app.buttons["Clear filters"].tapWhenReady()
+        XCTAssertTrue(app.navigationBars.buttons["Close"].waitUntilHittable(timeout: 5), "Clearing filters leaves search mode")
+        let unavailable = app.buttons["artifact-design-unavailable"]
+        scrollUntilHittable(app,unavailable,in:list);list.swipeUp();unavailable.tapWhenReady()
+        XCTAssertTrue(app.alerts["Couldn't open file"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.alerts.staticTexts["This archived file is unavailable."].exists)
+        try capture("details-artifacts-unavailable")
+        app.alerts.buttons["OK"].tapWhenReady()
+        let file = app.buttons["artifact-design-plan"]
+        scrollUntilHittable(app,file,up:false,in:list);file.tapWhenReady()
+        let previewOpened = app.buttons["Done"].waitForExistence(timeout: 5)
+        print("DESIGN_PREVIEW_OPENED \(previewOpened)")
+        try capture(previewOpened ? "details-artifacts-preview" : "details-artifacts-preview-attempt")
+        if stage == "after" { XCTAssertTrue(previewOpened, app.debugDescription) }
+        if previewOpened {
+          XCTAssertTrue(app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Gate battery plan")).firstMatch.waitForExistence(timeout: 5))
+          app.buttons["Done"].tapWhenReady()
+          XCTAssertTrue(app.buttons["artifact-design-plan"].waitForExistence(timeout: 5))
+          app.buttons["Close"].tapWhenReady()
+          let chatFile = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "gate-battery-plan.txt,")).firstMatch
+          scrollUntilHittable(app,chatFile,up:false,in:app.scrollViews["conversationTranscript"])
+          let transcript = app.scrollViews["conversationTranscript"]
+          for _ in 0..<4 where chatFile.frame.minY < app.navigationBars.firstMatch.frame.maxY + 8 { transcript.swipeDown() }
+          try capture("details-chat-file-before-open")
+          chatFile.tapWhenReady()
+          XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10), app.debugDescription)
+          try capture("details-chat-file-preview")
+          app.buttons["Done"].tapWhenReady()
+        }
+      }
+      app.terminate()
+    }
+  }
+
   func testScreenshotTour() throws {
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))

@@ -4,10 +4,12 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
   const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
+  const fontSession = ["details", "conversation"].includes(screen) ? await context.newCDPSession(tab) : undefined;
+  if (fontSession) { await fontSession.send("DOM.enable"); await fontSession.send("CSS.enable"); }
   const paths = [], geometry = [];
   let state = "loaded";
   let checked = false;
@@ -27,7 +29,18 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals", "recovery"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (!["conversation", "questions", "approvals", "recovery", "details"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (screen === "details") {
+      const conversation = structuredClone(fixture.conversation);
+      conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
+      if (state === "files-empty") {
+        conversation.files = [];
+        conversation.messages = conversation.messages.map(message => ({...message, files:[]}));
+      }
+      if (state === "failed-profile") conversation.activity = {state:"failed", detail:"The gate service did not answer."};
+      if (state === "blocked-profile") conversation.activity = {state:"blocked", detail:"Waiting for your decision."};
+      return route.fulfill({json:conversation});
+    }
     return route.fulfill({ json: screen === "questions" ? questionConversation : screen === "approvals" ? approvalConversation : screen === "recovery" ? { ...recoveryConversation, draft: recoveryDraft } : fixture.conversation });
   });
   if (screen === "questions") await context.route("**/api/bots/*/requests/fixture-question", async route => {
@@ -65,6 +78,15 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       return route.fulfill({ json: recoveryReceipt });
     });
     await context.route("**/api/submissions/*", route => route.fulfill({ json: recoveryReceipt || { requestId: "fixture", status: "uncertain" } }));
+  }
+  if (screen === "details") {
+    await context.route("**/api/files/*", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (fixture.images?.[path]) return route.fulfill({contentType:"image/png",body:Buffer.from(fixture.images[path],"base64")});
+      const response = fixture.fileResponses?.[path];
+      return response ? route.fulfill({status:response.status || 200,contentType:response.mime,body:response.body}) : route.continue();
+    });
+    await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
   }
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
@@ -122,8 +144,80 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         return { top, bottom, label: row.textContent };
       }),
     })) });
+    if (screen === "details") geometry.at(-1).details = await tab.evaluate(() => {
+      const selected = document.querySelector(".artifact-item.selected");
+      const metadata = selected?.querySelector("small");
+      const preview = document.querySelector(".artifact-text-preview pre");
+      const status = document.querySelector(".bot-details-facts .bot-activity");
+      const icon = document.querySelector(".bot-details-actions .artifacts-button-icon .icon");
+      const badge = document.querySelector(".bot-details-actions .artifacts-count");
+      const bounds = element => element && ({x:element.getBoundingClientRect().x, y:element.getBoundingClientRect().y, width:element.getBoundingClientRect().width, height:element.getBoundingClientRect().height});
+      return {
+        metadata: metadata && {color:getComputedStyle(metadata).color, background:getComputedStyle(selected).backgroundColor},
+        previewFont: preview && getComputedStyle(preview).fontFamily,
+        status: status && {label:status.textContent, classes:status.className, color:getComputedStyle(status).color},
+        icon:bounds(icon), badge:bounds(badge),
+        list:bounds(document.querySelector(".artifacts-list")),
+        rows:[...document.querySelectorAll(".artifact-item")].slice(0, 2).map(bounds),
+      };
+    });
+    if (fontSession) {
+      const {root} = await fontSession.send("DOM.getDocument");
+      const selector = screen === "details" ? ".artifact-text-preview pre" : ".message-markdown pre code";
+      const {nodeId} = await fontSession.send("DOM.querySelector", {nodeId:root.nodeId, selector});
+      if (nodeId) geometry.at(-1).renderedCodeFonts = (await fontSession.send("CSS.getPlatformFontsForNode", {nodeId})).fonts;
+    }
   };
   try {
+    if (screen === "details") {
+      await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+        if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+      }));
+      const profile = tab.locator(".bot-details"), artifacts = tab.locator(".artifacts-dialog");
+      const openProfile = async () => {
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click(); await profile.waitFor();
+      };
+      const openFiles = async () => { await profile.getByRole("button",{name:/^Artifacts/}).click(); await artifacts.waitFor(); };
+      for (const [name,width,height,theme] of [
+        ["desktop",1440,1000,"light"],["desktop-dark",1440,1000,"dark"],
+        ["phone",390,844,"light"],["phone-dark",390,844,"dark"],["narrow",320,720,"light"],["tablet",768,1024,"light"],
+      ]) {
+        await tab.setViewportSize({width,height}); await tab.emulateMedia({colorScheme:theme}); await openProfile();
+        await capture("profile-"+name,width,height,theme); await openFiles(); await artifacts.locator(".artifact-text-preview pre").waitFor();
+        await capture("artifacts-"+name,width,height,theme);
+      }
+      if (stage !== "before") {
+        state="failed-profile"; await openProfile(); await profile.locator(".bot-activity.state-failed").waitFor(); await capture("profile-failed",390,844);
+        state="blocked-profile"; await openProfile(); await profile.locator(".bot-activity.state-blocked").waitFor(); await capture("profile-blocked",390,844);
+        state="loaded";
+      }
+      await tab.setViewportSize({width:390,height:844}); await tab.evaluate(() => sessionStorage.setItem("design-large-text","true"));
+      await openProfile(); await capture("profile-large-text",390,844);
+      await profile.locator(".sheet-body").evaluate(el=>{el.scrollTop=el.scrollHeight;}); await capture("profile-large-text-bottom",390,844);
+      await openFiles(); await capture("artifacts-large-text",390,844);
+      await artifacts.locator(".artifact-detail").evaluate(el=>{el.scrollTop=el.scrollHeight;}); await capture("artifacts-large-text-bottom",390,844);
+      await tab.evaluate(()=>sessionStorage.removeItem("design-large-text")); await openProfile();
+      const pin = profile.getByRole("button",{name:"Pin",exact:true}); await pin.click(); await profile.getByRole("button",{name:"Unpin",exact:true}).waitFor();
+      await profile.getByRole("switch").check(); if (!await profile.getByRole("switch").isChecked()) throw Error("Following did not turn on.");
+      await capture("profile-pinned-following",390,844); await openFiles();
+      const search = artifacts.getByRole("searchbox",{name:"Search files"}); await search.fill("no-matching-file");
+      await artifacts.getByText("No matching files",{exact:true}).waitFor(); await capture("artifacts-no-results",390,844);
+      await artifacts.getByRole("button",{name:"Clear filters",exact:true}).click();
+      for (const [id,name] of [["design-photo","image"],["design-survey","document"],["design-external","external"],["design-unsupported","unsupported"],["design-unavailable","failed-preview"]]) {
+        const filename=fixture.conversation.files.find(file=>file.id===id).name;
+        await artifacts.locator(".artifact-item").filter({hasText:filename}).click();
+        if (id==="design-photo") await artifacts.locator(".artifact-preview img").waitFor();
+        if (id==="design-unavailable") await artifacts.getByRole("button",{name:"Retry preview",exact:true}).waitFor();
+        await capture("artifacts-"+name,390,844);
+      }
+      await artifacts.getByRole("button",{name:"Retry preview",exact:true}).click(); await artifacts.getByRole("button",{name:"Retry preview",exact:true}).waitFor();
+      state="files-empty"; await openProfile(); await openFiles(); await artifacts.getByText("No artifacts yet",{exact:true}).waitFor(); await capture("artifacts-empty",390,844);
+      state="earlier-error"; await openProfile(); await openFiles();
+      await artifacts.getByText("Files from earlier in the conversation could not be loaded. Close and reopen this list to try again.",{exact:true}).waitFor();
+      await capture("artifacts-earlier-error",390,844);
+      return {paths,geometry,pinAndFollow:true,clearFilters:true,previewRetry:true};
+    }
     if (screen === "recovery") {
       await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
         if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";

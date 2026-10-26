@@ -1857,25 +1857,38 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     }
   }
   func open(_ file: FileRef) {
+    open(file, present: { self.openedFile = $0 })
+  }
+  /// A sheet owns its preview presentation and may cancel its own download when dismissed.
+  @discardableResult
+  func open(_ file: FileRef, present: @escaping @MainActor (PreviewFile) -> Void,
+    onError: (@MainActor (Error) -> Void)? = nil) -> Task<Void, Never> {
     fileTask?.cancel()
     let currentGeneration = generation
-    fileTask = Task {
+    let task = Task {
       do {
         guard let api else { return }
         let data = try await api.data(path: "/api/files/\(APIClient.component(file.id))")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
           "AgentInterface-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(
-          URL(fileURLWithPath: file.name).lastPathComponent)
+        let url = directory.appendingPathComponent(URL(fileURLWithPath: file.name).lastPathComponent)
         try data.write(to: url, options: [.atomic, .completeFileProtection])
         guard !Task.isCancelled, currentGeneration == generation else {
           try? FileManager.default.removeItem(at: directory)
           return
         }
-        openedFile = PreviewFile(url: url)
-      } catch { if currentGeneration == generation { report(error) } }
+        present(PreviewFile(url: url))
+      } catch {
+        guard !Task.isCancelled, !(error is CancellationError), currentGeneration == generation else { return }
+        if let onError {
+          onError(error)
+          if (error as? APIError)?.isSessionExpired == true { report(error) }
+        } else { report(error) }
+      }
     }
+    fileTask = task
+    return task
   }
   /// Revokes this device's server session, then clears it locally. If the server cannot be
   /// reached the token is kept and this returns false, unless `localOnly` accepts that the

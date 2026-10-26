@@ -52,8 +52,8 @@ References collected October 25, 2026. External artwork is reference material on
 | Questions | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
 | Approvals | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
 | Failed and interrupted turns | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone 9.2; iPad 9.1 |
-| Assistant details and artifacts | Pending | Pending | Pending |
-| Assistant creation and settings | Pending | Pending | Pending |
+| Assistant details and artifacts | Web, iPhone and iPad captured | Complete | Web details 9.1; artifacts desktop 9.2, phone 9; iPhone profile/artifacts 9.1, preview 9; iPad 9 |
+| Assistant creation and settings | In progress | In progress | Pending |
 | Avatar editor | Pending | Pending | Pending |
 | Models and capabilities | Pending | Pending | Pending |
 | Memory, work and learning | Pending | Pending | Pending |

@@ -152,19 +152,24 @@ struct FileAttachmentView: View {
 }
 struct FilePreview: UIViewControllerRepresentable {
   var file: PreviewFile
-  func makeCoordinator() -> Coordinator { Coordinator(url: file.url) }
-  func makeUIViewController(context: Context) -> QLPreviewController {
+  @Environment(\.dismiss) private var dismiss
+  func makeCoordinator() -> Coordinator { Coordinator(url: file.url, close: { dismiss() }) }
+  func makeUIViewController(context: Context) -> UINavigationController {
     let controller = QLPreviewController()
     controller.dataSource = context.coordinator
-    return controller
+    controller.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done,
+      target: context.coordinator, action: #selector(Coordinator.closePreview))
+    return UINavigationController(rootViewController: controller)
   }
-  func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
+  func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
   static func dismantleUIViewController(
-    _ uiViewController: QLPreviewController, coordinator: Coordinator
+    _ uiViewController: UINavigationController, coordinator: Coordinator
   ) { try? FileManager.default.removeItem(at: coordinator.url.deletingLastPathComponent()) }
   class Coordinator: NSObject, QLPreviewControllerDataSource {
     var url: URL
-    init(url: URL) { self.url = url }
+    let close: () -> Void
+    init(url: URL, close: @escaping () -> Void) { self.url = url; self.close = close }
+    @objc func closePreview() { close() }
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int)
       -> QLPreviewItem

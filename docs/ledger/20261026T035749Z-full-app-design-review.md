@@ -708,3 +708,152 @@ fingerprints and reran all 105 focused web tests on the final source. That run
 passed in `reviews/15-opus-vitest.log`. It withdrew the predicted dead-tap claim
 for the old native control. The refused-retry annotation marker was moved clear
 of the text. No app code changed after the passing recheck.
+
+### Assistant details and artifacts, in progress
+
+The accepted starting commit is `af3e8fd`. Shared fixture
+`.agents/fixtures/details-design.json` has seven synthetic files, a long model
+identifier and a Markdown last-message preview. Its SHA-256 is
+`548b984cc72ce0fea638243ed667580cc825e2e8023b43b15fccda32151b16f5`.
+Web baseline `details-before.json` has 25 distinct captures with no document
+overflow. Native before flows passed on iPhone
+`.private/ios-test-20261026T185544Z-18619.xcresult` and iPad
+`.private/ios-test-20261026T185825Z-20547.xcresult`. Those baseline flows explicitly
+record `DESIGN_PREVIEW_OPENED false`; passing baseline capture does not claim
+working previews. Native product changes before these baselines were only
+accessibility identifiers for the two lists.
+
+Baseline problems included a model label squeezed into single-letter lines,
+overlapping quick-action labels at 200%, small artifact metadata, raw Markdown
+in the last message, low-contrast native captions and a white count on mint.
+The web now uses stacked facts, plain excerpts, responsive quick-action and
+filter grids, readable metadata and code, and semantic status colors. Both
+clients show friendly file categories without changing MIME safety checks.
+Native profile labels and file names grow at accessibility sizes, and file
+icons share a fixed column.
+
+A focused Opus rubber-duck, with no code edits, identified competing native
+preview presenters. The baseline accessibility tree had no Quick Look. A
+scoped presenter inside the artifact sheet then displayed the file, but exposed
+a separate missing-toolbar problem. Quick Look now has a native navigation
+container and explicit Done control, plus its standard share action.
+Artifact downloads keep their existing generation/cancellation guards, deliver
+a preview to the requesting sheet, and report download errors in that sheet.
+The row shows progress for its own file. Unit tests verify scoped delivery and
+scoped errors. UI captures verify the file body and return to the artifact list.
+
+Early capture failures were corrected for iOS 27's lowercase search "close"
+control, the switch thumb rather than its inert label, and taps on partly hidden
+items. Capture navigation now checks visible bounds before tapping quick actions
+and chat attachments. No console log was available in the baseline xcresult,
+so a UIKit warning was not observed and is not claimed.
+
+The annotation renderer now accepts an explicit batch manifest. It preflights all
+specs/images and confines output paths to the manifest directory, avoiding the
+unrelated matches that a filename glob could include.
+
+The iPhone final-layout run passed all six artifact unit tests and the five-variant
+capture flow in `.private/ios-test-20261026T192002Z-35023.xcresult`. The flow
+verified scoped and chat previews, visible document contents, Done, a scoped
+404 alert, pin/follow, search, empty/error and AX3 layouts. The iPad run then
+stopped at a test assumption that a phone-style search cancel control existed.
+The app now binds native search presentation explicitly; Clear filters also
+leaves search mode. This uses an iOS 17 API verified in the selected SDK.
+That small change still needs the planned final phone and iPad runs.
+
+### Cross-project runtime coordination
+
+SteadLog coordinator thread `672d6b62-638e-4247-b4a7-a455d2d3a2ba` requested a
+shared native window. No native process was running at handoff. SteadLog has
+the next 40-minute bounded window for eight iOS and fifteen Android baseline
+rows plus a web supplement. No further native work starts here before its
+explicit release. Two native capture runs remain planned.
+
+Both tasks now agree on the exact `fcntl.flock` file
+`/Volumes/DevSSD/scratch/steadlog-design-audit-20261025/machine-heavy.lock`.
+`.private/ios-machine-lock` configures this task. `validate-ios.sh` automatically
+acquires that lease before its existing repo lock, so a direct invocation cannot
+accidentally skip cross-project admission. The helper refuses immediately with
+exit 75 while held. A harmless probe confirmed that refusal; a separate owned
+probe verified the lease survives exec and releases after the command exits.
+No SteadLog process, device or admission file was altered.
+
+While native validation is paused for the coordinated window, the final AX3
+image review found decorative file icons growing beyond their fixed columns.
+They now use an explicit 20 pt symbol in the 24 pt column and align with the
+first filename line. That change is included in the two pending native runs.
+Web validation is complete: 17 focused tests, a passing build and 26 distinct
+captures with no overflow in `details-v3-after.json`. The explicit annotation
+manifest currently renders eleven web/iPhone comparisons; three iPad comparisons
+wait for the final iPad preview capture. Python tooling lint passes.
+
+### Details review 16 fixes, native runtime still queued
+
+Review 16 rejected the screen for five local issues. Web status colors now
+match the app vocabulary; selected metadata passes AA; code previews share the
+chat monospace token; the file badge scales beside its icon. Native quick-action
+icons now use equal ScaledMetric heights. The native change is unbuilt.
+
+The browser's platform-font probe found Courier behind the previous chat stack.
+The shared token adds an explicit Menlo fallback. Actual Menlo glyphs are recorded
+in both details and conversation capture reports. This small conversation font
+delta is included in the next scoped review. Text previews are now top-aligned,
+and the phone file list reveals the next row at 200% text.
+
+Current web checks: 34 focused tests in details-tests-v6.log, production build
+in details-build-v7.log, 27 details captures in details-v6-after.json, and 18
+conversation captures in conversation-details-font-after.json. Neither report
+has page overflow. Selected metadata contrast is 4.62:1 light and 4.91:1 dark.
+Six web comparisons were regenerated. Reviewed source snapshots and the delta
+are in reviews/16-reviewed-source and reviews/17-details-web-delta.patch.
+Web fingerprint: 89e1421c65eae66af87e944db9b8cf87e54a3efc7df2e584d26e03cf962b0e38.
+Native pending fingerprint: 25093311a89e33294f89677163d57beb87d27582b257660c89925264b5be0dc9.
+
+No native run has started since the handoff. Two final runs remain queued until
+SteadLog explicitly releases its coordinated window. No screen gate is accepted
+from expected scores, old native captures or source inspection alone.
+
+### Final details native batch and runtime handback
+
+SteadLog explicitly released its window at 20:10:11Z. The two serialized runs
+acquired the exact shared fcntl lock before the repo lock. iPhone result
+.private/ios-test-20261026T201139Z-62759.xcresult and iPad result
+.private/ios-test-20261026T201438Z-63728.xcresult each passed 7/7 without skips.
+Both report exact native fingerprint 25093311, unchanged throughout the runs.
+Each device has 21 fresh screenshots inside its result's start/finish times.
+details-native-evidence.json lists every hash and timestamp.
+
+All fourteen explicit before/after comparisons now render. The final iPad
+captures cover the previously missing dark, AX3, empty/error, 404 alert, search
+clear and both document previews. Fresh iPhone and iPad AX3 captures show aligned
+Find/Pin labels. The fixed-size file glyph stays within its column.
+
+At 20:17:31Z, both task simulators were Shutdown, no owned xcodebuild remained,
+and a nonblocking probe confirmed the machine lock free. The explicit handback
+was sent to SteadLog before gallery postprocessing. Its four Android rows now
+have the next bounded window. More native work requires coordination after that
+window; none is planned for this screen pending Opus findings. No protected
+user device or unrelated resource was changed.
+
+The screen gate still awaits the new Opus review. Passing tests and screenshots
+do not substitute for its ratings. Details review 16 is archived in the repo.
+
+SteadLog sent its final runtime release at 20:26:53Z, reporting cleanup and a
+free nonblocking lock probe. Its remaining captures require a new coordinated
+window. Our native checks remain complete; the current Opus recheck is pending.
+Any later native batch must still acquire the exact shared lock.
+
+### Details and artifacts accepted by Opus 5.5 High
+
+Review 17 independently verified both patches, exact source fingerprints, all
+42 native image hashes and timestamps, test summaries, rendered typography,
+contrast and annotations. Every screen passes separately: web details 9.1;
+web artifacts/preview 9.2 desktop and 9.0 phone; iPhone profile/artifacts 9.1
+and preview 9.0; iPad profile/artifacts/preview 9.0. The web conversation font
+delta preserves its accepted 9. No blocker remains. Reports are archived under
+docs/evidence/design-review/details-{review,recheck,acceptance}.md.
+
+The optional blocked-avatar morph, standard iPad form-sheet height at AX3 and
+tile padding remain accepted nonblocking notes. Two remaining web Courier
+fallbacks belong to the later work-details and keyboard-hints passes. No native
+rerun is needed for this accepted gate. Assistant creation/settings is next.

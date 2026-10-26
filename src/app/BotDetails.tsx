@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ActivityState, Bootstrap, Bot, Preferences } from "../shared/types";
+import { excerpt } from "../shared/event-copy";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { ArtifactsButton } from "../components/Artifacts";
 import { Icon } from "../components/Icon";
@@ -70,7 +71,7 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
     </header>
     <div className="sheet-body">
       <div className="bot-details-hero">
-        <Avatar avatar={bot.avatar} state={avatarState === "done" ? "idle" : avatarState} size={112} name={bot.name} botId={bot.id} />
+        <Avatar avatar={bot.avatar} state={avatarState === "done" ? "idle" : avatarState} size={88} name={bot.name} botId={bot.id} />
         <h2 id={titleId} tabIndex={-1}>{bot.name}</h2>
         {bot.description && <p className="bot-details-description">{bot.description}</p>}
         <p>{sharing(bot)}</p>
@@ -91,8 +92,8 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
         <div className="settings-row"><dt className="row-label">Model</dt><dd>{bot.provider ? `${bot.provider} / ${bot.model}` : bot.model}</dd></div>
         {working && <div className="settings-row"><dt className="row-label">Now</dt><dd className={`bot-activity state-${avatarState}`}>{stateLabels[avatarState]}</dd></div>}
         <div className="settings-row"><dt className="row-label">Last message</dt>
-          <dd>{bot.lastMessage?.at ? <><When value={bot.lastMessage.at} inline />{bot.lastMessage.text && <small>{bot.lastMessage.text}</small>}</>
-            : bot.lastMessage?.text ? <small>{bot.lastMessage.text}</small> : "No messages yet"}</dd></div>
+          <dd>{bot.lastMessage?.at ? <><When value={bot.lastMessage.at} inline />{bot.lastMessage.text && <small>{excerpt(bot.lastMessage.text)}</small>}</>
+            : bot.lastMessage?.text ? <small>{excerpt(bot.lastMessage.text)}</small> : "No messages yet"}</dd></div>
       </dl>
       <div className="settings-group">
         <label className="settings-row">

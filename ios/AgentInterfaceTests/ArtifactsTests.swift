@@ -11,6 +11,30 @@ import XCTest
     Conversation(botId: "bot", messages: messages, activity: Activity(state: .idle), approvals: [], files: files)
   }
 
+  func testAFilePreviewUsesItsOwningSheetInsteadOfTheRootPresenter() async throws {
+    let server = FakeServer { _ in .init(body: "Gate battery plan") }
+    let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()
+    var preview: PreviewFile?
+    let task = store.open(file("plan.txt"), present: { preview = $0 })
+    await task.value
+    let value = try XCTUnwrap(preview)
+    defer { try? FileManager.default.removeItem(at: value.url.deletingLastPathComponent()) }
+    XCTAssertEqual(try String(contentsOf: value.url, encoding: .utf8), "Gate battery plan")
+    XCTAssertNil(store.openedFile, "Only the sheet that requested the preview presents it")
+    XCTAssertEqual(server.lastRequest?.url?.path, "/api/files/plan.txt")
+  }
+
+  func testAPreviewFailureIsReportedToItsOwningSheet() async {
+    let server = FakeServer { _ in .init(status: 404, body: #"{"error":"This archived file is unavailable."}"#) }
+    let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()
+    var message: String?
+    let task = store.open(file("missing.txt"), present: { _ in XCTFail("No preview exists for a failed request") },
+      onError: { message = $0.localizedDescription })
+    await task.value
+    XCTAssertEqual(message, "This archived file is unavailable.")
+    XCTAssertNil(store.openedFile)
+  }
+
   func testSourcesFollowWhoSentTheFileInConversationOrder() {
     let earlier = [EarlierFiles.Entry(id: "e1", role: "user", files: [file("photo.png", "image/png")])]
     let value = conversation(

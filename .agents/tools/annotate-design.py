@@ -76,10 +76,33 @@ def render(spec, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('spec', type=Path)
-    parser.add_argument('output', type=Path)
+    parser.add_argument('output', type=Path, nargs='?')
+    parser.add_argument('--batch', action='store_true', help='Render an explicit manifest of relative spec/output paths')
     args = parser.parse_args()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    render(json.loads(args.spec.read_text()), args.output)
+    if args.batch:
+        if args.output is not None:
+            parser.error('A batch manifest supplies its output paths')
+        root = args.spec.resolve().parent
+        rows = json.loads(args.spec.read_text())
+        if not isinstance(rows, list) or not rows:
+            parser.error('A batch manifest must contain a nonempty list')
+        jobs = []
+        for row in rows:
+            source, output = ((root / row[key]).resolve() for key in ('spec', 'output'))
+            if not source.is_relative_to(root) or not output.is_relative_to(root):
+                parser.error('Batch paths must stay inside the manifest directory')
+            spec = json.loads(source.read_text())
+            for side in ('before', 'after'):
+                if not Path(spec[side]['image']).is_file():
+                    parser.error(f"Missing {side} image in {source}")
+            jobs.append((spec, output))
+    else:
+        if args.output is None:
+            parser.error('Supply an output image, or use --batch')
+        jobs = [(json.loads(args.spec.read_text()), args.output)]
+    for spec, output in jobs:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        render(spec, output)
 
 
 if __name__ == '__main__':

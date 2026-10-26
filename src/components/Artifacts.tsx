@@ -18,6 +18,7 @@ const kinds: { value: FileKind | "all"; label: string }[] = [
   { value: "audio", label: "Audio" }, { value: "video", label: "Video" },
   { value: "other", label: "Other files" },
 ];
+const typeNames: Record<FileKind, string> = { image: "Image", text: "Text", document: "PDF", audio: "Audio", video: "Video", other: "File" };
 const rasterTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "image/bmp"]);
 const textTypes = new Set(["text/plain", "text/markdown", "text/csv", "application/json"]);
 const audioTypes = new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm", "audio/flac"]);
@@ -102,9 +103,11 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
   return <>
     <Button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
       title="Browse artifacts" aria-haspopup="dialog" onClick={show}>
-      <Icon name="file" />
+      <span className="artifacts-button-icon">
+        <Icon name="file" />
+        {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
+      </span>
       <span className="artifacts-button-label">Artifacts</span>
-      {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
     </Button>
     {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
       earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
@@ -168,7 +171,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const url = managedFileUrl(file);
   const external = url ? undefined : sourceUrl(file);
   return <section className="artifact-detail" aria-label={`Preview of ${file.name}`}>
-    <header><h3>{file.name}</h3><p>{source} · {file.mime}{fileSize(file.size) && ` · ${fileSize(file.size)}`}</p></header>
+    <header><h3>{file.name}</h3><p>{source} · {typeNames[fileKind(file)]}{fileSize(file.size) && ` · ${fileSize(file.size)}`}</p></header>
     <div className="artifact-preview">
       {!url ? <p>{external ? "This file is hosted outside the app. Open its source to view it."
         : "This file has no supported download address."}</p>

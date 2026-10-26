@@ -516,8 +516,8 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .bot-details-hero { display: grid; justify-items: center; gap: 6px; padding: 0 12px 22px; text-align: center; }
 .bot-details-hero .avatar-wrap { margin-bottom: 10px; }
 .bot-details-hero h2 { margin: 0; font-size: 1.5rem; outline: none; overflow-wrap: anywhere; }
-.bot-details-hero p { margin: 0; font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
-.bot-details-hero .bot-details-description { margin-top: 6px; color: var(--ink); font-size: 0.875rem; }
+.bot-details-hero p { margin: 0; font-size: 0.875rem; color: var(--muted); overflow-wrap: anywhere; }
+.bot-details-hero .bot-details-description { margin-top: 6px; color: var(--ink); font-size: 0.9375rem; line-height: 1.55; }
 .bot-details-actions { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 10px; margin: 0 0 22px; }
 .bot-details-actions > button {
   position: relative;
@@ -533,21 +533,22 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   border-radius: 16px;
   background: var(--raised);
   color: var(--ink);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 .bot-details-actions > button:hover:enabled { background: var(--accent-soft); }
 .bot-details-actions > button.on { color: var(--accent); }
-.bot-details-actions .icon { color: var(--accent); }
+.bot-details-actions .icon { width: 1.25rem; height: 1.625rem; color: var(--accent); }
+.bot-details-actions .artifacts-button-icon { position: relative; display: inline-flex; align-items: center; height: 1.625rem; }
 .bot-details-actions .artifacts-count {
   position: absolute;
-  top: 8px;
-  right: calc(50% - 26px);
-  min-width: 18px;
-  padding: 1px 5px;
+  top: 0;
+  left: calc(100% + 0.125rem);
+  min-width: 1.125rem;
+  padding: 0.0625rem 0.3125rem;
   border-radius: 999px;
   background: var(--accent);
   color: var(--surface);
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 .bot-details .section-add { padding-top: 6px; }
@@ -616,3 +617,11 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
   .settings-sheet[open], .bot-menu { animation: none; }
 }
 .settings-notifications .notification-toggle input::before { display: none; }
+
+/* Quick actions reflow with the card width and the reader's text size. */
+.bot-details .sheet-body { container-type: inline-size; }
+@container (max-width: 20rem) {
+  .bot-details-actions { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.bot-details .row-text small { font-size: 0.875rem; line-height: 1.5; }

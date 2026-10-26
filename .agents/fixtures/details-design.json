@@ -1,0 +1,187 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-household-model-with-extended-context",
+      "provider": "openrouter",
+      "activity": "idle",
+      "description": "Household plans, gate checks, and everyday questions. I keep the next step clear.",
+      "instructions": "Explicit fixture instructions.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "simple"
+  },
+  "screen": "details",
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "details-question",
+        "role": "user",
+        "text": "Check the gates and keep the files together.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T12:59:00Z",
+        "files": [
+          {
+            "id": "design-csv",
+            "name": "gate-sensor-history-october-2026.csv",
+            "mime": "text/csv",
+            "size": 5824,
+            "url": "/api/files/design-csv"
+          }
+        ]
+      },
+      {
+        "id": "details-answer",
+        "role": "assistant",
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "createdAt": "2026-10-26T13:00:00Z",
+        "files": [
+          {
+            "id": "design-plan",
+            "name": "gate-battery-plan.txt",
+            "mime": "text/plain",
+            "size": 217,
+            "url": "/api/files/design-plan"
+          },
+          {
+            "id": "design-photo",
+            "name": "assistant-icon.png",
+            "mime": "image/png",
+            "size": 8492,
+            "url": "/api/files/design-photo"
+          },
+          {
+            "id": "design-survey",
+            "name": "north-pasture-gate-survey-and-battery-replacement-notes.pdf",
+            "mime": "application/pdf",
+            "size": 2488320,
+            "url": "/api/files/design-survey"
+          },
+          {
+            "id": "design-external",
+            "name": "supplier-installation-guide.pdf",
+            "mime": "application/pdf",
+            "size": 825120,
+            "url": "https://example.invalid/installation-guide.pdf"
+          },
+          {
+            "id": "design-unsupported",
+            "name": "legacy-controller-export.bin",
+            "mime": "application/octet-stream",
+            "size": 23944,
+            "url": "file:///fixture-only/controller.bin"
+          },
+          {
+            "id": "design-unavailable",
+            "name": "archived-gate-notes.txt",
+            "mime": "text/plain",
+            "size": 1558,
+            "url": "/api/files/design-unavailable"
+          }
+        ]
+      }
+    ],
+    "files": [
+      {
+        "id": "design-plan",
+        "name": "gate-battery-plan.txt",
+        "mime": "text/plain",
+        "size": 217,
+        "url": "/api/files/design-plan"
+      },
+      {
+        "id": "design-photo",
+        "name": "assistant-icon.png",
+        "mime": "image/png",
+        "size": 8492,
+        "url": "/api/files/design-photo"
+      },
+      {
+        "id": "design-survey",
+        "name": "north-pasture-gate-survey-and-battery-replacement-notes.pdf",
+        "mime": "application/pdf",
+        "size": 2488320,
+        "url": "/api/files/design-survey"
+      },
+      {
+        "id": "design-csv",
+        "name": "gate-sensor-history-october-2026.csv",
+        "mime": "text/csv",
+        "size": 5824,
+        "url": "/api/files/design-csv"
+      },
+      {
+        "id": "design-external",
+        "name": "supplier-installation-guide.pdf",
+        "mime": "application/pdf",
+        "size": 825120,
+        "url": "https://example.invalid/installation-guide.pdf"
+      },
+      {
+        "id": "design-unsupported",
+        "name": "legacy-controller-export.bin",
+        "mime": "application/octet-stream",
+        "size": 23944,
+        "url": "file:///fixture-only/controller.bin"
+      },
+      {
+        "id": "design-unavailable",
+        "name": "archived-gate-notes.txt",
+        "mime": "text/plain",
+        "size": 1558,
+        "url": "/api/files/design-unavailable"
+      }
+    ],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "fileResponses": {
+    "/api/files/design-plan": {
+      "mime": "text/plain",
+      "body": "Gate battery plan\n\nNorth gate: replace the battery before the next trip.\nEast gate: battery 62%.\nBarn gate: battery 48%.\n\nCheck all three gates on November 1.\n\nSynthetic design fixture. No reminders were created.\n"
+    },
+    "/api/files/design-csv": {
+      "mime": "text/csv",
+      "body": "Gate,Battery,Checked\nNorth,18%,2026-10-26\nEast,62%,2026-10-26\nBarn,48%,2026-10-26\n"
+    },
+    "/api/files/design-unavailable": {
+      "status": 404,
+      "mime": "application/json",
+      "body": "{\"error\":\"This archived file is unavailable.\"}"
+    }
+  },
+  "images": {
+    "/api/files/design-photo": "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"
+  }
+}

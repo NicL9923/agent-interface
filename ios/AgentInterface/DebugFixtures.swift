@@ -234,6 +234,18 @@
         client?.urlProtocolDidFinishLoading(self)
         return
       }
+      if let file = (Self.designFixture?["fileResponses"] as? [String: [String: Any]])?[path], let body = file["body"] as? String {
+        print("DESIGN_FILE_RESPONSE \(path)")
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: file["status"] as? Int ?? 200, httpVersion: nil, headerFields: ["Content-Type": file["mime"] as? String ?? "text/plain"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self); return
+      }
+      if Self.designFixture?["screen"] as? String == "details", path.hasSuffix("/files") {
+        let failed = Self.designFixture?["earlierFilesError"] as? Bool == true
+        let payload: [String: Any] = failed ? ["error": "Earlier files unavailable."] : ["messages": []]
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: failed ? 503 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
+      }
       let method = request.httpMethod ?? "GET"
       var object: Any = ["ok": true]
       var status = 200

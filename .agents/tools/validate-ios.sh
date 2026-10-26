@@ -9,6 +9,15 @@ simulator_id=$1
 operation=${2:-test}
 case "$operation" in test|build|live) ;; *) echo 'Choose test, build, or live' >&2; exit 2 ;; esac
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
+# A task can opt into a cross-project machine lease. Acquire it before the repo lock.
+machine_config="$repo_dir/.private/ios-machine-lock"
+if [[ -s "$machine_config" ]]; then
+  read -r machine_lock < "$machine_config"
+  if [[ "${IOS_MACHINE_ADMITTED:-}" != "$machine_lock" ]]; then
+    exec python3 "$repo_dir/.agents/tools/with-native-admission.py" --lock "$machine_lock" -- \
+      env IOS_MACHINE_ADMITTED="$machine_lock" bash "$0" "$@"
+  fi
+fi
 # Every checkout and worktree shares one lock in the main checkout, because they share the simulators.
 lock="$(cd "$(git -C "$repo_dir" rev-parse --git-common-dir)/.." && pwd)/.private/ios-validation.lock"
 if [[ "${IOS_VALIDATION_LOCKED:-}" != "$lock" ]]; then
@@ -86,7 +95,7 @@ fi
 shell_words() { local words; words=$(printf '%q ' "$@"); echo "${words% }"; }
 
 # The fingerprint covers uncommitted edits. A run whose inputs changed under it tests neither state.
-inputs() { python3 .agents/tools/source-state.py ios/ .agents/tools/validate-ios.sh .agents/tools/patch-xctestrun.py; }
+inputs() { python3 .agents/tools/source-state.py ios/ .agents/tools/validate-ios.sh .agents/tools/patch-xctestrun.py .agents/tools/with-native-admission.py; }
 inputs_before=$(inputs)
 # Build once, then run the tests from a copy of the generated test plan that limits XCTest's
 # crash-report wait. Without it this host waits about 300 seconds after every UI test.
