@@ -1,7 +1,6 @@
-import { isConversationReply } from "../shared/message-origin";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ActivityState, Bootstrap, Bot, SubmissionReceipt } from "../shared/types";
+import type { ActivityState, Bootstrap, Bot, Message, SubmissionReceipt } from "../shared/types";
 import type { VoiceState } from "../shared/voice";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
@@ -11,7 +10,7 @@ import { Button } from "../components/ui/button";
 import { request } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
-import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
+import type { Draft, LocalUpload, Pending } from "./storage";
 import { sendingDraft } from "./sent-echo";
 import { StatusDock, type DockItem } from "./StatusDock";
 import { ownPrompts, recallStep, type Recall } from "./prompt-recall";
@@ -33,6 +32,17 @@ export function useStopResponse(botId: string, report: (message: string) => void
       .finally(() => { if (shown.current === target) setStopping(false); });
   }, [botId, report]);
   return { stopping, stop };
+}
+
+/**
+ * This person's earlier messages for recall, newest first. The same array comes back while the
+ * messages are unchanged, so a streaming reply does not hand the composer a new list four times a second.
+ */
+export function useOwnPrompts(messages: readonly Message[] | undefined, userId: string | undefined) {
+  const kept = useRef<string[]>([]);
+  const next = ownPrompts(messages, userId ?? "");
+  if (next.length !== kept.current.length || next.some((text, index) => text !== kept.current[index])) kept.current = next;
+  return kept.current;
 }
 
 function ModelPickerPlaceholder({ model, failed = false }: { model: string; failed?: boolean }) {
@@ -123,11 +133,15 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   }, [footer]);
   return { panel, over };
 }
-export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, refresh, dock = [], stopping, onStop }: {
+// Memoized with stable callbacks from App, so a streaming reply, which changes the conversation about four times a second, does not re-render it.
+export const Composer = memo(function Composer({ boot, selected, botId, prompts, voiceReply, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, refresh, dock = [], stopping, onStop }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
-  conversation: SavedConversation | null;
+  /** This person's earlier messages in the chat, newest first, for Up and Down recall. */
+  prompts: readonly string[];
+  /** The reply the voice controls read aloud: the latest one while no run is working. */
+  voiceReply?: Message;
   state: ActivityState;
   active: boolean;
   connectionLost: boolean;
@@ -192,8 +206,6 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   const drop = useFileDrop(footer, addFiles);
   // Up and Down in an empty composer browse this person's earlier messages here, newest first.
   const [recall, setRecall] = useState<Recall>(null);
-  const prompts = useMemo(() => ownPrompts(conversation?.botId === botId ? conversation.messages : undefined, boot.user.id),
-    [conversation, botId, boot.user.id]);
   const caret = useRef<"start" | "end" | null>(null);
   // An edit from elsewhere, such as another device or a send, ends browsing.
   useEffect(() => { if (recall && shown.text !== prompts[recall.index]) setRecall(null); }, [recall, shown.text, prompts]);
@@ -379,7 +391,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           <div className="composer-voice">
             {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
             <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
-              reply={!active ? conversation?.messages.findLast(isConversationReply) : undefined}
+              reply={voiceReply}
               disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
@@ -411,4 +423,4 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
       </form>
     </footer>
   );
-}
+});

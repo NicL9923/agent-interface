@@ -385,6 +385,15 @@ describe("private assistant notification history", () => {
     expect(store.db.prepare("SELECT count(*) AS n FROM participants WHERE run_id='run'").get()).toEqual({ n: 0 });
   });
 
+  it("advances the privacy version when a private assistant's record is forgotten, so open streams rebuild what they hide", () => {
+    const store = seeded();
+    makePrivate(store, secret);
+    const version = store.privacyVersion;
+    store.forgetBot(secret);
+    expect(store.privateBots().some(bot => bot.botId === secret)).toBe(false);
+    expect(store.privacyVersion).toBeGreaterThan(version);
+  });
+
   it("sends each event only to whoever could see the assistant when it happened, by its own time", () => {
     const store = new Store(":memory:"); apps.push(store);
     for (const id of ["alice", "bob", "carol"]) {

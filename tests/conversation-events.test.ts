@@ -1,12 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+import { setTimeout as realDelay } from "node:timers/promises";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { hash } from "../src/server/auth.js";
-import type { Bot, Runtime } from "../src/shared/types.js";
+import type { Activity, Bot, Inflight, Message, Runtime, ToolCall } from "../src/shared/types.js";
 const origin = "http://127.0.0.1:3000";
-const apps: { close(): Promise<unknown> }[] = [];
-afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
+const apps: { close(): Promise<unknown>; server: { closeAllConnections(): void } }[] = [];
+// Under concurrent load on Node 24, app.close() waited on an accepted socket that had sent no request, which
+// Node 24 does not count as idle. Every connection here belongs to the test, so cleanup closes them first. The
+// shutdown test below calls app.close() directly, with a stream open, so preClose stays covered.
+afterEach(async () => {
+  vi.useRealTimers();
+  for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); }
+});
+
+// The server throttles notices with setTimeout and Date.now (a second for roster and change notices, a quarter
+// second for live reply growth). Every test runs those on virtual time, so a throttle costs nothing to wait out
+// and its length is still observable. Sockets and streams stay real, so after moving the clock a test gives
+// them a moment of real time to deliver whatever the server wrote.
+const virtualClock: Parameters<typeof vi.useFakeTimers>[0] = { toFake: ["setTimeout", "clearTimeout", "Date"] };
+/** Moves virtual time forward, then lets real sockets deliver what the server wrote meanwhile. */
+async function pass(ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await realDelay(25);
+}
 
 // An app contract double whose watched conversations change when a test says so.
 function runtimeDouble() {
@@ -42,9 +60,10 @@ async function setup() {
   const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
   const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
   const { csrfToken } = await signIn.json() as { csrfToken: string };
+  vi.useFakeTimers(virtualClock);
   return { ...fake, app, store, base, cookie, csrfToken };
 }
-/** Reads server-sent text as it arrives, so a test can wait for the next notice. */
+/** Reads server-sent text as it arrives, so a test can wait for the next notice. Waiting moves virtual time too. */
 async function stream(url: string, cookie: string, headers: Record<string, string> = { cookie }) {
   const response = await fetch(url, { headers });
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
@@ -62,10 +81,12 @@ async function stream(url: string, cookie: string, headers: Record<string, strin
     get done() { return done; },
     notices: () => text.split("data: change\n\n").length - 1,
     until: async (ready: () => boolean, ms = 3000) => {
-      const deadline = Date.now() + ms;
+      // Real elapsed time bounds the wait, since Date is virtual.
+      const deadline = performance.now() + ms;
       while (!ready()) {
-        if (Date.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
-        await new Promise(resolve => setTimeout(resolve, 10));
+        if (performance.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
+        await vi.advanceTimersByTimeAsync(10);
+        await new Promise(resolve => setImmediate(resolve));
       }
     },
     close: () => reader.cancel().then(() => pump),
@@ -88,6 +109,99 @@ describe("conversation change stream", () => {
     expect(events.text).toContain("another member's assistant");
     await events.close();
   });
+  describe("inflight growth notices", () => {
+    const live = (text: string, extra: Partial<Message> = {}, id = "sid-inflight", toolCalls: ToolCall[] = [], activity: Activity = { state: "thinking", runId: "run" }) =>
+      ({ botId: "shared", message: { id, role: "assistant" as const, text, ...extra }, activity, toolCalls });
+    /**
+     * Sets the live reply, notices it, and resolves with what the stream wrote for it, if anything.
+     * Pass `writes: false` when the server should stay silent: it then waits out the throttle and a moment more.
+     */
+    async function send(s: Awaited<ReturnType<typeof setup>>, events: Awaited<ReturnType<typeof stream>>, value: Inflight, writes = true) {
+      let reads = 0;
+      s.runtime.inflight = () => { reads++; return value; };
+      const before = events.text.length;
+      s.change("shared", "inflight");
+      await vi.advanceTimersByTimeAsync(250);
+      if (writes) await events.until(() => events.text.length > before && events.text.endsWith("\n\n"));
+      else { await events.until(() => reads > 0); await realDelay(25); }
+      return events.text.slice(before);
+    }
+    const frames = (text: string) => text.split("\n\n").filter(frame => frame.startsWith("event:")).map(frame => {
+      const [event, data] = frame.split("\n");
+      return [event.slice(7), JSON.parse(data.slice(6))] as const;
+    });
+
+    it("keeps the ?inflight=1 payload as it was, whole on every notice", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      const first = await send(s, events, live("Hello"));
+      const second = await send(s, events, live("Hello there", { reasoning: "Hmm" }));
+      expect(first).toBe('event: inflight\ndata: {"botId":"shared","message":{"id":"sid-inflight","role":"assistant","text":"Hello"},"activity":{"state":"thinking","runId":"run"},"toolCalls":[]}\n\n');
+      expect(second).toBe('event: inflight\ndata: {"botId":"shared","message":{"id":"sid-inflight","role":"assistant","text":"Hello there","reasoning":"Hmm"},"activity":{"state":"thinking","runId":"run"},"toolCalls":[]}\n\n');
+      await events.close();
+    });
+
+    it("sends ?inflight=2 growth as a delta on a base, and everything else whole", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      const call: ToolCall = { id: "call", name: "web_search", arguments: "{}", status: "running" };
+      const out = [
+        await send(s, events, live("Hello")),
+        await send(s, events, live("Hello there", { reasoning: "Hm" })),
+        await send(s, events, live("Hello there, partner", { reasoning: "Hm, ok" }, "sid-inflight", [call], { state: "working", runId: "run" })),
+        // Nothing grew: no event at all.
+        await send(s, events, live("Hello there, partner", { reasoning: "Hm, ok" }, "sid-inflight", [call], { state: "working", runId: "run" }), false),
+        // Not an extension of what was sent: whole again, then a delta from there.
+        await send(s, events, live("Howdy", { reasoning: "Hm, ok" })),
+        await send(s, events, live("Howdy y'all", { reasoning: "Hm, ok" })),
+        // A new message id starts over.
+        await send(s, events, live("Howdy y'all, again", {}, "next-inflight")),
+        // Anything else about the message changing cannot ride on a delta.
+        await send(s, events, live("Howdy y'all, again!", { createdAt: "2026-10-25T00:00:00Z" }, "next-inflight")),
+      ];
+      expect(out[3]).toBe("");
+      expect(frames(out.join(""))).toEqual([
+        ["inflight", live("Hello")],
+        ["inflight-delta", { botId: "shared", messageId: "sid-inflight", baseTextLength: 5, baseReasoningLength: 0, appendText: " there", appendReasoning: "Hm", activity: { state: "thinking", runId: "run" } }],
+        ["inflight-delta", { botId: "shared", messageId: "sid-inflight", baseTextLength: 11, baseReasoningLength: 2, appendText: ", partner", appendReasoning: ", ok", activity: { state: "working", runId: "run" }, toolCalls: [call] }],
+        ["inflight", live("Howdy", { reasoning: "Hm, ok" })],
+        ["inflight-delta", { botId: "shared", messageId: "sid-inflight", baseTextLength: 5, baseReasoningLength: 6, appendText: " y'all", activity: { state: "thinking", runId: "run" } }],
+        ["inflight", live("Howdy y'all, again", {}, "next-inflight")],
+        ["inflight", live("Howdy y'all, again!", { createdAt: "2026-10-25T00:00:00Z" }, "next-inflight")],
+      ]);
+      await events.close();
+    });
+
+    it("starts again whole after a change notice, which clients answer by dropping the live reply", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      await send(s, events, live("Hello"));
+      s.change("shared");
+      await events.until(() => events.notices() === 1);
+      expect(frames(await send(s, events, live("Hello there")))).toEqual([["inflight", live("Hello there")]]);
+      await events.close();
+    });
+
+    it("measures growth on the redacted reply, so a hidden handoff never leaks through a delta", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      s.store.savePresentation("hidden", { shared: false, ownerId: "local-two" });
+      const handoff = (text: string, reasoning: string, result: string): Inflight => live(text, { reasoning, origin: { kind: "agent", visibility: "activity", handle: "hidden" } }, "sid-inflight",
+        [{ id: "call", name: "message_agent", arguments: JSON.stringify({ target: "hidden", text: "private input" }), result, status: "running" }]);
+      const out = [await send(s, events, handoff("Private reply", "Private thought", "private output")),
+        // Raw text keeps growing while what this person may see stays the same.
+        await send(s, events, handoff("Private reply, more", "Private thought, more", "private output, more"), false),
+        await send(s, events, live("Public now"))].join("");
+      expect(out).not.toMatch(/Private (reply|thought)|private (input|output)|more/);
+      expect(frames(out).map(([event]) => event)).toEqual(["inflight", "inflight"]);
+      await events.close();
+    });
+  });
+
   it("returns configuration through the lazy detail route", async () => {
     const s=await setup();
     const response=await fetch(`${s.base}/api/bots/shared`,{headers:{cookie:s.cookie}});
@@ -103,7 +217,7 @@ describe("conversation change stream", () => {
     await current.until(() => current.text.includes("event: inflight"));
     await legacy.until(() => legacy.notices() === 1);
     expect(current.text).toContain('"text":"Live reply"');
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    await pass(1100);
     expect(current.notices()).toBe(0);
     s.change("shared");
     await current.until(() => current.notices() === 1);
@@ -131,13 +245,13 @@ describe("conversation change stream", () => {
     s.change("other");
     await events.until(() => events.notices() === 1);
     s.change("shared");
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await pass(500);
     // Still within a second of the last notice: held, then sent.
     expect(events.notices()).toBe(1);
-    await events.until(() => events.notices() === 2);
+    await pass(500);
+    expect(events.notices()).toBe(2);
     await events.close();
-    await new Promise(resolve => setTimeout(resolve, 50));
-    expect(s.watchers.get("shared")?.size).toBe(0);
+    await events.until(() => s.watchers.get("shared")?.size === 0);
   });
 
   it("notifies open chats of the app's own conversation writes", async () => {
@@ -173,7 +287,7 @@ describe("conversation change stream", () => {
     s.change("shared");
     await events.until(() => events.notices() === 1);
     s.store.deleteNativeSession(hash(token));
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    await pass(1100);
     s.change("shared");
     await events.until(() => events.done);
     expect(events.notices()).toBe(1);
@@ -226,20 +340,67 @@ describe("roster compatibility and household events", () => {
     expect(notices(owner)).toBe(0);
     vi.mocked(s.runtime.listBots).mockClear();
     for (let i = 0; i < 40; i++) s.rosterChanged();
-    await new Promise(resolve => setTimeout(resolve, 1150));
+    await pass(1150);
     expect(notices(owner)).toBe(0);
     expect(notices(other)).toBe(0);
     expect(s.runtime.listBots).toHaveBeenCalledOnce();
     s.bots[1].activity = "working";
     for (let i = 0; i < 40; i++) s.rosterChanged();
     await owner.until(() => notices(owner) === 1);
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    await pass(1100);
     expect(notices(owner)).toBe(1);
     expect(notices(other)).toBe(0);
     expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
     expect(owner.text).toBe("retry: 3000\n\nevent: roster\ndata: roster\n\n");
     expect(owner.text).not.toMatch(/private|Secret|working/);
     await owner.close(); await other.close();
+  });
+
+  it("lets the bootstrap that follows a roster notice reuse the evaluation's read", async () => {
+    const s = await setup();
+    // Copies, as Hermes answers: a held read must not change because the double's rows did.
+    s.runtime.listBots = vi.fn(async () => s.bots.map(bot => ({ ...bot })));
+    const events = await stream(`${s.base}/api/events`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    s.bots[0].activity = "working";
+    vi.mocked(s.runtime.listBots).mockClear();
+    s.rosterChanged();
+    await events.until(() => events.text.includes("event: roster"));
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(1);
+    // The stream's own opening read is still inside the hold, so only the evaluation's read can show this.
+    const read = async () => (await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })).json() as { bots: Bot[] }).bots[0].activity;
+    expect(await read()).toBe("working");
+    expect(await read()).toBe("working");
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(1);
+    await events.close();
+  });
+
+  it("keeps the newer roster evaluation when an older bootstrap read finishes after it", async () => {
+    const s = await setup();
+    const events = await stream(`${s.base}/api/events`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    // The opening read is held for 1.5 s. Let it expire so the bootstrap below starts its own read.
+    await pass(1600);
+    const row = (activity: Bot["activity"]) => [{ ...s.bots[0], activity }];
+    let releaseCapabilities!: () => void;
+    const capabilitiesHeld = new Promise<void>(resolve => { releaseCapabilities = resolve; });
+    const everything = await s.runtime.capabilities();
+    // The bootstrap's read sees an idle roster, then waits on capabilities. The evaluation's read, begun
+    // later, sees the assistant working and finishes first.
+    s.runtime.listBots = vi.fn().mockResolvedValueOnce(row("idle")).mockResolvedValue(row("working"));
+    s.runtime.capabilities = vi.fn().mockImplementationOnce(async () => { await capabilitiesHeld; return everything; }).mockResolvedValue(everything);
+    const read = async () => (await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })).json() as { bots: Bot[] }).bots[0].activity;
+    const older = read();
+    await events.until(() => vi.mocked(s.runtime.capabilities).mock.calls.length === 1);
+    s.rosterChanged();
+    await events.until(() => events.text.includes("event: roster"));
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
+    releaseCapabilities();
+    expect(await older).toBe("idle");
+    // The older read answered its own caller, but the evaluation's newer read is what the next bootstrap sees.
+    expect(await read()).toBe("working");
+    expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
+    await events.close();
   });
 
   it("notifies on an app write only when the visible roster changes and ends on sign-out", async () => {
@@ -255,7 +416,7 @@ describe("roster compatibility and household events", () => {
     expect((await send()).status).toBe(200);
     await events.until(() => events.text.includes("event: roster"));
     expect((await send()).status).toBe(200);
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    await pass(1100);
     expect(events.text.split("event: roster")).toHaveLength(2);
     expect((await fetch(`${s.base}/api/auth/logout`, { method: "POST", headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken } })).status).toBe(200);
     s.rosterChanged();

@@ -3,6 +3,7 @@ import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } fro
 import { routeUrl, type ApiQuery } from "../shared/api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
+import { applyInflightDelta } from "../shared/inflight";
 import type { Inflight, Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
@@ -208,14 +209,23 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       void load();
     };
     void load();
-    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=1`, () => {
+    const showInflight = (value: Inflight) => {
+      latestInflight = value;
+      holdPlace();
+      setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
+    };
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=2`, () => {
       latestInflight = undefined;
       void load();
     }, value => {
       if (!live || value.botId !== botId) return;
-      latestInflight = value;
-      holdPlace();
-      setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
+      showInflight(value);
+    }, {}, delta => {
+      if (!live || delta.botId !== botId) return true;
+      // Growth that does not continue the held reply is dropped for a reload, never guessed at.
+      const value = applyInflightDelta(latestInflight, delta);
+      if (value) showInflight(value);
+      return !!value;
     });
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {

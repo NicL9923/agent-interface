@@ -213,25 +213,39 @@ describe("watching a group chat on the app event stream", () => {
 
   it("announces room changes to a stream that asked for the room, and stops polling once it closes", async () => {
     const s = await setup();
+    // Only the poll timer is virtual. Sockets and streams stay real, so reads advance it in small steps.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
       expect(response.status).toBe(200);
-      const first = await read(response, text => text.includes("event: group"));
-      expect(first.text).toContain(`event: group\ndata: {"roomId":"shared","latestSeq":1}\n\n`);
+      const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+      const next = async () => {
+        let result: ReadableStreamReadResult<string> | undefined;
+        void reader.read().then(chunk => { result = chunk; });
+        for (let step = 0; !result; step++) {
+          if (step > 2000) throw new Error("Stream never produced a chunk");
+          await vi.advanceTimersByTimeAsync(10);
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        return result;
+      };
+      let text = "";
+      while (!text.includes("event: group")) text += (await next()).value;
+      expect(text).toContain(`event: group\ndata: {"roomId":"shared","latestSeq":1}\n\n`);
       // The room gains someone else's private assistant: the watch ends like its routes answer 404.
       s.store.savePresentation("planner", { shared: false, ownerId: "local-two" });
       s.setSeq(2);
-      let text = "";
+      text = "";
       for (;;) {
-        const chunk = await first.reader.read();
+        const chunk = await next();
         if (chunk.done) break;
         text += chunk.value;
       }
       expect(text).not.toContain("latestSeq\":2");
       const polls = s.groupRequest.mock.calls.filter(([input]) => input.operation === "state").length;
-      await new Promise(resolve => setTimeout(resolve, 2300));
+      await vi.advanceTimersByTimeAsync(2300);
       expect(s.groupRequest.mock.calls.filter(([input]) => input.operation === "state")).toHaveLength(polls);
-    } finally { await s.app.close(); }
+    } finally { vi.useRealTimers(); await s.app.close(); }
   });
 
   it("refuses a hidden or unknown room before opening the stream", async () => {

@@ -184,6 +184,10 @@ export class Store {
   todayFrontier(...args: Parameters<EventRepository["todayFrontier"]>) { return this.events.todayFrontier(...args); }
   markTodaySeen(...args: Parameters<EventRepository["markTodaySeen"]>) { return this.events.markTodaySeen(...args); }
   // retention
-  forgetBot(...args: Parameters<RetentionRepository["forgetBot"]>) { return this.retention.forgetBot(...args); }
+  forgetBot(...args: Parameters<RetentionRepository["forgetBot"]>) {
+    this.retention.forgetBot(...args);
+    // Its sharing record is gone, so open streams must rebuild what they hide.
+    this.presentations.noteRemoved();
+  }
   pruneRetention(...args: Parameters<RetentionRepository["pruneRetention"]>) { return this.retention.pruneRetention(...args); }
 }

@@ -280,6 +280,21 @@ export interface Inflight {
   activity: Activity;
   toolCalls: ToolCall[];
 }
+/**
+ * What `event: inflight-delta` carries on a stream opened with `?inflight=2`: growth of the reply
+ * the stream last sent whole. The base lengths say how much of each field the sender had already
+ * sent, so a receiver holding anything else must reload. `toolCalls` is present only when it changed.
+ */
+export interface InflightDelta {
+  botId: string;
+  messageId: string;
+  baseTextLength: number;
+  baseReasoningLength: number;
+  appendText?: string;
+  appendReasoning?: string;
+  activity: Activity;
+  toolCalls?: ToolCall[];
+}
 export interface ConversationOptions {
   /** The app's history window, cut by the runtime when it can. */
   window?: { start?: string; turns?: number };

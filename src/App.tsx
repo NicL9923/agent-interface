@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isConversationReply } from "./shared/message-origin";
 import type { ActivityState, Bot, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { write } from "./client-api";
@@ -22,7 +23,7 @@ import { UpdateNotice } from "./app/UpdateNotice";
 import { Sidebar } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
-import { Composer, useStopResponse } from "./app/Composer";
+import { Composer, useOwnPrompts, useStopResponse } from "./app/Composer";
 import { CommandPalette, paletteBots } from "./app/CommandPalette";
 import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
@@ -163,6 +164,29 @@ export function App() {
     selectBot(id);
   });
   const { stopping, stop } = useStopResponse(botId, setError);
+  // The composer is memoized, so these keep one identity while a reply streams.
+  const sendMessage = useStableCallback(() => send(request => history.anchorSend(request.requestId)));
+  const refreshSession = useStableCallback(() => void session.refresh());
+  const reconnect = useStableCallback(() => void session.reconnect());
+  const uploadFiles = useStableCallback(upload);
+  const retryUploadFile = useStableCallback(retryUpload);
+  const cancelUploadFile = useStableCallback(cancelUpload);
+  const retrySend = useStableCallback(retry);
+  const discardSend = useStableCallback(discard);
+  const ownConversation = conversation?.botId === botId ? conversation : null;
+  const prompts = useOwnPrompts(ownConversation?.messages, userId);
+  const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
+  const checkingConnection = session.checkingConnection;
+  // Notices from the rest of the app, rebuilt only when one of them changes.
+  const dock = useMemo(() => {
+    const items: DockItem[] = [];
+    if (!boot) return items;
+    if (connectionLost) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
+      appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
+    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice count={decisions} onReview={() => reviewFirstDecision()} /> });
+    if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
+    return items;
+  }, [boot, connectionLost, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
   const liveBot = boot?.bots.find(bot => bot.id === botId);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
   const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
@@ -203,13 +227,6 @@ export function App() {
   const avatarState = state === "done" ? "idle" : state;
   const open = openPanel;
   const detailsBot = panel?.kind === "details" ? boot.bots.find(bot => bot.id === panel.botId) : undefined;
-  const ownConversation = conversation?.botId === botId ? conversation : null;
-  const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
-  const dock: DockItem[] = [];
-  if (connectionLost) dock.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
-    appUnavailable={session.appUnavailable} busy={session.checkingConnection} retry={() => void session.reconnect()} /> });
-  if (decisions) dock.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice count={decisions} onReview={() => reviewFirstDecision()} /> });
-  if (mobile && update) dock.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
 
   return (
     <div className="app-shell">
@@ -240,14 +257,15 @@ export function App() {
               return missing.length - added.length;
             }}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
-          {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
+          {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
+            voiceReply={active ? undefined : ownConversation?.messages.findLast(isConversationReply)} state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
-            draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={upload}
-            retryUpload={retryUpload} cancelUpload={cancelUpload} pending={pending} receipt={receipt}
-            sending={sending} retry={retry} discard={discard}
-            send={() => send(request => history.anchorSend(request.requestId))} reviewed={reviewed} setReviewed={setReviewed}
+            draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
+            retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
+            sending={sending} retry={retrySend} discard={discardSend}
+            send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
             stopping={stopping} onStop={stop} dock={dock}
-            refresh={() => void session.refresh()} />}
+            refresh={refreshSession} />}
         </>}
       </main>
       {panel?.kind === "settings" && (

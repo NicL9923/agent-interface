@@ -510,7 +510,7 @@ const server = createServer(async (request, response) => {
     return json(response, {});
   }
   if (url.pathname === '/inline-ui') { response.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': inlineUiShellPolicy, 'X-Frame-Options': 'SAMEORIGIN' }); return response.end(inlineUiShell); }
-  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
+  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
 

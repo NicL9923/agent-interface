@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { Sidebar } from "../src/app/Sidebar";
+import { preloadBotMenu } from "../src/app/BotMenu";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { ComponentProps } from "react";
 import { mountRoot } from "./ui-harness";
@@ -33,7 +34,12 @@ beforeEach(() => {
     onMoveToSection: vi.fn(), onNewSection: vi.fn(),
   };
 });
-const render = () => act(async () => root.render(createElement(Sidebar, props)));
+// Rows hold a lightweight stand-in until the menu code has loaded, which happens right after first paint.
+// These tests are about the real menu; bot-menu-ui.test.ts covers gestures that beat it.
+const render = async () => {
+  await act(async () => root.render(createElement(Sidebar, props)));
+  await act(async () => { await preloadBotMenu(); });
+};
 const statuses = () => [...container.querySelectorAll(".pinned-activity")].map(node => node.textContent);
 
 it("updates pinned activity from the selected conversation and other bots' live summaries", async () => {

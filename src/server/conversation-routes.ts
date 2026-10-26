@@ -5,7 +5,7 @@ import { interruptionPendingMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
-import type { CapabilityKey, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
+import type { CapabilityKey, InflightDelta, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
 import { apiRoute, type ApiRequest } from "./api-route.js";
@@ -134,35 +134,71 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Followed before the first await, so a client that leaves during setup leaves no watcher.
     const connection = eventStreamConnection(reply);
     const botId = id.parse((req.params as { id: string }).id);
-    const optedIn = (req.query as { inflight?: string }).inflight === "1";
+    // ?inflight=1 sends each live reply whole, as the iOS app and cached web bundles read it.
+    // ?inflight=2 sends only what a reply grew by since the last event this stream sent.
+    const mode = (req.query as { inflight?: string }).inflight;
+    const optedIn = mode === "1" || mode === "2", deltas = mode === "2";
+    // The privacy version the redaction below was built for. Every change to who owns or shares an
+    // assistant advances it, so comparing versions replaces re-reading and comparing the private list.
+    let seen = store.privacyVersion;
     let redact = optedIn ? await redactAgents(store, roster, signedIn(req).id) : undefined;
     if (connection.closed) return connection.abandon();
-    let hidden = JSON.stringify(store.privateBots());
     let last = 0, pending: ReturnType<typeof setTimeout> | undefined;
     let livePending: ReturnType<typeof setTimeout> | undefined, liveLast = 0;
     let stream: EventStream | undefined;
+    // What this stream last sent of the live reply, after redaction, so growth is measured on what
+    // the viewer may see and never on the raw reply.
+    let sent: { id: string; text: string; reasoning: string; rest: string; tools: string; activity: string } | undefined;
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
-      pending ??= setTimeout(() => { pending = undefined; last = Date.now(); stream?.send("data: change\n\n"); },
-        Math.max(0, last + 1000 - Date.now()));
+      pending ??= setTimeout(() => {
+        pending = undefined; last = Date.now();
+        // A client drops the live reply it holds on this notice, so the next one goes whole.
+        sent = undefined;
+        stream?.send("data: change\n\n");
+      }, Math.max(0, last + 1000 - Date.now()));
     };
     const notice = (kind?: "inflight") => {
       if (!optedIn || kind !== "inflight") {
         clearTimeout(livePending); livePending = undefined;
-        if (optedIn) { redact = undefined; hidden = ""; }
+        if (optedIn) { redact = undefined; seen = -1; }
         changed(); return;
       }
       livePending ??= setTimeout(() => {
         livePending = undefined; liveLast = Date.now();
         void (async () => {
           // Privacy can change through another assistant's settings while this stream stays open.
-          const next = JSON.stringify(store.privateBots());
-          if (next !== hidden) { redact = await redactAgents(store, roster, signedIn(req).id); hidden = next; }
-          if (next !== JSON.stringify(store.privateBots())) { changed(); return; }
+          if (store.privacyVersion !== seen) {
+            const version = store.privacyVersion;
+            redact = await redactAgents(store, roster, signedIn(req).id);
+            // Changed again while rebuilding: leave it stale for the next tick and have the client refetch.
+            if (store.privacyVersion !== version) { changed(); return; }
+            seen = version;
+          }
           const value = runtime.inflight?.(botId);
           // A structural read is already pending when its snapshot was invalidated.
           if (!value || !redact) return;
-          stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message: redact.message(value.message), toolCalls: value.toolCalls.map(redact.call) })}\n\n`);
+          const message = redact.message(value.message), toolCalls = value.toolCalls.map(redact.call);
+          if (deltas) {
+            const reasoning = message.reasoning ?? "";
+            const next = { id: message.id, text: message.text, reasoning, tools: JSON.stringify(toolCalls),
+              // Everything else about the message, which a growth notice cannot carry.
+              rest: JSON.stringify({ ...message, text: "", reasoning: undefined }), activity: JSON.stringify(value.activity) };
+            const base = sent;
+            sent = next;
+            if (base && base.id === next.id && base.rest === next.rest && next.text.startsWith(base.text) && reasoning.startsWith(base.reasoning)) {
+              const appendText = next.text.slice(base.text.length), appendReasoning = reasoning.slice(base.reasoning.length);
+              const toolsChanged = base.tools !== next.tools;
+              if (!appendText && !appendReasoning && !toolsChanged && base.activity === next.activity) return;
+              const delta: InflightDelta = { botId: value.botId, messageId: message.id,
+                baseTextLength: base.text.length, baseReasoningLength: base.reasoning.length,
+                ...(appendText ? { appendText } : {}), ...(appendReasoning ? { appendReasoning } : {}),
+                activity: value.activity, ...(toolsChanged ? { toolCalls } : {}) };
+              stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`);
+              return;
+            }
+          }
+          stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
